@@ -69,7 +69,7 @@ public enum Opcode : byte
     Jump,           // [u16 offset]
     JumpIfTrue,
     JumpIfFalse,
-    JumpIfNullish,
+    JumpIfNotNullish,
 
     // ----- Misc -----
     TypeOf,

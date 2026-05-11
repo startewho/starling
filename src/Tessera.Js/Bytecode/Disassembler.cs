@@ -60,7 +60,7 @@ public static class Disassembler
                 case Opcode.Jump:
                 case Opcode.JumpIfTrue:
                 case Opcode.JumpIfFalse:
-                case Opcode.JumpIfNullish:
+                case Opcode.JumpIfNotNullish:
                 case Opcode.LogAnd:
                 case Opcode.LogOr:
                 case Opcode.Coalesce:

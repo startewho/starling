@@ -143,10 +143,12 @@ public class JsCompilerTests
     }
 
     [Fact]
-    public void Nullish_coalescing_uses_JumpIfNullish()
+    public void Nullish_coalescing_uses_JumpIfNotNullish()
     {
+        // a ?? b short-circuits to 'a' when a is NOT nullish, hence the
+        // inverted polarity vs && and ||.
         var d = Disassembler.Disassemble(Compile("a ?? b;"));
-        d.Should().Contain("Dup").And.Contain("JumpIfNullish");
+        d.Should().Contain("Dup").And.Contain("JumpIfNotNullish");
     }
 
     [Fact]

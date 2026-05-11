@@ -41,13 +41,37 @@ public sealed class JsCompiler
     public static Chunk Compile(Program program, string? name = "<script>")
     {
         var c = new JsCompiler();
-        c.EmitProgram(program);
+        c.EmitProgram(program, keepLastExpression: false);
         return c._b.Build(name);
     }
 
-    private void EmitProgram(Program p)
+    /// <summary>
+    /// Compile in eval / REPL mode: if the last statement is an
+    /// ExpressionStatement, leave its value on the stack so the caller of
+    /// the VM can observe it. Used by <c>tessera js</c> and by tests.
+    /// </summary>
+    public static Chunk CompileForEval(Program program, string? name = "<eval>")
     {
-        foreach (var s in p.Body) EmitStatement(s);
+        var c = new JsCompiler();
+        c.EmitProgram(program, keepLastExpression: true);
+        return c._b.Build(name);
+    }
+
+    private void EmitProgram(Program p, bool keepLastExpression)
+    {
+        for (var i = 0; i < p.Body.Count; i++)
+        {
+            var s = p.Body[i];
+            var isLast = i == p.Body.Count - 1;
+            if (isLast && keepLastExpression && s is ExpressionStatement es)
+            {
+                EmitExpression(es.Expression); // skip trailing Pop
+            }
+            else
+            {
+                EmitStatement(s);
+            }
+        }
         _b.Emit(Opcode.Halt);
     }
 
@@ -266,7 +290,7 @@ public sealed class JsCompiler
         {
             "&&" => Opcode.JumpIfFalse,
             "||" => Opcode.JumpIfTrue,
-            "??" => Opcode.JumpIfNullish,
+            "??" => Opcode.JumpIfNotNullish,
             _ => throw new NotSupportedException(log.Op),
         };
         var jumpAddr = _b.EmitJump(jmp);
