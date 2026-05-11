@@ -61,9 +61,20 @@ public sealed partial class HtmlTokenizer
     // end-tag-name states to recognize an "appropriate" close (§13.2.5.11).
     private string? _lastStartTagName;
 
-    // Temporary buffer for end-tag-matching attempts in RCDATA/RAWTEXT/Script
-    // and for named-character-reference candidate matching.
+    // Temporary buffer for end-tag-matching attempts in RCDATA/RAWTEXT/Script,
+    // for MarkupDeclarationOpen's bounded lookahead, and for named-character-
+    // reference candidate matching.
     private readonly StringBuilder _tempBuffer = new();
+
+    // --- Comment + doctype builders (populated by M1-01e/f states) ----------
+    private readonly StringBuilder _commentData = new();
+    private readonly StringBuilder _doctypeName = new();
+    private bool _doctypeNameSet;
+    private readonly StringBuilder _doctypePublicId = new();
+    private bool _doctypePublicIdSet;
+    private readonly StringBuilder _doctypeSystemId = new();
+    private bool _doctypeSystemIdSet;
+    private bool _doctypeForceQuirks;
 
     public HtmlTokenizer(IParseErrorSink? errorSink = null)
     {
@@ -176,6 +187,45 @@ public sealed partial class HtmlTokenizer
                 DispatchRawState(state, c);
                 return;
 
+            // M1-01e: comment + CDATA + bogus-comment + markup-declaration-open.
+            case TokenizerState.MarkupDeclarationOpen:
+            case TokenizerState.CommentStart:
+            case TokenizerState.CommentStartDash:
+            case TokenizerState.Comment:
+            case TokenizerState.CommentLessThanSign:
+            case TokenizerState.CommentLessThanSignBang:
+            case TokenizerState.CommentLessThanSignBangDash:
+            case TokenizerState.CommentLessThanSignBangDashDash:
+            case TokenizerState.CommentEndDash:
+            case TokenizerState.CommentEnd:
+            case TokenizerState.CommentEndBang:
+            case TokenizerState.BogusComment:
+            case TokenizerState.CdataSection:
+            case TokenizerState.CdataSectionBracket:
+            case TokenizerState.CdataSectionEnd:
+                DispatchCommentState(state, c);
+                return;
+
+            // M1-01f: doctype states.
+            case TokenizerState.Doctype:
+            case TokenizerState.BeforeDoctypeName:
+            case TokenizerState.DoctypeName:
+            case TokenizerState.AfterDoctypeName:
+            case TokenizerState.AfterDoctypePublicKeyword:
+            case TokenizerState.BeforeDoctypePublicIdentifier:
+            case TokenizerState.DoctypePublicIdentifierDoubleQuoted:
+            case TokenizerState.DoctypePublicIdentifierSingleQuoted:
+            case TokenizerState.AfterDoctypePublicIdentifier:
+            case TokenizerState.BetweenDoctypePublicAndSystemIdentifiers:
+            case TokenizerState.AfterDoctypeSystemKeyword:
+            case TokenizerState.BeforeDoctypeSystemIdentifier:
+            case TokenizerState.DoctypeSystemIdentifierDoubleQuoted:
+            case TokenizerState.DoctypeSystemIdentifierSingleQuoted:
+            case TokenizerState.AfterDoctypeSystemIdentifier:
+            case TokenizerState.BogusDoctype:
+                DispatchDoctypeState(state, c);
+                return;
+
             default:
                 throw new NotImplementedException(
                     $"Tokenizer state '{state}' not implemented yet. " +
@@ -220,6 +270,47 @@ public sealed partial class HtmlTokenizer
             case TokenizerState.RawtextEndTagName:
             case TokenizerState.Plaintext:
                 StepRawEof();
+                _eofProcessed = true;
+                return true;
+
+            // M1-01e EOF handling.
+            case TokenizerState.MarkupDeclarationOpen:
+            case TokenizerState.CommentStart:
+            case TokenizerState.CommentStartDash:
+            case TokenizerState.Comment:
+            case TokenizerState.CommentLessThanSign:
+            case TokenizerState.CommentLessThanSignBang:
+            case TokenizerState.CommentLessThanSignBangDash:
+            case TokenizerState.CommentLessThanSignBangDashDash:
+            case TokenizerState.CommentEndDash:
+            case TokenizerState.CommentEnd:
+            case TokenizerState.CommentEndBang:
+            case TokenizerState.BogusComment:
+            case TokenizerState.CdataSection:
+            case TokenizerState.CdataSectionBracket:
+            case TokenizerState.CdataSectionEnd:
+                StepCommentEof();
+                _eofProcessed = true;
+                return true;
+
+            // M1-01f EOF handling.
+            case TokenizerState.Doctype:
+            case TokenizerState.BeforeDoctypeName:
+            case TokenizerState.DoctypeName:
+            case TokenizerState.AfterDoctypeName:
+            case TokenizerState.AfterDoctypePublicKeyword:
+            case TokenizerState.BeforeDoctypePublicIdentifier:
+            case TokenizerState.DoctypePublicIdentifierDoubleQuoted:
+            case TokenizerState.DoctypePublicIdentifierSingleQuoted:
+            case TokenizerState.AfterDoctypePublicIdentifier:
+            case TokenizerState.BetweenDoctypePublicAndSystemIdentifiers:
+            case TokenizerState.AfterDoctypeSystemKeyword:
+            case TokenizerState.BeforeDoctypeSystemIdentifier:
+            case TokenizerState.DoctypeSystemIdentifierDoubleQuoted:
+            case TokenizerState.DoctypeSystemIdentifierSingleQuoted:
+            case TokenizerState.AfterDoctypeSystemIdentifier:
+            case TokenizerState.BogusDoctype:
+                StepDoctypeEof();
                 _eofProcessed = true;
                 return true;
 

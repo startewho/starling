@@ -161,12 +161,8 @@ public sealed partial class HtmlTokenizer
         switch (c)
         {
             case '!':
-                // TODO(wp:M1-01e): switch to MarkupDeclarationOpen.
-                // Until then, emit '<!' as text so we don't crash on doctypes
-                // and comments. This is incorrect per spec; M1-01e replaces.
-                _emitted.Enqueue(new CharacterToken('<'));
-                _emitted.Enqueue(new CharacterToken('!'));
-                _state = TokenizerState.Data;
+                _state = TokenizerState.MarkupDeclarationOpen;
+                _tempBuffer.Clear();
                 break;
 
             case '/':
@@ -174,13 +170,13 @@ public sealed partial class HtmlTokenizer
                 break;
 
             case '?':
-                // §13.2.5.6 routes to BogusComment (M1-01e). Until then we
-                // emit a parse error and drop into Data so we keep moving.
+                // §13.2.5.6: parse error; create empty comment; reconsume in
+                // bogus comment state.
                 _errors.Report(
                     HtmlParseError.UnexpectedQuestionMarkInsteadOfTagName,
                     _line, _column);
-                _emitted.Enqueue(new CharacterToken('<'));
-                Reconsume(c, TokenizerState.Data);
+                _commentData.Clear();
+                Reconsume(c, TokenizerState.BogusComment);
                 break;
 
             default:

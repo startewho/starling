@@ -65,6 +65,65 @@ public enum HtmlParseError
 
     /// <summary>Stray <c>/</c> in a tag, e.g. <c>&lt;a /b&gt;</c>.</summary>
     UnexpectedSolidusInTag,
+
+    // M1-01e — comment + CDATA states ------------------------------------
+
+    /// <summary><c>&lt;!</c> not followed by <c>--</c>, <c>DOCTYPE</c>, or
+    /// <c>[CDATA[</c>. Falls into bogus comment.</summary>
+    IncorrectlyOpenedComment,
+
+    /// <summary><c>&lt;!--&gt;</c> or <c>&lt;!---&gt;</c> — empty comment closed too soon.</summary>
+    AbruptClosingOfEmptyComment,
+
+    /// <summary><c>&lt;!-- &lt;!--</c> — nested comment start observed.</summary>
+    NestedComment,
+
+    /// <summary><c>&lt;!-- foo --!&gt;</c> — bogus close.</summary>
+    IncorrectlyClosedComment,
+
+    /// <summary><c>&lt;![CDATA[</c> seen in HTML content (allowed only in foreign content).</summary>
+    CdataInHtmlContent,
+
+    // M1-01f — doctype states --------------------------------------------
+
+    /// <summary><c>&lt;!DOCTYPE</c> followed by non-whitespace, non-EOF, non-<c>&gt;</c>.</summary>
+    MissingWhitespaceBeforeDoctypeName,
+
+    /// <summary><c>&lt;!DOCTYPE&gt;</c> with no name.</summary>
+    MissingDoctypeName,
+
+    /// <summary>Doctype public identifier closes with <c>&gt;</c> instead of the quote.</summary>
+    AbruptDoctypePublicIdentifier,
+
+    /// <summary>Doctype system identifier closes with <c>&gt;</c> instead of the quote.</summary>
+    AbruptDoctypeSystemIdentifier,
+
+    /// <summary><c>PUBLIC "..." "..."</c> with no whitespace between identifiers.</summary>
+    MissingWhitespaceBetweenDoctypePublicAndSystemIdentifiers,
+
+    /// <summary>Public identifier started without an opening quote.</summary>
+    MissingQuoteBeforeDoctypePublicIdentifier,
+
+    /// <summary>System identifier started without an opening quote.</summary>
+    MissingQuoteBeforeDoctypeSystemIdentifier,
+
+    /// <summary><c>PUBLIC&gt;</c> with no identifier.</summary>
+    MissingDoctypePublicIdentifier,
+
+    /// <summary><c>SYSTEM&gt;</c> with no identifier.</summary>
+    MissingDoctypeSystemIdentifier,
+
+    /// <summary><c>PUBLIC</c> not followed by whitespace.</summary>
+    MissingWhitespaceAfterDoctypePublicKeyword,
+
+    /// <summary><c>SYSTEM</c> not followed by whitespace.</summary>
+    MissingWhitespaceAfterDoctypeSystemKeyword,
+
+    /// <summary>Extra content after the system identifier; drops into bogus doctype.</summary>
+    UnexpectedCharacterAfterDoctypeSystemIdentifier,
+
+    /// <summary>Doctype name followed by garbage that isn't <c>PUBLIC</c>/<c>SYSTEM</c>.</summary>
+    InvalidCharacterSequenceAfterDoctypeName,
 }
 
 /// <summary>
