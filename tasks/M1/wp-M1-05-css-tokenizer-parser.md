@@ -1,10 +1,10 @@
 ---
 id: "wp:M1-05-css-tokenizer-parser"
 milestone: "M1"
-status: "claimed"
-claimed_by: "agent-test-smoke"
-claimed_at: "2026-05-11T15:31:10Z"
-branch: "wp-M1-05-css-tokenizer-parser"
+status: "available"
+claimed_by: ""
+claimed_at: ""
+branch: ""
 depends_on:
   - "wp:M0-02-common"
 blocks:
@@ -32,3 +32,4 @@ WPT `css/css-syntax/**` ≥ 80%.
 ## Handoff log
 - 2026-05-11T15:20Z — created.
 - 2026-05-11T15:31:10Z — claimed by agent-test-smoke, branch `wp-M1-05-css-tokenizer-parser`
+- 2026-05-11T15:31:15Z — released (was agent-test-smoke, claimed 2026-05-11T15:31:10Z)
