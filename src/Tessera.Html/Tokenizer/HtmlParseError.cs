@@ -124,6 +124,32 @@ public enum HtmlParseError
 
     /// <summary>Doctype name followed by garbage that isn't <c>PUBLIC</c>/<c>SYSTEM</c>.</summary>
     InvalidCharacterSequenceAfterDoctypeName,
+
+    // M1-01g — character reference states ------------------------------
+
+    /// <summary>Named character reference matched without a trailing semicolon (e.g. <c>&amp;amp foo</c>).</summary>
+    MissingSemicolonAfterCharacterReference,
+
+    /// <summary>An ampersand-form reference (<c>&amp;foo;</c>) isn't in the table.</summary>
+    UnknownNamedCharacterReference,
+
+    /// <summary><c>&amp;#;</c> or <c>&amp;#x;</c> with no digits.</summary>
+    AbsenceOfDigitsInNumericCharacterReference,
+
+    /// <summary><c>&amp;#0;</c>.</summary>
+    NullCharacterReference,
+
+    /// <summary>Numeric reference &gt; U+10FFFF.</summary>
+    CharacterReferenceOutsideUnicodeRange,
+
+    /// <summary>Numeric reference inside the UTF-16 surrogate range.</summary>
+    SurrogateCharacterReference,
+
+    /// <summary>Numeric reference points at a Unicode noncharacter.</summary>
+    NoncharacterCharacterReference,
+
+    /// <summary>Numeric reference points at a C0 / C1 control that isn't whitespace.</summary>
+    ControlCharacterReference,
 }
 
 /// <summary>

@@ -93,9 +93,10 @@ public sealed partial class HtmlTokenizer
         switch (c)
         {
             case '&':
-                // TODO(wp:M1-01g): return state = Rcdata, switch to
-                // CharacterReference. Until then, emit '&' as literal.
-                _emitted.Enqueue(new CharacterToken('&'));
+                _returnState = TokenizerState.Rcdata;
+                _tempBuffer.Clear();
+                _tempBuffer.Append('&');
+                _state = TokenizerState.CharacterReference;
                 break;
             case '<':
                 _state = TokenizerState.RcdataLessThanSign;

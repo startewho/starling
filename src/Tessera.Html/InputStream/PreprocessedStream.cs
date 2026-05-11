@@ -109,6 +109,24 @@ public sealed class PreprocessedStream
     }
 
     /// <summary>
+    /// Look at the code point <paramref name="offset"/> positions past
+    /// <see cref="Peek"/>. <c>-1</c> if past the buffered region.
+    /// </summary>
+    public int PeekAt(int offset)
+    {
+        var idx = _pos + offset;
+        if (idx < 0 || idx >= _buffer.Count) return -1;
+        return _buffer[idx];
+    }
+
+    /// <summary>Advance the read position by <paramref name="n"/> code points.</summary>
+    public void Advance(int n)
+    {
+        _pos += n;
+        if (_pos > _buffer.Count) _pos = _buffer.Count;
+    }
+
+    /// <summary>
     /// Number of code points still buffered.
     /// </summary>
     public int Remaining => _buffer.Count - _pos;

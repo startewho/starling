@@ -374,8 +374,10 @@ public sealed partial class HtmlTokenizer
                 _state = TokenizerState.AfterAttributeValueQuoted;
                 return;
             case '&':
-                // TODO(wp:M1-01g): set return state, switch to CharacterReference.
-                _attrValue.Append('&');
+                _returnState = TokenizerState.AttributeValueDoubleQuoted;
+                _tempBuffer.Clear();
+                _tempBuffer.Append('&');
+                _state = TokenizerState.CharacterReference;
                 return;
             case 0:
                 _errors.Report(HtmlParseError.UnexpectedNullCharacter, _line, _column);
@@ -396,8 +398,10 @@ public sealed partial class HtmlTokenizer
                 _state = TokenizerState.AfterAttributeValueQuoted;
                 return;
             case '&':
-                // TODO(wp:M1-01g): character reference.
-                _attrValue.Append('&');
+                _returnState = TokenizerState.AttributeValueSingleQuoted;
+                _tempBuffer.Clear();
+                _tempBuffer.Append('&');
+                _state = TokenizerState.CharacterReference;
                 return;
             case 0:
                 _errors.Report(HtmlParseError.UnexpectedNullCharacter, _line, _column);
@@ -420,8 +424,10 @@ public sealed partial class HtmlTokenizer
         switch (c)
         {
             case '&':
-                // TODO(wp:M1-01g): character reference.
-                _attrValue.Append('&');
+                _returnState = TokenizerState.AttributeValueUnquoted;
+                _tempBuffer.Clear();
+                _tempBuffer.Append('&');
+                _state = TokenizerState.CharacterReference;
                 return;
             case '>':
                 _state = TokenizerState.Data;

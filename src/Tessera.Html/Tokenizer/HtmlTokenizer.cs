@@ -76,6 +76,15 @@ public sealed partial class HtmlTokenizer
     private bool _doctypeSystemIdSet;
     private bool _doctypeForceQuirks;
 
+    // --- Character-reference state (populated by M1-01g states) -------------
+    // Spec §13.2.5.72: many states route to CharacterReference; the return
+    // state is the state we go back to. When the return state is one of the
+    // AttributeValue* variants, decoded chars are appended to the attribute
+    // value buffer instead of being emitted as character tokens.
+    private TokenizerState _returnState = TokenizerState.Data;
+    private uint _charRefCode;
+    private bool _charRefOverflowed;
+
     public HtmlTokenizer(IParseErrorSink? errorSink = null)
     {
         _errors = errorSink ?? IParseErrorSink.Null;
@@ -228,6 +237,19 @@ public sealed partial class HtmlTokenizer
                 DispatchCommentState(state, c);
                 return;
 
+            // M1-01g: character-reference states.
+            case TokenizerState.CharacterReference:
+            case TokenizerState.NamedCharacterReference:
+            case TokenizerState.AmbiguousAmpersand:
+            case TokenizerState.NumericCharacterReference:
+            case TokenizerState.HexadecimalCharacterReferenceStart:
+            case TokenizerState.DecimalCharacterReferenceStart:
+            case TokenizerState.HexadecimalCharacterReference:
+            case TokenizerState.DecimalCharacterReference:
+            case TokenizerState.NumericCharacterReferenceEnd:
+                DispatchCharRefState(state, c);
+                return;
+
             // M1-01f: doctype states.
             case TokenizerState.Doctype:
             case TokenizerState.BeforeDoctypeName:
@@ -338,6 +360,20 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
+            // M1-01g EOF handling.
+            case TokenizerState.CharacterReference:
+            case TokenizerState.NamedCharacterReference:
+            case TokenizerState.AmbiguousAmpersand:
+            case TokenizerState.NumericCharacterReference:
+            case TokenizerState.HexadecimalCharacterReferenceStart:
+            case TokenizerState.DecimalCharacterReferenceStart:
+            case TokenizerState.HexadecimalCharacterReference:
+            case TokenizerState.DecimalCharacterReference:
+            case TokenizerState.NumericCharacterReferenceEnd:
+                StepCharRefEof();
+                _eofProcessed = true;
+                return true;
+
             // M1-01f EOF handling.
             case TokenizerState.Doctype:
             case TokenizerState.BeforeDoctypeName:
@@ -374,10 +410,10 @@ public sealed partial class HtmlTokenizer
         switch (c)
         {
             case '&':
-                // TODO(wp:M1-01g): set return state Data, switch to
-                // CharacterReference. Until then, emit '&' as a literal so
-                // a Data+Tag-only tokenizer is observably useful.
-                _emitted.Enqueue(new CharacterToken('&'));
+                _returnState = TokenizerState.Data;
+                _tempBuffer.Clear();
+                _tempBuffer.Append('&');
+                _state = TokenizerState.CharacterReference;
                 break;
 
             case '<':
