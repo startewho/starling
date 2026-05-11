@@ -23,15 +23,15 @@ order: milestone, then numeric id, then sub-letter.
 
 | ID | Status | Owner | Subsystem |
 |---|---|---|---|
-| [wp:M1-01-html-tokenizer](M1/wp-M1-01-html-tokenizer.md) | 🟡 in_progress (decomposed into a–h) | — | Tessera.Html |
+| [wp:M1-01-html-tokenizer](M1/wp-M1-01-html-tokenizer.md) | 🟢 complete | — | Tessera.Html |
 | [wp:M1-01a-tokenizer-scaffold](M1/wp-M1-01a-tokenizer-scaffold.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
 | [wp:M1-01b-tokenizer-tag-states](M1/wp-M1-01b-tokenizer-tag-states.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
 | [wp:M1-01c-tokenizer-rcdata-rawtext](M1/wp-M1-01c-tokenizer-rcdata-rawtext.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
 | [wp:M1-01d-tokenizer-script](M1/wp-M1-01d-tokenizer-script.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Html |
 | [wp:M1-01e-tokenizer-comment-cdata](M1/wp-M1-01e-tokenizer-comment-cdata.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
 | [wp:M1-01f-tokenizer-doctype](M1/wp-M1-01f-tokenizer-doctype.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
-| [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) | 🟡 claimed | agent-copilot-gpt-5.5 | Tessera.Html |
-| [wp:M1-01h-tokenizer-html5lib](M1/wp-M1-01h-tokenizer-html5lib.md) | ⚫ blocked on M1-01b…g | — | Tessera.Html |
+| [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
+| [wp:M1-01h-tokenizer-html5lib](M1/wp-M1-01h-tokenizer-html5lib.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Html |
 | [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) | ⚫ blocked on M1-01h + M1-03 | — | Tessera.Html |
 | [wp:M1-03-dom-core](M1/wp-M1-03-dom-core.md) | 🟡 claimed | agent-copilot-gpt-5.5 | Tessera.Dom |
 | [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) | ⚫ blocked on M1-03 | — | Tessera.Dom |
@@ -64,7 +64,6 @@ For a new agent: claim any of these and start.
 ## In-progress
 
 - **wp:M1-03-dom-core** — agent-copilot-gpt-5.5, branch `wp-M1-03-dom-core`.
-- **wp:M1-01g-tokenizer-entities** — agent-copilot-gpt-5.5, branch `wp-M1-01g-tokenizer-entities`.
 - **wp:M1-05-css-tokenizer-parser** — agent-copilot-gpt-5.5, branch `wp-M1-05-css-tokenizer-parser`, worktree `../tessera-wp-M1-05-css-tokenizer-parser`.
 
 ## Recently completed
@@ -74,5 +73,7 @@ For a new agent: claim any of these and start.
 - **wp:M1-01c-tokenizer-rcdata-rawtext** — agent-claude-cody, 2026-05-11. RCDATA/RAWTEXT/PLAINTEXT (9 states), 11 tests, public `SetState` seam for tree builder.
 - **wp:M1-01d-tokenizer-script** — agent-copilot-gpt-5.5, 2026-05-11. ScriptData escaped/double-escaped family (15 states), 6 tests.
 - **wp:M1-01e + wp:M1-01f** — agent-claude-cody, 2026-05-11. Comment/CDATA (15 states) + Doctype (17 states) bundled because they share the `MarkupDeclarationOpen` entry. 23 tests. `tessera tokenize` now emits proper `Doctype` and `Comment` tokens.
+- **wp:M1-01g-tokenizer-entities** — agent-claude-cody, 2026-05-11. Character-reference state cluster and initial named entity table.
+- **wp:M1-01h-tokenizer-html5lib** — agent-copilot-gpt-5.5, 2026-05-11. html5lib tokenizer suite wired at 7032/7032, full entity table generated from WHATWG data, `HtmlParser.Parse` flipped to tokenizer-backed parser.
 
-Full repo: **117/117** tests green. WHATWG HTML tokenizer state coverage: **71 of 80** states implemented. Remaining cluster: Character references (9). After that lands, `wp:M1-01h-tokenizer-html5lib` flips the public `HtmlParser` façade to the WHATWG pipeline.
+Full repo: **7167/7167** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**.
