@@ -2,10 +2,11 @@
 id: "wp:M3-02a-js-parser-expressions"
 parent: "wp:M3-02-js-parser"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-11T17:45:00Z"
 branch: "wp-M3-02a-js-parser-expressions"
+completed_at: "2026-05-11T17:55:00Z"
 depends_on:
   - "wp:M3-01-js-lexer"
 blocks:
@@ -57,3 +58,11 @@ precedence + associativity per ES2024 §13.
 ## Handoff log
 - 2026-05-11T17:45Z — created and claimed by agent-claude-cody. Claim
   posted as its own atomic commit before any implementation.
+- 2026-05-11T17:55Z — landed Ast/Expressions.cs (21 node types) +
+  Parse/JsParser.cs (recursive-descent over ES2024 §13.16 precedence
+  ladder). 34 unit tests covering precedence, associativity (especially
+  ** right-assoc and assignment right-assoc), unary/update with the
+  no-LT rule, optional chaining (?., ?.[, ?.()), new with member chain,
+  array elision + spread, object shorthand + computed + reserved-word
+  keys, sequence, and basic syntax-error reporting. 245/245 full repo.
+  Unblocks wp:M3-02b (statements).
