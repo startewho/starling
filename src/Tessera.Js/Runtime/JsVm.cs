@@ -32,11 +32,22 @@ public sealed class JsVm
 
     /// <summary>Run a chunk to completion. Returns the topmost value at Halt,
     /// or Undefined if the stack was empty.</summary>
-    public JsValue Run(Chunk chunk)
+    public JsValue Run(Chunk chunk) => Run(chunk, args: []);
+
+    /// <summary>
+    /// Internal entry that copies <paramref name="args"/> into the first N
+    /// local slots before dispatching. Top-level scripts call with an
+    /// empty array; <c>Opcode.Call</c> for a user-defined
+    /// <see cref="JsFunction"/> recurses through this entry, so the .NET
+    /// call stack mirrors the JS call stack.
+    /// </summary>
+    private JsValue Run(Chunk chunk, JsValue[] args)
     {
         var stack = new JsValue[MaxStack];
         var sp = 0;
         var locals = new JsValue[Math.Max(chunk.LocalCount, 1)];
+        for (var k = 0; k < args.Length && k < locals.Length; k++)
+            locals[k] = args[k];
         var code = chunk.Code;
         var constants = chunk.Constants;
         var ip = 0;
@@ -234,13 +245,33 @@ public sealed class JsVm
                 case Opcode.Call:
                 {
                     var argc = ReadU8();
-                    var args = new JsValue[argc];
-                    for (var i = argc - 1; i >= 0; i--) args[i] = Pop();
+                    var callArgs = new JsValue[argc];
+                    for (var i = argc - 1; i >= 0; i--) callArgs[i] = Pop();
                     var callee = Pop();
                     if (callee.IsObject && callee.AsObject is JsNativeFunction native)
-                        Push(native.Body(args));
+                    {
+                        Push(native.Body(callArgs));
+                    }
+                    else if (callee.IsObject && callee.AsObject is JsFunction jsFn)
+                    {
+                        // Reentrant call — mirrors JS call stack on .NET's.
+                        var ret = Run(jsFn.Body, callArgs);
+                        Push(ret);
+                    }
                     else
+                    {
                         throw new JsThrow(JsValue.String($"not a function: {callee}"));
+                    }
+                    break;
+                }
+
+                // LoadFunction — pull a pre-compiled JsFunction out of the
+                // constant pool and wrap as an object value.
+                case Opcode.LoadFunction:
+                {
+                    var idx = ReadU16();
+                    var fn = (JsFunction)constants[idx]!;
+                    Push(JsValue.Object(fn));
                     break;
                 }
 

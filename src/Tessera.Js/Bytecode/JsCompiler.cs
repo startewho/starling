@@ -59,10 +59,21 @@ public sealed class JsCompiler
 
     private void EmitProgram(Program p, bool keepLastExpression)
     {
+        // Hoist FunctionDeclarations: compile bodies, allocate locals,
+        // emit StoreLocal in declaration order so they're callable before
+        // their textual position (matches §10.2.11 / §13.2.1 var hoisting
+        // for function declarations).
+        HoistFunctionDeclarations(p.Body);
+
         for (var i = 0; i < p.Body.Count; i++)
         {
             var s = p.Body[i];
             var isLast = i == p.Body.Count - 1;
+            if (s is FunctionDeclaration)
+            {
+                // Already hoisted; nothing to emit at the textual position.
+                continue;
+            }
             if (isLast && keepLastExpression && s is ExpressionStatement es)
             {
                 EmitExpression(es.Expression); // skip trailing Pop
@@ -73,6 +84,57 @@ public sealed class JsCompiler
             }
         }
         _b.Emit(Opcode.Halt);
+    }
+
+    private void HoistFunctionDeclarations(IReadOnlyList<Statement> body)
+    {
+        foreach (var s in body)
+        {
+            if (s is not FunctionDeclaration fd) continue;
+            // Compile the body into a sub-chunk via a fresh JsCompiler.
+            var sub = new JsCompiler();
+            sub.EmitFunctionBody(fd);
+            var chunk = sub._b.Build(fd.Name.Name);
+            var fn = new Runtime.JsFunction(fd.Name.Name, chunk, CountSimpleParams(fd.Params));
+            var idx = _b.AddConstant(fn);
+            // Bind by name on the global object so recursive calls inside the
+            // function body — which see only their own locals + globals —
+            // can resolve the name. Closures (lexical capture) will land in
+            // wp:M3-04c and replace this with proper upvalues.
+            var nameIdx = _b.AddConstant(fd.Name.Name);
+            _b.EmitU16(Opcode.LoadFunction, idx);
+            _b.EmitU16(Opcode.StoreGlobal, nameIdx);
+        }
+    }
+
+    private static int CountSimpleParams(IReadOnlyList<Expression> ps)
+    {
+        // Spread/rest doesn't add to arity for first-cut binding.
+        var n = 0;
+        foreach (var p in ps) if (p is Identifier) n++;
+        return n;
+    }
+
+    /// <summary>Compile a function body. Parameters get the first N local
+    /// slots; the body's own var declarations follow.</summary>
+    private void EmitFunctionBody(FunctionDeclaration fd)
+    {
+        // Reserve a local slot per simple-identifier parameter so the
+        // callee sees args in slots 0..N-1.
+        foreach (var p in fd.Params)
+        {
+            if (p is Identifier id)
+            {
+                var slot = _b.ReserveLocal();
+                _scopes[^1][id.Name] = slot;
+                // Parameters arrive in their slots before the body runs;
+                // no DeclareLocal needed.
+            }
+            // SpreadElement (rest params) deferred to M3-04c.
+        }
+        foreach (var inner in fd.Body.Body) EmitStatement(inner);
+        // Implicit `return undefined` if the body didn't return.
+        _b.Emit(Opcode.ReturnUndefined);
     }
 
     // -----------------------------------------------------------------------
@@ -138,8 +200,8 @@ public sealed class JsCompiler
                 _b.Emit(Opcode.Nop); // M3-05+ may emit a real debugger trap
                 return;
             case FunctionDeclaration:
-                // TODO(wp:M3-04): hoisting + sub-chunk compilation.
-                _b.Emit(Opcode.Nop);
+                // Hoisted at scope entry by HoistFunctionDeclarations;
+                // textual position emits nothing.
                 return;
         }
         throw new NotSupportedException(

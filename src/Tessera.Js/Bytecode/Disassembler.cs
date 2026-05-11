@@ -32,6 +32,7 @@ public static class Disassembler
             {
                 // u16 operand opcodes
                 case Opcode.LoadConst:
+                case Opcode.LoadFunction:
                 case Opcode.LoadGlobal:
                 case Opcode.StoreGlobal:
                 case Opcode.LoadProperty:
