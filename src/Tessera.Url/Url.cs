@@ -3,9 +3,11 @@ using System.Text;
 namespace Tessera.Url;
 
 /// <summary>
-/// Minimal URL representation. The full WHATWG URL parser is M2 work; for M0
-/// we only need enough to recognize <c>file://</c>, <c>http://</c>, and
-/// <c>https://</c> schemes and surface the path. See 03_NETWORKING.md.
+/// URL value type modeled on the WHATWG URL spec
+/// (<see href="https://url.spec.whatwg.org/#concept-url"/>). Constructed
+/// either positionally (legacy M0 shape) or via the
+/// <see cref="UrlParser.Parse(string)"/> state machine which populates the
+/// optional <see cref="Username"/>/<see cref="Password"/> as well.
 /// </summary>
 public sealed record Url(
     string Scheme,
@@ -15,9 +17,23 @@ public sealed record Url(
     string? Query,
     string? Fragment)
 {
+    /// <summary>Optional username component of the URL's authority.</summary>
+    public string? Username { get; init; }
+
+    /// <summary>Optional password component of the URL's authority.</summary>
+    public string? Password { get; init; }
+
     public bool IsFile => Scheme.Equals("file", StringComparison.OrdinalIgnoreCase);
     public bool IsHttp => Scheme.Equals("http", StringComparison.OrdinalIgnoreCase);
     public bool IsHttps => Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True if Scheme is one of <c>http</c>, <c>https</c>,
+    /// <c>ws</c>, <c>wss</c>, <c>ftp</c>, <c>file</c> — the "special schemes"
+    /// from §3.1 with built-in default port + authority rules.</summary>
+    public bool IsSpecial => SpecialSchemes.IsSpecial(Scheme);
+
+    /// <summary>Default port for the scheme, or null if none defined.</summary>
+    public int? DefaultPort => SpecialSchemes.DefaultPort(Scheme);
 
     public override string ToString()
     {
@@ -26,6 +42,13 @@ public sealed record Url(
         if (Host is not null || IsFile)
         {
             sb.Append("//");
+            if (Username is not null && Username.Length > 0)
+            {
+                sb.Append(Username);
+                if (Password is not null && Password.Length > 0)
+                    sb.Append(':').Append(Password);
+                sb.Append('@');
+            }
             if (Host is not null) sb.Append(Host);
             if (Port is int p) sb.Append(':').Append(p);
         }
