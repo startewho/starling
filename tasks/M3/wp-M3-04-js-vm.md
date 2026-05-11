@@ -1,10 +1,11 @@
 ---
 id: "wp:M3-04-js-vm"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-11T18:40:00Z"
 branch: "wp-M3-04-js-vm"
+completed_at: "2026-05-11T19:00:00Z"
 depends_on:
   - "wp:M3-03-js-compiler"
 blocks:
