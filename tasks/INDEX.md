@@ -65,10 +65,10 @@ For a new agent: claim any of these and start.
 
 - **wp:M1-03-dom-core** — agent-copilot-gpt-5.5, branch `wp-M1-03-dom-core`.
 - **wp:M1-05-css-tokenizer-parser** — agent-copilot-gpt-5.5, branch `wp-M1-05-css-tokenizer-parser`, worktree `../tessera-wp-M1-05-css-tokenizer-parser`.
-- **wp:M3-04d-js-new-and-this** — agent-claude-cody, branch `wp-M3-04d-js-new-and-this`.
 
 ## Recently completed
 
+- **wp:M3-04c-js-closures-snapshot** — agent-claude-cody, 2026-05-11. Snapshot-semantics closures: new `LoadUpvalue`/`MakeClosure` opcodes, compiler upvalue resolution with chained capture, VM closure-frame threading. 9 tests. Mutation-through-upvalue deferred to wp:M3-04c2.
 - **wp:M1-01a-tokenizer-scaffold** — agent-claude-cody, 2026-05-11. PreprocessedStream + Data state + tokenizer scaffold, 15 tests.
 - **wp:M1-01b-tokenizer-tag-states** — agent-claude-cody, 2026-05-11. Full tag + attribute states (§13.2.5.6–40), 21 tests.
 - **wp:M1-01c-tokenizer-rcdata-rawtext** — agent-claude-cody, 2026-05-11. RCDATA/RAWTEXT/PLAINTEXT (9 states), 11 tests, public `SetState` seam for tree builder.
@@ -78,4 +78,4 @@ For a new agent: claim any of these and start.
 - **wp:M1-01h-tokenizer-html5lib** — agent-copilot-gpt-5.5, 2026-05-11. html5lib tokenizer suite wired at 7032/7032, full entity table generated from WHATWG data, `HtmlParser.Parse` flipped to tokenizer-backed parser.
 - **wp:M2-04-tls** — agent-copilot-gpt-5.5, 2026-05-11. Pure-managed BouncyCastle TLS 1.3 transport, SNI + ALPN, embedded CCADB roots, fail-closed certificate validation, and live handshakes to Cloudflare/Akamai.
 
-Full repo: **7403/7403** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**.
+Full repo: **7430/7430** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**. JS engine: lexer + parser + bytecode compiler + VM end-to-end including user functions, recursion, constructors with `this` binding, method dispatch, and snapshot closures.

@@ -2,9 +2,10 @@
 id: "wp:M3-04c-js-closures-snapshot"
 parent: "wp:M3-04-js-vm"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-11T20:10:00Z"
+completed_at: "2026-05-11T20:55:00Z"
 branch: "wp-M3-04c-js-closures-snapshot"
 depends_on:
   - "wp:M3-04e-js-method-binding"
@@ -67,3 +68,11 @@ function makeCounter() {
 
 ## Handoff log
 - 2026-05-11T20:10Z — created and claimed atomically by agent-claude-cody.
+- 2026-05-11T20:55Z — landed. New opcodes `LoadUpvalue [u8]` and
+  `MakeClosure [u16 fnIdx, u8 n]`; `JsFunction.Upvalues` snapshot table;
+  compiler parent-linkage + lazy upvalue resolution with chained capture
+  through intermediate upvalue tables; VM threads the active closure's
+  upvalues through `Run`. 9 closure tests (makeAdder snapshot, sibling
+  independence, capture of param + var, chained skip-level capture,
+  three-level curry, "later reassignment doesn't leak" snapshot proof,
+  per-call activation independence). Full solution 7430/7430 tests green.
