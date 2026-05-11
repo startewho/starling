@@ -1,10 +1,11 @@
 ---
 id: "wp:M1-07-css-cascade"
 milestone: "M1"
-status: "blocked"
-claimed_by: ""
-claimed_at: ""
-branch: ""
+status: "complete"
+claimed_by: "agent-copilot-gpt-5.5"
+claimed_at: "2026-05-11T20:17:57Z"
+branch: "wp-M1-07-css-cascade"
+completed_at: "2026-05-11T20:17:57Z"
 depends_on:
   - "wp:M1-06-css-selectors"
 blocks:
@@ -26,3 +27,4 @@ WPT `css/css-cascade/**` ≥ 80%.
 
 ## Handoff log
 - 2026-05-11T15:20Z — created.
+- 2026-05-11T20:17Z — picked up after wp:M1-06; implemented style origins, property registry/shorthands, value parsing, computed style, style engine cascade, custom property resolution, and UA stylesheet defaults with focused cascade tests.

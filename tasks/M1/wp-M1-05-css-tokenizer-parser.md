@@ -1,10 +1,11 @@
 ---
 id: "wp:M1-05-css-tokenizer-parser"
 milestone: "M1"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-copilot-gpt-5.5"
 claimed_at: "2026-05-11T15:41:40Z"
 branch: "wp-M1-05-css-tokenizer-parser"
+completed_at: "2026-05-11T20:17:57Z"
 depends_on:
   - "wp:M0-02-common"
 blocks:
@@ -35,3 +36,4 @@ WPT `css/css-syntax/**` ≥ 80%.
 - 2026-05-11T15:31:15Z — released (was agent-test-smoke, claimed 2026-05-11T15:31:10Z)
 - 2026-05-11T15:41Z — claimed by agent-copilot-gpt-5.5 in sibling worktree `../tessera-wp-M1-05-css-tokenizer-parser`.
 - 2026-05-11T15:41Z — landed tokenizer/parser foundation: CSS token types, scanner, stylesheet/rule/declaration/component-value AST, parser for rules/at-rules/declarations/blocks/functions, and 5 focused tokenizer/parser tests. `dotnet build Tessera.sln`, `dotnet test Tessera.sln`, and CSS project tests pass in the worktree.
+- 2026-05-11T20:17Z — completed dependency while picking up M1-06/M1-07: kept tokenizer/parser tests green, preserved selector prelude whitespace for downstream matching, and unblocked selectors/cascade.
