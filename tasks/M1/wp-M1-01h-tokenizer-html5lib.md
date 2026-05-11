@@ -1,0 +1,37 @@
+---
+id: "wp:M1-01h-tokenizer-html5lib"
+parent: "wp:M1-01-html-tokenizer"
+milestone: "M1"
+status: "available"
+claimed_by: ""
+claimed_at: ""
+branch: ""
+depends_on:
+  - "wp:M1-01b-tokenizer-tag-states"
+  - "wp:M1-01c-tokenizer-rcdata-rawtext"
+  - "wp:M1-01d-tokenizer-script"
+  - "wp:M1-01e-tokenizer-comment-cdata"
+  - "wp:M1-01f-tokenizer-doctype"
+  - "wp:M1-01g-tokenizer-entities"
+blocks:
+  - "wp:M1-02-html-tree-builder"
+subsystem: "Tessera.Html"
+plan_refs:
+  - "browser-plan/04_HTML_PARSING.md#tokenizer"
+  - "browser-plan/12_TESTING.md"
+---
+
+# wp:M1-01h — html5lib tokenizer suite to 100%
+
+## Goal
+Wire `testdata/spec/html5lib-tests/tokenizer/` (vendored subtree) as an xUnit
+data-driven test. Drive every red case to green. Flip the public
+`HtmlParser.Parse` façade to the WHATWG tokenizer + tree builder pipeline.
+
+## Acceptance
+- html5lib tokenizer suite: **100%**.
+- `HtmlParser.Parse` now uses the WHATWG tokenizer. The M0
+  `MinimalHtmlParser` stays for benchmarking and is removed in a follow-up.
+
+## Handoff log
+- 2026-05-11T15:20Z — created.

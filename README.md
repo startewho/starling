@@ -49,6 +49,12 @@ Each subsystem has a focused doc in [`browser-plan/`](browser-plan/). For agent-
 packages with explicit inputs / outputs / acceptance, see
 [`14_AGENT_TASKS.md`](browser-plan/14_AGENT_TASKS.md).
 
+**Implementation agents:** start with [`AGENTS.md`](AGENTS.md) and the queue at
+[`tasks/INDEX.md`](tasks/INDEX.md). Multiple agents can work in parallel — claim
+an unblocked package via `./tasks/lib/claim.sh`, work on the dedicated branch,
+leave a handoff-log entry on stop, and complete when merged. The full workflow
+is in [`tasks/README.md`](tasks/README.md).
+
 ## License
 
 TBD (set before public release).
