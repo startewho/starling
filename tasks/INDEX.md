@@ -45,9 +45,10 @@ order: milestone, then numeric id, then sub-letter.
 
 | ID | Status | Owner | Subsystem |
 |---|---|---|---|
-| [wp:M2-01-url-parser](M2/wp-M2-01-url-parser.md) | 🔵 available | — | Tessera.Url |
-| [wp:M2-02-dns](M2/wp-M2-02-dns.md) | ⚫ blocked on M2-01 | — | Tessera.Net |
-| [wp:M2-03-tcp](M2/wp-M2-03-tcp.md) | ⚫ blocked on M2-01 | — | Tessera.Net |
+| [wp:M2-01-url-parser](M2/wp-M2-01-url-parser.md) | 🟢 complete | agent-claude-cody | Tessera.Url |
+| [wp:M2-02-dns](M2/wp-M2-02-dns.md) | 🟢 complete | agent-claude-cody | Tessera.Net |
+| [wp:M2-03-tcp](M2/wp-M2-03-tcp.md) | 🟢 complete | agent-claude-cody | Tessera.Net |
+| [wp:M2-04-tls](M2/wp-M2-04-tls.md) | 🔵 available | — | Tessera.Net |
 
 > Remaining M2 packages (TLS, HTTP/1, cookies, end-to-end) and all of M3–M11
 > exist in `browser-plan/14_AGENT_TASKS.md`. File tracking files here as you
@@ -57,14 +58,13 @@ order: milestone, then numeric id, then sub-letter.
 
 For a new agent: claim any of these and start.
 
-- [wp:M1-05-css-tokenizer-parser](M1/wp-M1-05-css-tokenizer-parser.md) — parallel to DOM, no overlap.
-- [wp:M2-01-url-parser](M2/wp-M2-01-url-parser.md) — self-contained, sets up all of M2.
-- [wp:M3-01-js-lexer](M3/wp-M3-01-js-lexer.md) — start the JS pole early; M3 is the longest milestone.
+- [wp:M2-04-tls](M2/wp-M2-04-tls.md) — pure-managed TLS 1.3 transport over the M2 TCP seam; unblocks HTTP/1.1.
 
 ## In-progress
 
 - **wp:M1-03-dom-core** — agent-copilot-gpt-5.5, branch `wp-M1-03-dom-core`.
 - **wp:M1-05-css-tokenizer-parser** — agent-copilot-gpt-5.5, branch `wp-M1-05-css-tokenizer-parser`, worktree `../tessera-wp-M1-05-css-tokenizer-parser`.
+- **wp:M3-04d-js-new-and-this** — agent-claude-cody, branch `wp-M3-04d-js-new-and-this`.
 
 ## Recently completed
 
