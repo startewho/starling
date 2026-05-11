@@ -35,10 +35,10 @@ order: milestone, then numeric id, then sub-letter.
 | [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) | 🔵 available | — | Tessera.Html |
 | [wp:M1-03-dom-core](M1/wp-M1-03-dom-core.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Dom |
 | [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) | 🔵 available | — | Tessera.Dom |
-| [wp:M1-05-css-tokenizer-parser](M1/wp-M1-05-css-tokenizer-parser.md) | 🟡 claimed | agent-copilot-gpt-5.5 | Tessera.Css |
-| [wp:M1-06-css-selectors](M1/wp-M1-06-css-selectors.md) | ⚫ blocked on M1-05 | — | Tessera.Css |
-| [wp:M1-07-css-cascade](M1/wp-M1-07-css-cascade.md) | ⚫ blocked on M1-06 | — | Tessera.Css |
-| [wp:M1-08-layout-block-inline](M1/wp-M1-08-layout-block-inline.md) | ⚫ blocked on M1-07 | — | Tessera.Layout |
+| [wp:M1-05-css-tokenizer-parser](M1/wp-M1-05-css-tokenizer-parser.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Css |
+| [wp:M1-06-css-selectors](M1/wp-M1-06-css-selectors.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Css |
+| [wp:M1-07-css-cascade](M1/wp-M1-07-css-cascade.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Css |
+| [wp:M1-08-layout-block-inline](M1/wp-M1-08-layout-block-inline.md) | 🔵 available | — | Tessera.Layout |
 | [wp:M1-09-paint-display-list](M1/wp-M1-09-paint-display-list.md) | ⚫ blocked on M1-08 | — | Tessera.Paint |
 
 ## M2 — Networking
@@ -62,13 +62,12 @@ For a new agent: claim any of these and start.
 - [wp:M2-05-http1](M2/wp-M2-05-http1.md) — HTTP/1.1 request/response over the TCP/TLS transports; unblocks cookies and end-to-end networking.
 - [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) — WHATWG tree construction over the completed tokenizer + DOM core.
 - [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) — EventTarget/Event dispatch now that DOM core exists.
-
-## In-progress
-
-- **wp:M1-05-css-tokenizer-parser** — agent-copilot-gpt-5.5, branch `wp-M1-05-css-tokenizer-parser`, worktree `../tessera-wp-M1-05-css-tokenizer-parser`.
+- [wp:M1-08-layout-block-inline](M1/wp-M1-08-layout-block-inline.md) — Block + inline layout now that CSS cascade is available.
 
 ## Recently completed
 
+- **wp:M1-06 + wp:M1-07 CSS selectors/cascade** — agent-copilot-gpt-5.5, 2026-05-11. Selector AST/parser/specificity, right-to-left matching, selector index, style origins, value/property parsing, cascade/inheritance/custom properties, and UA stylesheet defaults. CSS project tests at 39/39.
+- **wp:M1-05-css-tokenizer-parser** — agent-copilot-gpt-5.5, 2026-05-11. Tokenizer/parser foundation plus downstream fixes for selector prelude whitespace and parser tests.
 - **wp:M3-04c-js-closures-snapshot** — agent-claude-cody, 2026-05-11. Snapshot-semantics closures: new `LoadUpvalue`/`MakeClosure` opcodes, compiler upvalue resolution with chained capture, VM closure-frame threading. 9 tests. Mutation-through-upvalue deferred to wp:M3-04c2.
 - **wp:M1-01a-tokenizer-scaffold** — agent-claude-cody, 2026-05-11. PreprocessedStream + Data state + tokenizer scaffold, 15 tests.
 - **wp:M1-01b-tokenizer-tag-states** — agent-claude-cody, 2026-05-11. Full tag + attribute states (§13.2.5.6–40), 21 tests.

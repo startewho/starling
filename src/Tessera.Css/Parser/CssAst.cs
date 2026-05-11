@@ -2,7 +2,10 @@ using Tessera.Css.Tokenizer;
 
 namespace Tessera.Css.Parser;
 
-public sealed record StyleSheet(string Source, IReadOnlyList<CssRule> Rules);
+public sealed record StyleSheet(
+    string Source,
+    IReadOnlyList<CssRule> Rules,
+    StyleOrigin Origin = StyleOrigin.Author);
 
 public abstract record CssRule;
 

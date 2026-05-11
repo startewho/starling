@@ -1,7 +1,17 @@
 using System.Globalization;
+using System.Text;
 
 namespace Tessera.Css.Tokenizer;
 
+/// <summary>
+/// CSS Syntax Module Level 3 §4 tokenizer.
+/// </summary>
+/// <remarks>
+/// The tokenizer follows the spec's "consume a token" algorithm. It does not
+/// implement the full preprocessing step from §3.3 — we accept raw CRLF/CR/FF
+/// at consume sites instead. The output stream is materialized eagerly via
+/// <see cref="Tokenize"/>; the parser consumes the list.
+/// </remarks>
 public sealed class CssTokenizer
 {
     private readonly string _source;
@@ -63,10 +73,12 @@ public sealed class CssTokenizer
         if (c == '#')
         {
             Read();
-            if (IsName(Peek()))
+            if (IsName(Peek()) || StartsValidEscape())
                 return new CssToken(CssTokenType.Hash, ConsumeName());
             return new CssToken(CssTokenType.Delim, Delimiter: '#');
         }
+        if (c == '\\' && StartsValidEscape())
+            return ConsumeIdentLike();
         if (WouldStartIdentifier())
             return ConsumeIdentLike();
 
@@ -95,18 +107,41 @@ public sealed class CssTokenizer
 
     private CssToken ConsumeString(char ending)
     {
-        var value = new System.Text.StringBuilder();
+        var value = new StringBuilder();
         while (!IsEnd)
         {
-            var c = Read();
+            var c = Peek();
             if (c == ending)
+            {
+                _position++;
                 return new CssToken(CssTokenType.String, value.ToString());
+            }
             if (c is '\n' or '\r' or '\f')
                 return new CssToken(CssTokenType.BadString, value.ToString());
-            if (c == '\\' && !IsEnd)
-                value.Append(Read());
-            else
-                value.Append(c);
+            if (c == '\\')
+            {
+                if (_position + 1 >= _source.Length)
+                {
+                    _position++;
+                    continue;
+                }
+                var next = Peek(1);
+                if (next is '\n' or '\r' or '\f')
+                {
+                    // \<newline> in a string is a line continuation per spec §4.3.5.
+                    _position++; // backslash
+                    if (Peek() == '\r' && Peek(1) == '\n')
+                        _position++;
+                    _position++;
+                    continue;
+                }
+                _position++; // backslash
+                value.Append(ConsumeEscape());
+                continue;
+            }
+
+            _position++;
+            value.Append(c);
         }
 
         return new CssToken(CssTokenType.String, value.ToString());
@@ -172,34 +207,129 @@ public sealed class CssTokenizer
         if (Peek() is '"' or '\'')
             return new CssToken(CssTokenType.Function, "url");
 
-        var start = _position;
-        while (!IsEnd && Peek() != ')')
+        var value = new StringBuilder();
+        while (!IsEnd)
         {
-            if (Peek() is '"' or '\'' or '(' || char.IsWhiteSpace(Peek()))
+            var c = Peek();
+            if (c == ')')
             {
-                while (!IsEnd && Peek() != ')')
+                _position++;
+                return new CssToken(CssTokenType.Url, value.ToString());
+            }
+
+            if (char.IsWhiteSpace(c))
+            {
+                while (!IsEnd && char.IsWhiteSpace(Peek()))
                     _position++;
-                if (!IsEnd)
+                if (IsEnd || Peek() == ')')
+                {
+                    if (!IsEnd)
+                        _position++;
+                    return new CssToken(CssTokenType.Url, value.ToString());
+                }
+                return ConsumeBadUrlRemnants();
+            }
+
+            if (c is '"' or '\'' or '(' || IsNonPrintable(c))
+                return ConsumeBadUrlRemnants();
+
+            if (c == '\\')
+            {
+                if (StartsValidEscape())
+                {
                     _position++;
-                return new CssToken(CssTokenType.BadUrl);
+                    value.Append(ConsumeEscape());
+                    continue;
+                }
+                return ConsumeBadUrlRemnants();
             }
 
             _position++;
+            value.Append(c);
         }
 
-        var value = _source[start.._position];
-        if (!IsEnd)
-            _position++;
-        return new CssToken(CssTokenType.Url, value);
+        return new CssToken(CssTokenType.Url, value.ToString());
+    }
+
+    private CssToken ConsumeBadUrlRemnants()
+    {
+        while (!IsEnd)
+        {
+            var c = Read();
+            if (c == ')')
+                break;
+            if (c == '\\' && _position < _source.Length && _source[_position] is not ('\n' or '\r' or '\f'))
+                ConsumeEscape();
+        }
+        return new CssToken(CssTokenType.BadUrl);
     }
 
     private string ConsumeName()
     {
-        var start = _position;
-        while (IsName(Peek()))
-            _position++;
-        return _source[start.._position];
+        var builder = new StringBuilder();
+        while (true)
+        {
+            var c = Peek();
+            if (IsName(c))
+            {
+                _position++;
+                builder.Append(c);
+                continue;
+            }
+            if (c == '\\' && StartsValidEscape())
+            {
+                _position++;
+                builder.Append(ConsumeEscape());
+                continue;
+            }
+            break;
+        }
+        return builder.ToString();
     }
+
+    private string ConsumeEscape()
+    {
+        if (IsEnd)
+            return "�";
+
+        var c = Read();
+        if (IsHex(c))
+        {
+            Span<char> hex = stackalloc char[6];
+            hex[0] = c;
+            var count = 1;
+            while (count < 6 && IsHex(Peek()))
+                hex[count++] = _source[_position++];
+            if (char.IsWhiteSpace(Peek()))
+            {
+                // Spec: a single trailing whitespace after a hex escape is consumed (CRLF as one).
+                if (Peek() == '\r' && Peek(1) == '\n')
+                    _position++;
+                _position++;
+            }
+
+            var code = uint.Parse(hex[..count], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            if (code == 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+                return "�";
+            return char.ConvertFromUtf32((int)code);
+        }
+
+        return c.ToString();
+    }
+
+    private bool StartsValidEscape(int offset = 0)
+    {
+        var first = Peek(offset);
+        var second = Peek(offset + 1);
+        return first == '\\' && second is not ('\n' or '\r' or '\f');
+    }
+
+    private static bool IsHex(char c)
+        => char.IsAsciiDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    // CSS Syntax 3 §4.2: U+0000..U+0008, U+000B, U+000E..U+001F, U+007F.
+    private static bool IsNonPrintable(char c)
+        => c <= 0x08 || c == 0x0B || (c >= 0x0E && c <= 0x1F) || c == 0x7F;
 
     private void ConsumeDigits()
     {
@@ -219,7 +349,9 @@ public sealed class CssTokenizer
         var c1 = Peek();
         var c2 = Peek(1);
         if (c1 == '-')
-            return IsNameStart(c2) || c2 == '-';
+            return IsNameStart(c2) || c2 == '-' || (c2 == '\\' && StartsValidEscape(1));
+        if (c1 == '\\')
+            return StartsValidEscape();
         return IsNameStart(c1);
     }
 

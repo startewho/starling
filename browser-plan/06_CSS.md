@@ -279,11 +279,11 @@ Per [SPEC: CSS Cascade Level 5](https://www.w3.org/TR/css-cascade-5/).
 ### Origin order (low to high)
 
 1. UA origin.
-2. UA `!important`.
-3. User origin.
-4. User `!important`.
-5. Author origin.
-6. Author `!important`.
+2. User origin.
+3. Author origin.
+4. Author `!important`.
+5. User `!important`.
+6. UA `!important`.
 7. Animations.
 8. Transitions.
 

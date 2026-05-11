@@ -21,10 +21,11 @@ public sealed class CssParser
         _tokens = tokens;
     }
 
-    public static StyleSheet ParseStyleSheet(string source) => new CssParser(source).ParseStyleSheet();
+    public static StyleSheet ParseStyleSheet(string source, StyleOrigin origin = StyleOrigin.Author)
+        => new CssParser(source).ParseStyleSheet(origin);
 
-    public StyleSheet ParseStyleSheet()
-        => new(_source, ConsumeRuleList(topLevel: true));
+    public StyleSheet ParseStyleSheet(StyleOrigin origin = StyleOrigin.Author)
+        => new(_source, ConsumeRuleList(topLevel: true), origin);
 
     public IReadOnlyList<CssDeclaration> ParseDeclarationList()
     {
@@ -73,7 +74,10 @@ public sealed class CssParser
     {
         var name = Current.Value;
         _position++;
-        var prelude = ConsumeComponentValuesUntil(CssTokenType.Semicolon, CssTokenType.LeftBrace);
+        var prelude = ConsumeComponentValuesUntil(
+            preserveWhitespace: false,
+            CssTokenType.Semicolon,
+            CssTokenType.LeftBrace);
         if (Current.Type == CssTokenType.Semicolon)
         {
             _position++;
@@ -98,7 +102,10 @@ public sealed class CssParser
 
     private StyleRule ConsumeQualifiedRule()
     {
-        var prelude = ConsumeComponentValuesUntil(CssTokenType.LeftBrace, CssTokenType.Eof);
+        var prelude = ConsumeComponentValuesUntil(
+            preserveWhitespace: true,
+            CssTokenType.LeftBrace,
+            CssTokenType.Eof);
         if (Current.Type != CssTokenType.LeftBrace)
             return new StyleRule(prelude, []);
 
@@ -112,19 +119,31 @@ public sealed class CssParser
     {
         var name = Current.Value;
         _position++;
+        SkipWhitespace();
         ConsumeIf(CssTokenType.Colon);
-        var values = ConsumeComponentValuesUntil(CssTokenType.Semicolon, CssTokenType.RightBrace);
+        var values = ConsumeComponentValuesUntil(
+            preserveWhitespace: false,
+            CssTokenType.Semicolon,
+            CssTokenType.RightBrace);
         var important = RemoveTrailingImportant(values);
         ConsumeIf(CssTokenType.Semicolon);
         return new CssDeclaration(name, values, important);
     }
 
-    private List<CssComponentValue> ConsumeComponentValuesUntil(params CssTokenType[] terminators)
+    private void SkipWhitespace()
+    {
+        while (Current.Type == CssTokenType.Whitespace)
+            _position++;
+    }
+
+    private List<CssComponentValue> ConsumeComponentValuesUntil(
+        bool preserveWhitespace,
+        params CssTokenType[] terminators)
     {
         var values = new List<CssComponentValue>();
         while (!IsEnd && !terminators.Contains(Current.Type))
         {
-            if (Current.Type == CssTokenType.Whitespace)
+            if (!preserveWhitespace && Current.Type == CssTokenType.Whitespace)
             {
                 _position++;
                 continue;
@@ -150,7 +169,10 @@ public sealed class CssParser
     {
         var start = Consume().Type;
         var end = MatchingEnd(start);
-        var values = ConsumeComponentValuesUntil(end, CssTokenType.Eof);
+        var values = ConsumeComponentValuesUntil(
+            preserveWhitespace: true,
+            end,
+            CssTokenType.Eof);
         ConsumeIf(end);
         return new CssSimpleBlock(start, values);
     }
@@ -158,7 +180,10 @@ public sealed class CssParser
     private CssFunction ConsumeFunction()
     {
         var name = Consume().Value;
-        var values = ConsumeComponentValuesUntil(CssTokenType.RightParen, CssTokenType.Eof);
+        var values = ConsumeComponentValuesUntil(
+            preserveWhitespace: true,
+            CssTokenType.RightParen,
+            CssTokenType.Eof);
         ConsumeIf(CssTokenType.RightParen);
         return new CssFunction(name, values);
     }

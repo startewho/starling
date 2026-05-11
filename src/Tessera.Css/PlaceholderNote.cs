@@ -1,10 +1,12 @@
 namespace Tessera.Css;
 
 /// <summary>
-/// Placeholder so the assembly is non-empty in M0. Real CSS tokenizer / parser
-/// / cascade / computed-value system lights up in M1 — see 06_CSS.md.
+/// Module status note. Tokenizer/parser, selectors, and cascade/property/value
+/// support landed under wp:M1-05 through wp:M1-07; layout integration is next.
 /// </summary>
 public static class PlaceholderNote
 {
-    public const string Message = "Tessera.Css — M1 work pending. See browser-plan/06_CSS.md.";
+    public const string Message =
+        "Tessera.Css — Tokenizer, parser, selectors, and cascade ready. " +
+        "Layout integration still pending. See browser-plan/06_CSS.md.";
 }

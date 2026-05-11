@@ -1,0 +1,43 @@
+using Tessera.Css.Parser;
+
+namespace Tessera.Css.UserAgent;
+
+public static class UaStyleSheet
+{
+    public const string Source = """
+        html, body, div, section, article, main, header, footer, nav, aside,
+        p, h1, h2, h3, h4, h5, h6, blockquote, pre, address, figure, figcaption,
+        ul, ol, menu, li, dl, dt, dd, form, fieldset, legend, table, caption,
+        thead, tbody, tfoot, tr, td, th {
+          display: block;
+        }
+
+        head, title, meta, link, style, script {
+          display: none;
+        }
+
+        body {
+          margin: 8px;
+          color: black;
+          background-color: white;
+          font-family: serif;
+          font-size: 16px;
+        }
+
+        p { margin: 1em 0; }
+        h1 { display: block; font-size: 2em; margin: 0.67em 0; font-weight: 700; }
+        h2 { display: block; font-size: 1.5em; margin: 0.83em 0; font-weight: 700; }
+        h3 { display: block; font-size: 1.17em; margin: 1em 0; font-weight: 700; }
+        h4 { display: block; margin: 1.33em 0; font-weight: 700; }
+        h5 { display: block; font-size: 0.83em; margin: 1.67em 0; font-weight: 700; }
+        h6 { display: block; font-size: 0.67em; margin: 2.33em 0; font-weight: 700; }
+        ul, ol, menu { margin: 1em 0; padding-left: 40px; }
+        li { display: list-item; }
+        a { color: blue; text-decoration: underline; }
+        b, strong { font-weight: 700; }
+        i, em, cite { font-style: italic; }
+        pre { white-space: pre; font-family: monospace; }
+        """;
+
+    public static StyleSheet Parse() => CssParser.ParseStyleSheet(Source, StyleOrigin.UserAgent);
+}
