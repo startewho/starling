@@ -24,13 +24,13 @@ order: milestone, then numeric id, then sub-letter.
 | ID | Status | Owner | Subsystem |
 |---|---|---|---|
 | [wp:M1-01-html-tokenizer](M1/wp-M1-01-html-tokenizer.md) | 🟡 in_progress (decomposed into a–h) | — | Tessera.Html |
-| [wp:M1-01a-tokenizer-scaffold](M1/wp-M1-01a-tokenizer-scaffold.md) | 🟡 in_review | agent-claude-cody | Tessera.Html |
-| [wp:M1-01b-tokenizer-tag-states](M1/wp-M1-01b-tokenizer-tag-states.md) | ⚫ blocked on M1-01a | — | Tessera.Html |
-| [wp:M1-01c-tokenizer-rcdata-rawtext](M1/wp-M1-01c-tokenizer-rcdata-rawtext.md) | ⚫ blocked on M1-01a | — | Tessera.Html |
+| [wp:M1-01a-tokenizer-scaffold](M1/wp-M1-01a-tokenizer-scaffold.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
+| [wp:M1-01b-tokenizer-tag-states](M1/wp-M1-01b-tokenizer-tag-states.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
+| [wp:M1-01c-tokenizer-rcdata-rawtext](M1/wp-M1-01c-tokenizer-rcdata-rawtext.md) | 🔵 available | — | Tessera.Html |
 | [wp:M1-01d-tokenizer-script](M1/wp-M1-01d-tokenizer-script.md) | ⚫ blocked on M1-01c | — | Tessera.Html |
-| [wp:M1-01e-tokenizer-comment-cdata](M1/wp-M1-01e-tokenizer-comment-cdata.md) | ⚫ blocked on M1-01a | — | Tessera.Html |
-| [wp:M1-01f-tokenizer-doctype](M1/wp-M1-01f-tokenizer-doctype.md) | ⚫ blocked on M1-01a | — | Tessera.Html |
-| [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) | ⚫ blocked on M1-01b | — | Tessera.Html |
+| [wp:M1-01e-tokenizer-comment-cdata](M1/wp-M1-01e-tokenizer-comment-cdata.md) | 🔵 available | — | Tessera.Html |
+| [wp:M1-01f-tokenizer-doctype](M1/wp-M1-01f-tokenizer-doctype.md) | 🔵 available | — | Tessera.Html |
+| [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) | 🔵 available | — | Tessera.Html |
 | [wp:M1-01h-tokenizer-html5lib](M1/wp-M1-01h-tokenizer-html5lib.md) | ⚫ blocked on M1-01b…g | — | Tessera.Html |
 | [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) | ⚫ blocked on M1-01h + M1-03 | — | Tessera.Html |
 | [wp:M1-03-dom-core](M1/wp-M1-03-dom-core.md) | 🟡 claimed | agent-copilot-gpt-5.5 | Tessera.Dom |
@@ -57,12 +57,19 @@ order: milestone, then numeric id, then sub-letter.
 
 For a new agent: claim any of these and start.
 
+- [wp:M1-01c-tokenizer-rcdata-rawtext](M1/wp-M1-01c-tokenizer-rcdata-rawtext.md) — RCDATA/RAWTEXT/PLAINTEXT cluster; unblocked by M1-01a complete.
+- [wp:M1-01e-tokenizer-comment-cdata](M1/wp-M1-01e-tokenizer-comment-cdata.md) — Comment/CDATA cluster; unblocked by M1-01a.
+- [wp:M1-01f-tokenizer-doctype](M1/wp-M1-01f-tokenizer-doctype.md) — Doctype cluster; unblocked by M1-01a.
+- [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) — Character-reference resolution + entity-table generator; unblocked by M1-01b complete.
 - [wp:M1-05-css-tokenizer-parser](M1/wp-M1-05-css-tokenizer-parser.md) — parallel to DOM, no overlap.
 - [wp:M2-01-url-parser](M2/wp-M2-01-url-parser.md) — self-contained, sets up all of M2.
 - [wp:M3-01-js-lexer](M3/wp-M3-01-js-lexer.md) — start the JS pole early; M3 is the longest milestone.
-- [wp:M1-01b-tokenizer-tag-states](M1/wp-M1-01b-tokenizer-tag-states.md) — available once M1-01a lands.
 
 ## In-progress
 
-- **wp:M1-01a-tokenizer-scaffold** — agent-claude-cody, branch `wp-M1-01a-tokenizer-scaffold`. **in_review** as of 2026-05-11T15:36Z; PreprocessedStream + Data state + Tokenizer scaffold + 15 unit tests landed; `dotnet test` 49/49.
 - **wp:M1-03-dom-core** — agent-copilot-gpt-5.5, branch `wp-M1-03-dom-core`.
+
+## Recently completed
+
+- **wp:M1-01a-tokenizer-scaffold** — agent-claude-cody, 2026-05-11. PreprocessedStream + Data state + tokenizer scaffold, 15 tests.
+- **wp:M1-01b-tokenizer-tag-states** — agent-claude-cody, 2026-05-11. Full tag + attribute states (§13.2.5.6–40), 21 tests. Total HTML tokenizer suite now 36 tests, full repo 70/70.

@@ -2,10 +2,11 @@
 id: "wp:M1-01b-tokenizer-tag-states"
 parent: "wp:M1-01-html-tokenizer"
 milestone: "M1"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-11T15:32:56Z"
 branch: "wp-M1-01b-tokenizer-tag-states"
+completed_at: "2026-05-11T15:38:00Z"
 depends_on:
   - "wp:M1-01a-tokenizer-scaffold"
 blocks:
@@ -40,3 +41,18 @@ Pick this up after a:
 ## Handoff log
 - 2026-05-11T15:20Z — created.
 - 2026-05-11T15:32:56Z — claimed by agent-claude-cody, branch `wp-M1-01b-tokenizer-tag-states`
+- 2026-05-11T15:38Z — landed:
+  - `src/Tessera.Html/Tokenizer/HtmlTokenizer.TagStates.cs` (new partial,
+    all 12 states from §13.2.5.6–40 plus tag-builder helpers).
+  - Updated `HtmlTokenizer.cs` to be a partial class with a central
+    `Dispatch` switch each cluster registers against. EOF handling
+    delegated to per-cluster `Step*Eof` methods.
+  - Added structural-equality overrides on `StartTagToken` / `EndTagToken`
+    (the synthesized record equality compared the attribute list by
+    reference, which broke test asserts).
+  - Fixed an M1-01a spec deviation: PreprocessedStream no longer remaps
+    NULL — per spec §13.2.5.1, Data emits NULL verbatim, name-buffer
+    states map to U+FFFD with a parse error.
+  - 21 new tests in `tests/Tessera.Html.Tests/Tokenizer/TagStateTests.cs`.
+- 2026-05-11T15:38Z — `dotnet test` 70/70 green (was 49; +21 new).
+  Marking complete.
