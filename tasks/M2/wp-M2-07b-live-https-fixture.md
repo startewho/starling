@@ -2,10 +2,10 @@
 id: "wp:M2-07b-live-https-fixture"
 parent: "wp:M2-07-network-end-to-end"
 milestone: "M2"
-status: "available"
-claimed_by: ""
-claimed_at: ""
-branch: ""
+status: "claimed"
+claimed_by: "agent-claude-cody"
+claimed_at: "2026-05-13T14:40:55Z"
+branch: "main"
 depends_on:
   - "wp:M2-07a-img-fetch-decode-paint"
 blocks: []
@@ -85,3 +85,4 @@ real-world page so we can keep regressing it offline.
 - 2026-05-13T00:00Z — agent-claude-cody, filed during MVP-path planning
   split-out of the catch-all wp:M2-07-network-end-to-end. Available to
   claim after wp:M2-07a lands.
+- 2026-05-13T14:40:55Z — claimed by agent-claude-cody, working on main
