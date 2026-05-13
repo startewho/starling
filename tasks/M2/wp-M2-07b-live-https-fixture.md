@@ -87,4 +87,12 @@ real-world page so we can keep regressing it offline.
   split-out of the catch-all wp:M2-07-network-end-to-end. Available to
   claim after wp:M2-07a lands.
 - 2026-05-13T14:40:55Z — claimed by agent-claude-cody, working on main
-- 2026-05-13T14:51:47Z — merged; complete
+- 2026-05-13T14:51:47Z — merged; complete. Swapped anthropic.com (257 KB,
+  heavy JS) for nginx.org per the fallback note: 6 same-origin
+  subresources, ~33 KB total, HTML4, zero JS. Snapshot golden lands
+  byte-exact on macOS; SSIM ≥ 0.99 is the fallback. Live golden for
+  https://example.com was captured by this session — Linux-only in CI to
+  avoid font-rasteriser drift across the matrix. Re-vendor with
+  tools/snapshot-vendor/vendor-snapshot.sh and regenerate goldens with
+  TESSERA_UPDATE_GOLDENS=1 (the live test additionally needs
+  TESSERA_ALLOW_NETWORK=1).
