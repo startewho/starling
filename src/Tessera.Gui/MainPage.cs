@@ -16,7 +16,7 @@ public sealed class MainPage : ContentPage
     private readonly Button _forwardButton;
     private readonly Button _reloadButton;
     private readonly Image _viewport;
-    private readonly Label _statusLabel;
+    private readonly Editor _statusLabel;
     private readonly Label _titleLabel;
     private readonly Border _placeholder;
     private readonly BrowserSession _session;
@@ -81,12 +81,18 @@ public sealed class MainPage : ContentPage
             FontAttributes = FontAttributes.Bold,
         };
 
-        _statusLabel = new Label
+        // Editor instead of Label so the text is system-selectable: drag to
+        // select, cmd-C / right-click → Copy work natively on Mac Catalyst
+        // (UITextView under the hood). IsReadOnly keeps it non-editable.
+        _statusLabel = new Editor
         {
             Text = $"Ready. Pure-managed .NET browser; renderer viewport {Viewport.Width}×{Viewport.Height} CSS px.",
             TextColor = Palette.Muted,
+            BackgroundColor = Colors.Transparent,
             FontSize = 12,
-            LineBreakMode = LineBreakMode.TailTruncation,
+            IsReadOnly = true,
+            AutoSize = EditorAutoSizeOption.TextChanges,
+            Margin = new Thickness(-4, -8),
         };
 
         Content = BuildLayout();
