@@ -32,14 +32,14 @@ order: milestone, then numeric id, then sub-letter.
 | [wp:M1-01f-tokenizer-doctype](M1/wp-M1-01f-tokenizer-doctype.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
 | [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) | 🟢 complete | agent-claude-cody | Tessera.Html |
 | [wp:M1-01h-tokenizer-html5lib](M1/wp-M1-01h-tokenizer-html5lib.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Html |
-| [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) | 🔵 available | — | Tessera.Html |
+| [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Html |
 | [wp:M1-03-dom-core](M1/wp-M1-03-dom-core.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Dom |
-| [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) | 🔵 available | — | Tessera.Dom |
+| [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Dom |
 | [wp:M1-05-css-tokenizer-parser](M1/wp-M1-05-css-tokenizer-parser.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Css |
 | [wp:M1-06-css-selectors](M1/wp-M1-06-css-selectors.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Css |
 | [wp:M1-07-css-cascade](M1/wp-M1-07-css-cascade.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Css |
-| [wp:M1-08-layout-block-inline](M1/wp-M1-08-layout-block-inline.md) | 🔵 available | — | Tessera.Layout |
-| [wp:M1-09-paint-display-list](M1/wp-M1-09-paint-display-list.md) | ⚫ blocked on M1-08 | — | Tessera.Paint |
+| [wp:M1-08-layout-block-inline](M1/wp-M1-08-layout-block-inline.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Layout |
+| [wp:M1-09-paint-display-list](M1/wp-M1-09-paint-display-list.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Paint |
 
 ## M2 — Networking
 
@@ -49,23 +49,34 @@ order: milestone, then numeric id, then sub-letter.
 | [wp:M2-02-dns](M2/wp-M2-02-dns.md) | 🟢 complete | agent-claude-cody | Tessera.Net |
 | [wp:M2-03-tcp](M2/wp-M2-03-tcp.md) | 🟢 complete | agent-claude-cody | Tessera.Net |
 | [wp:M2-04-tls](M2/wp-M2-04-tls.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Net |
-| [wp:M2-05-http1](M2/wp-M2-05-http1.md) | 🔵 available | — | Tessera.Net |
+| [wp:M2-05-http1](M2/wp-M2-05-http1.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Net |
+| [wp:M2-07-network-end-to-end](M2/wp-M2-07-network-end-to-end.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Engine |
+| [wp:M2-07a-img-fetch-decode-paint](M2/wp-M2-07a-img-fetch-decode-paint.md) | 🔵 available | — | Tessera.Paint |
+| [wp:M2-07b-live-https-fixture](M2/wp-M2-07b-live-https-fixture.md) | 🔵 available | — | Tessera.Engine |
+| [wp:M2-07c-http-keepalive-pool](M2/wp-M2-07c-http-keepalive-pool.md) | 🔵 available | — | Tessera.Net |
+| [wp:M2-07d-encoding-hardening](M2/wp-M2-07d-encoding-hardening.md) | 🔵 available | — | Tessera.Engine |
 
-> Remaining M2 packages (TLS, HTTP/1, cookies, end-to-end) and all of M3–M11
-> exist in `browser-plan/14_AGENT_TASKS.md`. File tracking files here as you
-> bring each milestone into focus — `tasks/README.md` is the contract.
+> Remaining M2 packages (07a–07d above close the M2 exit checklist) and all
+> of M3–M11 exist in `browser-plan/14_AGENT_TASKS.md`. File tracking files
+> here as you bring each milestone into focus — `tasks/README.md` is the
+> contract.
 
 ## Available right now (no dependencies pending)
 
-For a new agent: claim any of these and start.
+For a new agent: claim any of these and start. Listed in MVP-priority order
+(highest impact first; see `~/.claude/plans/check-current-status-and-keen-metcalfe.md`).
 
-- [wp:M2-05-http1](M2/wp-M2-05-http1.md) — HTTP/1.1 request/response over the TCP/TLS transports; unblocks cookies and end-to-end networking.
-- [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) — WHATWG tree construction over the completed tokenizer + DOM core.
-- [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) — EventTarget/Event dispatch now that DOM core exists.
-- [wp:M1-08-layout-block-inline](M1/wp-M1-08-layout-block-inline.md) — Block + inline layout now that CSS cascade is available.
+- [wp:M2-07a-img-fetch-decode-paint](M2/wp-M2-07a-img-fetch-decode-paint.md) — `<img>` fetch/decode/paint; unblocks 07b. Every real page is missing its dominant visual without this.
+- [wp:M2-07c-http-keepalive-pool](M2/wp-M2-07c-http-keepalive-pool.md) — connection pool reuse; required by the M2 exit checklist.
+- [wp:M2-07d-encoding-hardening](M2/wp-M2-07d-encoding-hardening.md) — CodePages-backed WHATWG labels + WPT `encoding/` subset.
+- [wp:M2-07b-live-https-fixture](M2/wp-M2-07b-live-https-fixture.md) — live HTTPS render fixture + SSIM gate; depends on 07a.
 
 ## Recently completed
 
+- **wp:M2-07 catch-all reconciled + split** — agent-claude-cody, 2026-05-13. Marked the catch-all `wp:M2-07-network-end-to-end` complete for the scope actually delivered (redirects, meta charset sniff, 5 local fixtures, partial encoding labels) and split the open follow-ups into four focused successor tickets (07a/b/c/d) so the M2 exit can be driven in parallel. Drive-by: fixed schema-invalid `in_progress` status on `wp:M3-02-js-parser` back to `available`.
+- **M1 static rendering closure** — agent-copilot-gpt-5.5, 2026-05-12. Reconciled HTML tree builder, DOM events, layout, paint display-list, and HTTP/1 status; engine render now uses document style/layout/paint; added a 20-case GoldenImage suite for paragraphs, headings, lists, backgrounds, margins, borders, wrapping, and alignment.
+- **M2 network-to-pixels foundation** — agent-copilot-gpt-5.5, 2026-05-12. Added bounded redirect following, HTML meta charset sniffing, visible text boundaries for block content, and 5 local snapshot-style HTTP fixtures for static pages.
+- **Real-user usability foundations** — agent-copilot-gpt-5.5, 2026-05-12. Added browser-session navigation history with shared cookies, link underline paint, text alignment hardening, deterministic microtask/timer event-loop core, and a temporary JS-to-DOM host bridge for reading/updating text and dispatching click events.
 - **wp:M1-06 + wp:M1-07 CSS selectors/cascade** — agent-copilot-gpt-5.5, 2026-05-11. Selector AST/parser/specificity, right-to-left matching, selector index, style origins, value/property parsing, cascade/inheritance/custom properties, and UA stylesheet defaults. CSS project tests at 39/39.
 - **wp:M1-05-css-tokenizer-parser** — agent-copilot-gpt-5.5, 2026-05-11. Tokenizer/parser foundation plus downstream fixes for selector prelude whitespace and parser tests.
 - **wp:M3-04c-js-closures-snapshot** — agent-claude-cody, 2026-05-11. Snapshot-semantics closures: new `LoadUpvalue`/`MakeClosure` opcodes, compiler upvalue resolution with chained capture, VM closure-frame threading. 9 tests. Mutation-through-upvalue deferred to wp:M3-04c2.
@@ -79,4 +90,4 @@ For a new agent: claim any of these and start.
 - **wp:M1-03-dom-core** — agent-copilot-gpt-5.5, 2026-05-11. Node mutation primitives, owner-document propagation, Element attributes/NamedNodeMap, live collections, DocumentFragment/DocumentType, CharacterData/Text/Comment/CDATA, ProcessingInstruction, and 15 DOM tests.
 - **wp:M2-04-tls** — agent-copilot-gpt-5.5, 2026-05-11. Pure-managed BouncyCastle TLS 1.3 transport, SNI + ALPN, embedded CCADB roots, fail-closed certificate validation, and live handshakes to Cloudflare/Akamai.
 
-Full repo: **7440/7440** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**. JS engine: lexer + parser + bytecode compiler + VM end-to-end including user functions, recursion, constructors with `this` binding, method dispatch, and snapshot closures.
+Full repo: **7667/7667** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**. Static rendering has a 20-case GoldenImage suite. JS engine: lexer + parser + bytecode compiler + VM end-to-end including user functions, recursion, constructors with `this` binding, method dispatch, snapshot closures, and temporary DOM host bindings.

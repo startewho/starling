@@ -1,7 +1,7 @@
 ---
 id: "wp:M3-02-js-parser"
 milestone: "M3"
-status: "in_progress"
+status: "available"
 claimed_by: ""
 claimed_at: ""
 branch: ""
@@ -43,3 +43,11 @@ invalid sets per the plan.
 ## Handoff log
 - 2026-05-11T17:45Z — created and decomposed into 5 sub-tasks. The
   first (02a-expressions) is being claimed immediately.
+- 2026-05-13T00:00Z — agent-claude-cody, status corrected from the
+  schema-invalid `in_progress` back to `available`. Current state:
+  02a (expressions) and 02b (statements) are `complete`; 02c
+  (classes/modules), 02d (destructuring), and 02e (Test262 ≥ 80%
+  validation) are still un-filed and represent the remaining work for
+  this parent package. None of these blocks the M2 MVP path — JS is
+  off the critical path until M3-05 intrinsics + M4 DOM bindings come
+  into focus.
