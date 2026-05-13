@@ -52,27 +52,31 @@ order: milestone, then numeric id, then sub-letter.
 | [wp:M2-05-http1](M2/wp-M2-05-http1.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Net |
 | [wp:M2-07-network-end-to-end](M2/wp-M2-07-network-end-to-end.md) | 🟢 complete | agent-copilot-gpt-5.5 | Tessera.Engine |
 | [wp:M2-07a-img-fetch-decode-paint](M2/wp-M2-07a-img-fetch-decode-paint.md) | 🟢 complete | agent-claude-cody | Tessera.Paint |
-| [wp:M2-07b-live-https-fixture](M2/wp-M2-07b-live-https-fixture.md) | 🔵 available | — | Tessera.Engine |
-| [wp:M2-07c-http-keepalive-pool](M2/wp-M2-07c-http-keepalive-pool.md) | 🔵 available | — | Tessera.Net |
-| [wp:M2-07d-encoding-hardening](M2/wp-M2-07d-encoding-hardening.md) | 🔵 available | — | Tessera.Engine |
+| [wp:M2-07b-live-https-fixture](M2/wp-M2-07b-live-https-fixture.md) | 🟢 complete | agent-claude-cody | Tessera.Engine |
+| [wp:M2-07c-http-keepalive-pool](M2/wp-M2-07c-http-keepalive-pool.md) | 🟢 complete | agent-claude-cody | Tessera.Net |
+| [wp:M2-07d-encoding-hardening](M2/wp-M2-07d-encoding-hardening.md) | 🟢 complete | agent-claude-cody | Tessera.Engine |
 
-> Remaining M2 packages (07a–07d above close the M2 exit checklist) and all
-> of M3–M11 exist in `browser-plan/14_AGENT_TASKS.md`. File tracking files
-> here as you bring each milestone into focus — `tasks/README.md` is the
-> contract.
+> **M2 exit checklist closed.** All of M2 is complete. The MVP demo
+> `tessera render https://example.com -o out.png` is gated in CI via the
+> `network-tests` job (07b). The next focus is M3 (JS engine intrinsics +
+> async + RegExp + modules) and M4 (DOM bindings + interactive demo). See
+> `browser-plan/14_AGENT_TASKS.md` and `browser-plan/13_MILESTONES.md` for
+> the M3+ catalog; `tasks/README.md` is the workflow contract.
 
 ## Available right now (no dependencies pending)
 
-For a new agent: claim any of these and start. Listed in MVP-priority order
-(highest impact first; see `~/.claude/plans/check-current-status-and-keen-metcalfe.md`).
-
-- [wp:M2-07b-live-https-fixture](M2/wp-M2-07b-live-https-fixture.md) — live HTTPS render fixture + SSIM gate; now unblocked.
-- [wp:M2-07c-http-keepalive-pool](M2/wp-M2-07c-http-keepalive-pool.md) — connection pool reuse; required by the M2 exit checklist.
-- [wp:M2-07d-encoding-hardening](M2/wp-M2-07d-encoding-hardening.md) — CodePages-backed WHATWG labels + WPT `encoding/` subset.
+No M2 work remains. M3-02 sub-tasks (02c classes/modules, 02d
+destructuring, 02e Test262 ≥ 80%) are unfiled but available to anyone who
+wants to push the JS parser forward. Otherwise the next high-impact work
+is to file an M3-05 (intrinsics) ticket and start there — that's the
+single largest gating piece for any interactive demo.
 
 ## Recently completed
 
-- **wp:M2-07a-img-fetch-decode-paint** — agent-claude-cody, 2026-05-13. End-to-end `<img>` support: `ImageBox` (BoxKind.Replaced) wired into the inline formatting context; new `DrawImage` display item + ImageSharp blit; `ImageFetcher` walks the parsed document, fetches via `TesseraHttpClient` or local files, decodes via ImageSharp, caches per absolute URL, and feeds the layout via `IImageResolver`. Drive-by URL parser fixes: relative-URL resolution against a file/https base now correctly replaces the last path segment; absolute-path relatives (`/css/x`) reset inherited segments. Repo: 7677/7677 green. Unblocks wp:M2-07b.
+- **wp:M2-07b-live-https-fixture** — agent-claude-cody, 2026-05-13. Live `https://example.com` render test (env-gated `TESSERA_ALLOW_NETWORK=1`, runs in a dedicated `network-tests` CI job), snapshot-vendored `nginx.org` fixture rendered through a local stub HTTP server with byte-exact + SSIM ≥ 0.99 golden gate, and a pure-managed SSIM implementation in `src/Tessera.Common/Image/Ssim.cs`. Picked nginx.org over the originally-suggested anthropic.com per the fallback note (33 KB, 6 same-origin subresources, HTML4, zero JS).
+- **wp:M2-07c-http-keepalive-pool** — agent-claude-cody, 2026-05-13. Per-origin HTTP/1.1 connection pool (6 concurrent, LRU eviction, 60s idle timeout) with transparent stale-socket re-dial. New `ConnectionPool` + `IHttpTransport` + `PooledHttpTransport` + `OriginKey`; `TesseraHttpClient.Dispose` now drains the pool; `H1ResponseParser` surfaces `IndicatesKeepAlive` + `HasDefiniteBodyFraming` for pool-fate gating. End-to-end test asserts exactly one TCP accept across two sequential GETs to the same origin.
+- **wp:M2-07d-encoding-hardening** — agent-claude-cody, 2026-05-13. WHATWG label table in `Tessera.Common.Encoding.WhatwgEncodingLabels` becomes the single source of truth across HTTP header, meta-charset, and BOM sniffing. `CodePagesEncodingProvider` registered in `TesseraEngine`'s static ctor unlocks windows-1250…1258, ISO-8859-2…16 (most), Shift_JIS, GBK/gb18030, Big5, EUC-KR, KOI8-*, macintosh. WPT `encoding/` curated subset hits 43/43 (100%) on supported labels — well past the 95% gate. Documented follow-ups: ISO-8859-{10,14,16}, the `replacement` decoder, `x-user-defined`.
+- **wp:M2-07a-img-fetch-decode-paint** — agent-claude-cody, 2026-05-13. End-to-end `<img>` support: `ImageBox` (BoxKind.Replaced) wired into the inline formatting context; new `DrawImage` display item + ImageSharp blit; `ImageFetcher` walks the parsed document, fetches via `TesseraHttpClient` or local files, decodes via ImageSharp, caches per absolute URL, and feeds the layout via `IImageResolver`. Drive-by URL parser fixes: relative-URL resolution against a file/https base now correctly replaces the last path segment; absolute-path relatives (`/css/x`) reset inherited segments. Unblocked wp:M2-07b.
 - **wp:M2-07 catch-all reconciled + split** — agent-claude-cody, 2026-05-13. Marked the catch-all `wp:M2-07-network-end-to-end` complete for the scope actually delivered (redirects, meta charset sniff, 5 local fixtures, partial encoding labels) and split the open follow-ups into four focused successor tickets (07a/b/c/d) so the M2 exit can be driven in parallel. Drive-by: fixed schema-invalid `in_progress` status on `wp:M3-02-js-parser` back to `available`.
 - **M1 static rendering closure** — agent-copilot-gpt-5.5, 2026-05-12. Reconciled HTML tree builder, DOM events, layout, paint display-list, and HTTP/1 status; engine render now uses document style/layout/paint; added a 20-case GoldenImage suite for paragraphs, headings, lists, backgrounds, margins, borders, wrapping, and alignment.
 - **M2 network-to-pixels foundation** — agent-copilot-gpt-5.5, 2026-05-12. Added bounded redirect following, HTML meta charset sniffing, visible text boundaries for block content, and 5 local snapshot-style HTTP fixtures for static pages.
@@ -90,4 +94,4 @@ For a new agent: claim any of these and start. Listed in MVP-priority order
 - **wp:M1-03-dom-core** — agent-copilot-gpt-5.5, 2026-05-11. Node mutation primitives, owner-document propagation, Element attributes/NamedNodeMap, live collections, DocumentFragment/DocumentType, CharacterData/Text/Comment/CDATA, ProcessingInstruction, and 15 DOM tests.
 - **wp:M2-04-tls** — agent-copilot-gpt-5.5, 2026-05-11. Pure-managed BouncyCastle TLS 1.3 transport, SNI + ALPN, embedded CCADB roots, fail-closed certificate validation, and live handshakes to Cloudflare/Akamai.
 
-Full repo: **7667/7667** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**. Static rendering has a 20-case GoldenImage suite. JS engine: lexer + parser + bytecode compiler + VM end-to-end including user functions, recursion, constructors with `this` binding, method dispatch, snapshot closures, and temporary DOM host bindings.
+Full repo: **7752/7752** tests green. WHATWG HTML tokenizer state coverage: **80 of 80** states implemented and html5lib tokenizer fixtures are at **100%**. Static rendering has a 20-case GoldenImage suite plus a 3-case image-paint suite plus an offline `nginx.org` snapshot fixture. Networking: HTTP/1.1 with keep-alive connection pool, gzip/brotli/deflate decompression, full WHATWG encoding label set (43/43 WPT curated subset), TLS 1.3 via pure-managed BouncyCastle, RFC 6265bis cookies. JS engine: lexer + parser + bytecode compiler + VM end-to-end including user functions, recursion, constructors with `this` binding, method dispatch, snapshot closures, and temporary DOM host bindings.
