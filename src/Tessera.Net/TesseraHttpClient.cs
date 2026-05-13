@@ -250,7 +250,7 @@ public sealed class TesseraHttpClient : IDisposable
             // caller distinguish via its own token.
             throw;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
         {
             // If this was a pooled connection on its first byte, treat the
             // failure as "socket died while idle" and let the caller retry.
@@ -258,6 +258,9 @@ public sealed class TesseraHttpClient : IDisposable
             // for idempotent GETs (the only verb the engine uses today) a
             // re-dial is safe. For non-GETs the caller surfaces this as a
             // transport failure when the retry has nothing to fall back to.
+            //
+            // Sockets propagate ECONNRESET as raw SocketException (not wrapped
+            // in IOException), so we accept both.
             return TransportSendOutcome.Unused();
         }
     }
