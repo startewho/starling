@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Tessera.Engine\Tessera.Engine.csproj" />
+    <ProjectReference Include="..\..\Tessera.ServiceDefaults\Tessera.ServiceDefaults.csproj" />
   </ItemGroup>
 </Project>
