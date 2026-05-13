@@ -37,6 +37,27 @@ public static class UaStyleSheet
         b, strong { font-weight: 700; }
         i, em, cite { font-style: italic; }
         pre { white-space: pre; font-family: monospace; }
+
+        /* Form controls. Real browsers render these as platform-native widgets;
+           we approximate with CSS so an unstyled `<input>`/`<button>` shows up
+           as a recognisable box. Author CSS still overrides everything here. */
+        input, button, select, textarea {
+          display: inline-block;
+          font-family: sans-serif;
+          font-size: 13px;
+          color: black;
+          background-color: white;
+          border: 1px solid #767676;
+          padding: 1px 2px;
+          margin: 0;
+        }
+        button, input[type="submit"], input[type="button"], input[type="reset"] {
+          background-color: #efefef;
+          padding: 2px 7px;
+          text-align: center;
+        }
+        input[type="hidden"] { display: none; }
+        textarea { padding: 2px; }
         """;
 
     public static StyleSheet Parse() => CssParser.ParseStyleSheet(Source, StyleOrigin.UserAgent);

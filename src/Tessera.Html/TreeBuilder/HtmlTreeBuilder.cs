@@ -432,6 +432,21 @@ public sealed class HtmlTreeBuilder
                 if (_openElements.HasInScope("body")) _mode = InsertionMode.AfterBody;
                 HandleAfterBody(end);
                 return;
+            // </p> must be tested BEFORE the generic IsSpecialBlock case below:
+            // `p` is itself in the implied-end-tag set, so the generic handler's
+            // unbounded GenerateImpliedEndTags() would pop the <p> we're trying
+            // to close, then PopUntilNamed("p") would scan the whole stack and
+            // drain <body>/<html>. The HTML spec's "close a p element" step
+            // exempts `p` from implied end tags for exactly this reason.
+            case EndTagToken end when end.Name == "p":
+                if (!_openElements.HasInButtonScope("p"))
+                {
+                    // Implicit <p> creation per spec; we approximate by inserting an empty one.
+                    InsertElement(new StartTagToken("p", Array.Empty<HtmlAttribute>(), SelfClosing: false));
+                }
+                GenerateImpliedEndTags(except: "p");
+                _openElements.PopUntilNamed("p");
+                return;
             case EndTagToken end when IsSpecialBlock(end.Name):
                 if (!_openElements.HasInScope(end.Name)) return;
                 GenerateImpliedEndTags();
@@ -443,15 +458,6 @@ public sealed class HtmlTreeBuilder
                 while (!_openElements.IsEmpty && !IsHeading(_openElements.Current.LocalName))
                     _openElements.Pop();
                 if (!_openElements.IsEmpty) _openElements.Pop();
-                return;
-            case EndTagToken end when end.Name == "p":
-                if (!_openElements.HasInButtonScope("p"))
-                {
-                    // Implicit <p> creation per spec; we approximate by inserting an empty one.
-                    InsertElement(new StartTagToken("p", Array.Empty<HtmlAttribute>(), SelfClosing: false));
-                }
-                GenerateImpliedEndTags(except: "p");
-                _openElements.PopUntilNamed("p");
                 return;
             case EndTagToken end when end.Name == "li":
                 if (!_openElements.HasInListItemScope("li")) return;

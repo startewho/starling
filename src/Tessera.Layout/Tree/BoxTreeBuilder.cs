@@ -61,6 +61,12 @@ internal sealed class BoxTreeBuilder
                         : new BlockBox(elementStyle, element);
                     parentBox.AppendChild(box);
                     BuildChildren(element, elementStyle, box);
+                    // <input> is a void element with no DOM children — synthesize
+                    // a TextBox from its value/placeholder so the search box and
+                    // submit button labels actually show up. Real intrinsic
+                    // sizing from the `size` attribute lands with form layout.
+                    if (string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
+                        AppendInputLabel(element, elementStyle, box);
                     break;
                 case Tessera.Dom.Text text:
                     var data = text.Data;
@@ -164,6 +170,35 @@ internal sealed class BoxTreeBuilder
         if (attrW is { } onlyW) return (onlyW, onlyW * ih / iw);
         if (attrH is { } onlyH) return (onlyH * iw / ih, onlyH);
         return (iw, ih);
+    }
+
+    private static void AppendInputLabel(Element input, ComputedStyle style, Box.Box box)
+    {
+        var type = (input.GetAttribute("type") ?? "text").Trim().ToLowerInvariant();
+
+        // Controls whose label isn't text content (checkbox/radio glyph, file
+        // picker, image button, hidden) get no synthetic text.
+        if (type is "checkbox" or "radio" or "file" or "image" or "hidden" or "color" or "range")
+            return;
+
+        var value = input.GetAttribute("value");
+        if (!string.IsNullOrEmpty(value))
+        {
+            box.AppendChild(new TextBox(value, style));
+            return;
+        }
+
+        // Default labels for submit/reset buttons match what browsers show
+        // when `value` is omitted — per HTML spec localised defaults.
+        var fallback = type switch
+        {
+            "submit" => "Submit",
+            "reset" => "Reset",
+            "button" => "",
+            _ => input.GetAttribute("placeholder") ?? "",
+        };
+        if (!string.IsNullOrEmpty(fallback))
+            box.AppendChild(new TextBox(fallback, style));
     }
 
     private static double? ParseDimensionAttribute(string? raw)

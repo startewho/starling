@@ -36,16 +36,22 @@ public sealed class Painter
     /// a parsed <see cref="Document"/> and the viewport size in CSS px. Pass an
     /// <paramref name="images"/> resolver to render <c>&lt;img&gt;</c> elements;
     /// without one, every <c>&lt;img&gt;</c> degrades to its <c>alt</c> text.
+    /// <paramref name="externalStylesheet"/> supplies parsed CSS for each
+    /// <c>&lt;link rel="stylesheet"&gt;</c> element — the painter inserts the
+    /// returned sheet at that element's position in document order so the
+    /// cascade matches what a browser sees. Without it, only inline
+    /// <c>&lt;style&gt;</c> blocks contribute.
     /// </summary>
     public Image<Rgba32> RenderDocument(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize = null,
-        IImageResolver? images = null)
+        IImageResolver? images = null,
+        Func<Element, StyleSheet?>? externalStylesheet = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var style = CreateStyleEngine(document, defaultFontSize);
+        var style = CreateStyleEngine(document, defaultFontSize, externalStylesheet);
         var layoutEngine = new LayoutEngineImpl(style, DefaultTextMeasurer.Instance, images);
         var root = layoutEngine.LayoutDocument(document, viewport);
 
@@ -54,7 +60,10 @@ public sealed class Painter
         return backend.Render(displayList, viewport);
     }
 
-    private static StyleEngine CreateStyleEngine(Document document, float? defaultFontSize)
+    private static StyleEngine CreateStyleEngine(
+        Document document,
+        float? defaultFontSize,
+        Func<Element, StyleSheet?>? externalStylesheet)
     {
         var style = new StyleEngine();
 
@@ -65,14 +74,37 @@ public sealed class Painter
                 StyleOrigin.User));
         }
 
-        foreach (var element in document.GetElementsByTagName("style"))
-        {
-            var source = element.TextContent;
-            if (!string.IsNullOrWhiteSpace(source))
-                style.AddStyleSheet(CssParser.ParseStyleSheet(source, StyleOrigin.Author));
-        }
+        // Walk the tree in document order so `<style>` and `<link rel=stylesheet>`
+        // contribute to the cascade in source order — required by [CSS Cascade
+        // 4 §6.3]: tree order is the tiebreaker after origin/importance/specificity.
+        AddAuthorStylesheets(document, externalStylesheet, style);
 
         return style;
+    }
+
+    private static void AddAuthorStylesheets(
+        Node node,
+        Func<Element, StyleSheet?>? externalStylesheet,
+        StyleEngine style)
+    {
+        if (node is Element element)
+        {
+            if (element.LocalName == "style")
+            {
+                var source = element.TextContent;
+                if (!string.IsNullOrWhiteSpace(source))
+                    style.AddStyleSheet(CssParser.ParseStyleSheet(source, StyleOrigin.Author));
+            }
+            else if (element.LocalName == "link" && externalStylesheet is not null)
+            {
+                var sheet = externalStylesheet(element);
+                if (sheet is not null)
+                    style.AddStyleSheet(sheet);
+            }
+        }
+
+        for (var child = node.FirstChild; child is not null; child = child.NextSibling)
+            AddAuthorStylesheets(child, externalStylesheet, style);
     }
 
     /// <summary>Legacy M0 path: draw a fixed string onto a viewport-sized canvas.</summary>
