@@ -4,6 +4,9 @@ using System.Text;
 using FluentAssertions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using Tessera.Net;
+using Tessera.Net.Http;
+using TesseraUrlParser = global::Tessera.Url.UrlParser;
 using Xunit;
 
 namespace Tessera.Engine.Tests;
@@ -238,6 +241,107 @@ public class EngineHttpTests
     }
 
     [Fact]
+    public async Task TesseraHttpClient_reuses_a_single_TCP_connection_across_two_sequential_GETs()
+    {
+        // wp:M2-07c — when the server keeps the connection alive after each
+        // response, the client must pool the transport and reuse it for the
+        // next request to the same origin. Asserting on AcceptCount==1 is the
+        // observable signal that the pool actually fired.
+        var body = Encoding.UTF8.GetBytes("ok");
+        using var server = await StubHttpServer.StartAsync(
+            _ => Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/plain\r\n" +
+                $"Content-Length: {body.Length}\r\n" +
+                "Connection: keep-alive\r\n\r\n" +
+                "ok"),
+            keepAlive: true);
+
+        using var client = new TesseraHttpClient();
+        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/").Value;
+
+        var first = await client.GetAsync(url, TestContext.Current.CancellationToken);
+        first.IsOk.Should().BeTrue(first.IsErr ? first.Error.ToString() : "");
+        first.Value.StatusCode.Should().Be(200);
+
+        var second = await client.GetAsync(url, TestContext.Current.CancellationToken);
+        second.IsOk.Should().BeTrue(second.IsErr ? second.Error.ToString() : "");
+        second.Value.StatusCode.Should().Be(200);
+
+        server.AcceptCount.Should().Be(1,
+            "the pool must reuse the kept-alive TCP connection across sequential GETs");
+        client.ConnectionPool.IdleCountFor(
+            OriginKey.Create("http", "localhost", server.Port))
+            .Should().Be(1, "after the second response the transport returns to the idle pool");
+    }
+
+    [Fact]
+    public async Task TesseraHttpClient_redials_when_pooled_connection_was_closed_by_peer()
+    {
+        // The server keeps the first connection alive (so we pool it) but
+        // closes it immediately after returning the response. When the next
+        // request arrives the original connection is half-dead — the client
+        // must transparently re-dial and the caller must see a clean 200.
+        var body = Encoding.UTF8.GetBytes("ok");
+        var responses = 0;
+        using var server = await StubHttpServer.StartAsync(
+            _ =>
+            {
+                Interlocked.Increment(ref responses);
+                // First response says keep-alive (so we pool it), but the
+                // server-side loop is single-shot so it'll close after.
+                return Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: text/plain\r\n" +
+                    $"Content-Length: {body.Length}\r\n" +
+                    "Connection: keep-alive\r\n\r\n" +
+                    "ok");
+            },
+            keepAlive: false);
+
+        using var client = new TesseraHttpClient();
+        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/").Value;
+
+        var first = await client.GetAsync(url, TestContext.Current.CancellationToken);
+        first.IsOk.Should().BeTrue();
+
+        // Give the server a tick to notice the close on its end (helps make
+        // the pooled-then-stale path deterministic on slow CI).
+        await Task.Delay(20, TestContext.Current.CancellationToken);
+
+        var second = await client.GetAsync(url, TestContext.Current.CancellationToken);
+        second.IsOk.Should().BeTrue(second.IsErr ? second.Error.ToString() : "");
+
+        server.AcceptCount.Should().Be(2,
+            "the pooled socket is half-dead so the second send must re-dial");
+        responses.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task TesseraHttpClient_does_not_reuse_when_server_closes_the_connection()
+    {
+        // Belt-and-braces: an explicit Connection: close response should drop
+        // the socket and force a second dial on the next request.
+        var body = Encoding.UTF8.GetBytes("ok");
+        using var server = await StubHttpServer.StartAsync(
+            _ => Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/plain\r\n" +
+                $"Content-Length: {body.Length}\r\n" +
+                "Connection: close\r\n\r\n" +
+                "ok"));
+
+        using var client = new TesseraHttpClient();
+        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/").Value;
+
+        (await client.GetAsync(url, TestContext.Current.CancellationToken)).IsOk.Should().BeTrue();
+        (await client.GetAsync(url, TestContext.Current.CancellationToken)).IsOk.Should().BeTrue();
+
+        server.AcceptCount.Should().Be(2);
+        client.ConnectionPool.IdleCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task RenderAsync_returns_render_error_on_http_failure_status()
     {
         using var server = await StubHttpServer.StartAsync(_ => Encoding.ASCII.GetBytes(
@@ -259,6 +363,7 @@ public class EngineHttpTests
     }
 
     [Theory]
+    // UTF / ASCII / Latin-1 core.
     [InlineData("text/html; charset=utf-8", new byte[] { 0x68, 0x69 }, "hi")]
     [InlineData("text/html", new byte[] { 0xEF, 0xBB, 0xBF, 0x68, 0x69 }, "hi")]
     [InlineData("text/html; charset=\"utf-8\"", new byte[] { 0x68 }, "h")]
@@ -269,6 +374,56 @@ public class EngineHttpTests
     [InlineData("text/html; charset=ISO_8859-1", new byte[] { 0xE9 }, "é")]
     [InlineData("text/html; charset=iso-ir-100", new byte[] { 0xE9 }, "é")]
     [InlineData("text/html; charset=unicode-1-1-utf-8", new byte[] { 0x68, 0x69 }, "hi")]
+    // WHATWG "iso-8859-1" / "us-ascii" canonicalise to windows-1252, so
+    // bytes 0x80..0x9F map to their windows-1252 glyphs (browser-compatible).
+    [InlineData("text/html; charset=iso-8859-1", new byte[] { 0x92 }, "’")]
+    [InlineData("text/html; charset=us-ascii", new byte[] { 0x80 }, "€")]
+    [InlineData("text/html; charset=windows-1252", new byte[] { 0x80, 0x92, 0x97 }, "€’—")]
+    [InlineData("text/html; charset=cp1252", new byte[] { 0x9C }, "œ")]
+    // windows-1250..1258 family.
+    [InlineData("text/html; charset=windows-1250", new byte[] { 0xA3 }, "Ł")]
+    [InlineData("text/html; charset=cp1251", new byte[] { 0xC0 }, "А")]
+    [InlineData("text/html; charset=windows-1253", new byte[] { 0xC1 }, "Α")]
+    [InlineData("text/html; charset=windows-1254", new byte[] { 0xFD }, "ı")]
+    [InlineData("text/html; charset=iso-8859-9", new byte[] { 0xFD }, "ı")]
+    [InlineData("text/html; charset=windows-1255", new byte[] { 0xE0 }, "א")]
+    [InlineData("text/html; charset=windows-1256", new byte[] { 0xC7 }, "ا")]
+    [InlineData("text/html; charset=windows-1257", new byte[] { 0xC0 }, "Ą")]
+    [InlineData("text/html; charset=windows-1258", new byte[] { 0xC0 }, "À")]
+    // ISO-8859 family (2..16).
+    [InlineData("text/html; charset=iso-8859-2", new byte[] { 0xA1 }, "Ą")]
+    [InlineData("text/html; charset=latin2", new byte[] { 0xA3 }, "Ł")]
+    [InlineData("text/html; charset=iso-8859-3", new byte[] { 0xA1 }, "Ħ")]
+    [InlineData("text/html; charset=iso-8859-4", new byte[] { 0xA1 }, "Ą")]
+    [InlineData("text/html; charset=iso-8859-5", new byte[] { 0xB0 }, "А")]
+    [InlineData("text/html; charset=iso-8859-7", new byte[] { 0xC1 }, "Α")]
+    [InlineData("text/html; charset=iso-8859-13", new byte[] { 0xC0 }, "Ą")]
+    [InlineData("text/html; charset=iso-8859-15", new byte[] { 0xA4 }, "€")]
+    // ISO-8859-10/-14/-16 are mapped by WHATWG but not shipped by the
+    // .NET BCL CodePages provider; the engine falls back to UTF-8 for
+    // those labels rather than mis-decoding. See WhatwgEncodingLabels.
+    // Cyrillic + Mac.
+    [InlineData("text/html; charset=koi8-r", new byte[] { 0xC1 }, "а")]
+    [InlineData("text/html; charset=koi8-u", new byte[] { 0xA4 }, "є")]
+    [InlineData("text/html; charset=x-mac-cyrillic", new byte[] { 0x80 }, "А")]
+    [InlineData("text/html; charset=macintosh", new byte[] { 0xA9 }, "©")]
+    // Thai / IBM866.
+    [InlineData("text/html; charset=windows-874", new byte[] { 0xA1 }, "ก")]
+    [InlineData("text/html; charset=tis-620", new byte[] { 0xA1 }, "ก")]
+    [InlineData("text/html; charset=ibm866", new byte[] { 0x80 }, "А")]
+    // CJK families.
+    [InlineData("text/html; charset=shift_jis", new byte[] { 0x82, 0xA0 }, "あ")]
+    [InlineData("text/html; charset=ms_kanji", new byte[] { 0x82, 0xA0 }, "あ")]
+    [InlineData("text/html; charset=sjis", new byte[] { 0x82, 0xA0 }, "あ")]
+    [InlineData("text/html; charset=gbk", new byte[] { 0xC4, 0xE3 }, "你")]
+    [InlineData("text/html; charset=gb2312", new byte[] { 0xC4, 0xE3 }, "你")]
+    [InlineData("text/html; charset=gb18030", new byte[] { 0xC4, 0xE3, 0xBA, 0xC3 }, "你好")]
+    [InlineData("text/html; charset=big5", new byte[] { 0xA4, 0x40 }, "一")]
+    [InlineData("text/html; charset=big5-hkscs", new byte[] { 0xA4, 0x40 }, "一")]
+    [InlineData("text/html; charset=euc-kr", new byte[] { 0xBE, 0xC8 }, "안")]
+    [InlineData("text/html; charset=korean", new byte[] { 0xBE, 0xC8 }, "안")]
+    [InlineData("text/html; charset=euc-jp", new byte[] { 0xA4, 0xA2 }, "あ")]
+    [InlineData("text/html; charset=iso-2022-jp", new byte[] { 0x1B, 0x24, 0x42, 0x24, 0x22, 0x1B, 0x28, 0x42 }, "あ")]
     public void ResolveEncoding_handles_common_inputs(string? contentType, byte[] body, string expectedDecoded)
     {
         var enc = TesseraEngine.ResolveEncoding(contentType, body);
@@ -322,54 +477,96 @@ public sealed record HttpSnapshotCase(
 }
 
 /// <summary>
-/// One-shot stub HTTP server used by engine integration tests. Serves a
-/// single response, then closes.
+/// Stub HTTP server used by engine integration tests. Serves one response per
+/// request, by default closing after each. Pass <c>keepAlive: true</c> to
+/// loop on the same TCP connection (used to exercise the wp:M2-07c keep-alive
+/// path); the server then keeps reading further requests off the same socket
+/// until the client closes or the response itself contains
+/// <c>Connection: close</c>.
 /// </summary>
 internal sealed class StubHttpServer : IDisposable
 {
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _accept;
+    private int _acceptCount;
 
     public int Port { get; }
 
-    private StubHttpServer(TcpListener listener, Func<string, byte[]> handler)
+    /// <summary>Number of distinct TCP accepts this server has handled.</summary>
+    public int AcceptCount => Volatile.Read(ref _acceptCount);
+
+    private StubHttpServer(TcpListener listener, Func<string, byte[]> handler, bool keepAlive)
     {
         _listener = listener;
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        _accept = Task.Run(() => AcceptLoop(handler));
+        _accept = Task.Run(() => AcceptLoop(handler, keepAlive));
     }
 
     public static Task<StubHttpServer> StartAsync(Func<string, byte[]> handler)
+        => StartAsync(handler, keepAlive: false);
+
+    public static Task<StubHttpServer> StartAsync(Func<string, byte[]> handler, bool keepAlive)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
-        return Task.FromResult(new StubHttpServer(listener, handler));
+        return Task.FromResult(new StubHttpServer(listener, handler, keepAlive));
     }
 
-    private async Task AcceptLoop(Func<string, byte[]> handler)
+    private async Task AcceptLoop(Func<string, byte[]> handler, bool keepAlive)
     {
         try
         {
             while (!_cts.IsCancellationRequested)
             {
-                using var client = await _listener.AcceptTcpClientAsync(_cts.Token);
-                using var stream = client.GetStream();
+                var client = await _listener.AcceptTcpClientAsync(_cts.Token);
+                Interlocked.Increment(ref _acceptCount);
+                _ = Task.Run(() => ServeConnectionAsync(client, handler, keepAlive));
+            }
+        }
+        catch (OperationCanceledException) { /* shutting down */ }
+        catch (ObjectDisposedException) { /* listener closed */ }
+        catch (IOException) { /* peer disconnected */ }
+    }
 
-                var buffer = new byte[8192];
-                var pos = 0;
-                while (pos < buffer.Length)
+    private async Task ServeConnectionAsync(TcpClient client, Func<string, byte[]> handler, bool keepAlive)
+    {
+        try
+        {
+            using (client)
+            using (var stream = client.GetStream())
+            {
+                while (!_cts.IsCancellationRequested)
                 {
-                    var n = await stream.ReadAsync(buffer.AsMemory(pos), _cts.Token);
-                    if (n == 0) break;
-                    pos += n;
-                    if (ContainsCrLfCrLf(buffer.AsSpan(0, pos))) break;
-                }
+                    var buffer = new byte[8192];
+                    var pos = 0;
+                    var gotRequest = false;
+                    while (pos < buffer.Length)
+                    {
+                        var n = await stream.ReadAsync(buffer.AsMemory(pos), _cts.Token);
+                        if (n == 0) break;
+                        pos += n;
+                        if (ContainsCrLfCrLf(buffer.AsSpan(0, pos)))
+                        {
+                            gotRequest = true;
+                            break;
+                        }
+                    }
+                    if (!gotRequest) return;
 
-                var req = Encoding.ASCII.GetString(buffer, 0, pos);
-                var response = handler(req);
-                await stream.WriteAsync(response, _cts.Token);
-                await stream.FlushAsync(_cts.Token);
+                    var req = Encoding.ASCII.GetString(buffer, 0, pos);
+                    var response = handler(req);
+                    await stream.WriteAsync(response, _cts.Token);
+                    await stream.FlushAsync(_cts.Token);
+
+                    if (!keepAlive) return;
+
+                    // If the response itself signals close, stop reading further
+                    // requests on this connection.
+                    var responseText = Encoding.ASCII.GetString(response);
+                    if (responseText.Contains("Connection: close", StringComparison.OrdinalIgnoreCase))
+                        return;
+                }
             }
         }
         catch (OperationCanceledException) { /* shutting down */ }

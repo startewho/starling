@@ -2,10 +2,10 @@
 id: "wp:M2-07b-live-https-fixture"
 parent: "wp:M2-07-network-end-to-end"
 milestone: "M2"
-status: "available"
-claimed_by: ""
-claimed_at: ""
-branch: ""
+status: "complete"
+claimed_by: "agent-claude-cody"
+claimed_at: "2026-05-13T14:40:55Z"
+branch: "main"
 depends_on:
   - "wp:M2-07a-img-fetch-decode-paint"
 blocks: []
@@ -14,6 +14,7 @@ plan_refs:
   - "browser-plan/13_MILESTONES.md#m2--networking-and-live-html"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-07-network-end-to-end"
   - "browser-plan/12_TESTING.md"
+completed_at: "2026-05-13T14:51:47Z"
 ---
 
 # wp:M2-07b — Live HTTPS render fixture + SSIM gate
@@ -85,3 +86,13 @@ real-world page so we can keep regressing it offline.
 - 2026-05-13T00:00Z — agent-claude-cody, filed during MVP-path planning
   split-out of the catch-all wp:M2-07-network-end-to-end. Available to
   claim after wp:M2-07a lands.
+- 2026-05-13T14:40:55Z — claimed by agent-claude-cody, working on main
+- 2026-05-13T14:51:47Z — merged; complete. Swapped anthropic.com (257 KB,
+  heavy JS) for nginx.org per the fallback note: 6 same-origin
+  subresources, ~33 KB total, HTML4, zero JS. Snapshot golden lands
+  byte-exact on macOS; SSIM ≥ 0.99 is the fallback. Live golden for
+  https://example.com was captured by this session — Linux-only in CI to
+  avoid font-rasteriser drift across the matrix. Re-vendor with
+  tools/snapshot-vendor/vendor-snapshot.sh and regenerate goldens with
+  TESSERA_UPDATE_GOLDENS=1 (the live test additionally needs
+  TESSERA_ALLOW_NETWORK=1).

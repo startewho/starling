@@ -2,10 +2,10 @@
 id: "wp:M2-07d-encoding-hardening"
 parent: "wp:M2-07-network-end-to-end"
 milestone: "M2"
-status: "available"
-claimed_by: ""
-claimed_at: ""
-branch: ""
+status: "complete"
+claimed_by: "agent-claude-cody"
+claimed_at: "2026-05-13T14:40:25Z"
+branch: "main"
 depends_on:
   - "wp:M2-05-http1"
 blocks: []
@@ -15,6 +15,7 @@ plan_refs:
   - "browser-plan/04_HTML_PARSING.md#encoding"
   - "browser-plan/13_MILESTONES.md#m2--networking-and-live-html"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-07-network-end-to-end"
+completed_at: "2026-05-13T14:52:13Z"
 ---
 
 # wp:M2-07d — Encoding hardening
@@ -91,3 +92,5 @@ gbk, big5, euc-kr, …) silently falls back to UTF-8 with replacement chars.
   split-out of the catch-all wp:M2-07-network-end-to-end. Available to
   claim. Picks up the open follow-up noted in the original wp:M2-07
   handoff log dated 2026-05-12T22:30Z.
+- 2026-05-13T14:40:25Z — claimed by agent-claude-cody, working on main
+- 2026-05-13T14:52:13Z — merged; complete
