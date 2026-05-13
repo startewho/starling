@@ -15,14 +15,20 @@ namespace Tessera.Headless;
 /// </summary>
 internal static class Program
 {
+    private static IDiagnostics s_diagnostics = NoopDiagnostics.Instance;
+
     public static int Main(string[] args)
     {
         // Wire OTel before we do anything observable. When launched by Aspire
         // (`dotnet run --project Tessera.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
         // is set and traces/metrics/logs flow to the Aspire dashboard. When
         // run directly, the providers are still wired but the exporter is a
-        // no-op.
+        // no-op. We tee the OTel-backed IDiagnostics with ConsoleDiagnostics
+        // so plain `dotnet run` still emits stderr trace lines.
         using var telemetry = OtelBootstrap.Initialize("tessera-headless");
+        s_diagnostics = new CompositeDiagnostics(
+            new ConsoleDiagnostics(),
+            telemetry.Diagnostics);
 
         if (args.Length == 0)
         {
@@ -185,7 +191,7 @@ internal static class Program
         // Allow bare paths in addition to file:// URLs — agent ergonomics.
         var url = NormalizeUrlOrPath(input);
 
-        var engine = new TesseraEngine(diagnostics: new ConsoleDiagnostics());
+        var engine = new TesseraEngine(diagnostics: s_diagnostics);
         var result = engine.Render(url, new RenderOptions(viewport, fontSize), output);
 
         return result.Match(

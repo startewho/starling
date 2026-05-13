@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using Tessera.Common.Diagnostics;
@@ -68,6 +69,9 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
 
+        using var _ = _diag.Span("engine", "fetch_image");
+        Activity.Current?.SetTag("url", key);
+
         try
         {
             byte[] bytes;
@@ -77,6 +81,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 if (!File.Exists(path))
                 {
                     _diag.Log(DiagLevel.Warn, "engine", $"Missing local image: {path}");
+                    _diag.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
                 bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -88,12 +93,15 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 if (response.IsErr)
                 {
                     _diag.Log(DiagLevel.Warn, "engine", $"Image fetch failed {url}: {response.Error}");
+                    _diag.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
+                Activity.Current?.SetTag("http.status_code", response.Value.StatusCode);
                 if (response.Value.StatusCode is < 200 or >= 400)
                 {
                     _diag.Log(DiagLevel.Warn, "engine",
                         $"Image fetch HTTP {response.Value.StatusCode} from {url}");
+                    _diag.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
                 bytes = response.Value.Body.ToArray();
@@ -101,21 +109,27 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
             else
             {
                 _diag.Log(DiagLevel.Warn, "engine", $"Unsupported image scheme '{url.Scheme}' for {url}");
+                _diag.Counter("engine.fetch.image.failed", 1);
                 return null;
             }
 
+            Activity.Current?.SetTag("bytes", bytes.Length);
             // ImageSharp auto-detects PNG/JPEG/GIF/BMP/WebP. CloneAs<Rgba32>
             // normalizes to the painter's pixel format and lets us dispose the
             // intermediate Image without surprising the caller.
             using var loaded = Image.Load(bytes);
             var bitmap = loaded.CloneAs<Rgba32>();
+            Activity.Current?.SetTag("image.w", bitmap.Width);
+            Activity.Current?.SetTag("image.h", bitmap.Height);
             _byUrl[key] = bitmap;
+            _diag.Counter("engine.fetch.image", 1);
             return bitmap;
         }
         catch (Exception ex) when (ex is IOException or SixLabors.ImageSharp.UnknownImageFormatException
                                    or SixLabors.ImageSharp.InvalidImageContentException)
         {
             _diag.Log(DiagLevel.Warn, "engine", $"Image decode failed {url}: {ex.Message}");
+            _diag.Counter("engine.fetch.image.failed", 1);
             return null;
         }
     }

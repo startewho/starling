@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\Tessera.Common\Tessera.Common.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Wired into the GUI (HostBuilder-shaped MauiAppBuilder) and the
          Headless CLI (plain Main entrypoint). The OTLP exporter reads
          OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_SERVICE_NAME from env; Aspire

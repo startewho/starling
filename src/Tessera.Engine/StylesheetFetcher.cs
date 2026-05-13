@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Tessera.Common.Diagnostics;
 using Tessera.Common.Encoding;
@@ -90,6 +91,9 @@ internal sealed class StylesheetFetcher : IDisposable
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
 
+        using var _ = _diag.Span("engine", "fetch_stylesheet");
+        Activity.Current?.SetTag("url", key);
+
         try
         {
             byte[] bytes;
@@ -100,6 +104,7 @@ internal sealed class StylesheetFetcher : IDisposable
                 if (!File.Exists(path))
                 {
                     _diag.Log(DiagLevel.Warn, "engine", $"Missing local stylesheet: {path}");
+                    _diag.Counter("engine.fetch.stylesheet.failed", 1);
                     return null;
                 }
                 bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -111,12 +116,15 @@ internal sealed class StylesheetFetcher : IDisposable
                 if (response.IsErr)
                 {
                     _diag.Log(DiagLevel.Warn, "engine", $"Stylesheet fetch failed {url}: {response.Error}");
+                    _diag.Counter("engine.fetch.stylesheet.failed", 1);
                     return null;
                 }
+                Activity.Current?.SetTag("http.status_code", response.Value.StatusCode);
                 if (response.Value.StatusCode is < 200 or >= 400)
                 {
                     _diag.Log(DiagLevel.Warn, "engine",
                         $"Stylesheet fetch HTTP {response.Value.StatusCode} from {url}");
+                    _diag.Counter("engine.fetch.stylesheet.failed", 1);
                     return null;
                 }
                 bytes = response.Value.Body.ToArray();
@@ -125,17 +133,21 @@ internal sealed class StylesheetFetcher : IDisposable
             else
             {
                 _diag.Log(DiagLevel.Warn, "engine", $"Unsupported stylesheet scheme '{url.Scheme}' for {url}");
+                _diag.Counter("engine.fetch.stylesheet.failed", 1);
                 return null;
             }
 
+            Activity.Current?.SetTag("bytes", bytes.Length);
             var text = DecodeCss(contentType, bytes);
             var sheet = CssParser.ParseStyleSheet(text, StyleOrigin.Author);
             _byUrl[key] = sheet;
+            _diag.Counter("engine.fetch.stylesheet", 1);
             return sheet;
         }
         catch (IOException ex)
         {
             _diag.Log(DiagLevel.Warn, "engine", $"Stylesheet read failed {url}: {ex.Message}");
+            _diag.Counter("engine.fetch.stylesheet.failed", 1);
             return null;
         }
     }

@@ -6,6 +6,7 @@ using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using Tessera.Common.Diagnostics;
 
 namespace Tessera.Telemetry;
 
@@ -24,7 +25,9 @@ public static class OtelBootstrap
     /// host (<c>MauiAppBuilder</c>, <c>HostApplicationBuilder</c>,
     /// <c>WebApplicationBuilder</c>). Uses the framework's logging/metrics
     /// builders so anything the app already logs through
-    /// <see cref="ILogger"/> flows out as OTel log records.
+    /// <see cref="ILogger"/> flows out as OTel log records, and registers
+    /// <see cref="IDiagnostics"/> as a singleton so engine code can resolve
+    /// it via DI.
     /// </summary>
     public static TBuilder AddTesseraTelemetry<TBuilder>(this TBuilder builder, string serviceName)
         where TBuilder : IHostApplicationBuilder
@@ -42,13 +45,18 @@ public static class OtelBootstrap
             .ConfigureResource(rb => rb.AddService(serviceName))
             .WithTracing(t => t
                 .AddSource(serviceName)
+                .AddSource(OtelDiagnostics.SourceName)
                 .AddHttpClientInstrumentation())
             .WithMetrics(m => m
+                .AddMeter(OtelDiagnostics.SourceName)
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation());
 
         if (HasOtlpEndpoint())
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
+
+        builder.Services.AddSingleton<IDiagnostics>(sp =>
+            new OtelDiagnostics(sp.GetRequiredService<ILoggerFactory>()));
 
         return builder;
     }
@@ -56,11 +64,12 @@ public static class OtelBootstrap
     /// <summary>
     /// Wire OpenTelemetry for a plain <c>Main</c>-style console app that
     /// doesn't go through <see cref="IHostApplicationBuilder"/>. Returns a
-    /// disposable that flushes and shuts down the providers — store it in a
-    /// <c>using</c> at the top of <c>Main</c> so traces/metrics aren't
-    /// dropped on exit.
+    /// disposable handle that flushes and shuts down the providers and
+    /// exposes both the <see cref="ILoggerFactory"/> and a ready-to-use
+    /// <see cref="IDiagnostics"/> — store it in a <c>using</c> at the top
+    /// of <c>Main</c> so traces/metrics aren't dropped on exit.
     /// </summary>
-    public static IDisposable Initialize(string serviceName)
+    public static OtelHandle Initialize(string serviceName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceName);
 
@@ -70,12 +79,14 @@ public static class OtelBootstrap
         var tracerBuilder = Sdk.CreateTracerProviderBuilder()
             .SetResourceBuilder(resource)
             .AddSource(serviceName)
+            .AddSource(OtelDiagnostics.SourceName)
             .AddHttpClientInstrumentation();
         if (hasOtlp) tracerBuilder.AddOtlpExporter();
         var tracerProvider = tracerBuilder.Build();
 
         var meterBuilder = Sdk.CreateMeterProviderBuilder()
             .SetResourceBuilder(resource)
+            .AddMeter(OtelDiagnostics.SourceName)
             .AddHttpClientInstrumentation()
             .AddRuntimeInstrumentation();
         if (hasOtlp) meterBuilder.AddOtlpExporter();
@@ -92,24 +103,35 @@ public static class OtelBootstrap
             });
         });
 
-        return new ProviderHandle(tracerProvider, meterProvider, loggerFactory);
+        return new OtelHandle(tracerProvider, meterProvider, loggerFactory);
     }
 
     private static bool HasOtlpEndpoint()
         => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
 
-    private sealed class ProviderHandle(
-        TracerProvider tracer,
-        MeterProvider meter,
-        ILoggerFactory loggerFactory) : IDisposable
+    public sealed class OtelHandle : IDisposable
     {
+        private readonly TracerProvider _tracer;
+        private readonly MeterProvider _meter;
+
+        internal OtelHandle(TracerProvider tracer, MeterProvider meter, ILoggerFactory loggerFactory)
+        {
+            _tracer = tracer;
+            _meter = meter;
+            LoggerFactory = loggerFactory;
+            Diagnostics = new OtelDiagnostics(loggerFactory);
+        }
+
+        public ILoggerFactory LoggerFactory { get; }
+        public IDiagnostics Diagnostics { get; }
+
         public void Dispose()
         {
             // Disposal order matters: flush exporters via the providers'
             // disposal hooks before tearing the logger factory down.
-            tracer.Dispose();
-            meter.Dispose();
-            loggerFactory.Dispose();
+            _tracer.Dispose();
+            _meter.Dispose();
+            LoggerFactory.Dispose();
         }
     }
 }
