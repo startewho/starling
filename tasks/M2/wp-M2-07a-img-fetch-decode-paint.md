@@ -2,7 +2,7 @@
 id: "wp:M2-07a-img-fetch-decode-paint"
 parent: "wp:M2-07-network-end-to-end"
 milestone: "M2"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-13T14:12:18Z"
 branch: "main"
@@ -18,6 +18,7 @@ plan_refs:
   - "browser-plan/07_LAYOUT.md#replaced-elements"
   - "browser-plan/13_MILESTONES.md#m2--networking-and-live-html"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-07-network-end-to-end"
+completed_at: "2026-05-13T14:32:16Z"
 ---
 
 # wp:M2-07a — `<img>` fetch, decode, and paint
@@ -97,3 +98,4 @@ visual element even when DOM + CSS are perfect.
   split-out of the catch-all wp:M2-07-network-end-to-end. Available to
   claim.
 - 2026-05-13T14:12:18Z — claimed by agent-claude-cody, working on main
+- 2026-05-13T14:32:16Z — merged; complete
