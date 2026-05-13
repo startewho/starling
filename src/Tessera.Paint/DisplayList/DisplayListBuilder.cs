@@ -50,6 +50,18 @@ public sealed class DisplayListBuilder
             return; // Text boxes have no children.
         }
 
+        // Replaced inline content (currently <img>): its Frame was set by the
+        // inline formatting context relative to the anonymous-block container,
+        // so frameX/frameY (which already includes that translation) is its
+        // document-space top-left.
+        if (box is ImageBox imageBox)
+        {
+            list.Add(new DrawImage(
+                new Rect(frameX, frameY, imageBox.Frame.Width, imageBox.Frame.Height),
+                imageBox.Source));
+            return; // ImageBox has no children.
+        }
+
         // Children paint after backgrounds. Their frames are in our content-box
         // coords, so push our padding+border origin.
         var contentOriginX = frameX + box.Border.Left + box.Padding.Left;

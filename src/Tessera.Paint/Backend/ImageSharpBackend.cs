@@ -57,6 +57,42 @@ public sealed class ImageSharpBackend
             case DrawText text:
                 DrawText(ctx, text);
                 break;
+            case DisplayList.DrawImage image:
+                DrawImage(ctx, image);
+                break;
+        }
+    }
+
+    private static void DrawImage(IImageProcessingContext ctx, DisplayList.DrawImage item)
+    {
+        if (item.Bounds.Width <= 0 || item.Bounds.Height <= 0) return;
+        if (item.Source is not Image<Rgba32> source) return;
+
+        var targetW = (int)Math.Round(item.Bounds.Width);
+        var targetH = (int)Math.Round(item.Bounds.Height);
+        if (targetW <= 0 || targetH <= 0) return;
+
+        // Resample only when the destination differs from the source's native
+        // size. Cloning is cheap relative to drawing and keeps the source
+        // immutable so the engine can reuse it across multiple <img> elements.
+        Image<Rgba32>? resampled = null;
+        try
+        {
+            var drawable = source;
+            if (source.Width != targetW || source.Height != targetH)
+            {
+                resampled = source.Clone(c => c.Resize(targetW, targetH));
+                drawable = resampled;
+            }
+
+            ctx.DrawImage(
+                drawable,
+                new Point((int)Math.Round(item.Bounds.X), (int)Math.Round(item.Bounds.Y)),
+                opacity: 1f);
+        }
+        finally
+        {
+            resampled?.Dispose();
         }
     }
 

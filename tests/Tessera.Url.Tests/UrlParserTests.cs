@@ -232,4 +232,32 @@ public class UrlParserTests
         UrlParser.Parse("https://alice:secret@example.com/").Value.ToString()
             .Should().Be("https://alice:secret@example.com/");
     }
+
+    [Fact]
+    public void Relative_filename_resolves_against_file_base()
+    {
+        var baseUrl = UrlParser.Parse("file:///tmp/pages/page.html").Value;
+        var u = UrlParser.Parse("swatch.png", baseUrl).Value;
+        u.Scheme.Should().Be("file");
+        u.Path.Should().Be("/tmp/pages/swatch.png");
+    }
+
+    [Fact]
+    public void Relative_filename_resolves_against_https_base()
+    {
+        var baseUrl = UrlParser.Parse("https://example.com/dir/index.html").Value;
+        var u = UrlParser.Parse("logo.png", baseUrl).Value;
+        u.Scheme.Should().Be("https");
+        u.Host.Should().Be("example.com");
+        u.Path.Should().Be("/dir/logo.png");
+    }
+
+    [Fact]
+    public void Absolute_path_resolves_against_base_host()
+    {
+        var baseUrl = UrlParser.Parse("https://example.com/dir/index.html").Value;
+        var u = UrlParser.Parse("/other/img.png", baseUrl).Value;
+        u.Host.Should().Be("example.com");
+        u.Path.Should().Be("/other/img.png");
+    }
 }

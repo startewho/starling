@@ -23,3 +23,11 @@ public sealed record DrawText(
     string FontFamily,
     bool Bold,
     bool Italic) : DisplayItem;
+
+/// <summary>
+/// Blit a decoded image into <paramref name="Bounds"/>. <paramref name="Source"/>
+/// is opaque to layout / display-list consumers; the paint backend casts it to
+/// its concrete bitmap type (ImageSharp's <c>Image&lt;Rgba32&gt;</c>). If
+/// <c>Bounds</c> differs from the source's native size the backend resamples.
+/// </summary>
+public sealed record DrawImage(Rect Bounds, object Source) : DisplayItem;

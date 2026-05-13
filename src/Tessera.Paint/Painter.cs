@@ -7,6 +7,7 @@ using Tessera.Css.Cascade;
 using Tessera.Css.Parser;
 using Tessera.Dom;
 using Tessera.Layout.Text;
+using Tessera.Layout.Tree;
 using Tessera.Paint.Backend;
 using Tessera.Paint.DisplayList;
 using LayoutEngineImpl = Tessera.Layout.LayoutEngine;
@@ -32,14 +33,20 @@ public sealed class Painter
     /// <summary>
     /// Run the full M1 pipeline: build a box tree, lay it out, build a paint
     /// display list, replay it onto an ImageSharp surface. The caller supplies
-    /// a parsed <see cref="Document"/> and the viewport size in CSS px.
+    /// a parsed <see cref="Document"/> and the viewport size in CSS px. Pass an
+    /// <paramref name="images"/> resolver to render <c>&lt;img&gt;</c> elements;
+    /// without one, every <c>&lt;img&gt;</c> degrades to its <c>alt</c> text.
     /// </summary>
-    public Image<Rgba32> RenderDocument(Document document, LayoutSize viewport, float? defaultFontSize = null)
+    public Image<Rgba32> RenderDocument(
+        Document document,
+        LayoutSize viewport,
+        float? defaultFontSize = null,
+        IImageResolver? images = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         var style = CreateStyleEngine(document, defaultFontSize);
-        var layoutEngine = new LayoutEngineImpl(style, DefaultTextMeasurer.Instance);
+        var layoutEngine = new LayoutEngineImpl(style, DefaultTextMeasurer.Instance, images);
         var root = layoutEngine.LayoutDocument(document, viewport);
 
         PaintList displayList = new DisplayListBuilder().Build(root);

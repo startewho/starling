@@ -26,8 +26,10 @@ internal sealed class InlineLayout
         var lineHeight = ResolveLineHeight(container.Style, fontSize);
         var baseline = _measurer.Baseline(fontSize);
 
-        // Collect a sequence of (text, style) runs by flattening inline + text children.
-        var runs = new List<(string Text, ComputedStyle? Style, TextBox Owner)>();
+        // Collect a flat sequence of inline-formatting items by walking the
+        // container's inline subtree (text runs flatten through InlineBox
+        // wrappers; <img> shows up as an ImageRun).
+        var runs = new List<InlineRun>();
         Flatten(container, runs);
 
         // No content → zero height.
@@ -36,49 +38,104 @@ internal sealed class InlineLayout
         double cursorX = 0, cursorY = 0;
         double currentLineHeight = lineHeight;
         var fragments = new List<(TextBox Owner, int Index)>();
+        var placedImages = new List<ImageBox>();
 
-        foreach (var (text, style, owner) in runs)
+        foreach (var run in runs)
         {
-            // Normalize whitespace: collapse runs of whitespace to a single space.
-            var normalized = NormalizeWhitespace(text);
-            if (normalized.Length == 0) continue;
-
-            var localFontSize = ResolveFontSize(style ?? container.Style);
-            var localLineHeight = ResolveLineHeight(style ?? container.Style, localFontSize);
-            currentLineHeight = Math.Max(currentLineHeight, localLineHeight);
-
-            var words = SplitToWords(normalized);
-            foreach (var word in words)
+            switch (run)
             {
-                if (word.Length == 0) continue;
-                var width = _measurer.MeasureWidth(word, localFontSize);
-
-                // Wrap if needed (only after at least one fragment on the line).
-                var leadingSpace = word.StartsWith(" ", StringComparison.Ordinal);
-                if (cursorX > 0 && cursorX + width > availableWidth)
-                {
-                    cursorY += currentLineHeight;
-                    cursorX = 0;
-                    currentLineHeight = localLineHeight;
-                    if (leadingSpace)
-                    {
-                        // Strip the leading space when wrapping; we don't carry it to a new line.
-                        var trimmed = word.TrimStart(' ');
-                        if (trimmed.Length == 0) continue;
-                        var trimmedWidth = _measurer.MeasureWidth(trimmed, localFontSize);
-                        AddFragment(owner, fragments, new TextFragment(trimmed, cursorX, cursorY, trimmedWidth, currentLineHeight, baseline));
-                        cursorX += trimmedWidth;
-                        continue;
-                    }
-                }
-
-                AddFragment(owner, fragments, new TextFragment(word, cursorX, cursorY, width, currentLineHeight, _measurer.Baseline(localFontSize)));
-                cursorX += width;
+                case TextRun text:
+                    LayoutText(text, container.Style, availableWidth, baseline,
+                        fragments, ref cursorX, ref cursorY, ref currentLineHeight);
+                    break;
+                case ImageRun image:
+                    LayoutImage(image.Box, availableWidth,
+                        placedImages, ref cursorX, ref cursorY, ref currentLineHeight);
+                    break;
             }
         }
 
-        AlignLines(container.Style, availableWidth, fragments);
+        AlignLines(container.Style, availableWidth, fragments, placedImages);
         return cursorY + currentLineHeight;
+    }
+
+    private void LayoutText(
+        TextRun run,
+        ComputedStyle? containerStyle,
+        double availableWidth,
+        double containerBaseline,
+        List<(TextBox Owner, int Index)> fragments,
+        ref double cursorX,
+        ref double cursorY,
+        ref double currentLineHeight)
+    {
+        var normalized = NormalizeWhitespace(run.Text);
+        if (normalized.Length == 0) return;
+
+        var localFontSize = ResolveFontSize(run.Style ?? containerStyle);
+        var localLineHeight = ResolveLineHeight(run.Style ?? containerStyle, localFontSize);
+        currentLineHeight = Math.Max(currentLineHeight, localLineHeight);
+
+        foreach (var word in SplitToWords(normalized))
+        {
+            if (word.Length == 0) continue;
+            var width = _measurer.MeasureWidth(word, localFontSize);
+            var leadingSpace = word.StartsWith(" ", StringComparison.Ordinal);
+
+            if (cursorX > 0 && cursorX + width > availableWidth)
+            {
+                cursorY += currentLineHeight;
+                cursorX = 0;
+                currentLineHeight = localLineHeight;
+                if (leadingSpace)
+                {
+                    var trimmed = word.TrimStart(' ');
+                    if (trimmed.Length == 0) continue;
+                    var trimmedWidth = _measurer.MeasureWidth(trimmed, localFontSize);
+                    AddFragment(run.Owner, fragments,
+                        new TextFragment(trimmed, cursorX, cursorY, trimmedWidth, currentLineHeight, containerBaseline));
+                    cursorX += trimmedWidth;
+                    continue;
+                }
+            }
+
+            AddFragment(run.Owner, fragments,
+                new TextFragment(word, cursorX, cursorY, width, currentLineHeight, _measurer.Baseline(localFontSize)));
+            cursorX += width;
+        }
+    }
+
+    private static void LayoutImage(
+        ImageBox image,
+        double availableWidth,
+        List<ImageBox> placedImages,
+        ref double cursorX,
+        ref double cursorY,
+        ref double currentLineHeight)
+    {
+        var width = image.IntrinsicWidth;
+        var height = image.IntrinsicHeight;
+
+        // Wrap to the next line if this image won't fit and the current line
+        // already has content. An image wider than the container stays on its
+        // own line and overflows — matching the simple v1 "no overflow break"
+        // behaviour of text.
+        if (cursorX > 0 && cursorX + width > availableWidth)
+        {
+            cursorY += currentLineHeight;
+            cursorX = 0;
+            currentLineHeight = height;
+        }
+        else
+        {
+            currentLineHeight = Math.Max(currentLineHeight, height);
+        }
+
+        // v1 places the image top-aligned within its line. Baseline alignment
+        // ("bottom of replaced element sits on text baseline") is a follow-up.
+        image.Frame = new Rect(cursorX, cursorY, width, height);
+        placedImages.Add(image);
+        cursorX += width;
     }
 
     private static void AddFragment(TextBox owner, List<(TextBox Owner, int Index)> fragments, TextFragment fragment)
@@ -87,35 +144,63 @@ internal sealed class InlineLayout
         fragments.Add((owner, owner.Fragments.Count - 1));
     }
 
-    private static void AlignLines(ComputedStyle? style, double availableWidth, List<(TextBox Owner, int Index)> fragments)
+    private static void AlignLines(
+        ComputedStyle? style,
+        double availableWidth,
+        List<(TextBox Owner, int Index)> fragments,
+        List<ImageBox> placedImages)
     {
         var align = style?.Get(PropertyId.TextAlign) is CssKeyword keyword
             ? keyword.Name.ToLowerInvariant()
             : "start";
-        if (align is not ("center" or "right" or "end") || fragments.Count == 0)
+        if (align is not ("center" or "right" or "end") || (fragments.Count == 0 && placedImages.Count == 0))
             return;
 
-        foreach (var line in fragments.GroupBy(item => item.Owner.Fragments[item.Index].Y))
+        // Group both text fragments and image boxes by their Y so per-line
+        // alignment shifts apply uniformly to everything sitting on the line.
+        var lines = new Dictionary<double, (List<(TextBox Owner, int Index)> Texts, List<ImageBox> Images, double RightEdge)>();
+        foreach (var item in fragments)
         {
-            var lineWidth = line.Max(item =>
-            {
-                var fragment = item.Owner.Fragments[item.Index];
-                return fragment.X + fragment.Width;
-            });
+            var frag = item.Owner.Fragments[item.Index];
+            var key = frag.Y;
+            if (!lines.TryGetValue(key, out var line)) line = ([], [], 0);
+            line.Texts.Add(item);
+            line.RightEdge = Math.Max(line.RightEdge, frag.X + frag.Width);
+            lines[key] = line;
+        }
+        foreach (var image in placedImages)
+        {
+            var key = image.Frame.Y;
+            if (!lines.TryGetValue(key, out var line)) line = ([], [], 0);
+            line.Images.Add(image);
+            line.RightEdge = Math.Max(line.RightEdge, image.Frame.X + image.Frame.Width);
+            lines[key] = line;
+        }
+
+        foreach (var (_, line) in lines)
+        {
             var offset = align == "center"
-                ? Math.Max(0, (availableWidth - lineWidth) / 2d)
-                : Math.Max(0, availableWidth - lineWidth);
+                ? Math.Max(0, (availableWidth - line.RightEdge) / 2d)
+                : Math.Max(0, availableWidth - line.RightEdge);
             if (offset == 0) continue;
 
-            foreach (var item in line)
+            foreach (var item in line.Texts)
             {
                 var fragment = item.Owner.Fragments[item.Index];
                 item.Owner.Fragments[item.Index] = fragment with { X = fragment.X + offset };
             }
+            foreach (var image in line.Images)
+            {
+                image.Frame = image.Frame with { X = image.Frame.X + offset };
+            }
         }
     }
 
-    private static void Flatten(Box.Box box, List<(string Text, ComputedStyle? Style, TextBox Owner)> runs)
+    private abstract record InlineRun;
+    private sealed record TextRun(string Text, ComputedStyle? Style, TextBox Owner) : InlineRun;
+    private sealed record ImageRun(ImageBox Box) : InlineRun;
+
+    private static void Flatten(Box.Box box, List<InlineRun> runs)
     {
         foreach (var child in box.Children)
         {
@@ -123,7 +208,10 @@ internal sealed class InlineLayout
             {
                 case TextBox tb:
                     tb.Fragments.Clear();
-                    runs.Add((tb.Text, tb.Style, tb));
+                    runs.Add(new TextRun(tb.Text, tb.Style, tb));
+                    break;
+                case ImageBox img:
+                    runs.Add(new ImageRun(img));
                     break;
                 case InlineBox ib:
                     Flatten(ib, runs);

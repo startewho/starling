@@ -77,6 +77,33 @@ public sealed class TextBox : Box
 }
 
 /// <summary>
+/// A replaced inline element with intrinsic dimensions (currently &lt;img&gt;).
+/// The <see cref="Source"/> is opaque to layout — the paint backend casts it
+/// to its concrete bitmap type. <see cref="Box.Frame"/> is set by the inline
+/// formatting context (for inline images) or block layout (for block images)
+/// to the box's position within its parent's content-box.
+/// </summary>
+public sealed class ImageBox : Box
+{
+    public ImageBox(
+        ComputedStyle? style,
+        Element? element,
+        double intrinsicWidth,
+        double intrinsicHeight,
+        object source)
+        : base(BoxKind.Replaced, style, element)
+    {
+        IntrinsicWidth = intrinsicWidth;
+        IntrinsicHeight = intrinsicHeight;
+        Source = source;
+    }
+
+    public double IntrinsicWidth { get; }
+    public double IntrinsicHeight { get; }
+    public object Source { get; }
+}
+
+/// <summary>
 /// A single line-aligned fragment of text emitted by the inline formatting
 /// context. <see cref="X"/> / <see cref="Y"/> are in the enclosing block's
 /// content-area coordinate space.

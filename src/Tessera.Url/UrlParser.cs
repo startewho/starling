@@ -249,8 +249,18 @@ public static class UrlParser
                 _state = State.Fragment;
                 return null;
             }
-            _state = _base.IsSpecial ? State.Relative : State.OpaquePath;
-            _opaquePath = _base.Path; // for opaque case
+            if (_base.IsSpecial)
+            {
+                // Relative state will rebuild _pathSegments; only the opaque
+                // branch should inherit _opaquePath. The previous unconditional
+                // assignment masked the rebuilt segments in Run()'s output.
+                _state = State.Relative;
+            }
+            else
+            {
+                _state = State.OpaquePath;
+                _opaquePath = _base.Path;
+            }
             _pathSegments = SplitPath(_base.Path);
             _host = _base.Host;
             _port = _base.Port;
@@ -336,7 +346,10 @@ public static class UrlParser
                 _state = State.Authority;
                 return null;
             }
-            // Reprocess as Path with single leading /.
+            // Reprocess as Path with single leading /. An absolute-path relative
+            // URL (e.g. "/other" against "https://x/dir/page") replaces the
+            // base's path entirely, so drop the inherited segments here.
+            _pathSegments.Clear();
             _state = State.Path;
             _i--;
             return null;

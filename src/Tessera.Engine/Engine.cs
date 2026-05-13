@@ -94,10 +94,14 @@ public sealed class TesseraEngine
         var doc = Html.HtmlParser.Parse(html);
         var displayText = ExtractDisplayText(doc);
 
+        using var images = new ImageFetcher(_diag, _httpFactory);
+        await images.FetchAllAsync(doc, baseUrl: u, ct).ConfigureAwait(false);
+
         using var image = _painter.RenderDocument(
             doc,
             new LayoutSize(options.Viewport.Width, options.Viewport.Height),
-            options.FontSize);
+            options.FontSize,
+            images);
 
         try
         {

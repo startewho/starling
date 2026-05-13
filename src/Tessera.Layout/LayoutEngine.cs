@@ -21,19 +21,21 @@ public sealed class LayoutEngine
 {
     private readonly StyleEngine _style;
     private readonly ITextMeasurer _measurer;
+    private readonly IImageResolver _images;
 
-    public LayoutEngine(StyleEngine style, ITextMeasurer? measurer = null)
+    public LayoutEngine(StyleEngine style, ITextMeasurer? measurer = null, IImageResolver? images = null)
     {
         ArgumentNullException.ThrowIfNull(style);
         _style = style;
         _measurer = measurer ?? DefaultTextMeasurer.Instance;
+        _images = images ?? NullImageResolver.Instance;
     }
 
     public BlockBox LayoutDocument(Document document, Size viewport)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var builder = new BoxTreeBuilder(_style);
+        var builder = new BoxTreeBuilder(_style, _images);
         var root = builder.Build(document);
 
         var block = new BlockLayout(_measurer, viewport);
