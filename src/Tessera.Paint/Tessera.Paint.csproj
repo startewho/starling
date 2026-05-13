@@ -14,8 +14,12 @@
     <PackageReference Include="SixLabors.Fonts" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Bundled fonts (M0 ships none; FontResolver falls back to system fonts).
-         When a font file is added here it will be copied next to the assembly. -->
-    <None Include="Resources\Fonts\**\*.*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Bundled fonts. EmbeddedResource (not None+CopyToOutputDirectory) so the
+         font ships inside Tessera.Paint.dll and survives Mac Catalyst's .app
+         bundling, single-file publish, and sandboxed environments where the
+         output directory is read-only or system font paths are blocked.
+         FontResolver scans GetManifestResourceNames() for *.ttf/*.otf. -->
+    <EmbeddedResource Include="Resources\Fonts\**\*.ttf" />
+    <EmbeddedResource Include="Resources\Fonts\**\*.otf" />
   </ItemGroup>
 </Project>
