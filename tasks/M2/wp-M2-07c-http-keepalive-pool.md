@@ -2,7 +2,7 @@
 id: "wp:M2-07c-http-keepalive-pool"
 parent: "wp:M2-07-network-end-to-end"
 milestone: "M2"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-13T14:40:21Z"
 branch: "main"
@@ -14,6 +14,7 @@ plan_refs:
   - "browser-plan/03_NETWORKING.md#http11"
   - "browser-plan/13_MILESTONES.md#m2--networking-and-live-html"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-07-network-end-to-end"
+completed_at: "2026-05-13T14:51:15Z"
 ---
 
 # wp:M2-07c — HTTP/1.1 connection pool + keep-alive
@@ -88,3 +89,4 @@ handshake cost.
   split-out of the catch-all wp:M2-07-network-end-to-end. Available to
   claim.
 - 2026-05-13T14:40:21Z — claimed by agent-claude-cody, working on main
+- 2026-05-13T14:51:15Z — merged; complete
