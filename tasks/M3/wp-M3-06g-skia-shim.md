@@ -2,9 +2,10 @@
 id: "wp:M3-06g-skia-shim"
 parent: "wp:M3-06-native-interop-pivot"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody-shim"
 claimed_at: "2026-05-14T16:28:41Z"
+completed_at: "2026-05-14T16:39:04Z"
 branch: "main"
 depends_on:
   - "wp:M3-06b-native-build"
@@ -77,3 +78,50 @@ behind opaque `void*` handles. This is long pole #2.
 ## Handoff log
 
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
+- 2026-05-14T16:39:04Z — complete (agent-claude-cody-shim). **osx-arm64 only**;
+  win/linux shims wait on those native builds. Summary:
+  - `tessera_skia.cpp` implemented for real against Skia Graphite + Dawn
+    (chrome/m140 headers). Context = `dawn::native::Instance` →
+    `EnumerateAdapters` (Metal) → `Adapter::CreateDevice` → `wgpu::Device` +
+    `Queue` → `skgpu::graphite::ContextFactory::MakeDawn` → `Context` +
+    `Recorder`. Surfaces via `SkSurfaces::RenderTarget`. The 4 DisplayItem ops
+    via `SkCanvas` drawRect/drawGlyphs/drawImageRect. Flush =
+    `Recorder::snap` → `Context::insertRecording` → `submit(SyncToCpu::kYes)`.
+  - `libtessera_skia.dylib` (28 MB) builds + links; the C smoke harness
+    (`smoke_test.c`) passes — context+surface, clear→fill_rect→flush→readback,
+    asserts background + rect pixels exact.
+  - **C-ABI surface changes vs the scaffold (2):**
+    1. `ts_read_pixels` now takes `TsContext*` as well as `TsSurface*` —
+       Graphite has no synchronous `SkSurface::readPixels`; readback goes
+       through `Context::asyncRescaleAndReadPixels` + a `SyncToCpu` submit,
+       both of which need the `Context`. 06h's `[LibraryImport]` binding must
+       mirror this.
+    2. No signature change, but `ts_shape_text` is **not** HarfBuzz complex
+       shaping: the native build (06b) did not stage the `skshaper` module
+       (no headers, no `SkShaper*` symbols in any staged `.a`). The shim uses
+       `SkFont::textToGlyphs` + advance-based pen positioning — correct glyph
+       ids + LTR positions for simple scripts, sufficient for golden tests,
+       but no ligatures/marks/bidi/kerning-features. Re-staging `skshaper`
+       (+`skunicode`) and swapping in `SkShapers::HB::*` is a follow-up.
+  - **Build/link surprises:**
+    - Skia's `is_official_build=true` `libskia.a` already folds in ALL of
+      Dawn (`dawn_native`/`dawn_proc`/`dawn_platform`, Dawn's common/utils,
+      SPIRV-Tools) plus jpeg/expat/the HarfBuzz C++ layer. Linking the
+      separate staged `libdawn_*.a`/`libcommon.a`/`libutils.a`/`libspvtools*.a`
+      produced thousands of duplicate symbols. Final link line: `libskia.a`
+      (`-force_load`) + only the third-party C archives it leaves undefined —
+      `libharfbuzz`, `libpng`, `libwebp`(+sse41), `libzlib`, `libskcms`,
+      `libwuffs`, `libdng_sdk`, `libpiex` — plus the macOS frameworks.
+    - Header sourcing: 06b stages the *contents* of Skia's `include/` into
+      `runtimes/<rid>/native/include/skia/`, but Skia headers self-reference
+      `#include "include/core/..."`, and Dawn's *generated* headers
+      (`dawn/webgpu_cpp.h`, `dawn/dawn_proc_table.h`) aren't staged at all. So
+      the shim CMake builds headers from the `third_party/skia` source
+      checkout + the `native/out/<rid>/gen` Dawn gen dir; libs still come from
+      `runtimes/<rid>/native/`. 06b's staging step should be revisited to
+      package the source-tree header layout (incl. Dawn gen headers) if the
+      checkout is meant to be disposable.
+    - Graphite render targets reject `kUnpremul` alpha — surfaces are created
+      `kPremul`; the C boundary stays unpremul RGBA8888 for upload/readback
+      (Skia converts on the fly).
+    - The shim TU is compiled as Objective-C++ (CoreText `SkFontMgr`).

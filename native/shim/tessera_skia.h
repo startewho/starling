@@ -178,9 +178,16 @@ TS_API TsStatus  TS_CALL ts_shape_text(TsFont* font,
  *   wait for GPU completion.
  *   ts_read_pixels: copy the surface contents into a caller-owned RGBA8888
  *   buffer (length must be width*height*4). PNG encode stays in C#.
+ *
+ * ABI NOTE (WP M3-06g): ts_read_pixels takes a TsContext* in addition to the
+ * TsSurface*. Graphite has no synchronous SkSurface::readPixels — readback
+ * goes through skgpu::graphite::Context::asyncRescaleAndReadPixels + a
+ * SyncToCpu submit, both of which need the Context. The scaffold signature
+ * (surface only) was not implementable against the chrome/m140 Graphite API.
  * ------------------------------------------------------------------------ */
 TS_API TsStatus  TS_CALL ts_flush_and_submit(TsContext* context, TsSurface* surface);
-TS_API TsStatus  TS_CALL ts_read_pixels(TsSurface* surface, uint8_t* out_pixels, size_t out_pixels_len);
+TS_API TsStatus  TS_CALL ts_read_pixels(TsContext* context, TsSurface* surface,
+                                        uint8_t* out_pixels, size_t out_pixels_len);
 
 #ifdef __cplusplus
 } /* extern "C" */

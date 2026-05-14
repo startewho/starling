@@ -134,43 +134,33 @@ else()
   # Static libs staged by build-skia.* — fold Skia + Dawn + their bundled deps
   # into the one shim binary so .NET ships a single native file.
   #
-  # Listed explicitly (not GLOB'd) and wrapped so the linker resolves the
-  # circular refs between libskia and the Dawn static libs: on Apple we use
-  # -force_load for the two libs whose symbols are pulled in indirectly
-  # (the Dawn proc table + skia), and rely on multi-pass for the rest.
+  # IMPORTANT: Skia's official build (is_official_build=true) already folds
+  # ALL of Dawn (dawn_native, dawn_proc, dawn_platform, Dawn's common/utils,
+  # SPIRV-Tools) and several third-party codecs (jpeg, expat, the harfbuzz C++
+  # layer) directly INTO libskia.a. Linking the separate libdawn_*.a /
+  # libcommon.a / libutils.a / libspvtools*.a archives therefore produces
+  # thousands of duplicate-symbol errors. So the link line is libskia.a plus
+  # ONLY the third-party archives whose C symbols libskia.a leaves undefined:
+  # libharfbuzz (the HarfBuzz C API), libpng, libzlib, libwebp.
   set(TESSERA_SKIA_LIBS
-    "${TESSERA_NATIVE_STAGE}/libskia.a"
-    "${TESSERA_NATIVE_STAGE}/libdawn_native_static.a"
-    "${TESSERA_NATIVE_STAGE}/libdawn_proc_static.a"
-    "${TESSERA_NATIVE_STAGE}/libdawn_platform_static.a"
     "${TESSERA_NATIVE_STAGE}/libharfbuzz.a"
     "${TESSERA_NATIVE_STAGE}/libpng.a"
-    "${TESSERA_NATIVE_STAGE}/libjpeg.a"
-    "${TESSERA_NATIVE_STAGE}/libjpeg12.a"
-    "${TESSERA_NATIVE_STAGE}/libjpeg16.a"
     "${TESSERA_NATIVE_STAGE}/libwebp.a"
     "${TESSERA_NATIVE_STAGE}/libwebp_sse41.a"
     "${TESSERA_NATIVE_STAGE}/libzlib.a"
-    "${TESSERA_NATIVE_STAGE}/libexpat.a"
     "${TESSERA_NATIVE_STAGE}/libskcms.a"
-    "${TESSERA_NATIVE_STAGE}/libspvtools.a"
-    "${TESSERA_NATIVE_STAGE}/libspvtools_opt.a"
-    "${TESSERA_NATIVE_STAGE}/libspvtools_val.a"
-    "${TESSERA_NATIVE_STAGE}/libdng_sdk.a"
     "${TESSERA_NATIVE_STAGE}/libwuffs.a"
+    "${TESSERA_NATIVE_STAGE}/libdng_sdk.a"
     "${TESSERA_NATIVE_STAGE}/libpiex.a"
-    "${TESSERA_NATIVE_STAGE}/libcommon.a"
-    "${TESSERA_NATIVE_STAGE}/libutils.a"
   )
 
   if(APPLE)
-    # -force_load libskia + libdawn_native_static so their globally-registered
-    # constructors / proc tables are not dead-stripped, and pass the whole set
-    # twice to satisfy cross-archive circular references.
+    # -force_load libskia.a so its globally-registered Graphite/Dawn backend
+    # factories + the Dawn proc table (all bundled inside libskia.a) survive
+    # dead-stripping. The third-party C archives are listed once; ld64
+    # backtracks across them in a single pass.
     target_link_libraries(tessera_skia PRIVATE
       -Wl,-force_load,"${TESSERA_NATIVE_STAGE}/libskia.a"
-      -Wl,-force_load,"${TESSERA_NATIVE_STAGE}/libdawn_native_static.a"
-      ${TESSERA_SKIA_LIBS}
       ${TESSERA_SKIA_LIBS}
     )
     target_link_libraries(tessera_skia PRIVATE
@@ -186,9 +176,11 @@ else()
       "-framework Cocoa"
     )
   else()
+    # On ELF/COFF linkers, wrap in a start/end group to resolve circular refs;
+    # --whole-archive on libskia.a keeps the registered backend factories.
     target_link_libraries(tessera_skia PRIVATE
-      ${TESSERA_SKIA_LIBS}
-      ${TESSERA_SKIA_LIBS}
+      -Wl,--whole-archive "${TESSERA_NATIVE_STAGE}/libskia.a" -Wl,--no-whole-archive
+      -Wl,--start-group ${TESSERA_SKIA_LIBS} -Wl,--end-group
     )
     if(WIN32)
       target_link_libraries(tessera_skia PRIVATE

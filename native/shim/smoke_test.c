@@ -99,7 +99,7 @@ int main(void) {
         fprintf(stderr, "FAIL: malloc\n");
         return 1;
     }
-    REQUIRE_OK(ts_read_pixels(surface, pixels, buf_len));
+    REQUIRE_OK(ts_read_pixels(ctx, surface, pixels, buf_len));
 
     /* Corner pixel (2,2) should be the blue background. */
     const uint8_t* corner = &pixels[(2 * WIDTH + 2) * 4];

@@ -112,8 +112,16 @@ SkRect ToSkRect(TsRect r) {
     return SkRect::MakeXYWH(r.x, r.y, r.width, r.height);
 }
 
-// RGBA8888, unpremultiplied — the wire format crossing the C boundary.
-SkImageInfo RgbaImageInfo(int w, int h) {
+// RGBA8888, premultiplied — the renderable format for GPU surfaces. Graphite
+// render targets require a premul (or opaque) alpha type.
+SkImageInfo RgbaSurfaceInfo(int w, int h) {
+    return SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+}
+
+// RGBA8888, unpremultiplied — the wire format crossing the C boundary for
+// pixel uploads (draw_image) and readback (read_pixels). Skia converts
+// between this and the premul surface format on the fly.
+SkImageInfo RgbaWireInfo(int w, int h) {
     return SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
 }
 
@@ -239,7 +247,7 @@ TS_API TsStatus TS_CALL ts_surface_create(TsContext* context, int32_t width, int
         return TS_NULL_HANDLE;
     }
 
-    SkImageInfo info = RgbaImageInfo(width, height);
+    SkImageInfo info = RgbaSurfaceInfo(width, height);
     sk_sp<SkSurface> surface = SkSurfaces::RenderTarget(context->recorder.get(), info);
     if (!surface) {
         return TS_ALLOCATION_FAILED;
@@ -345,7 +353,8 @@ TS_API TsStatus TS_CALL ts_canvas_draw_text(TsCanvas* canvas, TsFont* font,
     paint.setAntiAlias(true);
 
     // Positions are absolute (in surface pixels), so origin is (0,0).
-    canvas->canvas->drawGlyphs(static_cast<int>(glyph_count), ids.data(), positions.data(),
+    canvas->canvas->drawGlyphs(SkSpan<const SkGlyphID>(ids.data(), ids.size()),
+                               SkSpan<const SkPoint>(positions.data(), positions.size()),
                                SkPoint::Make(0.0f, 0.0f), font->font, paint);
     return TS_OK;
 }
@@ -360,7 +369,7 @@ TS_API TsStatus TS_CALL ts_canvas_draw_image(TsCanvas* canvas,
         return TS_INVALID_ARGUMENT;
     }
 
-    SkImageInfo info = RgbaImageInfo(width, height);
+    SkImageInfo info = RgbaWireInfo(width, height);
     const size_t rowBytes = static_cast<size_t>(width) * 4;
     SkPixmap pixmap(info, pixels, rowBytes);
 
@@ -575,14 +584,34 @@ TS_API TsStatus TS_CALL ts_flush_and_submit(TsContext* context, TsSurface* surfa
     return TS_OK;
 }
 
-TS_API TsStatus TS_CALL ts_read_pixels(TsSurface* surface, uint8_t* out_pixels, size_t out_pixels_len) {
-    if (surface == nullptr) {
+namespace {
+
+// Callback context for the Graphite async readback.
+struct AsyncReadState {
+    bool done = false;
+    bool ok = false;
+    std::unique_ptr<const SkImage::AsyncReadResult> result;
+};
+
+void AsyncReadDone(SkImage::ReadPixelsContext rawCtx,
+                   std::unique_ptr<const SkImage::AsyncReadResult> result) {
+    auto* state = static_cast<AsyncReadState*>(rawCtx);
+    state->result = std::move(result);
+    state->ok = (state->result != nullptr);
+    state->done = true;
+}
+
+}  // namespace
+
+TS_API TsStatus TS_CALL ts_read_pixels(TsContext* context, TsSurface* surface,
+                                       uint8_t* out_pixels, size_t out_pixels_len) {
+    if (context == nullptr || surface == nullptr) {
         return TS_NULL_HANDLE;
     }
     if (out_pixels == nullptr || out_pixels_len == 0) {
         return TS_INVALID_ARGUMENT;
     }
-    if (!surface->surface) {
+    if (!surface->surface || !context->graphite) {
         return TS_NULL_HANDLE;
     }
 
@@ -592,10 +621,36 @@ TS_API TsStatus TS_CALL ts_read_pixels(TsSurface* surface, uint8_t* out_pixels, 
         return TS_INVALID_ARGUMENT;
     }
 
-    SkImageInfo info = RgbaImageInfo(surface->width, surface->height);
-    const size_t rowBytes = static_cast<size_t>(surface->width) * 4;
-    if (!surface->surface->readPixels(info, out_pixels, rowBytes, 0, 0)) {
+    // Graphite has no synchronous SkSurface::readPixels — drive the async
+    // path and force completion with a SyncToCpu submit.
+    SkImageInfo dstInfo = RgbaWireInfo(surface->width, surface->height);
+    SkIRect srcRect = SkIRect::MakeWH(surface->width, surface->height);
+
+    AsyncReadState state;
+    context->graphite->asyncRescaleAndReadPixels(
+        surface->surface.get(), dstInfo, srcRect,
+        SkImage::RescaleGamma::kSrc, SkImage::RescaleMode::kNearest,
+        &AsyncReadDone, &state);
+
+    // The callback fires during a SyncToCpu submit.
+    if (!context->graphite->submit(skgpu::graphite::SyncToCpu::kYes)) {
+        return TS_DEVICE_LOST;
+    }
+    // Defensive: pump until the callback has run.
+    int guard = 0;
+    while (!state.done && guard++ < 1000) {
+        context->graphite->checkAsyncWorkCompletion();
+    }
+
+    if (!state.done || !state.ok || !state.result) {
         return TS_READBACK_FAILED;
+    }
+
+    const size_t srcRowBytes = state.result->rowBytes(0);
+    const auto* src = static_cast<const uint8_t*>(state.result->data(0));
+    const size_t dstRowBytes = static_cast<size_t>(surface->width) * 4;
+    for (int y = 0; y < surface->height; ++y) {
+        std::memcpy(out_pixels + y * dstRowBytes, src + y * srcRowBytes, dstRowBytes);
     }
     return TS_OK;
 }
