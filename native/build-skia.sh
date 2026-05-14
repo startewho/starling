@@ -83,6 +83,19 @@ log "pinned ANGLE @ ${ANGLE_COMMIT}"
 # --- fetch / update Skia checkout to the pinned commit -----------------------
 SKIA_REMOTE="https://skia.googlesource.com/skia.git"
 if [ ! -d "${SKIA_DIR}/.git" ]; then
+  # The target may pre-exist as an empty placeholder (e.g. a stray `.keep` left
+  # by scaffolding). `git clone` refuses a non-empty target, so clear the dir
+  # IFF it holds nothing but ignorable placeholders; otherwise abort rather
+  # than clobber something real.
+  if [ -d "${SKIA_DIR}" ]; then
+    if [ -z "$(find "${SKIA_DIR}" -mindepth 1 ! -name '.keep' -print -quit)" ]; then
+      log "clearing empty placeholder dir ${SKIA_DIR}"
+      rm -rf "${SKIA_DIR}"
+    else
+      die "${SKIA_DIR} exists, is not a Skia git checkout, and is not empty.
+       Refusing to clobber it — inspect and remove it manually, then re-run."
+    fi
+  fi
   log "cloning Skia into ${SKIA_DIR} ..."
   git clone "${SKIA_REMOTE}" "${SKIA_DIR}"
 fi
