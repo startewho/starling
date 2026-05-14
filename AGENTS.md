@@ -86,17 +86,21 @@ If `dotnet build` errors with permission-denied apphost deletions in a
 sandbox or container, pass `-p:UseAppHost=false`. This is a sandbox quirk
 only — CI runs without the flag.
 
-## Rule 0
+## Interop policy — managed-first, native at vetted seams
 
-Engine modules under `src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/`
-are **pure managed**. No `[DllImport]`, no `[LibraryImport]`, no native
-dependencies beyond what the .NET BCL ships. CI greps for this; lint job
-fails if you regress it. The GUI shell (`src/Tessera.Gui`, .NET MAUI) and
-the Aspire AppHost/ServiceDefaults projects are exempt — they link
-against UIKit/Cocoa (Catalyst) and ASP.NET host plumbing respectively,
-which is fine because the engine never imports from any of them. The
-engine projects must continue to build and test cleanly without those
-heavier platforms loaded.
+Native interop (`[LibraryImport]`/`[DllImport]`) is confined to two
+**designated interop projects**: `src/Tessera.Skia` (graphics) and
+`src/Tessera.Codecs` (image decode). Every other engine module under
+`src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/`
+stays **pure managed** — no P/Invoke, no native dependencies beyond what the
+.NET BCL ships. `SslStream` is the sanctioned TLS path: it is pure-managed BCL,
+so `Tessera.Net` keeps its clean bill. CI greps the engine-project allowlist
+(every engine project *except* the two interop projects); the lint job fails if
+you regress it. The GUI shell (`src/Tessera.Gui`, .NET MAUI) and the Aspire
+AppHost/ServiceDefaults projects are exempt — they link against UIKit/Cocoa
+(Catalyst) and ASP.NET host plumbing respectively, which is fine because the
+engine never imports from any of them. The engine projects must continue to
+build and test cleanly without those heavier platforms loaded.
 
 ## Decision hierarchy when something's ambiguous
 

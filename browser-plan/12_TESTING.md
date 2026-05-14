@@ -207,7 +207,16 @@ Stress tests under `tests/Tessera.E2E/Memory/`:
 - Open + close 1000 pages: working set must return within 10MB of baseline.
 - Repeated navigations on the same page: no `JsObject` leak across `[GC.Collect; GC.WaitForPendingFinalizers]`.
 
-## Rule 0 lint test
+## Interop seam policy test
+
+Under the interop seam policy ("managed-first, native at vetted seams"), native
+interop is confined to two designated projects — `Tessera.Skia` and
+`Tessera.Codecs`. The policy test greps every engine project *except* those two
+for `DllImport`/`LibraryImport` (the same project allowlist the CI `lint` job
+uses) and fails if any other project regresses. The old `NoSslStream_InNetProject`
+test is **removed** — `SslStream` is now the sanctioned TLS path. The test-code
+rewrite itself lands in the CI/policy work package (`06l`); the sketch below shows
+the pre-pivot shape for reference.
 
 ```csharp
 public class RuleZeroTests
@@ -263,7 +272,7 @@ E2E tests run only in nightly CI (slow, network-dependent). Locally guarded by e
 | `build` | PR + push | < 5 min | yes |
 | `test-unit-integration-golden` | PR + push | < 15 min | yes |
 | `test-html5lib` | PR + push | < 2 min | yes |
-| `lint` (style + rule 0) | PR + push | < 2 min | yes |
+| `lint` (style + interop seam policy) | PR + push | < 2 min | yes |
 | `test-wpt-subset` | nightly | < 60 min | no (advisory) |
 | `test-test262-subset` | nightly | < 90 min | no (advisory) |
 | `test-e2e` | nightly | < 30 min | no (advisory) |
@@ -274,6 +283,6 @@ E2E tests run only in nightly CI (slow, network-dependent). Locally guarded by e
 - [ ] `dotnet test --filter Category=Unit` exits 0 with > 0 tests passing on a fresh clone.
 - [ ] `dotnet test --filter Category=GoldenImage` exits 0; at least 20 cases per active milestone.
 - [ ] `dotnet test --filter Category=Wpt` produces a JSON results file; pass rate ≥ milestone target.
-- [ ] Rule-0 lint test passes on every branch.
+- [ ] Interop seam policy lint test passes on every branch.
 - [ ] BenchmarkDotNet results are emitted to `bench/results/<date>/` and uploaded as CI artifacts.
 - [ ] At least one fuzz target has been running > 24h on a CI runner with no crashes.

@@ -2,7 +2,7 @@
 
 ## Scope
 
-**In:** Display list IR, ImageSharp paint backend, font loading and shaping via SixLabors.Fonts, font fallback, image decoding (PNG/JPEG/GIF/WebP via ImageSharp), stacking context paint order, compositing.
+**In:** Display list IR, ImageSharp paint backend, font loading and shaping via SixLabors.Fonts, font fallback, image decoding (PNG/JPEG/GIF/WebP via OS-native codecs in `Tessera.Codecs`), stacking context paint order, compositing.
 **Out:** GPU acceleration (no managed GPU pipeline in v1), SVG paint (M5+, basic only), video (no), `<canvas>` rendering (M7+).
 
 ## Spec refs
@@ -17,11 +17,17 @@
 
 | Library | Version | Surface we use |
 |---|---|---|
-| `SixLabors.ImageSharp` | 3.1.12 | `Image<Rgba32>`, format codecs (PNG, JPEG, GIF, BMP, TGA, WebP, PBM, QOI) |
+| `SixLabors.ImageSharp` | 3.1.12 | `Image<Rgba32>` raster surface + image **encode**; transitional raster/encode bridge only — image **decode** moved to `Tessera.Codecs` |
 | `SixLabors.ImageSharp.Drawing` | 2.1.7 | `image.Mutate(ctx => ctx.Fill(...).DrawText(...))`, path drawing, clipping |
 | `SixLabors.Fonts` | 2.1.3 | TTF/OTF/WOFF/WOFF2 loading; variable fonts; OpenType GSUB/GPOS shaping; BiDi |
 
-All three are pure managed, MIT-licensed, no native deps.
+All three are pure managed, MIT-licensed, no native deps — they sit in
+`Tessera.Paint`, which stays P/Invoke-free under the interop seam policy.
+Image **decoding** is no longer ImageSharp's job: it now goes through
+`Tessera.Codecs`, one of the two designated native-interop projects, which
+wraps the OS-native codecs (macOS ImageIO, Windows WIC, Linux libjpeg/libpng/
+libwebp). ImageSharp is kept (transitionally) as a raster surface and encode
+path only.
 
 ### What SixLabors.Fonts shapes well
 
@@ -57,7 +63,7 @@ src/Tessera.Paint/
 │   ├── FontResolver.cs                 # @font-face + system loader + bundled fallback
 │   └── BundledFonts.cs
 ├── Images/
-│   ├── ImageDecoder.cs                 # wraps ImageSharp formats
+│   ├── ImageDecoder.cs                 # delegates to Tessera.Codecs (OS-native decode)
 │   └── ImageCache.cs
 └── Effects/
     ├── BoxShadow.cs
@@ -184,7 +190,9 @@ case Restore:
 
 ### Performance note
 
-ImageSharp is CPU-bound and slower than Skia. Acceptable trade-off for pure-managed. Hot paths:
+ImageSharp is CPU-bound and slower than a GPU rasterizer — acceptable for the
+current managed backend (a Skia-based backend is planned via `Tessera.Skia`, the
+designated graphics-interop seam). Hot paths:
 - Pre-allocate the result `Image<Rgba32>` once per page; clear instead of recreate.
 - Reuse `IPath` objects.
 - Cache shaped runs.
@@ -299,7 +307,11 @@ public interface IRasterImage
 }
 ```
 
-Decoding via `Image.Load<Rgba32>(stream)`. Formats supported by ImageSharp 3.1: PNG, JPEG, GIF (animated frames), BMP, TGA, WebP, PBM, QOI. **No SVG decoder** in ImageSharp — for SVG images:
+Decoding goes through `Tessera.Codecs` — the OS-native codec seam (macOS ImageIO,
+Windows WIC, Linux libjpeg/libpng/libwebp). Formats: PNG, JPEG, GIF (first frame in
+v1), BMP, WebP. `Tessera.Codecs` is one of the two designated native-interop
+projects; `Tessera.Paint` itself stays P/Invoke-free and just consumes the decoded
+RGBA buffers. **No SVG decoder** in the OS codecs — for SVG images:
 
 OUT-OF-SCOPE-V1 fully; M5+ minimal SVG (path, rect, circle, fill/stroke, text) implemented in `Tessera.Paint/Svg/` and rasterized into an `Image<Rgba32>`.
 

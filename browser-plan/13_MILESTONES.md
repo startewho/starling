@@ -2,7 +2,7 @@
 
 ## Posture
 
-Be honest: building a pure-managed .NET browser that runs google.com **search** and claude.ai **sign-in** is a multi-engineer-year undertaking. The plan stages work so the project is **demoable end-to-end** at every step, not "lots of pieces with nothing assembled."
+Be honest: building a managed-first .NET browser that runs google.com **search** and claude.ai **sign-in** is a multi-engineer-year undertaking. (Managed-first: the engine is pure-managed; native interop is confined to two vetted seams — `Tessera.Skia` for graphics and `Tessera.Codecs` for image decode.) The plan stages work so the project is **demoable end-to-end** at every step, not "lots of pieces with nothing assembled."
 
 Each milestone has:
 - **Entry**: what must exist before starting.
@@ -60,8 +60,8 @@ Each milestone has:
 **Goal**: `tessera render https://example.com -o out.png` works end-to-end (DNS → TCP → TLS → HTTP/1.1 → parse → layout → paint).
 
 **Work**:
-- [03_NETWORKING.md](03_NETWORKING.md): URL, DNS, TCP, TLS 1.3 via BouncyCastle, HTTP/1.1 (client only), cookies, basic cache, brotli/gzip decoding.
-- Image decoding (`<img>` rendering) via ImageSharp's codecs.
+- [03_NETWORKING.md](03_NETWORKING.md): URL, DNS, TCP, TLS 1.3 via `SslStream`, HTTP/1.1 (client only), cookies, basic cache, brotli/gzip decoding.
+- Image decoding (`<img>` rendering) via OS-native codecs (`Tessera.Codecs`).
 - Encoding sniffing across HTTP `Content-Type` charset, BOM, meta.
 - The headless renderer wires the network → parser pipeline.
 
@@ -82,6 +82,12 @@ Each milestone has:
 **Work**:
 - [09_JS_ENGINE.md](09_JS_ENGINE.md) almost entirely: lexer, parser, bytecode compiler, register VM, intrinsics (Object/Array/String/Number/Math/JSON/Date/RegExp), Promise + microtasks (microtask queue, but no fetch yet).
 - Modules: ES module loader hooked up against the file URL scheme.
+- **Native-interop pivot** (runs alongside the JS work — see `tasks/M3/wp-M3-06*`):
+  adopt the interop seam policy ("managed-first, native at vetted seams").
+  Introduce `Tessera.Skia` (Skia Graphite + ANGLE graphics) and `Tessera.Codecs`
+  (OS-native image decode) as the two designated `LibraryImport` projects; swap
+  BouncyCastle TLS for `SslStream`; repurpose the CI lint job from a blanket
+  P/Invoke ban to the engine-project allowlist.
 
 **Exit**:
 - Test262 pass rate ≥ 80% (excluding stage-3+ proposals).
@@ -159,7 +165,7 @@ This is where the long tail of "spec coverage gaps that real sites trip" gets pa
 
 **Work**:
 - [09_JS_ENGINE.md](09_JS_ENGINE.md) hardening: Proxy edge cases, RegExp unicode-flag (`v`), async/await/generators, typed arrays.
-- [10_WEB_APIS.md](10_WEB_APIS.md) IntersectionObserver, ResizeObserver, History API, `Crypto.subtle` minimum (HMAC-SHA256, ECDH P-256, AES-GCM via Bouncy Castle).
+- [10_WEB_APIS.md](10_WEB_APIS.md) IntersectionObserver, ResizeObserver, History API, `Crypto.subtle` minimum (HMAC-SHA256, ECDH P-256, AES-GCM via `System.Security.Cryptography`).
 - [06_CSS.md](06_CSS.md) full flexbox, grid, color functions, `clamp`, `min`, `max`, `calc` exhaustive.
 - Form submission + autocomplete history.
 - Subresource integrity.
@@ -184,7 +190,7 @@ claude.ai's hardness comes from: heavy React, intersection observers, fetch stre
 **Work**:
 - Web Workers (full implementation).
 - WebAssembly engine v0: parse + validate + interpret. Pure managed. Use Wabt-style validation. Hard, but bounded — WebAssembly is small relative to JS.
-- `crypto.subtle` complete enough for WebAuthn primitives via Bouncy Castle.
+- `crypto.subtle` complete enough for WebAuthn primitives via `System.Security.Cryptography`.
 - `import()` (dynamic).
 - Performance pass: shape-based inline caches, dead bytecode elimination.
 

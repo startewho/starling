@@ -134,8 +134,7 @@ Drop at repo root. Applied to every csproj. Sets the common shape.
     <PackageVersion Include="Avalonia.Fonts.Inter"          Version="12.0.3" />
     <PackageVersion Include="Avalonia.ReactiveUI"           Version="12.0.3" />
 
-    <!-- Crypto: pure-managed TLS support -->
-    <PackageVersion Include="BouncyCastle.Cryptography"     Version="2.5.0" />
+    <!-- TLS uses System.Net.Security.SslStream (BCL) — no crypto package needed. -->
 
     <!-- Tests + bench -->
     <PackageVersion Include="xunit.v3"                      Version="1.0.0" />
@@ -228,13 +227,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: '10.0.x' }
       - run: dotnet format --verify-no-changes
-      - name: forbid PInvoke
+      - name: forbid PInvoke outside the interop seams
         run: |
           ! grep -rn 'DllImport\|LibraryImport' \
               src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/
 ```
 
-The lint job's `grep` enforces Rule 0.
+The lint job's `grep` enforces the interop seam policy: native interop
+(`DllImport`/`LibraryImport`) is allowed only in the two designated interop
+projects, `Tessera.Skia` and `Tessera.Codecs`, which are simply absent from the
+grep allowlist above. Every other engine project must stay P/Invoke-free.
 
 ## Lockfiles
 
@@ -285,7 +287,7 @@ Each subcommand maps 1:1 to a public API in [01_ARCHITECTURE.md](01_ARCHITECTURE
 1. One PR per work package (see [14_AGENT_TASKS.md](14_AGENT_TASKS.md)).
 2. Each PR includes tests. No PR is merged with failing or absent tests.
 3. No PR adds a NuGet package without bumping `Directory.Packages.props` and stating the reason in the PR body.
-4. No PR adds a native dependency. CI's `lint` job will fail otherwise.
+4. No PR adds native interop (`DllImport`/`LibraryImport`) outside the two designated interop projects, `Tessera.Skia` and `Tessera.Codecs`. CI's `lint` job will fail otherwise.
 
 ## Acceptance Tests
 
@@ -294,4 +296,4 @@ Each subcommand maps 1:1 to a public API in [01_ARCHITECTURE.md](01_ARCHITECTURE
 - [ ] `dotnet format --verify-no-changes` exits 0.
 - [ ] CI badge green on all three OS matrix entries.
 - [ ] `tessera render file://testdata/hello.html -o out.png` writes a non-empty PNG.
-- [ ] `grep -rn 'DllImport\|LibraryImport' src/Tessera.*` is empty.
+- [ ] `grep -rn 'DllImport\|LibraryImport' src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/` is empty (native interop is allowed only in `Tessera.Skia` and `Tessera.Codecs`).

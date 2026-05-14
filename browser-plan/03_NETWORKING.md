@@ -2,7 +2,7 @@
 
 ## Scope
 
-**In:** URL parsing, DNS, TCP, TLS 1.3 (pure managed), HTTP/1.1, HTTP/2 + HPACK, cookies, content decoding (gzip/brotli/deflate), HTTP cache, fetch primitives. Public seam for the engine.
+**In:** URL parsing, DNS, TCP, TLS 1.3 (via `SslStream`), HTTP/1.1, HTTP/2 + HPACK, cookies, content decoding (gzip/brotli/deflate), HTTP cache, fetch primitives. Public seam for the engine.
 **Out:** `fetch()` JS binding ([10_WEB_APIS.md](10_WEB_APIS.md)), service workers, WebSocket framing details (sketch only), HTTP/3 (deferred).
 
 ## Spec refs
@@ -16,17 +16,33 @@
 - [SPEC: Cookies RFC 6265bis](https://www.ietf.org/archive/id/draft-ietf-httpbis-rfc6265bis-15.html)
 - [SPEC: Fetch](https://fetch.spec.whatwg.org/)
 
-## Rule 0 reminder
+## TLS approach
 
-No P/Invoke. No `HttpClient`. No `SslStream`. (Yes, `SslStream` is "managed" in .NET, but it dispatches to OS TLS via Schannel/OpenSSL/Network.framework and therefore violates the user's requirement of a pure-managed implementation. **Do not use it.**)
+`Tessera.Net` stays P/Invoke-free under the interop seam policy (native interop
+is confined to `Tessera.Skia` and `Tessera.Codecs`). TLS uses **`SslStream`** —
+the OS TLS stack (Schannel/OpenSSL/Network.framework) wrapped by pure-managed
+BCL. `SslStream` is BCL, so it does not count as native interop and `Tessera.Net`
+keeps its clean bill on the CI grep.
+
+- TLS via `SslStream` behind the `ITlsTransport` seam (`SslStreamTlsTransport`).
+- **TLS 1.3 only** — `EnabledSslProtocols = SslProtocols.Tls13`.
+- ALPN (`h2`, then `http/1.1`) + SNI via `SslClientAuthenticationOptions`.
+- **Trust:** the bundled CCADB root store remains the trust anchor for
+  cross-platform determinism — `X509ChainPolicy.CustomTrustStore` with
+  `TrustMode = CustomRootTrust`. The OS trust store is *not* used.
+
+**Still no `HttpClient`.** We do not use `System.Net.Http.HttpClient` — the HTTP/1.1
+and HTTP/2 stacks are hand-rolled (that's the whole point of this doc). The ban on
+`HttpClient` is unchanged; only the TLS implementation changed.
 
 What we *do* use:
 - `System.Net.Sockets.Socket` (raw TCP / UDP, fully managed).
+- `System.Net.Security.SslStream` (OS TLS 1.3, behind `ITlsTransport`).
+- `System.Security.Cryptography.X509Certificates` (chain building against the bundled root store).
 - `System.Buffers.ArrayPool<byte>` (zero-alloc receive paths).
 - `System.IO.Pipelines` (back-pressured streaming).
 - `System.IO.Compression` (DEFLATE, gzip — managed).
 - `System.IO.Compression.BrotliStream` (managed since .NET 7).
-- **BouncyCastle.Cryptography 2.5.0** for TLS 1.3 client (`Org.BouncyCastle.Tls.TlsClient`, fully managed C#).
 
 ## Project layout
 
@@ -46,9 +62,9 @@ src/Tessera.Net/
 │   └── ConnectionPool.cs
 ├── Tls/
 │   ├── ITlsTransport.cs
-│   ├── BcTlsClient.cs               # wraps BouncyCastle
-│   ├── BcTlsAuthentication.cs       # cert validation
-│   └── RootCertificates.cs          # bundled trust store
+│   ├── SslStreamTlsTransport.cs      # wraps SslStream (OS TLS 1.3)
+│   ├── CertificateVerifier.cs        # chain build + SAN match
+│   └── RootCertificates.cs          # bundled CCADB trust store
 ├── Http/
 │   ├── HttpRequest.cs / HttpResponse.cs / ResponseChunk.cs
 │   ├── H1/
@@ -172,54 +188,67 @@ public sealed class ConnectionPool
 
 Pool: max 6 simultaneous H1 connections per origin (browser default), 1 H2 connection per origin (multiplexed). Idle timeout 60s.
 
-## TLS 1.3 (pure managed)
+## TLS 1.3 via `SslStream`
 
-The only managed-only path is **BouncyCastle.Cryptography 2.5.0**, namespace `Org.BouncyCastle.Tls`. It implements TLS 1.3 client-side in pure C# (verified by `bc-csharp` upstream). It runs on .NET 10 with `net6.0`/`netstandard2.0` TFMs.
+TLS is provided by `System.Net.Security.SslStream` behind the `ITlsTransport` seam.
+`SslStream` is pure-managed BCL — it does not count as native interop under the
+interop seam policy, so `Tessera.Net` stays off the CI interop-grep list.
 
-**TLS 1.3 only.** By 2026, google.com, claude.ai, and every major CDN serve 1.3. We do not implement TLS 1.2 — it removes a downgrade-attack surface and halves the BouncyCastle code we have to validate. Sites that only offer ≤1.2 fail handshake with `NetworkException("TLS_VERSION_UNSUPPORTED")`. Revisit only if a target site breaks.
-
-### Why not `SslStream`?
-
-`SslStream` *appears* managed but delegates handshake/crypto to platform code (Schannel/OpenSSL/Network.framework). The user requirement is "from sockets up like Ladybird does"; that means **the bytes on the TLS record layer come out of our code**. BouncyCastle satisfies this.
+**TLS 1.3 only.** By 2026, google.com, claude.ai, and every major CDN serve 1.3.
+We pin `EnabledSslProtocols = SslProtocols.Tls13` and do not enable TLS 1.2 — it
+removes a downgrade-attack surface. Sites that only offer ≤1.2 fail handshake with
+`NetworkException("TLS_VERSION_UNSUPPORTED")`. Revisit only if a target site breaks.
 
 ### Wire-up sketch
 
 ```csharp
-using Org.BouncyCastle.Tls;
-using Org.BouncyCastle.Tls.Crypto.Impl.BC;
+using System.Net.Security;
+using System.Security.Authentication;
 
-public sealed class BcTlsTransport : ITlsTransport, IDisposable
+public sealed class SslStreamTlsTransport : ITlsTransport, IAsyncDisposable
 {
-    private readonly TlsClientProtocol _proto;
-    private readonly Stream _inner;
+    private readonly SslStream _ssl;
 
-    public static async Task<BcTlsTransport> StartAsync(
+    public static async Task<SslStreamTlsTransport> StartAsync(
         Stream tcp, string sni, IReadOnlyList<string> alpn, CancellationToken ct)
     {
-        var crypto = new BcTlsCrypto(new SecureRandom());
-        var client = new TesseraTlsClient(crypto, sni, alpn, RootCertificates.Default);
-        var proto  = new TlsClientProtocol(tcp);
-        proto.Connect(client);
-        // BouncyCastle TlsClientProtocol blocks; wrap it in Task.Run for async use.
-        return new BcTlsTransport(proto, tcp);
+        var ssl = new SslStream(tcp, leaveInnerStreamOpen: false);
+        var options = new SslClientAuthenticationOptions
+        {
+            TargetHost = sni,
+            EnabledSslProtocols = SslProtocols.Tls13,
+            ApplicationProtocols = alpn
+                .Select(p => new SslApplicationProtocol(p))
+                .ToList(),                       // e.g. Http2, then Http11
+            // Build the chain ourselves against the bundled CCADB root store.
+            RemoteCertificateValidationCallback = CertificateVerifier.Validate,
+            CertificateChainPolicy = CertificateVerifier.CustomRootChainPolicy(),
+        };
+        await ssl.AuthenticateAsClientAsync(options, ct);
+        return new SslStreamTlsTransport(ssl);
     }
 
-    public Stream Stream => _proto.Stream;
-    public string? NegotiatedAlpn => /* read from TlsClient callback */;
-    public void Dispose() => _proto.Close();
+    public Stream Stream => _ssl;
+    public string? NegotiatedAlpn => _ssl.NegotiatedApplicationProtocol.ToString();
+    public ValueTask DisposeAsync() => _ssl.DisposeAsync();
 }
 ```
 
-`TesseraTlsClient` extends `DefaultTlsClient` and overrides:
-- `GetSupportedVersions()` → TLS 1.3 only.
-- `GetSupportedCipherSuites()` → TLS 1.3 AEAD suites only (`TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`).
-- `GetProtocolNames()` → ALPN: `h2`, then `http/1.1`.
-- `NotifyServerCertificate(TlsServerCertificate)` → validate against `RootCertificates.Default` using bundled chain.
-- `GetClientExtensions()` → SNI, ALPN, `signature_algorithms`, key share for `x25519` + `secp256r1`.
+`CertificateVerifier` builds the chain with `X509Chain` configured for
+`X509ChainPolicy.CustomTrustStore` + `X509ChainTrustMode.CustomRootTrust`:
+- Chain to a bundled CCADB root — the OS trust store is **not** consulted.
+- `NotBefore ≤ now ≤ NotAfter` (the chain policy enforces expiry).
+- SAN match for the requested host (RFC 6125) — kept as custom code in
+  `CertificateHostNameMatcher`. No fall-through to CN.
+- ALPN, SNI, and key-share/`signature_algorithms` negotiation are handled by
+  `SslStream` itself.
 
 ### Root store
 
-Bundle Mozilla's CCADB at `testdata/roots/ccadb-roots.pem`. Build a `X509CertificateStructure[]` at static init. Refresh quarterly via a `tools/update-roots` script in repo. No OS dependency.
+Bundle Mozilla's CCADB at `testdata/roots/ccadb-roots.pem`. Load it into an
+`X509Certificate2Collection` and hand it to `X509ChainPolicy.CustomTrustStore` at
+static init. Refresh quarterly via a `tools/update-roots` script in repo. No OS
+trust-store dependency.
 
 ### Certificate validation rules
 
@@ -232,8 +261,7 @@ Bundle Mozilla's CCADB at `testdata/roots/ccadb-roots.pem`. Build a `X509Certifi
 
 ### TLS 1.3 features required
 
-- HKDF (BC implements).
-- AEAD (AES-GCM, ChaCha20-Poly1305 — BC implements).
+- HKDF + AEAD (AES-GCM, ChaCha20-Poly1305) — provided by the OS TLS stack via `SslStream`.
 - 0-RTT: **OUT-OF-SCOPE-V1**.
 - PSK / session resumption: v2.
 - Encrypted ClientHello (ECH): v3.
@@ -409,7 +437,7 @@ Used by [10_WEB_APIS.md#fetch](10_WEB_APIS.md#fetch).
 |---|---|
 | DNS resolution failure | Throw `NetworkException("DNS")`; engine shows `ERR_NAME_NOT_RESOLVED` page. |
 | TCP connect timeout | `NetworkException("CONNECT_TIMEOUT")`. |
-| TLS handshake failure | `NetworkException("TLS_HANDSHAKE")` with inner BC exception. |
+| TLS handshake failure | `NetworkException("TLS_HANDSHAKE")` with the inner `AuthenticationException` from `SslStream`. |
 | Cert chain invalid | Surface to user via shell prompt (later); fail-closed in v1. |
 | HTTP 5xx | Pass through to engine; no automatic retry. |
 | HTTP 3xx | Follow redirects up to 20 hops; abort with `ERR_TOO_MANY_REDIRECTS`. |
@@ -427,4 +455,5 @@ Used by [10_WEB_APIS.md#fetch](10_WEB_APIS.md#fetch).
 - [ ] Gzip and Brotli-encoded bodies decode byte-identical to non-encoded servers.
 - [ ] Connection pool reuses a TCP connection across two sequential HTTPS requests to the same origin.
 - [ ] All of the above pass on Windows, macOS, Linux in CI.
-- [ ] `grep -rn 'SslStream\|System.Net.Http' src/Tessera.Net/` is empty.
+- [ ] `grep -rn 'System.Net.Http\|HttpClient' src/Tessera.Net/` is empty (the `HttpClient` ban stands; `SslStream` is now the sanctioned TLS path).
+- [ ] `grep -rn 'DllImport\|LibraryImport' src/Tessera.Net/` is empty — `Tessera.Net` is not a designated interop project.

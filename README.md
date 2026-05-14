@@ -1,6 +1,8 @@
 # Tessera
 
-Pure-managed .NET 10 web browser. Built from primitives, no Chromium / Gecko / WebKit reuse.
+Managed-first .NET 10 web browser. Built from primitives, no Chromium / Gecko / WebKit reuse.
+Native interop is confined to two vetted seams (graphics + image codecs); everything
+else is pure-managed.
 
 > **Status:** M1 static rendering is wired end-to-end for the current supported
 > subset: HTML tokenizer/tree-builder, DOM, CSS cascade, block/inline layout,
@@ -43,13 +45,17 @@ tessera/
 ├── tests/                 # One xUnit project per src/ module + an E2E project
 ├── bench/                 # BenchmarkDotNet harness
 ├── testdata/              # Fixtures (HTML, golden PNGs, WPT subset eventually)
-└── .github/workflows/     # CI: build+test on win/mac/linux, plus a Rule-0 grep
+└── .github/workflows/     # CI: build+test on win/mac/linux, plus an interop-seam grep
 ```
 
-## Rule 0
+## Interop policy
 
-Pure managed throughout. No `DllImport`, no `LibraryImport`, no native dependencies beyond what
-the .NET BCL ships. The CI `lint` job greps the source tree to enforce this — see
+**Managed-first, native at vetted seams.** Native interop (`LibraryImport`) is
+confined to two designated projects — `Tessera.Skia` (graphics) and
+`Tessera.Codecs` (image decode). Every other engine project stays P/Invoke-free and
+takes no native dependency beyond what the .NET BCL ships. The CI `lint` job greps
+the engine-project allowlist (all engine projects *except* the two interop projects)
+to enforce this — see
 [`02_PROJECT_SETUP.md`](browser-plan/02_PROJECT_SETUP.md#ci-matrix-githubworkflowsciyml).
 
 ## Working on Tessera

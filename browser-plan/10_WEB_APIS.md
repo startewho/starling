@@ -370,9 +370,17 @@ crypto.getRandomValues(new Uint8Array(16));
 crypto.randomUUID();
 ```
 
-Use `System.Security.Cryptography.RandomNumberGenerator`. Pure managed in .NET 10? Yes — `RandomNumberGenerator.Fill` is backed by the OS RNG but the surface area is managed (technically P/Invoke under the hood inside the BCL, which is **allowed** — Rule 0 forbids P/Invoke in our code, not within the framework). Document this in the [01_ARCHITECTURE.md](01_ARCHITECTURE.md) rule-0 footnote.
+Use `System.Security.Cryptography.RandomNumberGenerator`. `RandomNumberGenerator.Fill`
+is backed by the OS RNG, but the surface area is pure-managed BCL — no P/Invoke in
+our code. Under the interop seam policy ("managed-first, native at vetted seams"),
+native interop is confined to `Tessera.Skia` and `Tessera.Codecs`; `Tessera.Bindings`
+calling a BCL crypto API is not native interop and stays on the clean side of the
+CI grep.
 
-`crypto.subtle.*` — OUT-OF-SCOPE-V1. Many sites won't need it. Login flows that do (passkeys) require subtle. Plan for M8 implementation via Bouncy Castle's crypto primitives.
+`crypto.subtle.*` — OUT-OF-SCOPE-V1. Many sites won't need it. Login flows that do
+(passkeys) require subtle. Plan for M8 implementation via
+`System.Security.Cryptography` (HMAC, ECDH/ECDSA P-256, AES-GCM, SHA-2 — all in the
+BCL, no native interop project required).
 
 ## WebSocket (M6+)
 
