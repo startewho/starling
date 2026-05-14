@@ -159,9 +159,15 @@ log "using Skia ninja=${NINJA}"
 OUT_DIR="${OUT_BASE}/${RID}"
 mkdir -p "${OUT_DIR}"
 
-# skia_use_cpp20=true is REQUIRED with skia_use_dawn=true: Dawn's Tint compiler
-# uses C++20 (`concept`/`requires`). Skia's build defaults to C++17 and would
-# fail to compile Dawn without this. (Confirmed against chrome/m140.)
+# GN args, with rationale for the non-obvious ones:
+#  - skia_use_cpp20=true — REQUIRED with skia_use_dawn=true: Dawn's Tint compiler
+#    uses C++20 (`concept`/`requires`); Skia otherwise defaults to C++17 and fails
+#    to compile Dawn. (Confirmed against chrome/m140.)
+#  - skia_use_system_*=false — build Skia's *bundled* externals
+#    (third_party/externals/{libpng,libjpeg-turbo,libwebp,zlib,expat,harfbuzz,icu})
+#    instead of system-installed dev libraries. All these args default to `true`,
+#    which breaks on macOS (no system png.h etc.) and would make the build depend
+#    on host-installed lib versions. Bundled == reproducible, matching REVISIONS.md.
 GN_ARGS="\
 skia_enable_graphite=true \
 skia_use_dawn=true \
@@ -169,6 +175,13 @@ skia_use_cpp20=true \
 skia_use_gl=true \
 skia_use_harfbuzz=true \
 skia_use_icu=true \
+skia_use_system_libpng=false \
+skia_use_system_libjpeg_turbo=false \
+skia_use_system_libwebp=false \
+skia_use_system_zlib=false \
+skia_use_system_expat=false \
+skia_use_system_harfbuzz=false \
+skia_use_system_icu=false \
 is_official_build=true \
 target_cpu=\"${GN_TARGET_CPU}\" \
 target_os=\"${GN_TARGET_OS}\""
