@@ -26,6 +26,14 @@ dotnet test
 dotnet run --project src/Tessera.Headless -- render testdata/hello.html -o out.png
 ```
 
+> **Native shim required.** Skia Graphite is the engine's sole rasterizer —
+> there is no managed fallback. The native `libtessera_skia` shim is gitignored
+> and not committed, so on a fresh checkout `dotnet build` fails fast with an
+> actionable error until you build it. See
+> [`native/README.md`](native/README.md) for the two-step build
+> (`./native/build-skia.sh` then the shim CMake build). Currently produced for
+> osx-arm64 only.
+
 The CLI accepts bare filesystem paths as well as well-formed `file://` URLs.
 `file:///absolute/path` works; `file://relative` does not (per the WHATWG URL
 spec, the segment after `//` is the authority/host, not part of the path).

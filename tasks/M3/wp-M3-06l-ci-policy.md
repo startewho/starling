@@ -99,18 +99,18 @@ deleted.
   - the `# TODO(wp:M3-06h)` native Skia package restore step in the `build` job.
   Status stays `claimed` (WP not fully complete) pending that one step.
 - 2026-05-14T18:25:00Z — completed (agent-claude-cody). Resolved the remaining
-  `# TODO(wp:M3-06h)` step. Rather than a speculative artifact-restore (native.yml
-  builds osx-arm64 only so far and publishes no release yet), the real fix was to
-  make the engine *not require* the native shim in PR CI: added a graceful
-  fallback so a no-shim environment runs the managed ImageSharp backend instead of
-  throwing `DllNotFoundException`. Changes (committed `wp:M3-06l — graceful
-  fallback…`): `NativeLoader.IsAvailable` (cached shim-presence probe);
-  `Painter.SelectBackend()` defaults to Skia only when the shim is present, else
-  ImageSharp (explicit `TESSERA_PAINT_BACKEND` still honored);
-  `LayoutDocumentWithStyle` picks the text measurer to match the backend;
-  `EngineSnapshotRenderTests` skips the Skia-vendored `nginx.org` golden when Skia
-  is not active; the `ci.yml` TODO replaced with a comment documenting the
-  decision. Verified the full suite green BOTH with the dylib present (Skia
-  active, 0 skips) and with it removed (ImageSharp fallback; `Tessera.Skia.Tests`
-  + the snapshot golden self-skip). A real artifact-restore in PR CI remains a
-  follow-up for when native.yml publishes releases for all three RIDs.
+  `# TODO(wp:M3-06h)` step. First pass added a graceful ImageSharp fallback so a
+  no-shim environment stayed green — but the user rejected that ("i don't want
+  the fallback at all: make this CORRECT"): Skia Graphite is the engine's *sole*
+  rasterizer and a missing shim must be a loud, hard failure, not a silent
+  degradation. Final state (committed `wp:M3-06 — remove the ImageSharp
+  fallback…`): the ImageSharp fallback is gone — `ImageSharpBackend.cs` /
+  `PaintBackend.cs` deleted, `Painter.SelectBackend()` removed, `NativeLoader`
+  throws an actionable `DllNotFoundException` when the shim is absent, and
+  `Tessera.Skia.csproj` has a `BeforeTargets="Build"` guard that fails the build
+  early with a build-it-with-`./native/build-skia.sh` message. The `ci.yml` step
+  now restores the shim from the latest successful `native.yml` run via
+  `gh run download`. Verified: full suite green WITH the dylib (0 skips); build
+  fails with a clear error WITHOUT it. Honest consequence: until native.yml
+  builds win-x64/linux-x64, the ubuntu/windows CI legs fail at Build — that red
+  is real missing platform support, intentionally not papered over.

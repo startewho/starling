@@ -5,13 +5,18 @@
 # DEPS (Dawn + ANGLE), runs `gn gen` with the Graphite GN args, `ninja`-builds,
 # and stages the output + license files into runtimes/<rid>/native/.
 #
-# This script is SCAFFOLDING for WP M3-06b. It encodes the full reproducible
-# recipe but has not itself been run end-to-end here (a Skia build is a
-# multi-hour GN/Ninja job needing depot_tools + a platform toolchain). Run it on
-# a provisioned machine — see native/README.md for prerequisites.
+# This is step 1 of 2 in the native build — it produces only the Skia/Dawn
+# static libs + headers. Step 2 is the shim CMake build (native/shim/), which
+# static-links them into libtessera_skia.*. See native/README.md for the full
+# fresh-checkout recipe.
+#
+# Run on osx-arm64: works. Run on Linux: written but unrun — expect to debug.
+# A Skia build is a multi-hour GN/Ninja job; only re-run when REVISIONS.md
+# changes.
 #
 # Usage:  ./native/build-skia.sh
-# Requires: depot_tools on PATH (gn, ninja), python3, git.
+# Requires: depot_tools on PATH (for fetch/gclient), python3, git.
+#           gn + ninja are self-provisioned from the Skia checkout.
 
 set -euo pipefail
 

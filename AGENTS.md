@@ -102,6 +102,16 @@ AppHost/ServiceDefaults projects are exempt — they link against UIKit/Cocoa
 engine never imports from any of them. The engine projects must continue to
 build and test cleanly without those heavier platforms loaded.
 
+**The native Skia shim is a hard requirement, not optional.** Skia Graphite is
+the engine's sole rasterizer — there is no managed fallback (the interim
+ImageSharp fallback was removed deliberately). `libtessera_skia` is gitignored
+and never committed, so a fresh checkout will fail `dotnet build` until you
+build it: `./native/build-skia.sh` then the shim CMake build — see
+[`native/README.md`](native/README.md). Do **not** "fix" a missing-shim build
+error by reintroducing a fallback; build the shim. Currently produced for
+osx-arm64 only; win-x64/linux-x64 native builds are unrun, so those CI legs are
+honestly red until they exist.
+
 ## Decision hierarchy when something's ambiguous
 
 1. **The plan** (`browser-plan/`) — if a doc gives an answer, follow it.

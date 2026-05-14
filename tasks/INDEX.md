@@ -96,11 +96,13 @@ structure).
 > OS-native; the GUI renders through the unified `DisplayList` path
 > (`BoxTreeRenderer` deleted). The native Skia + Graphite + Dawn build
 > (`build-skia.sh`) was hardened through five real fixes and produces
-> `libtessera_skia.dylib`. **Deliberate deviations:** `ImageSharpBackend` was
-> *kept* as the graceful fallback when the native shim is absent (so fresh
-> checkouts / CI stay green — Skia-specific tests self-skip); validation is
-> **osx-arm64 only** — win/linux native builds are still pending. Open
-> follow-ups are listed in the parent WP's handoff log.
+> `libtessera_skia.dylib`. **Deliberate deviations:** there is **no fallback** —
+> Skia Graphite is the sole rasterizer (an interim ImageSharp fallback was built
+> then removed per user direction). A missing shim is a hard build failure
+> (`Tessera.Skia.csproj` build-time guard + actionable `DllNotFoundException`).
+> Validation is **osx-arm64 only** — win/linux native builds are still pending,
+> so those CI legs are honestly red until they exist. Open follow-ups are listed
+> in the parent WP's handoff log.
 
 ## Available right now (no dependencies pending)
 

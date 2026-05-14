@@ -110,16 +110,20 @@ child work packages under `tasks/M3/`:
 
   **Deliberate deviations from the original Acceptance (re-planning, all
   documented):**
-  - `ImageSharpBackend.cs` was **kept, not deleted** — it is now the graceful
-    fallback when the native Skia shim is absent (fresh checkout / CI runner
-    without the out-of-band build). `Painter.SelectBackend()` prefers Skia,
-    falls back to ImageSharp. `BoxTreeRenderer.cs` and the three BouncyCastle
-    TLS files *were* deleted as planned.
+  - **No fallback — Skia Graphite is the sole rasterizer.** An interim graceful
+    ImageSharp fallback was built and then removed at the user's direction ("i
+    don't want the fallback at all: make this CORRECT"). `ImageSharpBackend.cs`,
+    `PaintBackend.cs`, and `Painter.SelectBackend()` are deleted; `NativeLoader`
+    throws an actionable `DllNotFoundException` when the shim is absent, and
+    `Tessera.Skia.csproj` has a `BeforeTargets="Build"` guard that hard-fails
+    the build early with a build-it message. `BoxTreeRenderer.cs` and the three
+    BouncyCastle TLS files were also deleted as planned.
   - Validation is **osx-arm64 only**. The native Skia + shim build
     (`build-skia.sh`, `libtessera_skia.dylib`) has only been run for osx-arm64;
     win-x64 / linux-x64 native builds are still pending (run `native.yml` or
-    the scripts on those platforms). On RIDs without the shim, the managed
-    fallback path runs and the Skia-specific tests self-skip.
+    the scripts on those platforms). With no fallback, RIDs without the shim
+    fail the build outright — the ubuntu/windows CI legs are honestly red until
+    those native builds exist.
 
   **Open follow-ups (not blocking pivot closure; file as new WPs when picked
   up):** win/linux native builds + shims; `CAMetalLayer` direct presentation in
