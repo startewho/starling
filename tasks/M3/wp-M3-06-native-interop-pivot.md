@@ -1,9 +1,10 @@
 ---
 id: "wp:M3-06-native-interop-pivot"
 milestone: "M3"
-status: "available"
-claimed_by: ""
-claimed_at: ""
+status: "complete"
+claimed_by: "agent-claude-cody"
+claimed_at: "2026-05-14T11:00:00Z"
+completed_at: "2026-05-14T18:30:00Z"
 branch: "main"
 depends_on: []
 blocks: []
@@ -100,3 +101,31 @@ child work packages under `tasks/M3/`:
 ## Handoff log
 
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
+- 2026-05-14T18:30:00Z — complete (agent-claude-cody). All 13 children
+  (06a–06l + the 06g2 follow-up) are `complete`; full `dotnet build && dotnet
+  test` green on osx-arm64. Skia Graphite is the default paint backend, the
+  interop seam policy is in place (native interop confined to `Tessera.Skia` +
+  `Tessera.Codecs`), BouncyCastle is gone (`SslStream`), image decode is
+  OS-native, and the GUI renders through the unified `DisplayList` path.
+
+  **Deliberate deviations from the original Acceptance (re-planning, all
+  documented):**
+  - `ImageSharpBackend.cs` was **kept, not deleted** — it is now the graceful
+    fallback when the native Skia shim is absent (fresh checkout / CI runner
+    without the out-of-band build). `Painter.SelectBackend()` prefers Skia,
+    falls back to ImageSharp. `BoxTreeRenderer.cs` and the three BouncyCastle
+    TLS files *were* deleted as planned.
+  - Validation is **osx-arm64 only**. The native Skia + shim build
+    (`build-skia.sh`, `libtessera_skia.dylib`) has only been run for osx-arm64;
+    win-x64 / linux-x64 native builds are still pending (run `native.yml` or
+    the scripts on those platforms). On RIDs without the shim, the managed
+    fallback path runs and the Skia-specific tests self-skip.
+
+  **Open follow-ups (not blocking pivot closure; file as new WPs when picked
+  up):** win/linux native builds + shims; `CAMetalLayer` direct presentation in
+  the GUI (currently offscreen render → bitmap); HarfBuzz/`skshaper` shaping in
+  the shim (currently `SkFont::textToGlyphs`, LTR only); hover-driven reflow in
+  the GUI; sub-fragment text selection + clipboard copy; a real native-artifact
+  restore in PR `ci.yml` once `native.yml` publishes releases; `build-skia.sh`
+  staging the proper `include/` layout (06g had to use the Skia checkout's
+  headers directly).

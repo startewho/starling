@@ -73,7 +73,7 @@ structure).
 
 | ID | Status | Owner | Subsystem |
 |---|---|---|---|
-| [wp:M3-06-native-interop-pivot](M3/wp-M3-06-native-interop-pivot.md) | 🟡 claimed | — | build |
+| [wp:M3-06-native-interop-pivot](M3/wp-M3-06-native-interop-pivot.md) | 🟢 complete | agent-claude-cody | build |
 | [wp:M3-06a-native-scaffold](M3/wp-M3-06a-native-scaffold.md) | 🟢 complete | agent-claude-cody-native | build |
 | [wp:M3-06b-native-build](M3/wp-M3-06b-native-build.md) | 🟢 complete | agent-claude-cody-native | build |
 | [wp:M3-06c-decoded-image](M3/wp-M3-06c-decoded-image.md) | 🟢 complete | agent-claude-cody-image | Tessera.Common |
@@ -85,28 +85,32 @@ structure).
 | [wp:M3-06h-skia-interop](M3/wp-M3-06h-skia-interop.md) | 🟢 complete | agent-claude-cody-skia-net | Tessera.Skia |
 | [wp:M3-06i-skia-backend](M3/wp-M3-06i-skia-backend.md) | 🟢 complete | agent-claude-cody-skia-backend | Tessera.Paint |
 | [wp:M3-06j-skia-fonts](M3/wp-M3-06j-skia-fonts.md) | 🟢 complete | agent-claude-cody-skia-fonts | Tessera.Paint |
-| [wp:M3-06k-gui-canvas](M3/wp-M3-06k-gui-canvas.md) | 🟡 claimed | agent-claude-cody-gui | Tessera.Gui |
-| [wp:M3-06l-ci-policy](M3/wp-M3-06l-ci-policy.md) | 🟡 claimed | agent-claude-cody-ci | build |
+| [wp:M3-06k-gui-canvas](M3/wp-M3-06k-gui-canvas.md) | 🟢 complete | agent-claude-cody-gui | Tessera.Gui |
+| [wp:M3-06l-ci-policy](M3/wp-M3-06l-ci-policy.md) | 🟢 complete | agent-claude-cody-ci | build |
 
-> **M3-06: native Skia build is GREEN.** 06a–06f all `complete`. The osx-arm64
-> Skia + Graphite + Dawn build now succeeds — `build-skia.sh` was hardened
-> through five real fixes (clone guard, skip emsdk, fetch-ninja, `skia_use_cpp20`,
-> bundled `skia_use_system_*=false`); `libskia.a` + Dawn/HarfBuzz/codec static
-> libs + headers are staged in `runtimes/osx-arm64/native/` (gitignored). That
-> unblocked the Skia chain: **06g (C-ABI shim) is now in progress.** Once 06g
-> produces `libtessera_skia.dylib`, 06h→06i→06j→06k follow as a relay. 06l (CI
-> policy) is partially done; its native-Skia-restore step waits on 06h. win-x64
-> / linux-x64 native builds are still pending (run `native.yml` or the script on
-> those platforms).
+> **M3-06 native interop pivot: COMPLETE.** All 13 packages (06a–06l + the
+> 06g2 shim follow-up) are `complete`; full `dotnet build && dotnet test` green
+> on osx-arm64. Skia Graphite is the default paint backend; the interop seam
+> policy is enforced (native interop confined to `Tessera.Skia` +
+> `Tessera.Codecs`); BouncyCastle is gone (`SslStream`); image decode is
+> OS-native; the GUI renders through the unified `DisplayList` path
+> (`BoxTreeRenderer` deleted). The native Skia + Graphite + Dawn build
+> (`build-skia.sh`) was hardened through five real fixes and produces
+> `libtessera_skia.dylib`. **Deliberate deviations:** `ImageSharpBackend` was
+> *kept* as the graceful fallback when the native shim is absent (so fresh
+> checkouts / CI stay green — Skia-specific tests self-skip); validation is
+> **osx-arm64 only** — win/linux native builds are still pending. Open
+> follow-ups are listed in the parent WP's handoff log.
 
 ## Available right now (no dependencies pending)
 
-All M3-06 packages that can proceed without a native Skia build are done or in
-progress. The Skia chain (06g–06k) is blocked on that build. M3-02 sub-tasks (02c
-classes/modules, 02d destructuring, 02e Test262 ≥ 80%) are unfiled but
-available to anyone who wants to push the JS parser forward. Otherwise the
-next high-impact work is to file an M3-05 (intrinsics) ticket and start
-there — that's the single largest gating piece for any interactive demo.
+The M3-06 native interop pivot is closed. Remaining pivot follow-ups (win/linux
+native builds, `CAMetalLayer` GUI presentation, HarfBuzz shaping, PR-CI native
+artifact restore) are catalogued in `wp:M3-06-native-interop-pivot`'s handoff
+log — file them as new WPs when picked up. Otherwise the next high-impact work
+is the JS engine: M3-02 sub-tasks (02c classes/modules, 02d destructuring, 02e
+Test262 ≥ 80%) are unfiled but available, and an M3-05 (intrinsics) ticket is
+the single largest gating piece for any interactive demo.
 
 ## Recently completed
 
