@@ -1,113 +1,67 @@
-using Org.BouncyCastle.Asn1.X509;
-using Org.BouncyCastle.Tls;
-using Org.BouncyCastle.X509;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Tessera.Net.Tls;
 
+/// <summary>
+/// Validates a server certificate chain against the bundled CCADB trust
+/// anchors. Chain building, expiry, and signature checks run through
+/// <see cref="X509Chain"/> with a <see cref="X509ChainPolicy.CustomTrustStore"/>
+/// so the OS trust store is never consulted; host-name matching stays as
+/// custom RFC 6125 code in <see cref="CertificateHostNameMatcher"/>.
+/// </summary>
 public static class CertificateVerifier
 {
+    /// <summary>
+    /// Verifies <paramref name="leafCertificate"/> (plus any intermediates the
+    /// server presented in <paramref name="extraCertificates"/>) chains to a
+    /// bundled trust anchor and matches <paramref name="hostname"/>.
+    /// </summary>
     public static bool Verify(
-        Certificate certificate,
+        X509Certificate2 leafCertificate,
+        X509Certificate2Collection? extraCertificates,
         string hostname,
         RootCertificates roots,
         DateTimeOffset? validationTime = null)
     {
-        if (certificate is null) throw new ArgumentNullException(nameof(certificate));
+        if (leafCertificate is null) throw new ArgumentNullException(nameof(leafCertificate));
         if (roots is null) throw new ArgumentNullException(nameof(roots));
         if (string.IsNullOrWhiteSpace(hostname)) return false;
 
-        var chain = DecodeChain(certificate);
-        if (chain.Count == 0) return false;
+        if (!CertificateHostNameMatcher.Matches(leafCertificate, hostname))
+            return false;
 
-        var now = (validationTime ?? DateTimeOffset.UtcNow).UtcDateTime;
-        if (!chain.All(c => c.IsValid(now))) return false;
-        if (!CertificateHostNameMatcher.Matches(chain[0], hostname)) return false;
-        if (!VerifyPresentedChain(chain)) return false;
+        using var chain = new X509Chain();
+        var policy = chain.ChainPolicy;
+        policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        policy.CustomTrustStore.Clear();
+        policy.CustomTrustStore.AddRange(roots.Certificates);
+        policy.RevocationMode = X509RevocationMode.NoCheck;
+        policy.VerificationFlags = X509VerificationFlags.NoFlag;
+        if (validationTime is { } when)
+            policy.VerificationTime = when.UtcDateTime;
+        if (extraCertificates is { Count: > 0 })
+            policy.ExtraStore.AddRange(extraCertificates);
 
-        return ChainsToTrustedRoot(chain[^1], roots.Certificates);
-    }
-
-    private static List<X509Certificate> DecodeChain(Certificate certificate)
-    {
-        var parser = new X509CertificateParser();
-        return certificate.GetCertificateList()
-            .Select(tlsCertificate => parser.ReadCertificate(tlsCertificate.GetEncoded()))
-            .ToList();
-    }
-
-    private static bool VerifyPresentedChain(List<X509Certificate> chain)
-    {
-        for (var i = 0; i < chain.Count - 1; i++)
-        {
-            if (!chain[i].IssuerDN.Equivalent(chain[i + 1].SubjectDN))
-                return false;
-            try
-            {
-                chain[i].Verify(chain[i + 1].GetPublicKey());
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ChainsToTrustedRoot(X509Certificate lastPresented, IReadOnlyList<X509Certificate> roots)
-    {
-        foreach (var root in roots)
-        {
-            if (lastPresented.SubjectDN.Equivalent(root.SubjectDN)
-                && SamePublicKey(lastPresented, root))
-                return true;
-
-            if (!lastPresented.IssuerDN.Equivalent(root.SubjectDN))
-                continue;
-
-            try
-            {
-                lastPresented.Verify(root.GetPublicKey());
-                return true;
-            }
-            catch
-            {
-                // Try the next root with the same subject; some stores have cross-signs.
-            }
-        }
-
-        return false;
-    }
-
-    private static bool SamePublicKey(X509Certificate left, X509Certificate right)
-    {
-        var leftKey = SubjectPublicKeyInfoFactory
-            .CreateSubjectPublicKeyInfo(left.GetPublicKey())
-            .GetEncoded();
-        var rightKey = SubjectPublicKeyInfoFactory
-            .CreateSubjectPublicKeyInfo(right.GetPublicKey())
-            .GetEncoded();
-        return leftKey.AsSpan().SequenceEqual(rightKey);
+        return chain.Build(leafCertificate);
     }
 }
 
+/// <summary>
+/// RFC 6125 host-name matching against a certificate's DNS Subject Alternative
+/// Names, including single-label wildcard support.
+/// </summary>
 public static class CertificateHostNameMatcher
 {
-    public static bool Matches(X509Certificate certificate, string hostname)
+    public static bool Matches(X509Certificate2 certificate, string hostname)
     {
         if (certificate is null) throw new ArgumentNullException(nameof(certificate));
         if (string.IsNullOrWhiteSpace(hostname)) return false;
 
         var normalizedHost = hostname.Trim().TrimEnd('.').ToLowerInvariant();
-        var names = certificate.GetSubjectAlternativeNames();
-        if (names is null || names.Count == 0)
-            return false;
 
-        foreach (var name in names)
+        foreach (var dnsName in EnumerateDnsNames(certificate))
         {
-            if (name.Count < 2 || name[0] is not int { } type || type != GeneralName.DnsName)
-                continue;
-            if (name[1] is string dnsName && MatchDnsName(dnsName, normalizedHost))
+            if (MatchDnsName(dnsName, normalizedHost))
                 return true;
         }
 
@@ -133,5 +87,16 @@ public static class CertificateHostNameMatcher
 
         var unmatched = normalizedHost[..^suffix.Length];
         return unmatched.Length > 0 && !unmatched.Contains('.', StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<string> EnumerateDnsNames(X509Certificate2 certificate)
+    {
+        foreach (var extension in certificate.Extensions)
+        {
+            if (extension is not X509SubjectAlternativeNameExtension san)
+                continue;
+            foreach (var dnsName in san.EnumerateDnsNames())
+                yield return dnsName;
+        }
     }
 }

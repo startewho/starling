@@ -1,28 +1,41 @@
-using Org.BouncyCastle.X509;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Tessera.Net.Tls;
 
+/// <summary>
+/// The trust anchor set used to validate server certificate chains. Backed by
+/// the bundled CCADB PEM so verification is deterministic across platforms
+/// rather than dependent on the OS trust store.
+/// </summary>
 public sealed class RootCertificates
 {
     private const string ResourceSuffix = ".Resources.Roots.ccadb.pem";
-    private readonly IReadOnlyList<X509Certificate> _certificates;
 
-    private RootCertificates(IReadOnlyList<X509Certificate> certificates)
+    private RootCertificates(X509Certificate2Collection certificates)
     {
-        _certificates = certificates;
+        Certificates = certificates;
     }
 
     public static RootCertificates Default { get; } = LoadDefault();
 
-    public IReadOnlyList<X509Certificate> Certificates => _certificates;
+    /// <summary>
+    /// The trust anchors, suitable for use as an <see cref="X509ChainPolicy"/>
+    /// custom trust store.
+    /// </summary>
+    public X509Certificate2Collection Certificates { get; }
 
     public static RootCertificates FromPem(Stream pemStream)
     {
         if (pemStream is null) throw new ArgumentNullException(nameof(pemStream));
-        var parser = new X509CertificateParser();
-        var certificates = parser.ReadCertificates(pemStream).ToArray();
-        if (certificates.Length == 0)
+
+        using var reader = new StreamReader(pemStream);
+        var pem = reader.ReadToEnd();
+
+        var certificates = new X509Certificate2Collection();
+        certificates.ImportFromPem(pem);
+        if (certificates.Count == 0)
             throw new InvalidDataException("root certificate bundle is empty");
+
         return new RootCertificates(certificates);
     }
 
