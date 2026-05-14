@@ -3,6 +3,7 @@ using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Tessera.Common.Image;
 using Tessera.Css.Values;
 using Tessera.Paint.DisplayList;
 using LayoutRect = Tessera.Layout.Rect;
@@ -41,6 +42,20 @@ public sealed class ImageSharpBackend
         });
 
         return image;
+    }
+
+    /// <summary>
+    /// Renders <paramref name="list"/> and lifts the result into a
+    /// backend-neutral <see cref="RenderedBitmap"/> (straight RGBA8888). The
+    /// peer entry point to <see cref="SkiaGraphiteBackend.Render"/>; ImageSharp
+    /// stays the default backend and the PNG encoder.
+    /// </summary>
+    public RenderedBitmap RenderToBitmap(PaintList list, LayoutSize viewport)
+    {
+        using var image = Render(list, viewport);
+        var rgba = new byte[checked(image.Width * image.Height * 4)];
+        image.CopyPixelDataTo(rgba);
+        return new RenderedBitmap(image.Width, image.Height, rgba);
     }
 
     private void Apply(IImageProcessingContext ctx, DisplayItem item)

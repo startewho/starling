@@ -1,6 +1,4 @@
 using FluentAssertions;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using Tessera.Html;
 using Xunit;
 using LayoutSize = Tessera.Layout.Size;
@@ -45,13 +43,15 @@ public sealed class M1StaticRenderingGoldenTests
 
         image.Width.Should().Be(testCase.Width);
         image.Height.Should().Be(testCase.Height);
-        CountNonWhite(image).Should().BeGreaterThanOrEqualTo(testCase.MinNonWhite, testCase.Name);
+        BitmapPixels.CountNonWhite(image).Should().BeGreaterThanOrEqualTo(testCase.MinNonWhite, testCase.Name);
 
         foreach (var required in testCase.RequiredColors)
-            CountExact(image, required.Color).Should().BeGreaterThanOrEqualTo(required.MinCount, testCase.Name);
+            BitmapPixels.CountExact(image, required.R, required.G, required.B)
+                .Should().BeGreaterThanOrEqualTo(required.MinCount, testCase.Name);
 
         foreach (var forbidden in testCase.ForbiddenColors)
-            CountExact(image, forbidden.Color).Should().Be(0, testCase.Name);
+            BitmapPixels.CountExact(image, forbidden.R, forbidden.G, forbidden.B)
+                .Should().Be(0, testCase.Name);
     }
 
     private static GoldenCase Case(
@@ -63,38 +63,6 @@ public sealed class M1StaticRenderingGoldenTests
         ColorCount[]? requiredColors = null,
         ColorCount[]? forbiddenColors = null)
         => new(name, html, width, height, minNonWhite, requiredColors ?? [], forbiddenColors ?? []);
-
-    private static int CountNonWhite(Image<Rgba32> image)
-    {
-        var count = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.R < 250 || px.G < 250 || px.B < 250)
-                        count++;
-            }
-        });
-        return count;
-    }
-
-    private static int CountExact(Image<Rgba32> image, Rgba32 color)
-    {
-        var count = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.Equals(color))
-                        count++;
-            }
-        });
-        return count;
-    }
 }
 
 public sealed record GoldenCase(
@@ -109,9 +77,9 @@ public sealed record GoldenCase(
     public override string ToString() => Name;
 }
 
-public sealed record ColorCount(Rgba32 Color, int MinCount = 20)
+public sealed record ColorCount(byte R, byte G, byte B, int MinCount = 20)
 {
-    public static ColorCount Red { get; } = new(new Rgba32(255, 0, 0), 100);
-    public static ColorCount Green { get; } = new(new Rgba32(0, 128, 0), 100);
-    public static ColorCount Blue { get; } = new(new Rgba32(0, 0, 255), 100);
+    public static ColorCount Red { get; } = new(255, 0, 0, 100);
+    public static ColorCount Green { get; } = new(0, 128, 0, 100);
+    public static ColorCount Blue { get; } = new(0, 0, 255, 100);
 }

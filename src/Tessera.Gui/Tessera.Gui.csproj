@@ -35,4 +35,25 @@
     <ProjectReference Include="..\Tessera.Engine\Tessera.Engine.csproj" />
     <ProjectReference Include="..\Tessera.Telemetry\Tessera.Telemetry.csproj" />
   </ItemGroup>
+
+  <!--
+    wp:M3-06i transitively pulls Tessera.Skia (via Tessera.Paint) into the GUI's
+    reference closure. Tessera.Skia ships libtessera_skia.dylib as a native
+    runtime asset; MAUI's Mac Catalyst bundler then tries to run
+    `install_name_tool` over it and fails on the nested runtimes/<rid>/native/
+    layout. Proper GUI+Skia native-lib registration is wp:M3-06k-gui-canvas's
+    job — until then, drop the transitively-copied dylib from the GUI bundle's
+    native-reference set so the build stays green. The engine paint path the GUI
+    uses today is still ImageSharp (the default backend); the GUI does not yet
+    drive the Skia backend.
+  -->
+  <Target Name="DropTransitiveSkiaNative"
+          BeforeTargets="_ComputeDynamicLibrariesToReidentify">
+    <ItemGroup>
+      <_FileNativeReference Remove="@(_FileNativeReference)"
+          Condition="'%(Filename)%(Extension)' == 'libtessera_skia.dylib'" />
+      <_DynamicLibraryToReidentify Remove="@(_DynamicLibraryToReidentify)"
+          Condition="'%(Filename)%(Extension)' == 'libtessera_skia.dylib'" />
+    </ItemGroup>
+  </Target>
 </Project>

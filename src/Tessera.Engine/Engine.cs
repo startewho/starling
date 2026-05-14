@@ -134,17 +134,17 @@ public sealed class TesseraEngine
             ).ConfigureAwait(false);
         }
 
-        Image<SixLabors.ImageSharp.PixelFormats.Rgba32> image;
+        Tessera.Common.Image.RenderedBitmap bitmap;
         using (_diag.Span("engine", "render_document"))
         {
-            image = _painter.RenderDocument(
+            bitmap = _painter.RenderDocument(
                 doc,
                 new LayoutSize(options.Viewport.Width, options.Viewport.Height),
                 options.FontSize,
                 images,
                 stylesheets.Resolve);
-            Activity.Current?.SetTag("image.w", image.Width);
-            Activity.Current?.SetTag("image.h", image.Height);
+            Activity.Current?.SetTag("image.w", bitmap.Width);
+            Activity.Current?.SetTag("image.h", bitmap.Height);
         }
 
         try
@@ -154,6 +154,11 @@ public sealed class TesseraEngine
                 using (_diag.Span("engine", "save_png"))
                 {
                     EnsureOutputDirectory(outputPath);
+                    // PNG encode stays via ImageSharp for now: wrap the
+                    // backend-neutral RGBA8888 bytes back into an Image<Rgba32>
+                    // purely for the encoder. LoadPixelData copies.
+                    using var image = Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+                        bitmap.Rgba, bitmap.Width, bitmap.Height);
                     image.SaveAsPng(outputPath);
                 }
             }
@@ -163,14 +168,14 @@ public sealed class TesseraEngine
             }
 
             _diag.Log(DiagLevel.Info, "engine",
-                $"Wrote {outputPath} ({image.Width}x{image.Height}, text length={displayText.Length}).");
+                $"Wrote {outputPath} ({bitmap.Width}x{bitmap.Height}, text length={displayText.Length}).");
 
             return Result<RenderOutcome, RenderError>.Ok(
-                new RenderOutcome(outputPath, image.Width, image.Height, displayText));
+                new RenderOutcome(outputPath, bitmap.Width, bitmap.Height, displayText));
         }
         finally
         {
-            image.Dispose();
+            bitmap.Dispose();
         }
 
         Result<RenderOutcome, RenderError> Fail(string message)

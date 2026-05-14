@@ -25,18 +25,7 @@ public sealed class EndToEndRenderTests
         var document = HtmlParser.Parse("<body><p>visible</p></body>");
         using var image = painter.RenderDocument(document, new LayoutSize(400, 200));
 
-        var nonWhite = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.R < 250 || px.G < 250 || px.B < 250)
-                        nonWhite++;
-            }
-        });
-        nonWhite.Should().BeGreaterThan(0);
+        BitmapPixels.CountNonWhite(image).Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -47,17 +36,6 @@ public sealed class EndToEndRenderTests
             "<body><div style=\"background-color: #008000; height: 50px\"></div></body>");
         using var image = painter.RenderDocument(document, new LayoutSize(200, 100));
 
-        var greenPixels = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.R == 0 && px.G == 128 && px.B == 0)
-                        greenPixels++;
-            }
-        });
-        greenPixels.Should().BeGreaterThan(100);
+        BitmapPixels.CountExact(image, 0, 128, 0).Should().BeGreaterThan(100);
     }
 }

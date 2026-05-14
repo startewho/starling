@@ -7,6 +7,9 @@
     <ProjectReference Include="..\Tessera.Layout\Tessera.Layout.csproj" />
     <ProjectReference Include="..\Tessera.Dom\Tessera.Dom.csproj" />
     <ProjectReference Include="..\Tessera.Css\Tessera.Css.csproj" />
+    <!-- Skia Graphite raster backend (wp:M3-06i). Opt-in behind the
+         TESSERA_PAINT_BACKEND flag; ImageSharp stays the default path. -->
+    <ProjectReference Include="..\Tessera.Skia\Tessera.Skia.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" />

@@ -3,6 +3,7 @@ using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using Tessera.Common.Diagnostics;
+using Tessera.Common.Image;
 using Tessera.Css;
 using Tessera.Css.Cascade;
 using Tessera.Css.Parser;
@@ -45,12 +46,13 @@ public sealed class Painter
     /// cascade matches what a browser sees. Without it, only inline
     /// <c>&lt;style&gt;</c> blocks contribute.
     /// </summary>
-    public Image<Rgba32> RenderDocument(
+    public RenderedBitmap RenderDocument(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize = null,
         IImageResolver? images = null,
-        Func<Element, StyleSheet?>? externalStylesheet = null)
+        Func<Element, StyleSheet?>? externalStylesheet = null,
+        PaintBackend? backend = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -60,11 +62,36 @@ public sealed class Painter
         using (_diag.Span("paint", "display_list"))
             displayList = new DisplayListBuilder().Build(root);
 
-        using (_diag.Span("paint", "raster"))
+        var selected = backend ?? SelectBackend();
+        using (_diag.Span("paint", $"raster:{selected}".ToLowerInvariant()))
         {
-            var backend = new ImageSharpBackend(_fonts);
-            return backend.Render(displayList, viewport);
+            // DisplayList / DisplayItem are the backend-neutral seam: both
+            // backends consume the exact same list. ImageSharp is the default
+            // (goldens are baselined against it); Skia Graphite is opt-in via
+            // TESSERA_PAINT_BACKEND=skia until goldens are re-baselined.
+            if (selected == PaintBackend.SkiaGraphite)
+            {
+                using var skia = new SkiaGraphiteBackend();
+                return skia.Render(displayList, viewport);
+            }
+
+            return new ImageSharpBackend(_fonts).RenderToBitmap(displayList, viewport);
         }
+    }
+
+    /// <summary>
+    /// Resolves the active paint backend. Honors the <c>TESSERA_PAINT_BACKEND</c>
+    /// environment variable (<c>skia</c> | <c>imagesharp</c>); defaults to
+    /// <see cref="PaintBackend.ImageSharp"/> so existing goldens stay byte-exact.
+    /// </summary>
+    public static PaintBackend SelectBackend()
+    {
+        var flag = Environment.GetEnvironmentVariable("TESSERA_PAINT_BACKEND");
+        return flag?.Trim().ToLowerInvariant() switch
+        {
+            "skia" or "skiagraphite" or "graphite" => PaintBackend.SkiaGraphite,
+            _ => PaintBackend.ImageSharp,
+        };
     }
 
     /// <summary>

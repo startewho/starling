@@ -29,7 +29,7 @@ public sealed class ImagePaintGoldenTests
         var painter = new Painter();
         using var rendered = painter.RenderDocument(document, new LayoutSize(320, 180), defaultFontSize: 16f, images: resolver);
 
-        CountExact(rendered, new Rgba32(255, 0, 0)).Should().BeGreaterThanOrEqualTo(
+        BitmapPixels.CountExact(rendered, 255, 0, 0).Should().BeGreaterThanOrEqualTo(
             500, "the 40x20 red swatch (800 px) should land in the output");
     }
 
@@ -49,7 +49,7 @@ public sealed class ImagePaintGoldenTests
         var painter = new Painter();
         using var rendered = painter.RenderDocument(document, new LayoutSize(320, 180), defaultFontSize: 16f, images: resolver);
 
-        CountBluish(rendered).Should().BeGreaterThanOrEqualTo(
+        BitmapPixels.CountBluish(rendered).Should().BeGreaterThanOrEqualTo(
             500, "the 60x20 blue JPEG swatch should dominate a region of the output");
     }
 
@@ -65,7 +65,7 @@ public sealed class ImagePaintGoldenTests
         var painter = new Painter();
         using var rendered = painter.RenderDocument(document, new LayoutSize(320, 180), defaultFontSize: 16f);
 
-        CountNonWhite(rendered).Should().BeGreaterThan(
+        BitmapPixels.CountNonWhite(rendered).Should().BeGreaterThan(
             30, "alt text should render as glyphs when the image fails to resolve");
     }
 
@@ -98,54 +98,6 @@ public sealed class ImagePaintGoldenTests
         foreach (var img in document.GetElementsByTagName("img"))
             if (img.Id == id) return img;
         throw new InvalidOperationException($"No <img id='{id}'> in fixture");
-    }
-
-    private static int CountExact(Image<Rgba32> image, Rgba32 color)
-    {
-        var count = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.Equals(color)) count++;
-            }
-        });
-        return count;
-    }
-
-    private static int CountBluish(Image<Rgba32> image)
-    {
-        // Any pixel where the blue channel dominates by a wide margin counts —
-        // JPEG compression around the swatch edges blurs into the neighbours,
-        // so this tolerates that bleed.
-        var count = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.B > 150 && px.B > px.R + 50 && px.B > px.G + 50) count++;
-            }
-        });
-        return count;
-    }
-
-    private static int CountNonWhite(Image<Rgba32> image)
-    {
-        var count = 0;
-        image.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                foreach (var px in row)
-                    if (px.R < 250 || px.G < 250 || px.B < 250) count++;
-            }
-        });
-        return count;
     }
 
     private sealed class ManualImageResolver : IImageResolver
