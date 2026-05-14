@@ -2,9 +2,9 @@
 id: "wp:M3-06g2-shim-drawimage"
 parent: "wp:M3-06-native-interop-pivot"
 milestone: "M3"
-status: "available"
-claimed_by: ""
-claimed_at: ""
+status: "claimed"
+claimed_by: "agent-claude-cody-shim2"
+claimed_at: "2026-05-14T17:26:22Z"
 branch: "main"
 depends_on:
   - "wp:M3-06g-skia-shim"
