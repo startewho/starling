@@ -112,6 +112,20 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 }
                 bytes = response.Value.Body.ToArray();
             }
+            else if (url.IsData)
+            {
+                // RFC 2397 data: URLs are decoded locally — never hit the
+                // network. Image-bearing data URIs are very common (Google,
+                // GitHub, many SPAs inline icons), so without this branch
+                // every such <img> degrades to its alt-text fallback.
+                if (!DataUrl.TryDecode(url, out var payload))
+                {
+                    _diag.Log(DiagLevel.Warn, "engine", $"Malformed data: URL for image");
+                    _diag.Counter("engine.fetch.image.failed", 1);
+                    return null;
+                }
+                bytes = payload.Bytes;
+            }
             else
             {
                 _diag.Log(DiagLevel.Warn, "engine", $"Unsupported image scheme '{url.Scheme}' for {url}");

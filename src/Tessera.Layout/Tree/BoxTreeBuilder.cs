@@ -56,6 +56,17 @@ internal sealed class BoxTreeBuilder
                         BuildImage(element, elementStyle, parentBox);
                         continue;
                     }
+                    if (string.Equals(element.LocalName, "svg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // We don't have an SVG renderer yet. Real browsers paint
+                        // the vector graphics; we degrade to the inline element's
+                        // accessible name so an icon like Google's logo
+                        // (<svg aria-label="Google">) at least surfaces *something*
+                        // recognisable instead of an empty box. Path/Rect/etc.
+                        // children carry no text and would otherwise vanish.
+                        BuildSvgFallback(element, elementStyle, parentBox);
+                        continue;
+                    }
                     Box.Box box = display == "inline" || display == "inline-block"
                         ? new InlineBox(elementStyle, element)
                         : new BlockBox(elementStyle, element);
@@ -158,9 +169,10 @@ internal sealed class BoxTreeBuilder
     /// <summary>
     /// Build an <c>&lt;img&gt;</c> as an <see cref="ImageBox"/> when the
     /// resolver has decoded bytes for it; otherwise degrade to a
-    /// <see cref="TextBox"/> carrying the <c>alt</c> attribute (or nothing
-    /// when <c>alt</c> is empty), matching the HTML spec's "missing image"
-    /// behaviour at a minimum level.
+    /// <see cref="TextBox"/> carrying the <c>alt</c> (or <c>aria-label</c> /
+    /// <c>title</c>) attribute when present. The HTML spec calls this the
+    /// "missing image" rendering: nothing if alt="" was explicitly authored,
+    /// otherwise show the alternative text.
     /// </summary>
     private void BuildImage(Element img, ComputedStyle style, Box.Box parentBox)
     {
@@ -172,9 +184,41 @@ internal sealed class BoxTreeBuilder
             return;
         }
 
-        var alt = img.GetAttribute("alt");
-        if (string.IsNullOrEmpty(alt)) return;
-        parentBox.AppendChild(new TextBox(alt, style));
+        var label = AccessibleName(img);
+        if (string.IsNullOrEmpty(label)) return;
+        parentBox.AppendChild(new TextBox(label, style));
+    }
+
+    /// <summary>
+    /// We don't paint SVG yet (no vector renderer + no SVG DOM). Until we do,
+    /// keep accessibility-driven content visible: render the inline element's
+    /// accessible name (aria-label / title / alt-on-image-children) as text
+    /// so a labelled icon like Google's <c>&lt;svg aria-label="Google"&gt;</c>
+    /// shows up as the word "Google" rather than a vanishing inline.
+    /// </summary>
+    private void BuildSvgFallback(Element svg, ComputedStyle style, Box.Box parentBox)
+    {
+        var label = AccessibleName(svg);
+        if (string.IsNullOrEmpty(label)) return;
+        // Inline the label; the surrounding context controls block/inline
+        // flow on the parent.
+        parentBox.AppendChild(new TextBox(label, style));
+    }
+
+    /// <summary>
+    /// The element's accessible name, in priority order: <c>aria-label</c>,
+    /// then <c>alt</c> (for <c>&lt;img&gt;</c>), then <c>title</c>. Returns
+    /// the empty string when no candidate is set.
+    /// </summary>
+    private static string AccessibleName(Element element)
+    {
+        var aria = element.GetAttribute("aria-label");
+        if (!string.IsNullOrEmpty(aria)) return aria;
+        var alt = element.GetAttribute("alt");
+        if (!string.IsNullOrEmpty(alt)) return alt;
+        var title = element.GetAttribute("title");
+        if (!string.IsNullOrEmpty(title)) return title;
+        return string.Empty;
     }
 
     /// <summary>
