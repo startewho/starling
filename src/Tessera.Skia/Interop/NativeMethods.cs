@@ -17,6 +17,7 @@ internal enum TsStatus
     AllocationFailed = 6,
     ReadbackFailed = 7,
     ShapingFailed = 8,
+    NotFound = 9,
     UnknownError = 100,
 }
 
@@ -167,6 +168,10 @@ internal static partial class NativeMethods
 
     [LibraryImport(Library)]
     internal static partial TsStatus ts_font_create(nint typeface, float sizePx, out nint outFont);
+
+    [LibraryImport(Library)]
+    internal static partial TsStatus ts_font_create_styled(
+        nint typeface, float sizePx, int embolden, int oblique, out nint outFont);
 
     [LibraryImport(Library)]
     internal static partial void ts_font_destroy(nint font);

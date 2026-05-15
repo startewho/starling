@@ -47,11 +47,12 @@ public sealed class Painter
         LayoutSize viewport,
         float? defaultFontSize = null,
         IImageResolver? images = null,
-        Func<Element, StyleSheet?>? externalStylesheet = null)
+        Func<Element, StyleSheet?>? externalStylesheet = null,
+        FontFaceRegistry? webFonts = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var root = LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet);
+        var root = LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts);
 
         PaintList displayList;
         using (_diag.Span("paint", "display_list"))
@@ -62,7 +63,7 @@ public sealed class Painter
             // DisplayList / DisplayItem is the renderer-neutral seam. Skia
             // Graphite is the engine's sole rasterizer — layout (above) measures
             // with Skia's shaped metrics, so paint and layout always agree.
-            using var skia = new SkiaGraphiteBackend();
+            using var skia = new SkiaGraphiteBackend(_fonts, webFonts);
             return skia.Render(displayList, viewport);
         }
     }
@@ -78,9 +79,10 @@ public sealed class Painter
         LayoutSize viewport,
         float? defaultFontSize = null,
         IImageResolver? images = null,
-        Func<Element, StyleSheet?>? externalStylesheet = null)
+        Func<Element, StyleSheet?>? externalStylesheet = null,
+        FontFaceRegistry? webFonts = null)
     {
-        var (root, _) = LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet);
+        var (root, _) = LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts);
         return root;
     }
 
@@ -95,7 +97,8 @@ public sealed class Painter
         LayoutSize viewport,
         float? defaultFontSize = null,
         IImageResolver? images = null,
-        Func<Element, StyleSheet?>? externalStylesheet = null)
+        Func<Element, StyleSheet?>? externalStylesheet = null,
+        FontFaceRegistry? webFonts = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -111,7 +114,7 @@ public sealed class Painter
         // it is created per layout call and disposed when done. (The layout
         // engine's own DefaultTextMeasurer remains for paint-free layout unit
         // tests, but the Painter pipeline is always Skia.)
-        using var measurer = new SkiaTextMeasurer(_fonts);
+        using var measurer = new SkiaTextMeasurer(_fonts, webFonts);
         var layoutEngine = new LayoutEngineImpl(style, measurer, images);
         Tessera.Layout.Box.BlockBox root;
         using (_diag.Span("paint", "layout"))

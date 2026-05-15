@@ -19,6 +19,16 @@ internal sealed class SkFont : SafeHandleZeroOrMinusOneIsInvalid
     /// <summary>Creates a font of <paramref name="sizePx"/> from <paramref name="typeface"/>.</summary>
     /// <exception cref="SkiaInteropException">The native call failed.</exception>
     public static SkFont Create(SkTypeface typeface, float sizePx)
+        => Create(typeface, sizePx, bold: false, italic: false);
+
+    /// <summary>
+    /// Creates a font of <paramref name="sizePx"/> from <paramref name="typeface"/>,
+    /// optionally applying synthetic bold (emboldened outlines) and/or italic (a
+    /// forward skew). Used when the cascade resolves <c>font-weight: bold</c> or
+    /// <c>font-style: italic</c> but no separate styled face is loaded.
+    /// </summary>
+    /// <exception cref="SkiaInteropException">The native call failed.</exception>
+    public static SkFont Create(SkTypeface typeface, float sizePx, bool bold, bool italic)
     {
         ArgumentNullException.ThrowIfNull(typeface);
 
@@ -26,11 +36,12 @@ internal sealed class SkFont : SafeHandleZeroOrMinusOneIsInvalid
         TsStatus status;
         lock (SkiaGate.Sync)
         {
-            NativeCallTrace.Enter("ts_font_create", typeface.Handle, $"size={sizePx}");
-            status = NativeMethods.ts_font_create(typeface.Handle, sizePx, out handle);
-            NativeCallTrace.Exit("ts_font_create", handle);
+            NativeCallTrace.Enter("ts_font_create_styled", typeface.Handle, $"size={sizePx} bold={bold} italic={italic}");
+            status = NativeMethods.ts_font_create_styled(
+                typeface.Handle, sizePx, bold ? 1 : 0, italic ? 1 : 0, out handle);
+            NativeCallTrace.Exit("ts_font_create_styled", handle);
         }
-        SkiaInteropException.ThrowIfNotOk(status, nameof(NativeMethods.ts_font_create));
+        SkiaInteropException.ThrowIfNotOk(status, nameof(NativeMethods.ts_font_create_styled));
 
         var font = new SkFont();
         font.SetHandle(handle);

@@ -30,7 +30,7 @@ namespace Tessera.Engine;
 internal sealed class StylesheetFetcher : IDisposable
 {
     private readonly Dictionary<Element, StyleSheet> _byElement = [];
-    private readonly Dictionary<string, StyleSheet> _byUrl = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (StyleSheet Sheet, TesseraUrl Url)> _byUrl = new(StringComparer.Ordinal);
     private readonly IDiagnostics _diag;
     private readonly Func<TesseraHttpClient> _httpFactory;
     private TesseraHttpClient? _sharedHttp;
@@ -43,6 +43,18 @@ internal sealed class StylesheetFetcher : IDisposable
 
     public StyleSheet? Resolve(Element element)
         => _byElement.TryGetValue(element, out var sheet) ? sheet : null;
+
+    /// <summary>
+    /// Enumerates every loaded sheet paired with the absolute URL it was
+    /// fetched from. Subresource fetchers (currently <see cref="FontFaceFetcher"/>)
+    /// use this so relative <c>url()</c> values resolve against the sheet's
+    /// origin, not the document's.
+    /// </summary>
+    public IEnumerable<(StyleSheet Sheet, TesseraUrl BaseUrl)> EnumerateLoaded()
+    {
+        foreach (var entry in _byUrl.Values)
+            yield return (entry.Sheet, entry.Url);
+    }
 
     public async Task FetchAllAsync(Document document, TesseraUrl? baseUrl, CancellationToken ct)
     {
@@ -89,7 +101,7 @@ internal sealed class StylesheetFetcher : IDisposable
     private async Task<StyleSheet?> FetchAndParseAsync(TesseraUrl url, CancellationToken ct)
     {
         var key = url.ToString();
-        if (_byUrl.TryGetValue(key, out var cached)) return cached;
+        if (_byUrl.TryGetValue(key, out var cached)) return cached.Sheet;
 
         using var _ = _diag.Span("engine", "fetch_stylesheet");
         Activity.Current?.SetTag("url", key);
@@ -140,7 +152,7 @@ internal sealed class StylesheetFetcher : IDisposable
             Activity.Current?.SetTag("bytes", bytes.Length);
             var text = DecodeCss(contentType, bytes);
             var sheet = CssParser.ParseStyleSheet(text, StyleOrigin.Author);
-            _byUrl[key] = sheet;
+            _byUrl[key] = (sheet, url);
             _diag.Counter("engine.fetch.stylesheet", 1);
             return sheet;
         }

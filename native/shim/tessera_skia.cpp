@@ -82,6 +82,13 @@ struct TsContext {
     const char* backendName = "Dawn/Metal";
 };
 
+struct TsCanvas {
+    SkCanvas* canvas = nullptr;  // borrowed from the SkSurface, not owned
+    // Borrowed Graphite recorder, threaded through from the surface so
+    // ts_canvas_draw_image can upload pixels as a texture.
+    skgpu::graphite::Recorder* recorder = nullptr;
+};
+
 struct TsSurface {
     sk_sp<SkSurface> surface;
     int32_t width = 0;
@@ -90,13 +97,9 @@ struct TsSurface {
     // Graphite texture-backed images (drawImageRect on a Graphite canvas only
     // draws texture-backed SkImages, not raster ones).
     skgpu::graphite::Recorder* recorder = nullptr;
-};
-
-struct TsCanvas {
-    SkCanvas* canvas = nullptr;  // borrowed from the SkSurface, not owned
-    // Borrowed Graphite recorder, threaded through from the surface so
-    // ts_canvas_draw_image can upload pixels as a texture.
-    skgpu::graphite::Recorder* recorder = nullptr;
+    // Borrowed canvas wrapper returned to managed code. It is embedded in the
+    // owning surface so ts_surface_get_canvas does not allocate a leaked handle.
+    TsCanvas canvas;
 };
 
 struct TsTypeface {
@@ -105,6 +108,7 @@ struct TsTypeface {
 
 struct TsFont {
     SkFont font;
+    bool   embolden = false;  /* synthetic bold: stroke the glyphs when drawing */
 };
 
 /* --------------------------------------------------------------------------
@@ -285,16 +289,12 @@ TS_API TsStatus TS_CALL ts_surface_get_canvas(TsSurface* surface, TsCanvas** out
     if (!surface->surface) {
         return TS_NULL_HANDLE;
     }
-    SkCanvas* canvas = surface->surface->getCanvas();
-    if (canvas == nullptr) {
+    surface->canvas.canvas = surface->surface->getCanvas();
+    if (surface->canvas.canvas == nullptr) {
         return TS_UNKNOWN_ERROR;
     }
-    // The TsCanvas is a thin owned wrapper around a borrowed SkCanvas* — it
-    // does not own the SkCanvas. .NET treats it as a borrowed view.
-    auto handle = std::make_unique<TsCanvas>();
-    handle->canvas = canvas;
-    handle->recorder = surface->recorder;
-    *out_canvas = handle.release();
+    surface->canvas.recorder = surface->recorder;
+    *out_canvas = &surface->canvas;
     return TS_OK;
 }
 
@@ -366,6 +366,21 @@ TS_API TsStatus TS_CALL ts_canvas_draw_text(TsCanvas* canvas, TsFont* font,
     canvas->canvas->drawGlyphs(SkSpan<const SkGlyphID>(ids.data(), ids.size()),
                                SkSpan<const SkPoint>(positions.data(), positions.size()),
                                SkPoint::Make(0.0f, 0.0f), font->font, paint);
+
+    // Synthetic bold: re-draw the run nudged sideways so the glyphs thicken.
+    // A stroked paint would be cleaner, but the Graphite glyph path does not
+    // honour stroke styling on text, so a sub-pixel overdraw is the reliable
+    // fake-bold when no real bold face is loaded.
+    if (font->embolden) {
+        const float nudge = font->font.getSize() * 0.03f;
+        std::vector<SkPoint> bold(positions);
+        for (auto& p : bold) {
+            p.fX += nudge;
+        }
+        canvas->canvas->drawGlyphs(SkSpan<const SkGlyphID>(ids.data(), ids.size()),
+                                   SkSpan<const SkPoint>(bold.data(), bold.size()),
+                                   SkPoint::Make(0.0f, 0.0f), font->font, paint);
+    }
     return TS_OK;
 }
 
@@ -453,13 +468,14 @@ TS_API TsStatus TS_CALL ts_typeface_from_name(const char* family_name, TsTypefac
     if (!mgr) {
         return TS_BACKEND_UNAVAILABLE;
     }
+    // Exact family match. Skia's legacyMakeTypeface() would return *something*
+    // for any name, masking "this family is not installed" — but the C# font
+    // resolver walks the CSS font-family list and needs to know when to move
+    // on. So we return TS_NOT_FOUND on no match; the caller is expected to try
+    // the next candidate, ending at a known-good generic like "sans-serif".
     sk_sp<SkTypeface> typeface = mgr->matchFamilyStyle(family_name, SkFontStyle());
     if (!typeface) {
-        // Fall back to the legacy resolver, which never returns null.
-        typeface = mgr->legacyMakeTypeface(family_name, SkFontStyle());
-    }
-    if (!typeface) {
-        return TS_INVALID_ARGUMENT;
+        return TS_NOT_FOUND;
     }
 
     auto handle = std::make_unique<TsTypeface>();
@@ -472,7 +488,9 @@ TS_API void TS_CALL ts_typeface_destroy(TsTypeface* typeface) {
     delete typeface;
 }
 
-TS_API TsStatus TS_CALL ts_font_create(TsTypeface* typeface, float size_px, TsFont** out_font) {
+TS_API TsStatus TS_CALL ts_font_create_styled(TsTypeface* typeface, float size_px,
+                                              int32_t embolden, int32_t oblique,
+                                              TsFont** out_font) {
     if (typeface == nullptr) {
         return TS_NULL_HANDLE;
     }
@@ -488,8 +506,19 @@ TS_API TsStatus TS_CALL ts_font_create(TsTypeface* typeface, float size_px, TsFo
     handle->font = SkFont(typeface->typeface, size_px);
     handle->font.setEdging(SkFont::Edging::kAntiAlias);
     handle->font.setSubpixel(true);
+    // Synthetic styling: fake-bold thickens outlines (applied as a glyph stroke
+    // at draw time — see ts_canvas_draw_text); fake-italic skews forward.
+    // -0.25 is the slope Skia/Chromium use for synthesized obliques.
+    handle->embolden = (embolden != 0);
+    if (oblique != 0) {
+        handle->font.setSkewX(-0.25f);
+    }
     *out_font = handle.release();
     return TS_OK;
+}
+
+TS_API TsStatus TS_CALL ts_font_create(TsTypeface* typeface, float size_px, TsFont** out_font) {
+    return ts_font_create_styled(typeface, size_px, 0, 0, out_font);
 }
 
 TS_API void TS_CALL ts_font_destroy(TsFont* font) {

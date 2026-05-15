@@ -1,54 +1,150 @@
+using System.Collections.Concurrent;
+using Tessera.Layout.Text;
+using Tessera.Skia;
 using Tessera.Skia.Handles;
+using Tessera.Skia.Interop;
 
 namespace Tessera.Paint;
 
 /// <summary>
-/// Resolves the sans-serif <see cref="SkTypeface"/> for the Skia paint path —
-/// the engine's sole rasterizer. Walks a 3-tier sans-serif chain:
+/// Resolves a CSS <c>font-family</c> list to a concrete <see cref="SkTypeface"/>
+/// for the Skia paint path — the engine's sole rasterizer. Walks the family
+/// list in order:
 /// <list type="number">
-///   <item>The bundled <c>OpenSans-Regular.ttf</c> (filesystem bundle, then the
-///   embedded resource — the embedded copy always ships inside the assembly).</item>
-///   <item>An installed sans-serif family via Skia's <c>SkFontMgr</c>/CoreText.</item>
-///   <item>The system font manager's generic <c>sans-serif</c>.</item>
+///   <item>For each candidate family, consults the @font-face registry first
+///   (web fonts loaded from the document's stylesheets), then asks Skia's
+///   <c>SkFontMgr</c>/CoreText for an exact match.</item>
+///   <item>Maps CSS generic keywords (<c>serif</c>, <c>sans-serif</c>,
+///   <c>monospace</c>, <c>cursive</c>, <c>fantasy</c>, <c>system-ui</c>) to
+///   sensible platform fallbacks.</item>
+///   <item>If nothing in the list resolves, the bundled
+///   <c>OpenSans-Regular.ttf</c> (or, if that fails, the system generic
+///   <c>sans-serif</c>) is the final fallback.</item>
 /// </list>
-/// If none resolve, a clear exception fires.
-///
-/// The full <c>FontResolver</c> per 08_FONTS_PAINT.md adds @font-face, Unicode
-/// fallback chains, and variable-font axis selection — those are later work.
+/// Cached by the unordered <see cref="FontSpec"/> shape so a span seeing the
+/// same family list + bold/italic doesn't re-walk the chain.
 /// </summary>
 public sealed class FontResolver : IDisposable
 {
     public static readonly FontResolver Default = new();
 
-    private readonly object _skiaLock = new();
-    private SkTypeface? _skiaSansTypeface;
+    private readonly ConcurrentDictionary<FontSpec, SkTypeface> _byFontSpec = new();
+    private readonly object _bundledLock = new();
+    private SkTypeface? _bundled;
     private bool _disposed;
 
     /// <summary>
-    /// Resolves the sans-serif <see cref="SkTypeface"/> for the Skia paint path.
-    /// Resolved once and cached for the resolver's lifetime — typeface creation
-    /// (parsing TTF tables / hitting SkFontMgr) is the expensive step; sized
-    /// fonts and shaping are built on top of it elsewhere.
-    /// <para>
-    /// <c>internal</c> because <see cref="SkTypeface"/> is a <c>Tessera.Skia</c>
-    /// internal handle — only the Skia-facing paint code (the measurer and the
-    /// Graphite backend) names it.
-    /// </para>
+    /// Resolves the typeface for <paramref name="spec"/>. Threads through the
+    /// per-document web-font registry when supplied — those faces take
+    /// precedence over system fonts of the same family name (CSS Fonts 3 §5).
     /// </summary>
-    /// <exception cref="InvalidOperationException">No typeface could be resolved.</exception>
-    internal SkTypeface GetSkiaSansSerifTypeface()
+    /// <exception cref="InvalidOperationException">No typeface resolves and the bundled fallback is also unavailable.</exception>
+    internal SkTypeface GetTypeface(FontSpec spec, FontFaceRegistry? webFonts = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_skiaSansTypeface is { } cached)
-            return cached;
+        ArgumentNullException.ThrowIfNull(spec);
 
-        lock (_skiaLock)
+        // Web-font registry results are not cached on the resolver: the
+        // registry is per-document, so caching here would leak its faces
+        // across navigations. Hot lookups still hit the registry's own cache.
+        if (webFonts is not null)
         {
-            return _skiaSansTypeface ??= ResolveSkiaSansSerifTypeface();
+            if (TryResolveFromList(spec, webFonts) is { } webMatch)
+                return webMatch;
+        }
+
+        return _byFontSpec.GetOrAdd(spec, ResolveSystem);
+    }
+
+    /// <summary>
+    /// Back-compat: the sans-serif typeface. Kept for callers that have not
+    /// yet been threaded through the spec-aware path.
+    /// </summary>
+    internal SkTypeface GetSkiaSansSerifTypeface()
+        => GetTypeface(FontSpec.Default);
+
+    private SkTypeface? TryResolveFromList(FontSpec spec, FontFaceRegistry webFonts)
+    {
+        foreach (var family in spec.Families)
+        {
+            if (webFonts.TryGet(family, spec.Bold, spec.Italic, out var typeface))
+                return typeface;
+        }
+        return null;
+    }
+
+    private SkTypeface ResolveSystem(FontSpec spec)
+    {
+        // Walk the declared family list, expanding any generic keywords. Each
+        // candidate gets a single exact-match attempt — the shim's
+        // ts_typeface_from_name has been tightened to return TS_NOT_FOUND
+        // rather than the lenient legacyMakeTypeface fallback, so a miss here
+        // really means "no such family installed".
+        foreach (var family in EnumerateCandidates(spec.Families))
+        {
+            if (TryMatchSystem(family) is { } match)
+                return match;
+        }
+
+        return GetBundledFallback();
+    }
+
+    private static SkTypeface? TryMatchSystem(string family)
+    {
+        try
+        {
+            return SkTypeface.FromName(family);
+        }
+        catch (SkiaInteropException ex) when (ex.Status == TsStatus.NotFound)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return null;
         }
     }
 
-    private static SkTypeface ResolveSkiaSansSerifTypeface()
+    private static IEnumerable<string> EnumerateCandidates(IReadOnlyList<string> families)
+    {
+        foreach (var family in families)
+        {
+            yield return family;
+            foreach (var sub in ExpandGeneric(family))
+                yield return sub;
+        }
+    }
+
+    /// <summary>
+    /// CSS generic keywords map to a small ordered list of family names that
+    /// are likely to be installed on each supported platform. macOS lists
+    /// come first since osx-arm64 is the only RID shipped today; the Linux
+    /// entries are kept for when that RID lands.
+    /// </summary>
+    private static IEnumerable<string> ExpandGeneric(string family) => family.ToLowerInvariant() switch
+    {
+        "serif" => ["Times New Roman", "Times", "Georgia", "Liberation Serif", "DejaVu Serif", "Noto Serif"],
+        "sans-serif" => ["Helvetica Neue", "Helvetica", "Arial", "Inter", "Liberation Sans", "DejaVu Sans", "Segoe UI", "Noto Sans", "Verdana"],
+        "monospace" => ["Menlo", "Monaco", "SF Mono", "Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono", "Consolas", "Noto Sans Mono"],
+        "cursive" => ["Snell Roundhand", "Apple Chancery", "Comic Sans MS", "Brush Script MT"],
+        "fantasy" => ["Papyrus", "Impact", "Herculanum"],
+        "system-ui" or "ui-sans-serif" => ["-apple-system", "system-ui", "SF Pro Text", "Helvetica Neue", "Segoe UI", "Roboto"],
+        "ui-serif" => ["-apple-system", "Times New Roman", "Times"],
+        "ui-monospace" => ["Menlo", "SF Mono", "Consolas"],
+        _ => [],
+    };
+
+    private SkTypeface GetBundledFallback()
+    {
+        if (_bundled is { } b) return b;
+
+        lock (_bundledLock)
+        {
+            return _bundled ??= ResolveBundled();
+        }
+    }
+
+    private static SkTypeface ResolveBundled()
     {
         // Tier 1: the bundled OpenSans-Regular.ttf. The embedded resource always
         // ships inside Tessera.Paint.dll, so this is the deterministic default.
@@ -64,32 +160,7 @@ public sealed class FontResolver : IDisposable
             }
         }
 
-        // Tier 2: an installed sans-serif family via Skia's SkFontMgr/CoreText.
-        string[] candidates =
-        [
-            "Inter",
-            "Helvetica Neue",
-            "Helvetica",
-            "Arial",
-            "Liberation Sans",
-            "DejaVu Sans",
-            "Segoe UI",
-            "Noto Sans",
-            "Verdana",
-        ];
-        foreach (var name in candidates)
-        {
-            try
-            {
-                return SkTypeface.FromName(name);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                // Try the next family.
-            }
-        }
-
-        // Tier 3: ask the system font manager for its generic "sans-serif".
+        // Tier 2: ask the system font manager for its generic "sans-serif".
         // SkFontMgr resolves this to a real face on every supported platform.
         try
         {
@@ -154,7 +225,9 @@ public sealed class FontResolver : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _skiaSansTypeface?.Dispose();
-        _skiaSansTypeface = null;
+        foreach (var t in _byFontSpec.Values) t.Dispose();
+        _byFontSpec.Clear();
+        _bundled?.Dispose();
+        _bundled = null;
     }
 }

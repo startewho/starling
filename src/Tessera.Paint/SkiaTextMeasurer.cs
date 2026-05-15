@@ -34,23 +34,23 @@ public sealed class SkiaTextMeasurer : ITextMeasurer, IDisposable
     private const char AdvanceProbe = 'x';
 
     private readonly FontResolver _fonts;
-    private readonly ConcurrentDictionary<float, SkFont> _fontCache = new();
-    private SkTypeface? _typeface;
-    private readonly object _typefaceLock = new();
+    private readonly FontFaceRegistry? _webFonts;
+    private readonly ConcurrentDictionary<FontCacheKey, SkFont> _fontCache = new();
     private bool _disposed;
 
-    public SkiaTextMeasurer(FontResolver? fonts = null)
+    public SkiaTextMeasurer(FontResolver? fonts = null, FontFaceRegistry? webFonts = null)
     {
         _fonts = fonts ?? FontResolver.Default;
+        _webFonts = webFonts;
     }
 
-    public double MeasureWidth(string text, double fontSize)
+    public double MeasureWidth(string text, double fontSize, FontSpec spec)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.Length == 0 || fontSize <= 0)
             return 0;
 
-        var font = GetFont((float)fontSize);
+        var font = GetFont((float)fontSize, spec);
 
         // Shape `text + probe`: the probe glyph's pen X is the advance the run
         // before it consumed — i.e. the exact width of `text`.
@@ -65,40 +65,34 @@ public sealed class SkiaTextMeasurer : ITextMeasurer, IDisposable
         return probeGlyph.X;
     }
 
-    public double NormalLineHeight(double fontSize)
+    public double NormalLineHeight(double fontSize, FontSpec spec)
     {
         if (fontSize <= 0) return 0;
-        var m = GetFont((float)fontSize).Metrics();
+        var m = GetFont((float)fontSize, spec).Metrics();
         // CSS `line-height: normal` ≈ the font's natural line spacing:
         // ascent + descent + recommended leading.
         return m.Ascent + m.Descent + m.Leading;
     }
 
-    public double Baseline(double fontSize)
+    public double Baseline(double fontSize, FontSpec spec)
     {
         if (fontSize <= 0) return 0;
-        var m = GetFont((float)fontSize).Metrics();
+        var m = GetFont((float)fontSize, spec).Metrics();
         // Distance from the top of the line box to the alphabetic baseline.
         // The line box adds half the leading above the ascent.
         return m.Ascent + (m.Leading / 2.0);
     }
 
-    private SkFont GetFont(float size)
+    private SkFont GetFont(float size, FontSpec spec)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return _fontCache.GetOrAdd(size, s => SkFont.Create(GetTypeface(), s));
+        var key = new FontCacheKey(spec, size);
+        return _fontCache.GetOrAdd(
+            key,
+            k => SkFont.Create(_fonts.GetTypeface(k.Spec, _webFonts), k.Size, k.Spec.Bold, k.Spec.Italic));
     }
 
-    private SkTypeface GetTypeface()
-    {
-        if (_typeface is { } t)
-            return t;
-
-        lock (_typefaceLock)
-        {
-            return _typeface ??= _fonts.GetSkiaSansSerifTypeface();
-        }
-    }
+    private readonly record struct FontCacheKey(FontSpec Spec, float Size);
 
     public void Dispose()
     {
@@ -109,7 +103,7 @@ public sealed class SkiaTextMeasurer : ITextMeasurer, IDisposable
             font.Dispose();
         _fontCache.Clear();
 
-        // The typeface is owned by the FontResolver (it caches and reuses it),
-        // so the measurer does not dispose it here.
+        // Typefaces are owned by the FontResolver (it caches and reuses them),
+        // so the measurer does not dispose them here.
     }
 }

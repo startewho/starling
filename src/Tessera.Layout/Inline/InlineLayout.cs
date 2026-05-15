@@ -25,8 +25,9 @@ internal sealed class InlineLayout
     public double Layout(Box.Box container, double availableWidth)
     {
         var fontSize = ResolveFontSize(container.Style);
-        var lineHeight = ResolveLineHeight(container.Style, fontSize);
-        var baseline = _measurer.Baseline(fontSize);
+        var containerSpec = ResolveFontSpec(container.Style);
+        var lineHeight = ResolveLineHeight(container.Style, fontSize, containerSpec);
+        var baseline = _measurer.Baseline(fontSize, containerSpec);
 
         // Collect a flat sequence of inline-formatting items by walking the
         // container's inline subtree. Regular `<span>` wrappers flatten so
@@ -61,6 +62,13 @@ internal sealed class InlineLayout
                     LayoutAtomic(atomic.Box, availableWidth,
                         placedAtomics, ref cursorX, ref cursorY, ref currentLineHeight);
                     break;
+                case LineBreakRun:
+                    // <br>: a forced line break. Close the current line and
+                    // start a fresh one at the container's line height.
+                    cursorY += currentLineHeight;
+                    cursorX = 0;
+                    currentLineHeight = lineHeight;
+                    break;
             }
         }
 
@@ -81,14 +89,18 @@ internal sealed class InlineLayout
         var normalized = NormalizeWhitespace(run.Text);
         if (normalized.Length == 0) return;
 
-        var localFontSize = ResolveFontSize(run.Style ?? containerStyle);
-        var localLineHeight = ResolveLineHeight(run.Style ?? containerStyle, localFontSize);
+        var effectiveStyle = run.Style ?? containerStyle;
+        var localFontSize = ResolveFontSize(effectiveStyle);
+        var localSpec = ResolveFontSpec(effectiveStyle);
+        var localLineHeight = ResolveLineHeight(effectiveStyle, localFontSize, localSpec);
         currentLineHeight = Math.Max(currentLineHeight, localLineHeight);
 
         foreach (var word in SplitToWords(normalized))
         {
             if (word.Length == 0) continue;
-            var width = _measurer.MeasureWidth(word, localFontSize);
+            // Collapse whitespace at the start of a line (white-space: normal).
+            if (cursorX == 0 && string.IsNullOrWhiteSpace(word)) continue;
+            var width = _measurer.MeasureWidth(word, localFontSize, localSpec);
             var leadingSpace = word.StartsWith(" ", StringComparison.Ordinal);
 
             if (cursorX > 0 && cursorX + width > availableWidth)
@@ -100,7 +112,7 @@ internal sealed class InlineLayout
                 {
                     var trimmed = word.TrimStart(' ');
                     if (trimmed.Length == 0) continue;
-                    var trimmedWidth = _measurer.MeasureWidth(trimmed, localFontSize);
+                    var trimmedWidth = _measurer.MeasureWidth(trimmed, localFontSize, localSpec);
                     AddFragment(run.Owner, fragments,
                         new TextFragment(trimmed, cursorX, cursorY, trimmedWidth, currentLineHeight, containerBaseline));
                     cursorX += trimmedWidth;
@@ -109,7 +121,7 @@ internal sealed class InlineLayout
             }
 
             AddFragment(run.Owner, fragments,
-                new TextFragment(word, cursorX, cursorY, width, currentLineHeight, _measurer.Baseline(localFontSize)));
+                new TextFragment(word, cursorX, cursorY, width, currentLineHeight, _measurer.Baseline(localFontSize, localSpec)));
             cursorX += width;
         }
     }
@@ -133,8 +145,9 @@ internal sealed class InlineLayout
         ResolveAtomicBoxModel(box, availableWidth);
 
         var fontSize = ResolveFontSize(box.Style);
-        var lineHeight = ResolveLineHeight(box.Style, fontSize);
-        var contentWidth = LayoutAtomicContent(box, fontSize);
+        var spec = ResolveFontSpec(box.Style);
+        var lineHeight = ResolveLineHeight(box.Style, fontSize, spec);
+        var contentWidth = LayoutAtomicContent(box, fontSize, spec);
 
         // CSS width: prefer an explicit value if the cascade gave us one.
         // Percentages resolve against the enclosing block's content width.
@@ -176,9 +189,9 @@ internal sealed class InlineLayout
     /// <c>&lt;input&gt;</c>'s value/placeholder lives here, as does a
     /// <c>&lt;button&gt;</c>'s label text.
     /// </summary>
-    private double LayoutAtomicContent(InlineBox box, double fontSize)
+    private double LayoutAtomicContent(InlineBox box, double fontSize, FontSpec spec)
     {
-        var baseline = _measurer.Baseline(fontSize);
+        var baseline = _measurer.Baseline(fontSize, spec);
         double width = 0;
         double height = 0;
 
@@ -189,7 +202,7 @@ internal sealed class InlineLayout
                 tb.Fragments.Clear();
                 var text = NormalizeWhitespace(tb.Text);
                 if (text.Length == 0) continue;
-                var fragWidth = _measurer.MeasureWidth(text, fontSize);
+                var fragWidth = _measurer.MeasureWidth(text, fontSize, spec);
                 tb.Fragments.Add(new TextFragment(text, width, 0, fragWidth, fontSize, baseline));
                 width += fragWidth;
                 height = Math.Max(height, fontSize);
@@ -361,6 +374,10 @@ internal sealed class InlineLayout
     private sealed record TextRun(string Text, ComputedStyle? Style, TextBox Owner) : InlineRun;
     private sealed record ImageRun(ImageBox Box) : InlineRun;
     private sealed record AtomicRun(InlineBox Box) : InlineRun;
+    private sealed record LineBreakRun : InlineRun
+    {
+        public static readonly LineBreakRun Instance = new();
+    }
 
     private static void Flatten(Box.Box box, List<InlineRun> runs)
     {
@@ -374,6 +391,9 @@ internal sealed class InlineLayout
                     break;
                 case ImageBox img:
                     runs.Add(new ImageRun(img));
+                    break;
+                case InlineBox ib when IsLineBreak(ib):
+                    runs.Add(LineBreakRun.Instance);
                     break;
                 case InlineBox ib when IsAtomicInline(ib):
                     runs.Add(new AtomicRun(ib));
@@ -397,6 +417,10 @@ internal sealed class InlineLayout
     /// and (legacy) <c>inline-flex</c>/<c>inline-grid</c>. We only handle
     /// <c>inline-block</c> in v1; replaced inlines go through <see cref="ImageRun"/>.
     /// </summary>
+    /// <summary>An <c>&lt;br&gt;</c> element: a forced line break in the inline flow.</summary>
+    private static bool IsLineBreak(InlineBox box)
+        => string.Equals(box.Element?.LocalName, "br", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsAtomicInline(InlineBox box)
     {
         if (box.Style is null) return false;
@@ -452,17 +476,18 @@ internal sealed class InlineLayout
         };
     }
 
-    private double ResolveLineHeight(ComputedStyle? style, double fontSize)
+    private double ResolveLineHeight(ComputedStyle? style, double fontSize, FontSpec spec)
     {
-        if (style is null) return _measurer.NormalLineHeight(fontSize);
+        if (style is null) return _measurer.NormalLineHeight(fontSize, spec);
         return style.Get(PropertyId.LineHeight) switch
         {
             CssNumber n => n.Value * fontSize,
             CssLength len => Block.BlockLayout.ToPx(len, _viewport),
             CssPercentage pct => fontSize * pct.Value / 100d,
-            CssKeyword k when k.Name == "normal" => _measurer.NormalLineHeight(fontSize),
-            _ => _measurer.NormalLineHeight(fontSize),
+            CssKeyword k when k.Name == "normal" => _measurer.NormalLineHeight(fontSize, spec),
+            _ => _measurer.NormalLineHeight(fontSize, spec),
         };
     }
 
+    private static FontSpec ResolveFontSpec(ComputedStyle? style) => FontSpec.FromStyle(style);
 }

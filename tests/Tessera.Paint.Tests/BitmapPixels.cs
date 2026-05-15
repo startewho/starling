@@ -22,6 +22,13 @@ internal static class BitmapPixels
     public static int CountBluish(RenderedBitmap image)
         => Count(image, (r, g, b, _) => b > 150 && b > r + 50 && b > g + 50);
 
+    /// <summary>True iff both bitmaps have the same size and identical RGBA bytes.</summary>
+    public static bool PixelsEqual(RenderedBitmap a, RenderedBitmap b)
+    {
+        if (a.Width != b.Width || a.Height != b.Height) return false;
+        return a.Rgba.SequenceEqual(b.Rgba);
+    }
+
     public static int Count(RenderedBitmap image, Func<byte, byte, byte, byte, bool> predicate)
     {
         var count = 0;

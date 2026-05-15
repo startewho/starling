@@ -49,18 +49,19 @@ internal sealed class SocketTcpConnection : ITcpConnection
         }
     }
 
-    public async ValueTask ShutdownAsync(CancellationToken ct)
+    public ValueTask ShutdownAsync(CancellationToken ct)
     {
-        if (!_open) return;
+        if (!_open) return ValueTask.CompletedTask;
         _open = false;
         try { _socket.Shutdown(SocketShutdown.Both); } catch (SocketException) { }
-        await Task.Yield();
         _ = ct;
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        await ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+        ShutdownAsync(CancellationToken.None).GetAwaiter().GetResult();
         _socket.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

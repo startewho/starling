@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Channels;
 using FluentAssertions;
 using Tessera.Net.Dns;
 using Tessera.Net.Tcp;
@@ -91,6 +92,42 @@ public class TcpDialerTests
     }
 
     [Fact]
+    public async Task DisposeAsync_completes_synchronously_when_called_from_synchronization_context()
+    {
+        using var listener = new EchoListener();
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        await client.ConnectAsync(listener.LocalEndpoint, TestContext.Current.CancellationToken);
+
+        var conn = new SocketTcpConnection(
+            client,
+            TcpEndpoint.For("localhost", listener.LocalEndpoint.Port));
+        var originalContext = SynchronizationContext.Current;
+        var context = new QueuingSynchronizationContext();
+        Task disposeTask;
+        bool completedSynchronously;
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            disposeTask = conn.DisposeAsync().AsTask();
+            completedSynchronously = disposeTask.IsCompletedSuccessfully;
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalContext);
+        }
+
+        if (!completedSynchronously)
+        {
+            await context.DrainAsync();
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        }
+
+        completedSynchronously.Should().BeTrue(
+            "synchronous dispose paths must not post continuations back to UI synchronization contexts");
+    }
+
+    [Fact]
     public async Task Read_returns_zero_when_peer_closes()
     {
         using var listener = new EchoListener(closeAfterFirstByte: true);
@@ -175,5 +212,21 @@ public class TcpDialerTests
     {
         public Task<byte[]> SendAsync(byte[] queryPacket, CancellationToken ct)
             => throw new InvalidOperationException("DNS not exercised in this test");
+    }
+
+    private sealed class QueuingSynchronizationContext : SynchronizationContext
+    {
+        private readonly Channel<(SendOrPostCallback Callback, object? State)> _callbacks =
+            Channel.CreateUnbounded<(SendOrPostCallback, object?)>();
+
+        public override void Post(SendOrPostCallback d, object? state)
+            => _callbacks.Writer.TryWrite((d, state));
+
+        public async Task DrainAsync()
+        {
+            _callbacks.Writer.Complete();
+            await foreach (var (callback, state) in _callbacks.Reader.ReadAllAsync())
+                callback(state);
+        }
     }
 }

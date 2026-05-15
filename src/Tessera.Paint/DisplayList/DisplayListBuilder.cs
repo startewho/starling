@@ -3,6 +3,7 @@ using Tessera.Css.Properties;
 using Tessera.Css.Values;
 using Tessera.Layout;
 using Tessera.Layout.Box;
+using Tessera.Layout.Text;
 
 namespace Tessera.Paint.DisplayList;
 
@@ -109,15 +110,7 @@ public sealed class DisplayListBuilder
             CssLength len => Tessera.Layout.Block.BlockLayout.ToPx(len),
             _ => 16d,
         };
-        var fontFamily = style?.Get(PropertyId.FontFamily) switch
-        {
-            CssKeyword kw => kw.Name,
-            CssString s => s.Value,
-            CssValueList vl when vl.Values.Count > 0 => FirstFamily(vl),
-            _ => "sans-serif",
-        };
-        var bold = IsBold(style);
-        var italic = IsItalic(style);
+        var spec = FontSpec.FromStyle(style);
 
         foreach (var frag in text.Fragments)
         {
@@ -128,9 +121,9 @@ public sealed class DisplayListBuilder
                 y + frag.Y + frag.Baseline,
                 fontSize,
                 color,
-                fontFamily,
-                bold,
-                italic));
+                spec.Families,
+                spec.Bold,
+                spec.Italic));
 
             if (IsUnderlined(style))
             {
@@ -141,34 +134,6 @@ public sealed class DisplayListBuilder
                     color));
             }
         }
-    }
-
-    private static string FirstFamily(CssValueList list)
-    {
-        var first = list.Values[0];
-        return first switch
-        {
-            CssKeyword kw => kw.Name,
-            CssString s => s.Value,
-            _ => "sans-serif",
-        };
-    }
-
-    private static bool IsBold(ComputedStyle? style)
-    {
-        if (style is null) return false;
-        return style.Get(PropertyId.FontWeight) switch
-        {
-            CssKeyword { Name: "bold" } => true,
-            CssNumber n => n.Value >= 600,
-            _ => false,
-        };
-    }
-
-    private static bool IsItalic(ComputedStyle? style)
-    {
-        if (style is null) return false;
-        return style.Get(PropertyId.FontStyle) is CssKeyword { Name: "italic" or "oblique" };
     }
 
     private static bool IsUnderlined(ComputedStyle? style)

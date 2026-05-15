@@ -92,6 +92,17 @@ public sealed class SkiaInteropSmokeTests
     }
 
     [Fact]
+    public void SameContext_CanRenderAndReadBackMultipleSurfaces()
+    {
+        Assert.SkipUnless(NativeShim.IsAvailable, NativeShim.SkipReason);
+
+        using var context = SkContext.Create(TsBackendHint.Auto);
+
+        RenderSolidSurface(context, new TsColor(255, 0, 0, 255), 255, 0, 0, "first surface");
+        RenderSolidSurface(context, new TsColor(0, 128, 0, 255), 0, 128, 0, "second surface");
+    }
+
+    [Fact]
     public void Handles_AreReleased_WithoutLeaks()
     {
         Assert.SkipUnless(NativeShim.IsAvailable, NativeShim.SkipReason);
@@ -109,6 +120,23 @@ public sealed class SkiaInteropSmokeTests
 
         // Reaching here without an AccessViolation / native abort is the assertion.
         true.Should().BeTrue();
+    }
+
+    private static void RenderSolidSurface(
+        SkContext context,
+        TsColor color,
+        byte expectedR,
+        byte expectedG,
+        byte expectedB,
+        string what)
+    {
+        using var surface = SkSurface.Create(context, Width, Height);
+        var canvas = surface.GetCanvas();
+        canvas.Clear(color);
+        surface.Flush(context);
+
+        byte[] pixels = surface.ReadPixels(context, Width, Height);
+        AssertPixel(pixels, x: 32, y: 32, expectedR, expectedG, expectedB, 255, what);
     }
 
     /// <summary>

@@ -20,6 +20,7 @@ public sealed class LaidOutPage : IDisposable
 {
     private readonly IDisposable _images;
     private readonly IDisposable _stylesheets;
+    private readonly IDisposable _webFonts;
     private bool _disposed;
 
     internal LaidOutPage(
@@ -30,7 +31,8 @@ public sealed class LaidOutPage : IDisposable
         string url,
         string? title,
         IDisposable images,
-        IDisposable stylesheets)
+        IDisposable stylesheets,
+        IDisposable webFonts)
     {
         Root = root;
         Document = document;
@@ -40,6 +42,7 @@ public sealed class LaidOutPage : IDisposable
         Title = title;
         _images = images;
         _stylesheets = stylesheets;
+        _webFonts = webFonts;
     }
 
     public BlockBox Root { get; }
@@ -69,5 +72,6 @@ public sealed class LaidOutPage : IDisposable
         _disposed = true;
         _images.Dispose();
         _stylesheets.Dispose();
+        _webFonts.Dispose();
     }
 }

@@ -95,7 +95,9 @@ public sealed class StyleEngineTests
         var style = new StyleEngine().Compute(p);
 
         style.Get(PropertyId.Display).Should().Be(new CssKeyword("block"));
-        style.GetLength(PropertyId.MarginTop).Should().Be(new CssLength(1, CssLengthUnit.Em));
+        // `p { margin: 1em 0 }` from the UA sheet — computed-value time resolves
+        // the em against the element's 16px font-size, so the margin is 16px.
+        style.GetLength(PropertyId.MarginTop).Should().Be(new CssLength(16, CssLengthUnit.Px));
     }
 
     [Fact]

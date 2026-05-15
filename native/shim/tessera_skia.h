@@ -52,6 +52,7 @@ typedef enum TsStatus {
     TS_ALLOCATION_FAILED = 6,
     TS_READBACK_FAILED = 7,
     TS_SHAPING_FAILED = 8,
+    TS_NOT_FOUND = 9,         /* a system-managed resource (e.g. typeface family) does not exist */
     TS_UNKNOWN_ERROR = 100
 } TsStatus;
 
@@ -158,6 +159,13 @@ TS_API TsStatus  TS_CALL ts_typeface_from_name(const char* family_name, TsTypefa
 TS_API void      TS_CALL ts_typeface_destroy(TsTypeface* typeface);
 
 TS_API TsStatus  TS_CALL ts_font_create(TsTypeface* typeface, float size_px, TsFont** out_font);
+/* Like ts_font_create, but applies synthetic styling: `embolden` thickens the
+ * glyph outlines (fake-bold) and `oblique` applies a forward skew (fake-italic).
+ * Both are 0/non-0 flags. Used when a real bold/italic face is not separately
+ * resolved — visually matches what Skia does as its own fallback. */
+TS_API TsStatus  TS_CALL ts_font_create_styled(TsTypeface* typeface, float size_px,
+                                               int32_t embolden, int32_t oblique,
+                                               TsFont** out_font);
 TS_API void      TS_CALL ts_font_destroy(TsFont* font);
 TS_API TsStatus  TS_CALL ts_font_metrics(TsFont* font, TsFontMetrics* out_metrics);
 

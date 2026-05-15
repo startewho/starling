@@ -21,7 +21,7 @@ public sealed record DrawText(
     double Y,
     double FontSize,
     CssColor Color,
-    string FontFamily,
+    IReadOnlyList<string> FontFamilies,
     bool Bold,
     bool Italic) : DisplayItem;
 

@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using Tessera.Common.Diagnostics;
 using Tessera.Common.Image;
 using Tessera.Css.Values;
+using Tessera.Layout.Text;
 using Tessera.Skia.Handles;
 using Tessera.Skia.Interop;
 using LayoutRect = Tessera.Layout.Rect;
@@ -32,19 +34,29 @@ public sealed class SkiaGraphiteBackend : IDisposable
 {
     // The DisplayList carries colors as straight sRGBA; the shim's TsColor is
     // the same 8-bit straight sRGBA shape, so the conversion is a field copy.
-    private const string DefaultSansSerifFamily = "sans-serif";
 
     private readonly Lazy<SkContext> _context;
-    private readonly Lazy<SkTypeface> _typeface;
+    private readonly FontResolver _fonts;
+    private readonly FontFaceRegistry? _webFonts;
+    private readonly ConcurrentDictionary<FontCacheKey, SkFont> _fontCache = new();
 
     public SkiaGraphiteBackend()
+        : this(FontResolver.Default, webFonts: null)
     {
-        // Defer the native context + typeface creation until the first render
-        // so merely constructing the backend (e.g. for the flag selector on a
-        // platform without the dylib) does not touch the shim.
-        _context = new Lazy<SkContext>(() => SkContext.Create());
-        _typeface = new Lazy<SkTypeface>(() => SkTypeface.FromName(DefaultSansSerifFamily));
     }
+
+    public SkiaGraphiteBackend(FontResolver fonts, FontFaceRegistry? webFonts)
+    {
+        ArgumentNullException.ThrowIfNull(fonts);
+        _fonts = fonts;
+        _webFonts = webFonts;
+        // Defer the native context creation until the first render so merely
+        // constructing the backend (e.g. for the flag selector on a platform
+        // without the dylib) does not touch the shim.
+        _context = new Lazy<SkContext>(() => SkContext.Create());
+    }
+
+    private readonly record struct FontCacheKey(FontSpec Spec, float Size);
 
     public RenderedBitmap Render(PaintList list, LayoutSize viewport)
     {
@@ -102,7 +114,14 @@ public sealed class SkiaGraphiteBackend : IDisposable
         // returns glyph pen positions relative to the run origin (0,0); the
         // display-list X/Y is the baseline origin, so translate every glyph by
         // it before handing the run to ts_canvas_draw_text.
-        using var font = SkFont.Create(_typeface.Value, (float)text.FontSize);
+        //
+        // Resolve and cache the SkFont for (family-list, bold, italic, size)
+        // — text runs from the same style share an entry. The cache is owned
+        // by this backend instance and disposed with it.
+        var spec = new FontSpec(text.FontFamilies, text.Bold, text.Italic);
+        var font = _fontCache.GetOrAdd(
+            new FontCacheKey(spec, (float)text.FontSize),
+            k => SkFont.Create(_fonts.GetTypeface(k.Spec, _webFonts), k.Size, k.Spec.Bold, k.Spec.Italic));
         var glyphs = font.ShapeText(text.Text);
         if (glyphs.Length == 0) return;
 
@@ -137,7 +156,8 @@ public sealed class SkiaGraphiteBackend : IDisposable
 
     public void Dispose()
     {
-        if (_typeface.IsValueCreated) _typeface.Value.Dispose();
+        foreach (var font in _fontCache.Values) font.Dispose();
+        _fontCache.Clear();
         if (_context.IsValueCreated) _context.Value.Dispose();
     }
 }

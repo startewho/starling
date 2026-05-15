@@ -98,8 +98,80 @@ public sealed class StyleEngine
             values[property] = ResolveVariables(value, customProperties);
         }
 
+        ResolveFontRelativeLengths(values, parentStyle);
+
         return new ComputedStyle(values, customProperties);
     }
+
+    /// <summary>
+    /// Resolve <c>em</c>/<c>rem</c> lengths to absolute <c>px</c> at computed-value
+    /// time, per CSS Values §5. <c>font-size</c> is resolved first — <c>em</c> on it
+    /// is relative to the <em>parent's</em> font-size — and every other property's
+    /// <c>em</c> then resolves against <em>this</em> element's font-size. Without
+    /// this, layout would treat every <c>em</c> as a flat 16px, so e.g. an
+    /// <c>h1 { font-size: 2em; margin: 0.67em 0 }</c> would get a 10.7px margin
+    /// instead of the correct 21.4px.
+    /// </summary>
+    private static void ResolveFontRelativeLengths(
+        Dictionary<PropertyId, CssValue> values,
+        ComputedStyle? parentStyle)
+    {
+        var parentFontPx = parentStyle is not null
+            ? AbsolutePx(parentStyle.Get(PropertyId.FontSize), emBasis: 16d)
+            : 16d;
+
+        var fontPx = ResolveFontSize(values[PropertyId.FontSize], parentFontPx);
+        values[PropertyId.FontSize] = new CssLength(fontPx, CssLengthUnit.Px);
+
+        foreach (var property in PropertyRegistry.All)
+        {
+            if (property == PropertyId.FontSize) continue;
+            values[property] = ResolveEm(values[property], fontPx);
+        }
+    }
+
+    private static double ResolveFontSize(CssValue value, double parentFontPx)
+        => value switch
+        {
+            CssLength { Unit: CssLengthUnit.Em } len => len.Value * parentFontPx,
+            CssLength { Unit: CssLengthUnit.Rem } len => len.Value * 16d,
+            CssLength len => AbsolutePx(len, parentFontPx),
+            CssPercentage pct => parentFontPx * pct.Value / 100d,
+            CssNumber n => n.Value,
+            _ => 16d,
+        };
+
+    private static CssValue ResolveEm(CssValue value, double fontPx)
+        => value switch
+        {
+            CssLength { Unit: CssLengthUnit.Em } len => new CssLength(len.Value * fontPx, CssLengthUnit.Px),
+            CssLength { Unit: CssLengthUnit.Rem } len => new CssLength(len.Value * 16d, CssLengthUnit.Px),
+            CssValueList list => new CssValueList(list.Values.Select(v => ResolveEm(v, fontPx)).ToList()),
+            _ => value,
+        };
+
+    /// <summary>Convert an absolute (or font-relative) length to px. Viewport- and
+    /// glyph-relative units (vw/vh/ch/ex) are left to layout, which has the
+    /// viewport.</summary>
+    private static double AbsolutePx(CssValue value, double emBasis)
+        => value switch
+        {
+            CssLength len => len.Unit switch
+            {
+                CssLengthUnit.Px => len.Value,
+                CssLengthUnit.Pt => len.Value * 4d / 3d,
+                CssLengthUnit.Pc => len.Value * 16d,
+                CssLengthUnit.In => len.Value * 96d,
+                CssLengthUnit.Cm => len.Value * 96d / 2.54d,
+                CssLengthUnit.Mm => len.Value * 96d / 25.4d,
+                CssLengthUnit.Q => len.Value * 96d / 101.6d,
+                CssLengthUnit.Em => len.Value * emBasis,
+                CssLengthUnit.Rem => len.Value * 16d,
+                _ => len.Value,
+            },
+            CssNumber n => n.Value,
+            _ => emBasis,
+        };
 
     private static void GatherFromRules(
         IReadOnlyList<CssRule> rules,

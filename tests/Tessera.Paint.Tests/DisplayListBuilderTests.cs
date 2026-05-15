@@ -58,6 +58,42 @@ public sealed class DisplayListBuilderTests
     }
 
     [Fact]
+    public void Font_family_list_is_carried_onto_draw_text()
+    {
+        // Quoted strings preserve case ("Helvetica Neue"); unquoted idents are
+        // lowercased by the CSS value parser. Family matching is ASCII
+        // case-insensitive per CSS Fonts 3 §5.1, so the renderer can still
+        // resolve "helvetica" to the system Helvetica — the assertion just
+        // mirrors what the cascade actually emits.
+        var dl = BuildList(
+            "<body><p style=\"font-family: 'Helvetica Neue', Helvetica, sans-serif\">styled</p></body>",
+            new Size(400, 300));
+
+        var text = dl.Items.OfType<DrawText>().First();
+        text.FontFamilies.Should().Equal("Helvetica Neue", "helvetica", "sans-serif");
+    }
+
+    [Fact]
+    public void Bold_weight_marks_draw_text_bold()
+    {
+        var dl = BuildList(
+            "<body><p style=\"font-weight: 700\">heavy</p></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawText>().Should().OnlyContain(t => t.Bold);
+    }
+
+    [Fact]
+    public void Italic_style_marks_draw_text_italic()
+    {
+        var dl = BuildList(
+            "<body><em>slanted</em></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawText>().Should().Contain(t => t.Italic);
+    }
+
+    [Fact]
     public void Underlined_link_emits_text_and_underline_fill()
     {
         var dl = BuildList("<body><a href=\"/next\">go next</a></body>", new Size(400, 300));

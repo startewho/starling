@@ -106,27 +106,50 @@ internal sealed class BoxTreeBuilder
             }
             else
             {
-                if (bucket is not null && bucket.Children.Count > 0)
-                {
-                    newChildren.Add(bucket);
-                    bucket.Parent = parent;
-                    bucket = null;
-                }
+                FlushBucket(bucket, newChildren, parent);
+                bucket = null;
                 newChildren.Add(child);
                 child.Parent = parent;
             }
         }
 
-        if (bucket is not null && bucket.Children.Count > 0)
-        {
-            bucket.Parent = parent;
-            newChildren.Add(bucket);
-        }
+        FlushBucket(bucket, newChildren, parent);
 
         parent.Children.Clear();
         parent.Children.AddRange(newChildren);
 
         foreach (var child in parent.Children) WrapInlinesInAnonymousBlocks(child);
+    }
+
+    /// <summary>
+    /// Append a finished anonymous-block bucket to <paramref name="newChildren"/>,
+    /// unless it holds only collapsible whitespace. CSS 2.2 §9.2.2.1: an anonymous
+    /// block that would contain only whitespace which subsequently collapses away
+    /// is not generated — so the newlines/indentation between block-level siblings
+    /// (e.g. between stacked <c>&lt;p&gt;</c>s) don't each become a line-height-tall
+    /// box that bloats vertical spacing and breaks adjacent-margin collapse.
+    /// </summary>
+    private static void FlushBucket(AnonymousBlockBox? bucket, List<Box.Box> newChildren, Box.Box parent)
+    {
+        if (bucket is null || bucket.Children.Count == 0)
+            return;
+        if (IsCollapsibleWhitespaceOnly(bucket))
+            return;
+        bucket.Parent = parent;
+        newChildren.Add(bucket);
+    }
+
+    private static bool IsCollapsibleWhitespaceOnly(AnonymousBlockBox bucket)
+    {
+        foreach (var child in bucket.Children)
+        {
+            if (child is not TextBox text || !string.IsNullOrWhiteSpace(text.Text))
+                return false;
+            // `white-space: pre*` keeps whitespace significant — don't drop it.
+            if (text.Style?.Get(PropertyId.WhiteSpace) is CssKeyword { Name: "pre" or "pre-wrap" or "pre-line" })
+                return false;
+        }
+        return true;
     }
 
     private static string DisplayKeyword(ComputedStyle style)

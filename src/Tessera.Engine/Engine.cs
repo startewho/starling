@@ -5,6 +5,8 @@ using SixLabors.ImageSharp;
 using Tessera.Common;
 using Tessera.Common.Diagnostics;
 using Tessera.Common.Encoding;
+using Tessera.Css;
+using Tessera.Css.Parser;
 using Tessera.Dom;
 using Tessera.Net;
 using Tessera.Paint;
@@ -134,6 +136,15 @@ public sealed class TesseraEngine
             ).ConfigureAwait(false);
         }
 
+        using var webFonts = new FontFaceRegistry();
+        using (var fontFaceFetcher = new FontFaceFetcher(_diag, _httpFactory))
+        using (_diag.Span("engine", "fetch_fonts"))
+        {
+            await fontFaceFetcher
+                .FetchAllAsync(EnumerateAuthorSheets(doc, u, stylesheets), webFonts, ct)
+                .ConfigureAwait(false);
+        }
+
         Tessera.Common.Image.RenderedBitmap bitmap;
         using (_diag.Span("engine", "render_document"))
         {
@@ -142,7 +153,8 @@ public sealed class TesseraEngine
                 new LayoutSize(options.Viewport.Width, options.Viewport.Height),
                 options.FontSize,
                 images,
-                stylesheets.Resolve);
+                stylesheets.Resolve,
+                webFonts);
             Activity.Current?.SetTag("image.w", bitmap.Width);
             Activity.Current?.SetTag("image.h", bitmap.Height);
         }
@@ -244,6 +256,7 @@ public sealed class TesseraEngine
         // here so callers don't have to.
         var images = new ImageFetcher(_diag, _httpFactory);
         var stylesheets = new StylesheetFetcher(_diag, _httpFactory);
+        var webFonts = new FontFaceRegistry();
         try
         {
             await Task.WhenAll(
@@ -251,20 +264,49 @@ public sealed class TesseraEngine
                 stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
             ).ConfigureAwait(false);
 
+            using (var fontFaceFetcher = new FontFaceFetcher(_diag, _httpFactory))
+            {
+                await fontFaceFetcher
+                    .FetchAllAsync(EnumerateAuthorSheets(doc, u, stylesheets), webFonts, ct)
+                    .ConfigureAwait(false);
+            }
+
             var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
             var (root, style) = _painter.LayoutDocumentWithStyle(
-                doc, viewport, options.FontSize, images, stylesheets.Resolve);
+                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts);
 
             var title = ExtractTitle(doc);
             return Result<LaidOutPage, RenderError>.Ok(
-                new LaidOutPage(root, doc, style, viewport, url, title, images, stylesheets));
+                new LaidOutPage(root, doc, style, viewport, url, title, images, stylesheets, webFonts));
         }
         catch
         {
             images.Dispose();
             stylesheets.Dispose();
+            webFonts.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Yields every author stylesheet visible on the document — inline
+    /// <c>&lt;style&gt;</c> blocks (whose base URL is the document URL) and
+    /// every fetched <c>&lt;link rel="stylesheet"&gt;</c> (whose base URL is
+    /// the absolute URL it was fetched from). The font-face fetcher needs the
+    /// per-sheet base URL so a <c>url("foo.woff2")</c> declared in a remote
+    /// CSS resolves against that CSS's origin, not the document's.
+    /// </summary>
+    private static IEnumerable<(StyleSheet Sheet, TesseraUrl? BaseUrl)> EnumerateAuthorSheets(
+        Document doc, TesseraUrl? docUrl, StylesheetFetcher stylesheets)
+    {
+        foreach (var styleElement in doc.GetElementsByTagName("style"))
+        {
+            var source = styleElement.TextContent;
+            if (string.IsNullOrWhiteSpace(source)) continue;
+            yield return (CssParser.ParseStyleSheet(source, StyleOrigin.Author), docUrl);
+        }
+        foreach (var entry in stylesheets.EnumerateLoaded())
+            yield return (entry.Sheet, entry.BaseUrl);
     }
 
     private static string? ExtractTitle(Document doc)

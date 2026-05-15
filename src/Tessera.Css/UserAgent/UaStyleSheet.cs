@@ -33,6 +33,13 @@ public static class UaStyleSheet
         h6 { display: block; font-size: 0.67em; margin: 2.33em 0; font-weight: 700; }
         ul, ol, menu { margin: 1em 0; padding-left: 40px; }
         li { display: list-item; }
+        hr {
+          display: block;
+          margin: 0.5em 0;
+          border-style: solid;
+          border-color: #888888;
+          border-width: 1px 0 0 0;
+        }
         a { color: blue; text-decoration: underline; }
         b, strong { font-weight: 700; }
         i, em, cite { font-style: italic; }
