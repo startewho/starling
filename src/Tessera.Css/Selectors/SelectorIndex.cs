@@ -20,13 +20,18 @@ public sealed class SelectorIndex<T>
     public void Add(ComplexSelector selector, T value)
     {
         ArgumentNullException.ThrowIfNull(selector);
-        var entry = new SelectorIndexEntry<T>(selector, value, _sequence++);
+        var pseudo = selector.TargetPseudoElement;
+        var entry = new SelectorIndexEntry<T>(selector, value, _sequence++, pseudo);
+
+        // Bucket by the last non-pseudo-element simple selector in the rightmost compound.
         var rightmost = selector.RightmostCompound.SimpleSelectors;
-        if (rightmost.OfType<IdSelector>().FirstOrDefault() is { } id)
+        var bucketSelectors = rightmost.Where(s => s is not PseudoElementSelector).ToList();
+
+        if (bucketSelectors.OfType<IdSelector>().FirstOrDefault() is { } id)
             AddTo(_ids, id.Id, entry);
-        else if (rightmost.OfType<ClassSelector>().FirstOrDefault() is { } @class)
+        else if (bucketSelectors.OfType<ClassSelector>().FirstOrDefault() is { } @class)
             AddTo(_classes, @class.ClassName, entry);
-        else if (rightmost.OfType<TypeSelector>().FirstOrDefault() is { } type)
+        else if (bucketSelectors.OfType<TypeSelector>().FirstOrDefault() is { } type)
             AddTo(_tags, type.LocalName, entry);
         else
             _universal.Add(entry);
@@ -36,7 +41,7 @@ public sealed class SelectorIndex<T>
     {
         ArgumentNullException.ThrowIfNull(element);
         var entries = new Dictionary<int, SelectorIndexEntry<T>>();
-        if (_ids.TryGetValue(element.Id, out var idEntries))
+        if (!string.IsNullOrEmpty(element.Id) && _ids.TryGetValue(element.Id, out var idEntries))
             AddEntries(entries, idEntries);
         foreach (var className in element.ClassList)
             if (_classes.TryGetValue(className, out var classEntries))
@@ -70,4 +75,8 @@ public sealed class SelectorIndex<T>
     }
 }
 
-public sealed record SelectorIndexEntry<T>(ComplexSelector Selector, T Value, int Sequence);
+public sealed record SelectorIndexEntry<T>(
+    ComplexSelector Selector,
+    T Value,
+    int Sequence,
+    PseudoElement? PseudoElementTarget = null);

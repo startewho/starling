@@ -20,10 +20,13 @@ public static class SpecificityCalculator
                 IdSelector => new Specificity(1, 0, 0),
                 ClassSelector or AttributeSelector => new Specificity(0, 1, 0),
                 PseudoClassSelector { Name: "where" } => Specificity.Zero,
-                PseudoClassSelector { Argument: SelectorList argument }
-                    when IsSpecificityReplacingPseudo(simple) => Max(argument),
+                PseudoClassSelector pc when IsSpecificityReplacingPseudo(pc.Name) => MaxArg(pc),
+                // nth-child/nth-last-child can carry NthArgument with an "of S" tail; its specificity adds.
+                PseudoClassSelector { Name: "nth-child" or "nth-last-child", Argument: NthArgument { OfSelector: { } ofList } } =>
+                    new Specificity(0, 1, 0) + MaxList(ofList),
                 PseudoClassSelector => new Specificity(0, 1, 0),
                 TypeSelector or PseudoElementSelector => new Specificity(0, 0, 1),
+                UniversalSelector => Specificity.Zero,
                 _ => Specificity.Zero,
             };
         }
@@ -31,10 +34,13 @@ public static class SpecificityCalculator
         return result;
     }
 
-    private static bool IsSpecificityReplacingPseudo(SimpleSelector selector)
-        => selector is PseudoClassSelector { Name: "is" or "not" or "has" };
+    private static bool IsSpecificityReplacingPseudo(string name)
+        => name is "is" or "not" or "has";
 
-    private static Specificity Max(SelectorList list)
+    private static Specificity MaxArg(PseudoClassSelector selector)
+        => selector.Argument is SelectorList list ? MaxList(list) : Specificity.Zero;
+
+    private static Specificity MaxList(SelectorList list)
         => list.Selectors.Count == 0
             ? Specificity.Zero
             : list.Selectors.Select(selector => selector.Specificity).Max();
