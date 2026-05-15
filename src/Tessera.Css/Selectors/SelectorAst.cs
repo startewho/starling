@@ -10,6 +10,18 @@ public sealed record ComplexSelector(IReadOnlyList<ComplexSelectorPart> Parts)
     public CompoundSelector RightmostCompound => Parts[^1].Compound;
 
     public Specificity Specificity => SpecificityCalculator.Calculate(this);
+
+    /// <summary>If the rightmost compound ends with a pseudo-element, the kind; otherwise null.</summary>
+    public PseudoElement? TargetPseudoElement
+    {
+        get
+        {
+            if (Parts.Count == 0) return null;
+            var simples = RightmostCompound.SimpleSelectors;
+            if (simples.Count == 0) return null;
+            return simples[^1] is PseudoElementSelector pe ? pe.Kind : null;
+        }
+    }
 }
 
 public sealed record ComplexSelectorPart(
@@ -25,6 +37,7 @@ public enum SelectorCombinator
     Child,
     NextSibling,
     SubsequentSibling,
+    Column,
 }
 
 public abstract record SimpleSelector;
@@ -56,7 +69,65 @@ public enum AttributeOperator
 
 public sealed record PseudoClassSelector(string Name, object? Argument = null) : SimpleSelector;
 
-public sealed record PseudoElementSelector(string Name) : SimpleSelector;
+public sealed record PseudoElementSelector(PseudoElement Kind, string Name) : SimpleSelector
+{
+    public PseudoElementSelector(string name)
+        : this(PseudoElementHelpers.FromName(name), name.ToLowerInvariant()) { }
+}
+
+public enum PseudoElement
+{
+    Before,
+    After,
+    Marker,
+    Placeholder,
+    FirstLine,
+    FirstLetter,
+    Selection,
+    Backdrop,
+    FileSelectorButton,
+    DetailsContent,
+    Cue,
+    Unknown,
+}
+
+public static class PseudoElementHelpers
+{
+    public static PseudoElement FromName(string name) => name.ToLowerInvariant() switch
+    {
+        "before" => PseudoElement.Before,
+        "after" => PseudoElement.After,
+        "marker" => PseudoElement.Marker,
+        "placeholder" => PseudoElement.Placeholder,
+        "first-line" => PseudoElement.FirstLine,
+        "first-letter" => PseudoElement.FirstLetter,
+        "selection" => PseudoElement.Selection,
+        "backdrop" => PseudoElement.Backdrop,
+        "file-selector-button" => PseudoElement.FileSelectorButton,
+        "details-content" => PseudoElement.DetailsContent,
+        "cue" => PseudoElement.Cue,
+        _ => PseudoElement.Unknown,
+    };
+
+    public static string ToCssName(this PseudoElement element) => element switch
+    {
+        PseudoElement.Before => "before",
+        PseudoElement.After => "after",
+        PseudoElement.Marker => "marker",
+        PseudoElement.Placeholder => "placeholder",
+        PseudoElement.FirstLine => "first-line",
+        PseudoElement.FirstLetter => "first-letter",
+        PseudoElement.Selection => "selection",
+        PseudoElement.Backdrop => "backdrop",
+        PseudoElement.FileSelectorButton => "file-selector-button",
+        PseudoElement.DetailsContent => "details-content",
+        PseudoElement.Cue => "cue",
+        _ => "unknown",
+    };
+}
+
+/// <summary>Argument for nth-style pseudos with optional "of S" filter (Selectors 4 §15.3).</summary>
+public sealed record NthArgument(NthPattern Pattern, SelectorList? OfSelector = null);
 
 public readonly record struct Specificity(int Ids, int Classes, int Types) : IComparable<Specificity>
 {

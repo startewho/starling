@@ -53,6 +53,7 @@ public sealed class SelectorParser
     {
         var parts = new List<ComplexSelectorPart>();
         var pendingCombinator = SelectorCombinator.None;
+        var sawExplicitLeadingCombinator = false;
 
         while (!IsEnd && !IsToken(CssTokenType.Comma))
         {
@@ -63,6 +64,8 @@ public sealed class SelectorParser
             if (TryConsumeCombinator(out var explicitCombinator))
             {
                 pendingCombinator = explicitCombinator;
+                if (parts.Count == 0)
+                    sawExplicitLeadingCombinator = true;
                 SkipWhitespace();
                 continue;
             }
@@ -71,9 +74,13 @@ public sealed class SelectorParser
             if (compound.SimpleSelectors.Count == 0)
                 break;
 
-            parts.Add(new ComplexSelectorPart(compound, parts.Count == 0
-                ? SelectorCombinator.None
-                : pendingCombinator));
+            EnforcePseudoElementPosition(compound);
+
+            // Preserve an explicit leading combinator (e.g. `> a` inside `:has()`) on the first part.
+            var combinator = parts.Count == 0
+                ? (sawExplicitLeadingCombinator ? pendingCombinator : SelectorCombinator.None)
+                : pendingCombinator;
+            parts.Add(new ComplexSelectorPart(compound, combinator));
             pendingCombinator = SelectorCombinator.None;
         }
 
@@ -120,9 +127,24 @@ public sealed class SelectorParser
         return new CompoundSelector(simples);
     }
 
+    private static void EnforcePseudoElementPosition(CompoundSelector compound)
+    {
+        var simples = compound.SimpleSelectors;
+        for (var i = 0; i < simples.Count - 1; i++)
+        {
+            if (simples[i] is PseudoElementSelector)
+                throw new FormatException(
+                    "A pseudo-element selector must be the last simple selector in a compound selector.");
+        }
+    }
+
     private bool TryParseTypeSelector(out SimpleSelector selector)
     {
         selector = null!;
+        // Namespace-prefixed selectors: ns|tag, ns|*, *|tag, *|*, |tag, |*
+        if (TryParseNamespacedTypeOrUniversal(out selector))
+            return true;
+
         if (TryConsumeIdent(out var name))
         {
             selector = new TypeSelector(name.ToLowerInvariant());
@@ -135,6 +157,53 @@ public sealed class SelectorParser
             return true;
         }
 
+        return false;
+    }
+
+    private bool TryParseNamespacedTypeOrUniversal(out SimpleSelector selector)
+    {
+        selector = null!;
+        // Look ahead for: (ident|*|empty) '|' (ident|*) where '|' is a Delim and the next char is NOT '='
+        // and the bar is not the column combinator '||'.
+        var save = _position;
+        string? ns = null;
+        var consumedPrefix = false;
+
+        if (IsToken(CssTokenType.Ident) && IsDelimiter('|', 1) && !IsDelimiter('=', 2) && !IsDelimiter('|', 2))
+        {
+            ns = TokenAt(0).Value.ToLowerInvariant();
+            _position += 2;
+            consumedPrefix = true;
+        }
+        else if (IsDelimiter('*') && IsDelimiter('|', 1) && !IsDelimiter('=', 2) && !IsDelimiter('|', 2))
+        {
+            ns = "*";
+            _position += 2;
+            consumedPrefix = true;
+        }
+        else if (IsDelimiter('|') && !IsDelimiter('=', 1) && !IsDelimiter('|', 1))
+        {
+            ns = string.Empty;
+            _position += 1;
+            consumedPrefix = true;
+        }
+
+        if (!consumedPrefix)
+            return false;
+
+        if (TryConsumeIdent(out var localName))
+        {
+            selector = new TypeSelector(localName.ToLowerInvariant(), ns);
+            return true;
+        }
+        if (TryConsumeDelimiter('*'))
+        {
+            selector = new UniversalSelector(ns);
+            return true;
+        }
+
+        // Rollback if no local name follows.
+        _position = save;
         return false;
     }
 
@@ -161,33 +230,74 @@ public sealed class SelectorParser
         {
             _position++;
             var name = function.Name.ToLowerInvariant();
-            selector = pseudoElement
-                ? new PseudoElementSelector(name)
-                : new PseudoClassSelector(name, ParsePseudoArgument(name, function.Values));
+            if (pseudoElement)
+            {
+                // Functional pseudo-elements (e.g. ::part(), ::slotted()) — store name only for now.
+                selector = new PseudoElementSelector(name);
+            }
+            else
+            {
+                selector = new PseudoClassSelector(name, ParsePseudoArgument(name, function.Values));
+            }
             return true;
         }
 
         if (TryConsumeIdent(out var ident))
         {
             var name = ident.ToLowerInvariant();
-            selector = pseudoElement
-                ? new PseudoElementSelector(name)
-                : new PseudoClassSelector(name);
+            // Selectors 4 §3.4: ::before/::after/::first-line/::first-letter may also be written with a single colon (legacy CSS2).
+            if (!pseudoElement && IsLegacyPseudoElementName(name))
+            {
+                selector = new PseudoElementSelector(name);
+            }
+            else
+            {
+                selector = pseudoElement
+                    ? new PseudoElementSelector(name)
+                    : new PseudoClassSelector(name);
+            }
             return true;
         }
 
         return false;
     }
 
+    private static bool IsLegacyPseudoElementName(string name)
+        => name is "before" or "after" or "first-line" or "first-letter";
+
     private static object? ParsePseudoArgument(string name, IReadOnlyList<CssComponentValue> values)
         => name switch
         {
             "is" or "where" or "not" or "has" => ParseSelectorList(values),
             "lang" => FirstValueText(values)?.ToLowerInvariant(),
-            "nth-child" or "nth-last-child" or "nth-of-type" or "nth-last-of-type" =>
-                ParseNthPattern(ComponentValuesText(values)),
+            "dir" => FirstValueText(values)?.ToLowerInvariant(),
+            "nth-child" or "nth-last-child" => ParseNthArgument(values),
+            "nth-of-type" or "nth-last-of-type" => ParseNthArgument(values).Pattern,
             _ => ComponentValuesText(values),
         };
+
+    /// <summary>Parses An+B with optional `of S` tail (Selectors 4 §15.3).</summary>
+    private static NthArgument ParseNthArgument(IReadOnlyList<CssComponentValue> values)
+    {
+        // Split values at the standalone "of" ident.
+        int? ofIndex = null;
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (values[i] is CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var v } } &&
+                v.Equals("of", StringComparison.OrdinalIgnoreCase))
+            {
+                ofIndex = i;
+                break;
+            }
+        }
+
+        if (ofIndex is null)
+            return new NthArgument(ParseNthPattern(ComponentValuesText(values)));
+
+        var nthText = ComponentValuesText(values.Take(ofIndex.Value).ToList());
+        var ofValues = values.Skip(ofIndex.Value + 1).ToList();
+        return new NthArgument(ParseNthPattern(nthText), ParseSelectorList(ofValues));
+    }
 
     private static NthPattern ParseNthPattern(string text)
     {
@@ -279,6 +389,13 @@ public sealed class SelectorParser
         if (TryConsumeDelimiter('~'))
         {
             combinator = SelectorCombinator.SubsequentSibling;
+            return true;
+        }
+        // Column combinator '||' — parsed but only meaningful in table contexts.
+        if (IsDelimiter('|') && IsDelimiter('|', 1))
+        {
+            _position += 2;
+            combinator = SelectorCombinator.Column;
             return true;
         }
 
