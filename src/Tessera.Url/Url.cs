@@ -26,6 +26,7 @@ public sealed record Url(
     public bool IsFile => Scheme.Equals("file", StringComparison.OrdinalIgnoreCase);
     public bool IsHttp => Scheme.Equals("http", StringComparison.OrdinalIgnoreCase);
     public bool IsHttps => Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+    public bool IsData => Scheme.Equals("data", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>True if Scheme is one of <c>http</c>, <c>https</c>,
     /// <c>ws</c>, <c>wss</c>, <c>ftp</c>, <c>file</c> — the "special schemes"

@@ -178,6 +178,61 @@ public sealed class LayoutEngineTests
         div.Frame.X.Should().BeApproximately(0, 0.5);
     }
 
+    // -------------------------------------------------- img/svg fallback
+    //
+    // When an <img> can't be resolved (network failure, unsupported format,
+    // data: scheme stripped) we degrade to its accessible name so the page
+    // doesn't lose user-visible content. The <svg> branch is the same story
+    // for inline SVG, which Tessera does not yet render — google.com's logo
+    // is an inline <svg aria-label="Google">, so without this fallback the
+    // user sees a vanishing inline.
+
+    [Fact]
+    public void Unresolved_img_with_alt_renders_alt_text()
+    {
+        var root = Layout(
+            """<body><img src="missing.png" alt="example image"></body>""",
+            new Size(400, 600));
+        AllText(root).Should().Contain("example image");
+    }
+
+    [Fact]
+    public void Unresolved_img_with_no_alt_falls_back_to_aria_label()
+    {
+        var root = Layout(
+            """<body><img src="missing.png" aria-label="logo"></body>""",
+            new Size(400, 600));
+        AllText(root).Should().Contain("logo");
+    }
+
+    [Fact]
+    public void Unresolved_img_with_empty_alt_renders_nothing()
+    {
+        var root = Layout(
+            """<body><img src="missing.png" alt=""></body>""",
+            new Size(400, 600));
+        AllText(root).Should().NotContain("missing");
+    }
+
+    [Fact]
+    public void Inline_svg_with_aria_label_renders_label_as_text()
+    {
+        var root = Layout(
+            """<body><svg aria-label="Google" width="272" height="92"><path fill="#EA4335"></path></svg></body>""",
+            new Size(800, 600));
+        AllText(root).Should().Contain("Google");
+    }
+
+    [Fact]
+    public void Inline_svg_with_no_aria_label_is_empty()
+    {
+        var root = Layout(
+            """<body><svg width="24" height="24"><rect width="24" height="24"></rect></svg></body>""",
+            new Size(400, 600));
+        // No text content because nothing identifies the element.
+        AllText(root).Should().BeEmpty();
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static Box.Box? FindBox(Box.Box root, string localName)
@@ -197,6 +252,13 @@ public sealed class LayoutEngineTests
         foreach (var child in box.Children)
             foreach (var inner in FlattenTextBoxes(child))
                 yield return inner;
+    }
+
+    private static string AllText(Box.Box root)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var tb in FlattenTextBoxes(root)) sb.Append(tb.Text);
+        return sb.ToString();
     }
 
     private static List<TextFragment> AllFragments(Box.Box root)
