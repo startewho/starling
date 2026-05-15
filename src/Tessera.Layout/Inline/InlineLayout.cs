@@ -137,9 +137,19 @@ internal sealed class InlineLayout
     /// </summary>
     /// <remarks>
     /// Per CSS 2.1 §10.1, an inline-block establishes a new block formatting
-    /// context. When the box has any block-level children we run a nested
-    /// <see cref="Block.BlockLayout"/> pass over them. Otherwise we use the
-    /// lighter text-only path (<see cref="LayoutAtomicContent"/>).
+    /// context. We dispatch on the child mix:
+    /// <list type="bullet">
+    ///   <item>Any block-level child → nested <see cref="Block.BlockLayout"/>
+    ///   pass (true BFC sub-pass, with anonymous-block wrapping already done
+    ///   by <see cref="Tree.BoxTreeBuilder"/>).</item>
+    ///   <item>Only inline-level non-text children (nested inline-blocks,
+    ///   images, <c>&lt;br&gt;</c>, spans) → a recursive inline-formatting
+    ///   sub-pass via <see cref="Layout"/>, sized via a max-content
+    ///   approximation so the inline-block shrinks-to-fit (CSS 2.1 §10.3.5).</item>
+    ///   <item>Only text children → the lightweight
+    ///   <see cref="LayoutAtomicContent"/> path that measures glyph widths
+    ///   directly.</item>
+    /// </list>
     /// </remarks>
     private void LayoutAtomic(
         InlineBox box,
@@ -176,6 +186,43 @@ internal sealed class InlineLayout
             var consumed = sub.LayoutChildren(box, subWidth);
             contentWidth = subWidth;
             contentHeight = consumed;
+        }
+        else if (HasNonTextInlineChild(box))
+        {
+            // Inline-block whose children are inline-level non-text (nested
+            // inline-blocks, <br>, <img>, spans). The text-only path would
+            // silently drop these. Run a recursive inline-formatting sub-pass
+            // and shrink-to-fit to the max-content width so the parent line
+            // doesn't consume the whole row.
+            //
+            // CSS 2.1 §10.3.5: shrink-to-fit width =
+            //     min(max(min-content, available), max-content).
+            // We approximate this by running the sub-pass once with the
+            // remaining line width (or the explicit author width), measuring
+            // the rightmost X reached by any placed child, and using that as
+            // the inline-block's content width. A pure measurement pass
+            // followed by a second placement pass would be cleaner; in
+            // practice the single-pass approach gives the right visual result
+            // because line-breaking only triggers at availableWidth, and the
+            // measured rightmost-X reflects the actual content extent.
+            var explicitInner = ResolveLength(box.Style, PropertyId.Width, availableWidth);
+            double subWidth;
+            if (explicitInner is { } iw)
+            {
+                subWidth = iw;
+            }
+            else
+            {
+                subWidth = Math.Max(0, availableWidth - cursorX);
+                if (_viewport is { } vp && vp.Width > 0)
+                    subWidth = Math.Min(subWidth, vp.Width);
+            }
+
+            var consumed = this.Layout(box, subWidth);
+            contentHeight = consumed;
+            contentWidth = explicitInner is { } w2
+                ? w2
+                : MeasureUsedWidth(box);
         }
         else
         {
@@ -508,6 +555,74 @@ internal sealed class InlineLayout
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// True if any direct (or indirectly-nested via plain inline spans) child
+    /// is something the text-only <see cref="LayoutAtomicContent"/> path
+    /// cannot place: a nested inline-block, a replaced inline (<c>&lt;img&gt;</c>),
+    /// or a <c>&lt;br&gt;</c>. Bare inline spans wrapping such children also
+    /// count — those flatten into the same inline formatting context as their
+    /// contents. We deliberately do NOT count plain inline <c>&lt;span&gt;</c>s
+    /// that contain only text: the text-only path handles them via the
+    /// container's direct TextBox children, and the box tree builder normally
+    /// produces text children at the inline-block level for void content like
+    /// <c>&lt;input&gt;</c>.
+    /// </summary>
+    private static bool HasNonTextInlineChild(Box.Box box)
+    {
+        foreach (var child in box.Children)
+        {
+            switch (child)
+            {
+                case ImageBox:
+                    return true;
+                case InlineBox ib when IsLineBreak(ib):
+                    return true;
+                case InlineBox ib when IsAtomicInline(ib):
+                    return true;
+                case InlineBox ib:
+                    // A wrapper inline (e.g. <span>) recurses; treat its
+                    // subtree as part of this inline-block's IFC.
+                    if (HasNonTextInlineChild(ib)) return true;
+                    break;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// After a recursive <see cref="Layout"/> sub-pass on
+    /// <paramref name="box"/>, measure the rightmost X reached by any placed
+    /// descendant. This is the max-content extent of the inline-block —
+    /// suitable as its content-box width for shrink-to-fit sizing (CSS 2.1
+    /// §10.3.5). Descends through inline spans because their text fragments
+    /// live on the spans themselves; atomic children carry their own
+    /// <see cref="Box.Box.Frame"/>.
+    /// </summary>
+    private static double MeasureUsedWidth(Box.Box box)
+    {
+        double max = 0;
+        Walk(box);
+        return max;
+
+        void Walk(Box.Box node)
+        {
+            switch (node)
+            {
+                case TextBox tb:
+                    foreach (var frag in tb.Fragments)
+                        max = Math.Max(max, frag.X + frag.Width);
+                    return;
+                case ImageBox img:
+                    max = Math.Max(max, img.Frame.X + img.Frame.Width);
+                    return;
+                case InlineBox ib when IsAtomicInline(ib) && ib != box:
+                    max = Math.Max(max, ib.Frame.X + ib.Frame.Width);
+                    return;
+            }
+            foreach (var child in node.Children) Walk(child);
+        }
     }
 
     private static string NormalizeWhitespace(string text)

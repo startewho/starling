@@ -100,7 +100,121 @@ public sealed class InlineBlockBlockChildrenTests
         text.Should().Contain(s => s.Contains("hello"));
     }
 
+    [Fact]
+    public void Inline_block_with_inline_block_child_renders_the_child()
+    {
+        // No block children — but an inline-block child. The text-only path
+        // would silently drop the inner span; the inline-formatting-context
+        // sub-pass must place it with a non-zero frame.
+        const string html = """
+            <body><span style="display:inline-block">
+              <span style="display:inline-block;width:50px;height:20px;background:red">x</span>
+            </span></body>
+            """;
+        var root = Layout(html, new Size(800, 600));
+
+        var spans = FindAll(root, "span").ToList();
+        spans.Should().HaveCountGreaterOrEqualTo(2);
+        var outer = spans[0];
+        var inner = spans[1];
+
+        outer.Frame.Width.Should().BeGreaterThan(0,
+            "the outer inline-block must size to include its child");
+        outer.Frame.Height.Should().BeGreaterThan(0);
+        inner.Frame.Width.Should().BeGreaterThan(0,
+            "the inner inline-block must be placed inside the outer span");
+        inner.Frame.Height.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void Inline_block_shrinks_to_max_content_width_not_available_width()
+    {
+        // The outer inline-block contains an inline-block sized to 100px.
+        // Without shrink-to-fit, the outer would expand to fill the 1000px
+        // div and push "SIBLING" onto a second line. With shrink-to-fit,
+        // SIBLING sits next to the outer span on the same line.
+        const string html = """
+            <body><div style="width:1000px">
+              <span style="display:inline-block"><span style="display:inline-block;width:100px;height:20px">a</span></span>SIBLING
+            </div></body>
+            """;
+        var root = Layout(html, new Size(1200, 600));
+
+        var outer = FindBox(root, "span")!;
+        // The outer's content width should be roughly the inner's 100px
+        // (plus a small whitespace allowance from text nodes around the
+        // inner span). Crucially: it must NOT eat the whole 1000px row.
+        outer.Frame.Width.Should().BeLessThan(500,
+            "outer inline-block must shrink-to-fit, not consume the row");
+
+        // Find the SIBLING text fragment and verify it landed on the same
+        // visual line (same Y in the anonymous-block coordinate space) as
+        // the outer inline-block. If it wrapped, its Y would be larger.
+        var siblingFrag = FindTextFragment(root, "SIBLING");
+        siblingFrag.Should().NotBeNull("the SIBLING text run must be placed");
+        var outerLineY = outer.Frame.Y;
+        siblingFrag!.Value.Y.Should().BeLessThan(outerLineY + outer.Frame.Height,
+            "SIBLING must sit on the same line as the outer inline-block");
+    }
+
+    [Fact]
+    public void Google_form_shape_keeps_cells_horizontal()
+    {
+        // Two <td>s: the first wraps an inline-block <div> with an <input>;
+        // the second has a link. Both cells should sit side-by-side, not
+        // stacked. The inline-block <div> must shrink-to-fit so the first
+        // cell doesn't consume the entire row.
+        const string html = """
+            <body><table><tr>
+              <td><div style="display:inline-block"><input type="text" size="57" name="q"></div></td>
+              <td><a href="#">Advanced</a></td>
+            </tr></table></body>
+            """;
+        var root = Layout(html, new Size(1280, 720));
+
+        var cells = FindAll(root, "td").ToList();
+        cells.Should().HaveCount(2);
+
+        // Same row → same Y (within a tolerance for row-alignment slack).
+        Math.Abs(cells[0].Frame.Y - cells[1].Frame.Y).Should().BeLessThan(2,
+            "both cells should share a Y on the same row");
+
+        // Second cell must sit to the right of the first.
+        cells[1].Frame.X.Should().BeGreaterThan(cells[0].Frame.X,
+            "the second cell should follow horizontally, not wrap below");
+
+        // The input must actually be in the layout tree with a frame.
+        var input = FindInputByType(root, "text");
+        input.Should().NotBeNull();
+        input!.Frame.Width.Should().BeGreaterThan(0);
+        input.Frame.Height.Should().BeGreaterThan(0);
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private static IEnumerable<Box.Box> FindAll(Box.Box root, string localName)
+    {
+        if (root.Element?.LocalName == localName) yield return root;
+        foreach (var child in root.Children)
+            foreach (var hit in FindAll(child, localName))
+                yield return hit;
+    }
+
+    private static TextFragment? FindTextFragment(Box.Box root, string contains)
+    {
+        if (root is TextBox tb)
+        {
+            foreach (var frag in tb.Fragments)
+                if (frag.Text.Contains(contains, StringComparison.Ordinal))
+                    return frag;
+        }
+        foreach (var child in root.Children)
+        {
+            var hit = FindTextFragment(child, contains);
+            if (hit is not null) return hit;
+        }
+        return null;
+    }
 
     private static Box.Box? FindBox(Box.Box root, string localName)
     {
