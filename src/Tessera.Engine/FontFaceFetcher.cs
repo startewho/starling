@@ -76,7 +76,7 @@ internal sealed class FontFaceFetcher : IDisposable
                     if (!IsLikelyReadableFormat(url.Format)) continue;
                     var bytes = await FetchBytesAsync(url.Url, baseUrl, ct).ConfigureAwait(false);
                     if (bytes is null) continue;
-                    if (registry.TryAdd(rule.FamilyName, rule.Bold, rule.Italic, bytes))
+                    if (registry.TryAdd(rule.FamilyName, rule.Bold, rule.Italic, bytes, rule.UnicodeRange))
                     {
                         _diag.Counter("engine.fetch.font", 1);
                         return;
@@ -102,14 +102,14 @@ internal sealed class FontFaceFetcher : IDisposable
 
     private static bool IsLikelyReadableFormat(string? format)
     {
-        // Skia/CoreText handles TrueType, OpenType, and (on Apple) Datafork
-        // suitcases. WOFF/WOFF2 are wrappers we don't unwrap yet — skip them
-        // so we don't fetch megabytes just to throw the result away. An
-        // unknown format hint isn't a hard "no" (a server might serve a TTF
-        // through a URL ending in .woff): we still try.
+        // We unwrap WOFF / WOFF2 in FontFaceRegistry.TryAdd (Brotli is in
+        // System.IO.Compression). WOFF2 files using the glyf/loca transform
+        // still fail — declare a TTF/OTF fallback in your src list if your
+        // visitor base needs the modern format. SVG fonts are skipped: they
+        // are obsolete and Skia doesn't take them.
         if (string.IsNullOrEmpty(format)) return true;
         var f = format.Trim().ToLowerInvariant();
-        return f is "truetype" or "opentype" or "ttf" or "otf";
+        return f is "truetype" or "opentype" or "ttf" or "otf" or "woff" or "woff2";
     }
 
     private async Task<byte[]?> FetchBytesAsync(string href, TesseraUrl? baseUrl, CancellationToken ct)

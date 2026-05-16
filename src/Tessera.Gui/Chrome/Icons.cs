@@ -13,6 +13,7 @@ public static class Icons
     public const string Back = "M9.5 3.5 5 8l4.5 4.5";
     public const string Fwd = "M6.5 3.5 11 8l-4.5 4.5";
     public const string Reload = "M13 8a5 5 0 1 1-1.5-3.5M13 3v2h-2";
+    public const string Stop = "M4.5 4.5h7v7h-7z";
     public const string Go = "M3 8h10M9 4l4 4-4 4";
     public const string Find = "M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM14 14l-3.2-3.2";
     public const string Enter = "M13 4v3a2 2 0 0 1-2 2H3M6 12 3 9l3-3";
@@ -35,6 +36,8 @@ public static class Icons
     public const string TriDown = "M4 6l4 4 4-4";
     public const string Rec = "M8 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z";
     public const string Cmd = "M5 5a1.5 1.5 0 1 0 1.5 1.5V5H5ZM11 5a1.5 1.5 0 1 1-1.5 1.5V5H11ZM5 11a1.5 1.5 0 1 1 1.5-1.5V11H5ZM11 11a1.5 1.5 0 1 0-1.5-1.5V11H11ZM6.5 6.5h3v3h-3z";
+    public const string Sun = "M8 5.25a2.75 2.75 0 1 0 0 5.5 2.75 2.75 0 0 0 0-5.5ZM8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1M12.6 12.6l-1.1-1.1M4.5 4.5l-1.1-1.1";
+    public const string Moon = "M13.25 9.5A5 5 0 1 1 6.5 2.75a4 4 0 0 0 6.75 6.75Z";
 
     /// <summary>
     /// Builds a stroked <see cref="Path"/> from a 16×16 path string. Stroke

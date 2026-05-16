@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Tessera.Common.Diagnostics;
 using Tessera.Css.Cascade;
 using Tessera.Dom;
 using Tessera.Layout.Block;
@@ -22,24 +24,52 @@ public sealed class LayoutEngine
     private readonly StyleEngine _style;
     private readonly ITextMeasurer _measurer;
     private readonly IImageResolver _images;
+    private readonly IDiagnostics _diag;
 
-    public LayoutEngine(StyleEngine style, ITextMeasurer? measurer = null, IImageResolver? images = null)
+    public LayoutEngine(
+        StyleEngine style,
+        ITextMeasurer? measurer = null,
+        IImageResolver? images = null,
+        IDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(style);
         _style = style;
         _measurer = measurer ?? DefaultTextMeasurer.Instance;
         _images = images ?? NullImageResolver.Instance;
+        _diag = diagnostics ?? NoopDiagnostics.Instance;
     }
 
     public BlockBox LayoutDocument(Document document, Size viewport)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var builder = new BoxTreeBuilder(_style, _images);
-        var root = builder.Build(document);
+        _diag.Counter("layout.runs", 1);
+        using var span = _diag.Span("layout", "run");
+        Activity.Current?.SetTag("layout.viewport_width", viewport.Width);
+        Activity.Current?.SetTag("layout.viewport_height", viewport.Height);
 
-        var block = new BlockLayout(_measurer, viewport);
-        block.Layout(root);
+        BlockBox root;
+        using (_diag.Span("layout", "box_tree_build"))
+        {
+            var builder = new BoxTreeBuilder(_style, _images);
+            root = builder.Build(document);
+        }
+
+        using (_diag.Span("layout", "block"))
+        {
+            var block = new BlockLayout(_measurer, viewport);
+            block.Layout(root);
+        }
+
+        Activity.Current?.SetTag("layout.boxes", CountBoxes(root));
         return root;
+    }
+
+    private static int CountBoxes(Box.Box box)
+    {
+        var n = 1;
+        foreach (var child in box.Children)
+            n += CountBoxes(child);
+        return n;
     }
 }

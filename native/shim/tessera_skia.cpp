@@ -50,6 +50,7 @@
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkSamplingOptions.h"
 #include "include/core/SkSurface.h"
+#include "include/core/SkFontArguments.h"
 #include "include/core/SkTypeface.h"
 
 // --- Skia Graphite + Dawn backend ------------------------------------------
@@ -306,6 +307,14 @@ TS_API TsStatus TS_CALL ts_canvas_clear(TsCanvas* canvas, TsColor color) {
     return TS_OK;
 }
 
+TS_API TsStatus TS_CALL ts_canvas_scale(TsCanvas* canvas, float sx, float sy) {
+    if (canvas == nullptr || canvas->canvas == nullptr) {
+        return TS_NULL_HANDLE;
+    }
+    canvas->canvas->scale(sx, sy);
+    return TS_OK;
+}
+
 /* --------------------------------------------------------------------------
  * The 4 DisplayItem ops.
  * ------------------------------------------------------------------------ */
@@ -420,7 +429,10 @@ TS_API TsStatus TS_CALL ts_canvas_draw_image(TsCanvas* canvas,
     }
 
     SkRect src = SkRect::MakeWH(static_cast<float>(width), static_cast<float>(height));
-    SkSamplingOptions sampling(SkFilterMode::kLinear);
+    // Mitchell-Netravali bicubic. Cheap at our image counts and visibly better
+    // than kLinear when downscaling raster <img> content into smaller rects;
+    // identical-or-better than kLinear when upscaling.
+    SkSamplingOptions sampling(SkCubicResampler::Mitchell());
     canvas->canvas->drawImageRect(image, src, ToSkRect(dst_rect), sampling, nullptr,
                                   SkCanvas::kStrict_SrcRectConstraint);
     return TS_OK;
@@ -488,6 +500,52 @@ TS_API void TS_CALL ts_typeface_destroy(TsTypeface* typeface) {
     delete typeface;
 }
 
+TS_API TsStatus TS_CALL ts_typeface_clone_variations(TsTypeface* base,
+                                                    const TsFontVariation* variations,
+                                                    size_t variation_count,
+                                                    TsTypeface** out_typeface) {
+    if (out_typeface == nullptr) {
+        return TS_INVALID_ARGUMENT;
+    }
+    *out_typeface = nullptr;
+    if (base == nullptr || !base->typeface) {
+        return TS_NULL_HANDLE;
+    }
+    if (variation_count > 0 && variations == nullptr) {
+        return TS_INVALID_ARGUMENT;
+    }
+
+    // Translate TsFontVariation{tag,value} -> SkFontArguments::VariationPosition::Coordinate.
+    // SkFontArguments owns the array via pointer-and-count; we keep the
+    // SkFontArguments::VariationPosition::Coordinate buffer alive on the stack
+    // around the makeClone() call.
+    std::vector<SkFontArguments::VariationPosition::Coordinate> coords;
+    coords.reserve(variation_count);
+    for (size_t i = 0; i < variation_count; ++i) {
+        SkFontArguments::VariationPosition::Coordinate c;
+        c.axis = static_cast<SkFourByteTag>(variations[i].tag);
+        c.value = variations[i].value;
+        coords.push_back(c);
+    }
+
+    SkFontArguments::VariationPosition position;
+    position.coordinates = coords.data();
+    position.coordinateCount = static_cast<int>(coords.size());
+
+    SkFontArguments args;
+    args.setVariationDesignPosition(position);
+
+    sk_sp<SkTypeface> cloned = base->typeface->makeClone(args);
+    if (!cloned) {
+        return TS_INVALID_ARGUMENT;
+    }
+
+    auto handle = std::make_unique<TsTypeface>();
+    handle->typeface = std::move(cloned);
+    *out_typeface = handle.release();
+    return TS_OK;
+}
+
 TS_API TsStatus TS_CALL ts_font_create_styled(TsTypeface* typeface, float size_px,
                                               int32_t embolden, int32_t oblique,
                                               TsFont** out_font) {
@@ -504,7 +562,12 @@ TS_API TsStatus TS_CALL ts_font_create_styled(TsTypeface* typeface, float size_p
 
     auto handle = std::make_unique<TsFont>();
     handle->font = SkFont(typeface->typeface, size_px);
-    handle->font.setEdging(SkFont::Edging::kAntiAlias);
+    // kSubpixelAntiAlias enables LCD-subpixel (RGB-stripe) text on opaque
+    // backgrounds — visibly crisper than the kAntiAlias grayscale path on
+    // the page surface (which is always cleared opaque). Skia transparently
+    // falls back to grayscale where LCD isn't valid (transparent backgrounds,
+    // rotated text, etc.), so this is safe as a default.
+    handle->font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
     handle->font.setSubpixel(true);
     // Synthetic styling: fake-bold thickens outlines (applied as a glyph stroke
     // at draw time — see ts_canvas_draw_text); fake-italic skews forward.

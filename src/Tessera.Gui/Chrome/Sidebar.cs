@@ -15,9 +15,11 @@ public sealed class Sidebar : Grid
 
     public Sidebar(
         ThemeManager tm,
+        IReadOnlyList<TabInfo> bookmarks,
         IReadOnlyList<TabInfo> pinned,
         IReadOnlyList<TabInfo> today,
-        string activeId)
+        string activeId,
+        Action<TabInfo>? onTabActivated = null)
     {
         var t = tm.Tokens;
 
@@ -30,7 +32,7 @@ public sealed class Sidebar : Grid
 
         this.Add(BuildWordmark(tm), 0, 0);
         this.Add(BuildCommandStub(tm), 0, 1);
-        this.Add(BuildSections(tm, pinned, today, activeId), 0, 2);
+        this.Add(BuildSections(tm, bookmarks, pinned, today, activeId, onTabActivated), 0, 2);
         this.Add(BuildFooter(tm), 0, 3);
 
         // Right-edge hairline.
@@ -85,13 +87,23 @@ public sealed class Sidebar : Grid
     }
 
     private static View BuildSections(
-        ThemeManager tm, IReadOnlyList<TabInfo> pinned, IReadOnlyList<TabInfo> today, string activeId)
+        ThemeManager tm,
+        IReadOnlyList<TabInfo> bookmarks,
+        IReadOnlyList<TabInfo> pinned,
+        IReadOnlyList<TabInfo> today,
+        string activeId,
+        Action<TabInfo>? onTabActivated)
     {
         var stack = new VerticalStackLayout { Spacing = 1 };
+        if (bookmarks.Count > 0)
+        {
+            stack.Add(SectionLabel(tm, "Bookmarks"));
+            foreach (var tab in bookmarks) stack.Add(TabRow(tm, tab, tab.Id == activeId, onTabActivated));
+        }
         stack.Add(SectionLabel(tm, "Pinned"));
-        foreach (var tab in pinned) stack.Add(TabRow(tm, tab, tab.Id == activeId));
+        foreach (var tab in pinned) stack.Add(TabRow(tm, tab, tab.Id == activeId, onTabActivated));
         stack.Add(SectionLabel(tm, "Today"));
-        foreach (var tab in today) stack.Add(TabRow(tm, tab, tab.Id == activeId));
+        foreach (var tab in today) stack.Add(TabRow(tm, tab, tab.Id == activeId, onTabActivated));
 
         return new ScrollView { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Never };
     }
@@ -103,7 +115,7 @@ public sealed class Sidebar : Grid
         return new ContentView { Padding = new Thickness(10, 8, 10, 4), Content = label };
     }
 
-    private static View TabRow(ThemeManager tm, TabInfo tab, bool active)
+    private static View TabRow(ThemeManager tm, TabInfo tab, bool active, Action<TabInfo>? onTabActivated)
     {
         var t = tm.Tokens;
 
@@ -159,6 +171,13 @@ public sealed class Sidebar : Grid
             ChromeKit.AttachHover(row,
                 () => row.BackgroundColor = t.Hover,
                 () => row.BackgroundColor = Colors.Transparent);
+
+        if (onTabActivated is not null && !string.IsNullOrWhiteSpace(tab.Url))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => onTabActivated(tab);
+            row.GestureRecognizers.Add(tap);
+        }
         return row;
     }
 

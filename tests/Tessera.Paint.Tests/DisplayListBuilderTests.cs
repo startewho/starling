@@ -60,17 +60,25 @@ public sealed class DisplayListBuilderTests
     [Fact]
     public void Font_family_list_is_carried_onto_draw_text()
     {
-        // Quoted strings preserve case ("Helvetica Neue"); unquoted idents are
-        // lowercased by the CSS value parser. Family matching is ASCII
-        // case-insensitive per CSS Fonts 3 §5.1, so the renderer can still
-        // resolve "helvetica" to the system Helvetica — the assertion just
-        // mirrors what the cascade actually emits.
+        // The font-family value parser preserves case for ident family names
+        // and lowercases only the generic keywords ("sans-serif" et al.).
         var dl = BuildList(
             "<body><p style=\"font-family: 'Helvetica Neue', Helvetica, sans-serif\">styled</p></body>",
             new Size(400, 300));
 
         var text = dl.Items.OfType<DrawText>().First();
-        text.FontFamilies.Should().Equal("Helvetica Neue", "helvetica", "sans-serif");
+        text.FontFamilies.Should().Equal("Helvetica Neue", "Helvetica", "sans-serif");
+    }
+
+    [Fact]
+    public void Multi_word_unquoted_family_is_joined_with_spaces()
+    {
+        var dl = BuildList(
+            "<body><p style=\"font-family: Open Sans\">styled</p></body>",
+            new Size(400, 300));
+
+        var text = dl.Items.OfType<DrawText>().First();
+        text.FontFamilies.Should().Equal("Open Sans");
     }
 
     [Fact]

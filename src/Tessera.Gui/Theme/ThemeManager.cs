@@ -16,12 +16,22 @@ namespace Tessera.Gui.Theme;
 /// </summary>
 public sealed class ThemeManager
 {
+    /// <summary>
+    /// Multiplier applied to chrome metrics and page-content rendering, on top
+    /// of the device's physical-pixel density. Catalyst's old iPad idiom
+    /// implicitly upscaled everything by ~1.3× before downsampling to Mac
+    /// points; switching to the Mac idiom removed that upscale and made the
+    /// UI feel small relative to Chrome / Safari on macOS. 1.3 restores the
+    /// previous visual size while keeping the new native crispness.
+    /// </summary>
+    public const double UiScale = 1.3;
+
     public ThemeMode Theme { get; private set; } = ThemeMode.Dark;
     public DensityMode Density { get; private set; } = DensityMode.Comfy;
     public TypeMode Type { get; private set; } = TypeMode.Sans;
 
     public ThemeTokens Tokens { get; private set; } = ThemeTokens.Dark;
-    public DensityTokens Metrics { get; private set; } = DensityTokens.Comfy;
+    public DensityTokens Metrics { get; private set; } = DensityTokens.Comfy.Scaled(UiScale);
 
     /// <summary>Font family the chrome renders in — swapped by <see cref="TypeMode"/>.</summary>
     public string ChromeFont => Type == TypeMode.Mono ? Fonts.Mono : Fonts.Sans;
@@ -44,7 +54,7 @@ public sealed class ThemeManager
     {
         if (Density == mode) return;
         Density = mode;
-        Metrics = DensityTokens.For(mode);
+        Metrics = DensityTokens.For(mode).Scaled(UiScale);
         Changed?.Invoke(this, EventArgs.Empty);
     }
 

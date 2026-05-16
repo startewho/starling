@@ -3,6 +3,9 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Tessera.Paint.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Tessera.Common\Tessera.Common.csproj" />
     <ProjectReference Include="..\Tessera.Layout\Tessera.Layout.csproj" />
     <ProjectReference Include="..\Tessera.Dom\Tessera.Dom.csproj" />

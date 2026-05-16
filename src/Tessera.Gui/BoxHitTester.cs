@@ -1,5 +1,8 @@
+using Tessera.Css.Properties;
+using Tessera.Css.Values;
 using Tessera.Layout.Box;
 using DomElement = Tessera.Dom.Element;
+using DomNode = Tessera.Dom.Node;
 
 namespace Tessera.Gui;
 
@@ -103,6 +106,72 @@ public static class BoxHitTester
                 return el;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Resolves the CSS <c>cursor</c> keyword for <paramref name="hit"/>.
+    /// Walks the box tree from the hit upward picking the first computed
+    /// <c>cursor</c> that isn't <c>auto</c>; if every ancestor is <c>auto</c>
+    /// (the default), falls back to HTML-semantic defaults:
+    /// <list type="bullet">
+    /// <item><c>&lt;a href&gt;</c> → <c>pointer</c></item>
+    /// <item>text content (a <c>TextBox</c> hit) → <c>text</c></item>
+    /// <item>everything else → <c>default</c></item>
+    /// </list>
+    /// Returns one of the CSS3 UI keyword strings (<c>default</c>,
+    /// <c>pointer</c>, <c>text</c>, <c>not-allowed</c>, etc.). Callers map it
+    /// to a platform cursor.
+    /// </summary>
+    public static string ResolveCursor(HitResult hit)
+    {
+        if (hit.Box is null) return "default";
+
+        // 1) Author-supplied cursor wins. Walk up the box chain (which also
+        //    follows the DOM ancestor chain for non-anonymous boxes) and stop
+        //    on the first non-auto keyword.
+        for (var node = (Box?)hit.Box; node is not null; node = node.Parent)
+        {
+            if (node.Style?.Get(PropertyId.Cursor) is CssKeyword kw
+                && !string.Equals(kw.Name, "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                return kw.Name.ToLowerInvariant();
+            }
+        }
+
+        // 2) Element-semantic defaults. Anchors with hrefs are pointers; a
+        //    direct text-content hit is the I-beam; otherwise the arrow.
+        if (hit.LinkAnchor is not null) return "pointer";
+        if (hit.Box is TextBox) return "text";
+
+        // Form controls in the DOM ancestor chain pick up their conventional
+        // shape (button → default arrow, input/select → text/arrow based on
+        // type). Walk a small distance up the DOM in case the textbox's
+        // immediate element is anonymous wrapper content.
+        for (var n = (DomNode?)hit.Box.Element; n is not null; n = n.ParentNode)
+        {
+            if (n is not DomElement el) continue;
+            switch (el.LocalName)
+            {
+                case "a":
+                    if (!string.IsNullOrEmpty(el.GetAttribute("href")))
+                        return "pointer";
+                    break;
+                case "button":
+                case "select":
+                case "option":
+                    return "default";
+                case "input":
+                    var type = (el.GetAttribute("type") ?? "text").ToLowerInvariant();
+                    return type is "text" or "search" or "email" or "url" or "tel"
+                            or "password" or "number"
+                        ? "text"
+                        : "default";
+                case "textarea":
+                    return "text";
+            }
+        }
+
+        return "default";
     }
 
     /// <summary>

@@ -211,7 +211,9 @@ public sealed record CssColor(byte R, byte G, byte B, byte A = 255) : CssValue
     }
 
     /// <summary>Construct from native-space components, preserving them while
-    /// also computing an 8-bit sRGB fallback for direct paint use.</summary>
+    /// also computing an 8-bit sRGB fallback for direct paint use. Out-of-gamut
+    /// colors are mapped via <see cref="GamutMapper"/> (Color 4 §13.1 chroma
+    /// reduction in Oklch).</summary>
     public static CssColor FromComponents(ColorSpace space, double c1, double c2, double c3, double alpha = 1.0)
     {
         // For "none" components (NaN), treat as 0 for conversion purposes per Color 4 §4.4.
@@ -219,7 +221,7 @@ public sealed record CssColor(byte R, byte G, byte B, byte A = 255) : CssValue
         var s2 = double.IsNaN(c2) ? 0 : c2;
         var s3 = double.IsNaN(c3) ? 0 : c3;
         var sa = double.IsNaN(alpha) ? 0 : alpha;
-        var (r, g, b) = ColorConversion.ToSrgb(space, s1, s2, s3);
+        var (r, g, b) = GamutMapper.MapToSrgb(space, s1, s2, s3);
         var (br, bg, bb, ba) = ClampToBytes(r, g, b, sa);
         return new CssColor(br, bg, bb, ba)
         {
@@ -231,14 +233,19 @@ public sealed record CssColor(byte R, byte G, byte B, byte A = 255) : CssValue
         };
     }
 
-    /// <summary>Return an 8-bit sRGB representation. Performs gamut clamping by
-    /// simple component clamping per Color 4 §13 (a more thorough chroma-reduction
-    /// implementation is left to a future pass).</summary>
+    /// <summary>Return an 8-bit sRGB representation, performing Color 4 §13.1
+    /// chroma-reduction gamut mapping for wide-gamut authored colors.</summary>
     public CssColor ToSrgb()
     {
-        if (Space == ColorSpace.Srgb && !double.IsNaN(C1) && !double.IsNaN(C2) && !double.IsNaN(C3))
+        if (!HasWideGamutData)
             return new CssColor(R, G, B, A);
-        return new CssColor(R, G, B, A);
+        var s1 = double.IsNaN(C1) ? 0 : C1;
+        var s2 = double.IsNaN(C2) ? 0 : C2;
+        var s3 = double.IsNaN(C3) ? 0 : C3;
+        var sa = double.IsNaN(AlphaF) ? 0 : AlphaF;
+        var (r, g, b) = GamutMapper.MapToSrgb(Space, s1, s2, s3);
+        var (br, bg, bb, ba) = ClampToBytes(r, g, b, sa);
+        return new CssColor(br, bg, bb, ba) { Space = ColorSpace.Srgb };
     }
 
     private static (byte, byte, byte, byte) ClampToBytes(double r, double g, double b, double a)
@@ -290,7 +297,10 @@ public sealed record CssEnvReference(string Name, CssValue? Fallback) : CssValue
 /// attr(name [type-or-unit] [, fallback]) per CSS Values 4 §11.2. Resolution
 /// happens when the value is attached to an element with attributes.
 /// </summary>
-public sealed record CssAttrReference(string AttrName, string? TypeOrUnit, CssValue? Fallback) : CssValue;
+public sealed record CssAttrReference(string AttrName, string? TypeOrUnit, CssValue? Fallback) : CssValue
+{
+    public CssValue? Resolve(Func<string, string?> lookup) => AttrResolver.Resolve(this, lookup);
+}
 
 /// <summary>
 /// A symbolic calc()/min()/max()/clamp()/round()/mod()/rem()/trig/exp/etc.
@@ -301,6 +311,8 @@ public sealed record CssAttrReference(string AttrName, string? TypeOrUnit, CssVa
 public sealed record CssCalc(CalcNode Expression) : CssValue
 {
     public override string ToString() => "calc(" + Expression + ")";
+
+    public CssValue Resolve(CssResolutionContext ctx) => CssCalcResolver.Resolve(this, ctx);
 }
 
 /// <summary>Base of the calc() expression tree (CSS Values 4 §10).</summary>

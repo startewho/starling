@@ -218,7 +218,7 @@ public static class ColorParser
         var args = SplitTopLevelCommas(raw).ToList();
         if (args.Count != 3) return false;
 
-        // arg0: "in <space>" (optionally polar interpolation hint like "in oklch longer hue")
+        // arg0: "in <space>" optionally followed by "<hint> hue" per Color 5 §6.
         var ws0 = FilterWhitespace(args[0]).ToList();
         if (ws0.Count < 2) return false;
         if (ws0[0] is not CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var inKw } } || !inKw.Equals("in", StringComparison.OrdinalIgnoreCase))
@@ -227,6 +227,25 @@ public static class ColorParser
             return false;
         if (!TryParseInterpolationSpace(spaceName, out var space))
             return false;
+
+        var hueStrategy = HueInterpolation.Shorter;
+        if (ws0.Count >= 4)
+        {
+            if (ws0[2] is not CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var hintName } })
+                return false;
+            if (ws0[3] is not CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var hueKw } } || !hueKw.Equals("hue", StringComparison.OrdinalIgnoreCase))
+                return false;
+            switch (hintName.ToLowerInvariant())
+            {
+                case "shorter": hueStrategy = HueInterpolation.Shorter; break;
+                case "longer": hueStrategy = HueInterpolation.Longer; break;
+                case "increasing": hueStrategy = HueInterpolation.Increasing; break;
+                case "decreasing": hueStrategy = HueInterpolation.Decreasing; break;
+                default: return false;
+            }
+            var polar = space is ColorSpace.Hsl or ColorSpace.Hwb or ColorSpace.Lch or ColorSpace.Oklch;
+            if (!polar) return false;
+        }
 
         // arg1, arg2: color [percentage]?
         if (!TryParseColorAndPercentage(args[1], out var ca, out var pa)) return false;
@@ -242,9 +261,11 @@ public static class ColorParser
         var wA = pa.Value / sum;
         var wB = pb.Value / sum;
 
-        color = Mix(space, ca, wA, cb, wB);
+        color = Mix(space, ca, wA, cb, wB, hueStrategy);
         return true;
     }
+
+    private enum HueInterpolation { Shorter, Longer, Increasing, Decreasing }
 
     private static bool TryParseInterpolationSpace(string name, out ColorSpace space)
     {
@@ -306,7 +327,7 @@ public static class ColorParser
 
     // ---------- mixing math ----------
 
-    private static CssColor Mix(ColorSpace space, CssColor a, double wA, CssColor b, double wB)
+    private static CssColor Mix(ColorSpace space, CssColor a, double wA, CssColor b, double wB, HueInterpolation hue = HueInterpolation.Shorter)
     {
         // Convert both to interpolation space, lerp components, convert back to sRGB for storage.
         var (a1, a2, a3) = ToInterpolation(space, a);
@@ -316,7 +337,6 @@ public static class ColorParser
 
         var alpha = aAlpha * wA + bAlpha * wB;
 
-        // For hue components in polar spaces, use shortest path interpolation.
         bool polar = space is ColorSpace.Hsl or ColorSpace.Hwb or ColorSpace.Lch or ColorSpace.Oklch;
         double c1, c2, c3;
         if (polar)
@@ -324,7 +344,7 @@ public static class ColorParser
             // Hue is the first component for hsl/hwb, third for lch/oklch.
             if (space is ColorSpace.Hsl or ColorSpace.Hwb)
             {
-                c1 = LerpHue(a1, b1, wA);
+                c1 = LerpHue(a1, b1, wA, hue);
                 c2 = a2 * wA + b2 * wB;
                 c3 = a3 * wA + b3 * wB;
             }
@@ -332,7 +352,7 @@ public static class ColorParser
             {
                 c1 = a1 * wA + b1 * wB;
                 c2 = a2 * wA + b2 * wB;
-                c3 = LerpHue(a3, b3, wA);
+                c3 = LerpHue(a3, b3, wA, hue);
             }
         }
         else
@@ -345,13 +365,42 @@ public static class ColorParser
         return CssColor.FromComponents(space, c1, c2, c3, alpha);
     }
 
-    private static double LerpHue(double aH, double bH, double wA)
+    private static double LerpHue(double aH, double bH, double wA, HueInterpolation strategy)
     {
-        // Shortest path (Color 5 default).
-        var diff = bH - aH;
-        while (diff > 180) diff -= 360;
-        while (diff < -180) diff += 360;
-        return aH + diff * (1 - wA);
+        // Normalize hues to [0, 360).
+        aH = ((aH % 360.0) + 360.0) % 360.0;
+        bH = ((bH % 360.0) + 360.0) % 360.0;
+        double diff;
+        switch (strategy)
+        {
+            case HueInterpolation.Shorter:
+                diff = bH - aH;
+                while (diff > 180) diff -= 360;
+                while (diff < -180) diff += 360;
+                break;
+            case HueInterpolation.Longer:
+                diff = bH - aH;
+                while (diff > 180) diff -= 360;
+                while (diff < -180) diff += 360;
+                // Take the long way around: flip 0->360 or 0->-360.
+                if (diff == 0) diff = 360;
+                else if (diff > 0) diff -= 360;
+                else diff += 360;
+                break;
+            case HueInterpolation.Increasing:
+                diff = bH - aH;
+                if (diff < 0) diff += 360;
+                break;
+            case HueInterpolation.Decreasing:
+                diff = bH - aH;
+                if (diff > 0) diff -= 360;
+                break;
+            default:
+                diff = bH - aH;
+                break;
+        }
+        var result = aH + diff * (1 - wA);
+        return ((result % 360.0) + 360.0) % 360.0;
     }
 
     private static (double, double, double) ToInterpolation(ColorSpace space, CssColor c)

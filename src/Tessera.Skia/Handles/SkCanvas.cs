@@ -36,6 +36,20 @@ internal sealed class SkCanvas : SafeHandleZeroOrMinusOneIsInvalid
         SkiaInteropException.ThrowIfNotOk(status, nameof(NativeMethods.ts_canvas_clear));
     }
 
+    /// <summary>Pre-concats a uniform scale onto the canvas matrix.</summary>
+    /// <exception cref="SkiaInteropException">The native call failed.</exception>
+    public void Scale(float sx, float sy)
+    {
+        TsStatus status;
+        lock (SkiaGate.Sync)
+        {
+            NativeCallTrace.Enter("ts_canvas_scale", handle, $"sx={sx} sy={sy}");
+            status = NativeMethods.ts_canvas_scale(handle, sx, sy);
+            NativeCallTrace.Exit("ts_canvas_scale", handle);
+        }
+        SkiaInteropException.ThrowIfNotOk(status, nameof(NativeMethods.ts_canvas_scale));
+    }
+
     /// <summary>Fills <paramref name="rect"/> with <paramref name="color"/>.</summary>
     /// <exception cref="SkiaInteropException">The native call failed.</exception>
     public void FillRect(TsRect rect, TsColor color)

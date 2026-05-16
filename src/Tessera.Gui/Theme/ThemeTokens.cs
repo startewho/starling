@@ -258,4 +258,20 @@ public sealed record DensityTokens
 
     public static DensityTokens For(DensityMode mode)
         => mode == DensityMode.Compact ? Compact : Comfy;
+
+    /// <summary>
+    /// Returns a copy with every spacing / radius / font-size token multiplied
+    /// by <paramref name="scale"/>. The radii's <c>RPill</c> sentinel (a "very
+    /// large" 999) is preserved verbatim — scaling it would only increase
+    /// rounding error against its corner-clipping semantics.
+    /// </summary>
+    public DensityTokens Scaled(double scale) => new()
+    {
+        Row = Row * scale, RowSm = RowSm * scale, RowXs = RowXs * scale,
+        Pad = Pad * scale, PadSm = PadSm * scale,
+        Gap = Gap * scale, GapSm = GapSm * scale,
+        R = R * scale, RMd = RMd * scale, RSm = RSm * scale, RPill = RPill,
+        FsXs = FsXs * scale, FsSm = FsSm * scale, FsMd = FsMd * scale,
+        FsLg = FsLg * scale, FsXl = FsXl * scale,
+    };
 }

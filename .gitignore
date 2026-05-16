@@ -34,6 +34,9 @@ project.lock.json
 .vscode/
 *.swp
 
+# Claude Code agent worktrees
+.claude/worktrees/
+
 # OS
 .DS_Store
 Thumbs.db

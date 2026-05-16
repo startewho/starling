@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Tessera.Common;
+using Tessera.Common.Diagnostics;
 using Tessera.Net.Dns;
 using Tessera.Net.Http;
 using Tessera.Net.Http.Cookies;
@@ -36,6 +38,7 @@ public sealed class TesseraHttpClient : IDisposable
     private readonly DnsResolver _dns;
     private readonly TcpDialer _dialer;
     private readonly ConnectionPool _pool;
+    private readonly IDiagnostics _diag;
     private bool _disposed;
 
     public TesseraHttpClient() : this(new TesseraHttpClientOptions()) { }
@@ -43,6 +46,7 @@ public sealed class TesseraHttpClient : IDisposable
     public TesseraHttpClient(TesseraHttpClientOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _diag = options.Diagnostics ?? NoopDiagnostics.Instance;
         _dns = options.DnsResolver ?? new DnsResolver(new UdpDnsTransport());
         _dialer = new TcpDialer(_dns) { ConnectTimeout = options.ConnectTimeout };
         _pool = options.ConnectionPool ?? new ConnectionPool();
@@ -86,6 +90,13 @@ public sealed class TesseraHttpClient : IDisposable
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         requestCts.CancelAfter(_options.RequestTimeout);
 
+        using var httpSpan = _diag.Span("net", "http");
+        Activity.Current?.SetTag("http.method", request.Method);
+        Activity.Current?.SetTag("http.url", url.ToString());
+        Activity.Current?.SetTag("server.address", origin.Host);
+        Activity.Current?.SetTag("server.port", origin.Port);
+        _diag.Counter("net.http.requests", 1);
+
         try
         {
             // 1. Try the pool first. A pooled transport may turn out to have
@@ -96,10 +107,14 @@ public sealed class TesseraHttpClient : IDisposable
             var pooled = _pool.TryAcquire(origin);
             if (pooled is not null)
             {
+                _diag.Counter("net.http.connection_reused", 1);
                 var pooledOutcome = await TrySendOnTransportAsync(
                     pooled, request, url, fromPool: true, requestCts.Token).ConfigureAwait(false);
                 if (pooledOutcome.UsedTransport)
+                {
+                    RecordResponseTags(pooledOutcome.Result);
                     return pooledOutcome.Result;
+                }
                 // Otherwise the connection was unusable (closed/IO) — dispose
                 // and retry with a fresh dial.
                 await SafeDisposeAsync(pooled).ConfigureAwait(false);
@@ -108,7 +123,12 @@ public sealed class TesseraHttpClient : IDisposable
             // 2. Dial + (optionally) TLS-handshake a new transport.
             var dialed = await DialAsync(url, origin, requestCts.Token).ConfigureAwait(false);
             if (dialed.IsErr)
+            {
+                RecordError(dialed.Error);
                 return Result<HttpResponse, NetworkError>.Err(dialed.Error);
+            }
+
+            _diag.Counter("net.http.connection_opened", 1);
 
             var fresh = dialed.Value;
             var freshOutcome = await TrySendOnTransportAsync(
@@ -119,47 +139,125 @@ public sealed class TesseraHttpClient : IDisposable
                 // transport error and discard. We don't loop again to avoid
                 // hammering.
                 await SafeDisposeAsync(fresh).ConfigureAwait(false);
+                RecordError(NetworkError.TransportFailure);
                 return Result<HttpResponse, NetworkError>.Err(NetworkError.TransportFailure);
             }
+            RecordResponseTags(freshOutcome.Result);
             return freshOutcome.Result;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            RecordError(NetworkError.RequestTimeout);
             return Result<HttpResponse, NetworkError>.Err(NetworkError.RequestTimeout);
         }
+    }
+
+    private void RecordResponseTags(Result<HttpResponse, NetworkError> result)
+    {
+        if (result.IsErr)
+        {
+            RecordError(result.Error);
+            return;
+        }
+        var response = result.Value;
+        Activity.Current?.SetTag("http.status_code", response.StatusCode);
+        Activity.Current?.SetTag("http.response.body.size", response.Body.Length);
+        _diag.Counter("net.http.bytes_in", response.Body.Length);
+        if (response.StatusCode >= 500)
+        {
+            Activity.Current?.SetStatus(ActivityStatusCode.Error, $"HTTP {response.StatusCode}");
+        }
+    }
+
+    private void RecordError(NetworkError error)
+    {
+        var message = error.ToString();
+        _diag.Counter("net.http.failures", 1);
+        Activity.Current?.SetStatus(ActivityStatusCode.Error, message);
+        _diag.Log(DiagLevel.Warn, "net", message);
     }
 
     private async Task<Result<IHttpTransport, NetworkError>> DialAsync(
         TesseraUrl url, OriginKey origin, CancellationToken ct)
     {
-        var dial = await _dialer.DialAsync(
-            new TcpEndpoint(origin.Host, origin.Port), ct).ConfigureAwait(false);
-        if (dial.IsErr)
+        // DNS resolution span. The TcpDialer drives DNS internally; we mirror
+        // the work with our own resolve call so the span/counter scope is
+        // crisp and DNS-only failures are distinguishable from connect-only
+        // failures. The result feeds DialDirectAsync below.
+        Result<DnsResult, DnsError> dnsResult;
+        using (var dnsSpan = _diag.Span("net", "dns"))
         {
-            return Result<IHttpTransport, NetworkError>.Err(dial.Error switch
+            Activity.Current?.SetTag("dns.host", origin.Host);
+            _diag.Counter("net.dns.resolutions", 1);
+            dnsResult = await _dns.ResolveAsync(origin.Host, ct).ConfigureAwait(false);
+            if (dnsResult.IsErr)
             {
-                TcpError.DnsFailed => NetworkError.DnsFailure,
-                TcpError.Timeout => NetworkError.ConnectTimeout,
-                _ => NetworkError.ConnectFailed,
-            });
+                _diag.Counter("net.dns.failures", 1);
+                Activity.Current?.SetStatus(ActivityStatusCode.Error, dnsResult.Error.ToString());
+                return Result<IHttpTransport, NetworkError>.Err(NetworkError.DnsFailure);
+            }
         }
 
-        var tcp = dial.Value;
+        // TCP connect span. Try each resolved address; first success wins.
+        ITcpConnection? tcp = null;
+        TcpError? lastTcpError = null;
+        using (var tcpSpan = _diag.Span("net", "tcp_connect"))
+        {
+            Activity.Current?.SetTag("server.address", origin.Host);
+            Activity.Current?.SetTag("server.port", origin.Port);
+            _diag.Counter("net.tcp.connects", 1);
+
+            foreach (var ip in dnsResult.Value.Addresses)
+            {
+                var endpoint = new System.Net.IPEndPoint(ip, origin.Port);
+                var dial = await _dialer.DialDirectAsync(
+                    endpoint,
+                    new TcpEndpoint(origin.Host, origin.Port),
+                    ct).ConfigureAwait(false);
+                if (dial.IsOk)
+                {
+                    tcp = dial.Value;
+                    break;
+                }
+                lastTcpError = dial.Error;
+            }
+
+            if (tcp is null)
+            {
+                _diag.Counter("net.tcp.failures", 1);
+                var err = lastTcpError == TcpError.Timeout
+                    ? NetworkError.ConnectTimeout
+                    : NetworkError.ConnectFailed;
+                Activity.Current?.SetStatus(ActivityStatusCode.Error, err.ToString());
+                return Result<IHttpTransport, NetworkError>.Err(err);
+            }
+        }
+
         if (url.IsHttps)
         {
+            using var tlsSpan = _diag.Span("net", "tls_handshake");
+            Activity.Current?.SetTag("server.address", origin.Host);
+            _diag.Counter("net.tls.handshakes", 1);
+
             var tlsResult = await BcTlsTransport.ConnectAsync(
                 tcp,
                 new TlsClientOptions(origin.Host, _options.AlpnProtocols),
                 ct).ConfigureAwait(false);
             if (tlsResult.IsErr)
             {
+                _diag.Counter("net.tls.failures", 1);
                 await tcp.DisposeAsync().ConfigureAwait(false);
-                return Result<IHttpTransport, NetworkError>.Err(tlsResult.Error switch
-                {
-                    TlsError.CertificateRejected => NetworkError.TlsCertificateRejected,
-                    _ => NetworkError.TlsHandshakeFailed,
-                });
+                var err = tlsResult.Error == TlsError.CertificateRejected
+                    ? NetworkError.TlsCertificateRejected
+                    : NetworkError.TlsHandshakeFailed;
+                Activity.Current?.SetStatus(ActivityStatusCode.Error, err.ToString());
+                return Result<IHttpTransport, NetworkError>.Err(err);
             }
+            // TesseraTlsClient pins TLS 1.3; tag it post-handshake.
+            Activity.Current?.SetTag("tls.protocol", "TLSv1.3");
+            if (tlsResult.Value.NegotiatedApplicationProtocol is { } alpn)
+                Activity.Current?.SetTag("tls.alpn", alpn);
+
             return Result<IHttpTransport, NetworkError>.Ok(
                 PooledHttpTransport.ForTls(origin, tcp, tlsResult.Value));
         }
@@ -194,12 +292,26 @@ public sealed class TesseraHttpClient : IDisposable
                     request.Headers.Set("Cookie", cookieHeader);
             }
 
-            await _options.RequestWriter
-                .WriteAsync(request, transport.Stream, ct)
-                .ConfigureAwait(false);
+            using (var writeSpan = _diag.Span("net", "h1_request"))
+            {
+                _diag.Counter("net.h1.requests_written", 1);
+                await _options.RequestWriter
+                    .WriteAsync(request, transport.Stream, ct)
+                    .ConfigureAwait(false);
+                if (!request.Body.IsEmpty)
+                    _diag.Counter("net.http.bytes_out", request.Body.Length);
+            }
 
-            var parseResult = await _options.ResponseParser
-                .ParseAsync(transport.Stream, ct).ConfigureAwait(false);
+            Result<HttpResponse, HttpError> parseResult;
+            using (var parseSpan = _diag.Span("net", "h1_response"))
+            {
+                _diag.Counter("net.h1.responses_parsed", 1);
+                parseResult = await _options.ResponseParser
+                    .ParseAsync(transport.Stream, ct).ConfigureAwait(false);
+                if (parseResult.IsOk)
+                    Activity.Current?.SetTag("http.status_code", parseResult.Value.StatusCode);
+            }
+
             if (parseResult.IsErr)
             {
                 // A pooled connection that the peer closed since the prior
@@ -318,6 +430,15 @@ public sealed class TesseraHttpClientOptions
     /// 60s idle timeout).
     /// </summary>
     public ConnectionPool? ConnectionPool { get; init; }
+
+    /// <summary>
+    /// Optional diagnostics sink. When set, the client emits per-request
+    /// spans (http / dns / tcp_connect / tls_handshake / h1_request /
+    /// h1_response) and counters (net.http.*, net.dns.*, net.tcp.*,
+    /// net.tls.*, net.h1.*) — feeding the Aspire dashboard. Defaults to
+    /// <see cref="NoopDiagnostics.Instance"/>.
+    /// </summary>
+    public IDiagnostics? Diagnostics { get; init; }
 }
 
 public enum NetworkError

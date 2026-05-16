@@ -97,6 +97,26 @@ internal struct TsFontMetrics
 }
 
 /// <summary>
+/// One OpenType variation-axis setting. The tag is the big-endian packing
+/// of the four ASCII bytes of the axis identifier (e.g. 'w','g','h','t' →
+/// <c>0x77676874</c>). Mirrors <c>TsFontVariation</c>.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct TsFontVariation
+{
+    public uint Tag;
+    public float Value;
+
+    public static uint PackTag(string fourCc)
+    {
+        if (fourCc.Length != 4)
+            throw new ArgumentException("axis tag must be 4 ASCII characters", nameof(fourCc));
+        return ((uint)(byte)fourCc[0] << 24) | ((uint)(byte)fourCc[1] << 16) |
+               ((uint)(byte)fourCc[2] << 8) | (byte)fourCc[3];
+    }
+}
+
+/// <summary>
 /// Source-generated P/Invoke bindings to the <c>tessera_skia</c> native shim.
 /// One <see cref="LibraryImportAttribute"/> partial method per <c>ts_</c>
 /// function in <c>native/shim/tessera_skia.h</c> — signatures mirror the C ABI
@@ -138,6 +158,9 @@ internal static partial class NativeMethods
     [LibraryImport(Library)]
     internal static partial TsStatus ts_canvas_clear(nint canvas, TsColor color);
 
+    [LibraryImport(Library)]
+    internal static partial TsStatus ts_canvas_scale(nint canvas, float sx, float sy);
+
     // --- The 4 DisplayItem ops ------------------------------------------
 
     [LibraryImport(Library)]
@@ -165,6 +188,10 @@ internal static partial class NativeMethods
 
     [LibraryImport(Library)]
     internal static partial void ts_typeface_destroy(nint typeface);
+
+    [LibraryImport(Library)]
+    internal static unsafe partial TsStatus ts_typeface_clone_variations(
+        nint baseTypeface, TsFontVariation* variations, nuint variationCount, out nint outTypeface);
 
     [LibraryImport(Library)]
     internal static partial TsStatus ts_font_create(nint typeface, float sizePx, out nint outFont);

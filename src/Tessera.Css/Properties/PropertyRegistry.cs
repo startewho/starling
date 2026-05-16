@@ -13,7 +13,9 @@ public static class PropertyRegistry
         PropertyId.Color,
         PropertyId.FontFamily,
         PropertyId.FontSize,
+        PropertyId.FontStretch,
         PropertyId.FontStyle,
+        PropertyId.FontVariationSettings,
         PropertyId.FontWeight,
         PropertyId.LineHeight,
         PropertyId.TextAlign,
@@ -57,7 +59,14 @@ public static class PropertyRegistry
             yield break;
 
         var name = declaration.Name.ToLowerInvariant();
-        var values = CssValueParser.ParseList(declaration.Value).ToList();
+        // font-family idents are family names, not CSS keywords — the value
+        // parser lowercases idents which would mangle "Helvetica Neue" to
+        // "helvetica neue". Family matching is case-insensitive at lookup
+        // time, but we keep the authored case here so the cascaded value
+        // round-trips and DevTools-style inspection sees the original text.
+        var values = name == "font-family"
+            ? FontFamilyValueParser.Parse(declaration.Value)
+            : CssValueParser.ParseList(declaration.Value).ToList();
         foreach (var parsed in Expand(name, values, declaration.Important))
             yield return parsed;
     }
@@ -88,7 +97,9 @@ public static class PropertyRegistry
             PropertyId.Visibility => new CssKeyword("visible"),
             PropertyId.FontFamily => new CssKeyword("serif"),
             PropertyId.FontSize => new CssLength(16, CssLengthUnit.Px),
+            PropertyId.FontStretch => new CssKeyword("normal"),
             PropertyId.FontStyle => new CssKeyword("normal"),
+            PropertyId.FontVariationSettings => new CssKeyword("normal"),
             PropertyId.FontWeight => new CssNumber(400),
             PropertyId.LineHeight => new CssKeyword("normal"),
             PropertyId.TextAlign => new CssKeyword("start"),
@@ -167,6 +178,9 @@ public static class PropertyRegistry
             PropertyId.ContentVisibility => new CssKeyword("visible"),
             PropertyId.WillChange => new CssKeyword("auto"),
             PropertyId.Isolation => new CssKeyword("auto"),
+            PropertyId.Container => new CssKeyword("none"),
+            PropertyId.ContainerType => new CssKeyword("normal"),
+            PropertyId.ContainerName => new CssKeyword("none"),
 
             // Scrolling
             PropertyId.ScrollBehavior => new CssKeyword("auto"),

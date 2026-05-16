@@ -132,6 +132,11 @@ TS_API void      TS_CALL ts_surface_destroy(TsSurface* surface);
  * surface is destroyed. */
 TS_API TsStatus  TS_CALL ts_surface_get_canvas(TsSurface* surface, TsCanvas** out_canvas);
 TS_API TsStatus  TS_CALL ts_canvas_clear(TsCanvas* canvas, TsColor color);
+/* Pre-concats a uniform scale onto the canvas matrix. The shim does not own
+ * the save/restore stack — callers are expected to call this immediately after
+ * ts_surface_get_canvas, before any draw ops, when rendering a logical-coordinate
+ * display list onto a physically-sized backing buffer for HiDPI displays. */
+TS_API TsStatus  TS_CALL ts_canvas_scale(TsCanvas* canvas, float sx, float sy);
 
 /* --------------------------------------------------------------------------
  * The 4 DisplayItem ops. These mirror Tessera.Paint's DisplayItem kinds 1:1 —
@@ -157,6 +162,25 @@ TS_API TsStatus  TS_CALL ts_canvas_draw_image(TsCanvas* canvas,
 TS_API TsStatus  TS_CALL ts_typeface_from_data(const uint8_t* ttf_bytes, size_t ttf_len, TsTypeface** out_typeface);
 TS_API TsStatus  TS_CALL ts_typeface_from_name(const char* family_name, TsTypeface** out_typeface);
 TS_API void      TS_CALL ts_typeface_destroy(TsTypeface* typeface);
+
+/* A single OpenType variation axis setting — a four-character axis tag
+ * ('wght', 'wdth', 'opsz', 'ital', 'slnt', ...) and its numeric value.
+ * Encoded as a uint32 (big-endian packing of the four ASCII bytes) so the
+ * C ABI stays POD; the C++ side reconstructs the SkFourByteTag. Mirrors
+ * Tessera.Skia.Interop.TsFontVariation. */
+typedef struct TsFontVariation {
+    uint32_t tag;     /* e.g. ('w'<<24) | ('g'<<16) | ('h'<<8) | 't' */
+    float    value;
+} TsFontVariation;
+
+/* Clones `base` with the supplied variation-axis settings applied. Returns
+ * a new TsTypeface the caller owns (destroy with ts_typeface_destroy). The
+ * source typeface is unaffected. For a non-variable face the variations are
+ * ignored and the returned typeface is functionally equivalent to `base`. */
+TS_API TsStatus  TS_CALL ts_typeface_clone_variations(TsTypeface* base,
+                                                     const TsFontVariation* variations,
+                                                     size_t variation_count,
+                                                     TsTypeface** out_typeface);
 
 TS_API TsStatus  TS_CALL ts_font_create(TsTypeface* typeface, float size_px, TsFont** out_font);
 /* Like ts_font_create, but applies synthetic styling: `embolden` thickens the

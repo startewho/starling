@@ -8,5 +8,6 @@ namespace Tessera.Gui.Chrome;
 /// <param name="Title">Display title.</param>
 /// <param name="Audio">Whether the tab is playing audio (accent dot).</param>
 /// <param name="Loading">Whether the tab is loading (spinner replaces favicon).</param>
+/// <param name="Url">Absolute URL to navigate to when the row is tapped, or null for non-actionable rows.</param>
 public sealed record TabInfo(
-    string Id, string Host, string Title, bool Audio = false, bool Loading = false);
+    string Id, string Host, string Title, bool Audio = false, bool Loading = false, string? Url = null);

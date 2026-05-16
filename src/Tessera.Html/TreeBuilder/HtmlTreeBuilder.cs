@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text;
+using Tessera.Common.Diagnostics;
 using Tessera.Dom;
 using Tessera.Html.Tokenizer;
 
@@ -31,37 +33,62 @@ public sealed class HtmlTreeBuilder
     private readonly Document _document = new();
     private readonly StackOfOpenElements _openElements = new();
     private readonly StringBuilder _pendingText = new();
+    private readonly IDiagnostics _diag;
+    private readonly CountingParseErrorSink? _errorCounter;
 
     private Element? _headElement;
     private Element? _bodyElement;
     private InsertionMode _mode = InsertionMode.Initial;
     private InsertionMode _originalMode = InsertionMode.Initial;
+    private int _tokenCount;
 
-    public HtmlTreeBuilder(HtmlTokenizer tokenizer)
+    public HtmlTreeBuilder(HtmlTokenizer tokenizer, IDiagnostics? diagnostics = null,
+        CountingParseErrorSink? errorCounter = null)
     {
         ArgumentNullException.ThrowIfNull(tokenizer);
         _tokenizer = tokenizer;
+        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _errorCounter = errorCounter;
     }
 
-    public static Document Parse(string html)
+    public static Document Parse(string html, IDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(html);
-        var tokenizer = new HtmlTokenizer();
+        var diag = diagnostics ?? NoopDiagnostics.Instance;
+        var errorCounter = new CountingParseErrorSink();
+        var tokenizer = new HtmlTokenizer(errorCounter);
         tokenizer.Feed(html);
         tokenizer.EndOfInput();
-        var builder = new HtmlTreeBuilder(tokenizer);
+        var builder = new HtmlTreeBuilder(tokenizer, diag, errorCounter);
         return builder.Run();
     }
 
     public Document Run()
     {
-        while (_tokenizer.ReadToken() is { } token)
+        using var _ = _diag.Span("html", "parse");
+        try
         {
-            HandleToken(token);
-            if (token is EndOfFileToken) break;
+            while (_tokenizer.ReadToken() is { } token)
+            {
+                _tokenCount++;
+                HandleToken(token);
+                if (token is EndOfFileToken) break;
+            }
+            FlushText();
+
+            var errorCount = _errorCounter?.Count ?? 0;
+            Activity.Current?.SetTag("html.tokens", _tokenCount);
+            Activity.Current?.SetTag("html.parse_errors", errorCount);
+            _diag.Counter("html.parses", 1);
+            if (errorCount > 0)
+                _diag.Counter("html.parse_errors", errorCount);
+            return _document;
         }
-        FlushText();
-        return _document;
+        catch (Exception ex)
+        {
+            Activity.Current?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
     }
 
     private void HandleToken(HtmlToken token)

@@ -43,6 +43,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" />
+    <PackageReference Include="ModelContextProtocol" />
     <ProjectReference Include="..\Tessera.Engine\Tessera.Engine.csproj" />
     <ProjectReference Include="..\Tessera.Telemetry\Tessera.Telemetry.csproj" />
   </ItemGroup>

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using Tessera.Layout.Text;
 using Tessera.Skia;
@@ -29,6 +30,8 @@ public sealed class FontResolver : IDisposable
     public static readonly FontResolver Default = new();
 
     private readonly ConcurrentDictionary<FontSpec, SkTypeface> _byFontSpec = new();
+    private readonly List<SkTypeface> _ownedClones = [];
+    private readonly object _ownedClonesLock = new();
     private readonly object _bundledLock = new();
     private SkTypeface? _bundled;
     private bool _disposed;
@@ -39,7 +42,15 @@ public sealed class FontResolver : IDisposable
     /// precedence over system fonts of the same family name (CSS Fonts 3 §5).
     /// </summary>
     /// <exception cref="InvalidOperationException">No typeface resolves and the bundled fallback is also unavailable.</exception>
-    internal SkTypeface GetTypeface(FontSpec spec, FontFaceRegistry? webFonts = null)
+    /// <summary>
+    /// Resolves the typeface for <paramref name="spec"/>. <paramref name="probeCodepoint"/>
+    /// (when supplied) is consulted against the web-font registry's
+    /// <c>unicode-range</c> filters so a subsetted face only matches when it
+    /// covers the codepoint being shaped — Google Fonts and Adobe Fonts both
+    /// rely on this for cheap script subsetting.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No typeface resolves and the bundled fallback is also unavailable.</exception>
+    internal SkTypeface GetTypeface(FontSpec spec, FontFaceRegistry? webFonts = null, int? probeCodepoint = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(spec);
@@ -47,13 +58,44 @@ public sealed class FontResolver : IDisposable
         // Web-font registry results are not cached on the resolver: the
         // registry is per-document, so caching here would leak its faces
         // across navigations. Hot lookups still hit the registry's own cache.
-        if (webFonts is not null)
-        {
-            if (TryResolveFromList(spec, webFonts) is { } webMatch)
-                return webMatch;
-        }
+        if (webFonts is not null && TryResolveFromList(spec, webFonts, probeCodepoint) is { } webMatch)
+            return ApplyVariations(webMatch, spec.Variations, ownClone: true);
 
-        return _byFontSpec.GetOrAdd(spec, ResolveSystem);
+        return _byFontSpec.GetOrAdd(spec, s => ApplyVariations(ResolveSystem(s), s.Variations, ownClone: false));
+    }
+
+    /// <summary>
+    /// Applies the variation axes to <paramref name="base"/>. Returns the
+    /// supplied typeface unchanged when there are no axes. Otherwise clones
+    /// the typeface via the shim — the clone is owned by the resolver so
+    /// disposal cleans it up (callers should not dispose the result).
+    /// </summary>
+    private SkTypeface ApplyVariations(SkTypeface @base, IReadOnlyList<FontVariation> variations, bool ownClone)
+    {
+        if (variations.Count == 0) return @base;
+
+        var buffer = ArrayPool<TsFontVariation>.Shared.Rent(variations.Count);
+        try
+        {
+            for (var i = 0; i < variations.Count; i++)
+            {
+                buffer[i] = new TsFontVariation
+                {
+                    Tag = TsFontVariation.PackTag(variations[i].Tag),
+                    Value = variations[i].Value,
+                };
+            }
+            var clone = @base.CloneWithVariations(buffer.AsSpan(0, variations.Count));
+            if (ownClone)
+            {
+                lock (_ownedClonesLock) _ownedClones.Add(clone);
+            }
+            return clone;
+        }
+        finally
+        {
+            ArrayPool<TsFontVariation>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>
@@ -63,11 +105,11 @@ public sealed class FontResolver : IDisposable
     internal SkTypeface GetSkiaSansSerifTypeface()
         => GetTypeface(FontSpec.Default);
 
-    private SkTypeface? TryResolveFromList(FontSpec spec, FontFaceRegistry webFonts)
+    private SkTypeface? TryResolveFromList(FontSpec spec, FontFaceRegistry webFonts, int? probeCodepoint)
     {
         foreach (var family in spec.Families)
         {
-            if (webFonts.TryGet(family, spec.Bold, spec.Italic, out var typeface))
+            if (webFonts.TryGet(family, spec.Bold, spec.Italic, probeCodepoint, out var typeface))
                 return typeface;
         }
         return null;
@@ -227,6 +269,11 @@ public sealed class FontResolver : IDisposable
         _disposed = true;
         foreach (var t in _byFontSpec.Values) t.Dispose();
         _byFontSpec.Clear();
+        lock (_ownedClonesLock)
+        {
+            foreach (var t in _ownedClones) t.Dispose();
+            _ownedClones.Clear();
+        }
         _bundled?.Dispose();
         _bundled = null;
     }

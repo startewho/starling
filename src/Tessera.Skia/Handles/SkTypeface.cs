@@ -62,6 +62,34 @@ internal sealed class SkTypeface : SafeHandleZeroOrMinusOneIsInvalid
     /// <summary>The raw native pointer, for passing to other interop calls.</summary>
     public nint Handle => handle;
 
+    /// <summary>
+    /// Returns a new typeface that is <c>this</c> with the supplied OpenType
+    /// variation-axis settings applied. For a non-variable face the axes are
+    /// silently ignored. The returned typeface is independent — disposing one
+    /// does not affect the other.
+    /// </summary>
+    /// <exception cref="SkiaInteropException">The native call failed.</exception>
+    public unsafe SkTypeface CloneWithVariations(ReadOnlySpan<TsFontVariation> variations)
+    {
+        nint outHandle;
+        TsStatus status;
+        lock (SkiaGate.Sync)
+        {
+            NativeCallTrace.Enter("ts_typeface_clone_variations", handle, $"axes={variations.Length}");
+            fixed (TsFontVariation* varsPtr = variations)
+            {
+                status = NativeMethods.ts_typeface_clone_variations(
+                    handle, varsPtr, (nuint)variations.Length, out outHandle);
+            }
+            NativeCallTrace.Exit("ts_typeface_clone_variations", outHandle);
+        }
+        SkiaInteropException.ThrowIfNotOk(status, nameof(NativeMethods.ts_typeface_clone_variations));
+
+        var clone = new SkTypeface();
+        clone.SetHandle(outHandle);
+        return clone;
+    }
+
     protected override bool ReleaseHandle()
     {
         lock (SkiaGate.Sync)

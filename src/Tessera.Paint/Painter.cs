@@ -106,7 +106,7 @@ public sealed class Painter
 
         StyleEngine style;
         using (_diag.Span("paint", "style_cascade"))
-            style = CreateStyleEngine(document, defaultFontSize, externalStylesheet);
+            style = CreateStyleEngine(document, defaultFontSize, externalStylesheet, _diag);
 
         // Layout measures with Skia's real shaped metrics (SkiaTextMeasurer) so
         // line breaks, widths, and baselines match exactly what the Skia
@@ -115,7 +115,7 @@ public sealed class Painter
         // engine's own DefaultTextMeasurer remains for paint-free layout unit
         // tests, but the Painter pipeline is always Skia.)
         using var measurer = new SkiaTextMeasurer(_fonts, webFonts);
-        var layoutEngine = new LayoutEngineImpl(style, measurer, images);
+        var layoutEngine = new LayoutEngineImpl(style, measurer, images, _diag);
         Tessera.Layout.Box.BlockBox root;
         using (_diag.Span("paint", "layout"))
             root = layoutEngine.LayoutDocument(document, viewport);
@@ -126,21 +126,23 @@ public sealed class Painter
     private static StyleEngine CreateStyleEngine(
         Document document,
         float? defaultFontSize,
-        Func<Element, StyleSheet?>? externalStylesheet)
+        Func<Element, StyleSheet?>? externalStylesheet,
+        IDiagnostics diag)
     {
-        var style = new StyleEngine();
+        var style = new StyleEngine(diagnostics: diag);
 
         if (defaultFontSize is > 0)
         {
             style.AddStyleSheet(CssParser.ParseStyleSheet(
                 FormattableString.Invariant($"body {{ font-size: {defaultFontSize.Value}px; }}"),
-                StyleOrigin.User));
+                StyleOrigin.User,
+                diag));
         }
 
         // Walk the tree in document order so `<style>` and `<link rel=stylesheet>`
         // contribute to the cascade in source order — required by [CSS Cascade
         // 4 §6.3]: tree order is the tiebreaker after origin/importance/specificity.
-        AddAuthorStylesheets(document, externalStylesheet, style);
+        AddAuthorStylesheets(document, externalStylesheet, style, diag);
 
         return style;
     }
@@ -148,7 +150,8 @@ public sealed class Painter
     private static void AddAuthorStylesheets(
         Node node,
         Func<Element, StyleSheet?>? externalStylesheet,
-        StyleEngine style)
+        StyleEngine style,
+        IDiagnostics diag)
     {
         if (node is Element element)
         {
@@ -156,7 +159,7 @@ public sealed class Painter
             {
                 var source = element.TextContent;
                 if (!string.IsNullOrWhiteSpace(source))
-                    style.AddStyleSheet(CssParser.ParseStyleSheet(source, StyleOrigin.Author));
+                    style.AddStyleSheet(CssParser.ParseStyleSheet(source, StyleOrigin.Author, diag));
             }
             else if (element.LocalName == "link" && externalStylesheet is not null)
             {
@@ -167,6 +170,6 @@ public sealed class Painter
         }
 
         for (var child = node.FirstChild; child is not null; child = child.NextSibling)
-            AddAuthorStylesheets(child, externalStylesheet, style);
+            AddAuthorStylesheets(child, externalStylesheet, style, diag);
     }
 }

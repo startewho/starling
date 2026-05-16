@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Tessera.Common.Diagnostics;
 using Tessera.Css.Media;
 using Tessera.Css.Parser;
 using Tessera.Css.Properties;
@@ -13,10 +15,12 @@ public sealed class StyleEngine
 {
     private readonly List<StyleSheet> _sheets = [];
     private readonly Dictionary<StyleOrigin, LayerOrder> _layerOrders = new();
+    private readonly IDiagnostics _diag;
     private MediaContext _mediaContext = MediaContext.Default;
 
-    public StyleEngine(bool includeUserAgentStyleSheet = true)
+    public StyleEngine(bool includeUserAgentStyleSheet = true, IDiagnostics? diagnostics = null)
     {
+        _diag = diagnostics ?? NoopDiagnostics.Instance;
         foreach (var origin in Enum.GetValues<StyleOrigin>())
             _layerOrders[origin] = new LayerOrder();
 
@@ -29,6 +33,20 @@ public sealed class StyleEngine
         get => _mediaContext;
         set => _mediaContext = value ?? MediaContext.Default;
     }
+
+    /// <summary>Provider that resolves real font glyph metrics (x-height, cap-height,
+    /// '0' advance, ideographic advance) for the cascaded font. Defaults to a
+    /// heuristic implementation that derives metrics from <c>font-size</c>. A
+    /// real shaping-aware backend (Skia, etc.) should replace this.</summary>
+    public IFontMetricsProvider FontMetrics { get; set; } = new HeuristicFontMetricsProvider();
+
+    /// <summary>Optional lookup invoked when resolving <c>cq*</c> units. The engine
+    /// walks the element's ancestor chain; for each ancestor, the lookup may return
+    /// a <c>(width, height)</c> pair if that ancestor is a container with a known
+    /// box size. The first non-null result is used. When the lookup is null or
+    /// every ancestor returns null, the spec-correct fallback is the small viewport
+    /// per CSS Containment 3 §3.2.</summary>
+    public Func<Element, (double Width, double Height)?>? ContainerSizeLookup { get; set; }
 
     public void AddStyleSheet(StyleSheet sheet)
     {
@@ -74,8 +92,28 @@ public sealed class StyleEngine
     public ComputedStyle Compute(Element element, SelectorMatchContext? context)
     {
         ArgumentNullException.ThrowIfNull(element);
+        using var _ = _diag.Span("css", "cascade");
+        try
+        {
+            var elementsStyled = 0;
+            var result = ComputeWithAncestors(element, context, ref elementsStyled);
+            Activity.Current?.SetTag("css.elements_styled", elementsStyled);
+            Activity.Current?.SetTag("css.sheets", _sheets.Count);
+            _diag.Counter("css.cascades", 1);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Activity.Current?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
+    }
+
+    private ComputedStyle ComputeWithAncestors(Element element, SelectorMatchContext? context, ref int elementsStyled)
+    {
         var parent = element.ParentNode as Element;
-        var parentStyle = parent is null ? null : Compute(parent, context);
+        var parentStyle = parent is null ? null : ComputeWithAncestors(parent, context, ref elementsStyled);
+        elementsStyled++;
         return Compute(element, parentStyle, context);
     }
 
@@ -113,7 +151,7 @@ public sealed class StyleEngine
         var inlineStyle = element.GetAttribute("style");
         if (!string.IsNullOrWhiteSpace(inlineStyle))
         {
-            var parser = new CssParser(inlineStyle);
+            var parser = new CssParser(inlineStyle, _diag);
             var declarations = parser.ParseDeclarationList();
             AddDeclarations(
                 declarations,
@@ -156,89 +194,159 @@ public sealed class StyleEngine
         {
             CssValue value;
             if (winners.TryGetValue(property, out var cascaded))
-                value = ResolveSpecialKeywords(cascaded, property, parentStyle, customProperties, allCandidates);
+                value = ResolveSpecialKeywords(cascaded, property, parentStyle, customProperties, allCandidates, element);
             else if (PropertyRegistry.Inherits(property) && parentStyle is not null)
                 value = parentStyle.Get(property);
             else
                 value = PropertyRegistry.InitialValue(property);
 
-            values[property] = ResolveVariables(value, customProperties);
+            values[property] = ResolveReferences(value, customProperties, element);
         }
 
-        ResolveFontRelativeLengths(values, parentStyle);
+        ResolveLengths(values, parentStyle, element);
 
         return new ComputedStyle(values, customProperties);
     }
 
     /// <summary>
-    /// Resolve <c>em</c>/<c>rem</c> lengths to absolute <c>px</c> at computed-value
-    /// time, per CSS Values §5. <c>font-size</c> is resolved first — <c>em</c> on it
-    /// is relative to the <em>parent's</em> font-size — and every other property's
-    /// <c>em</c> then resolves against <em>this</em> element's font-size. Without
-    /// this, layout would treat every <c>em</c> as a flat 16px, so e.g. an
-    /// <c>h1 { font-size: 2em; margin: 0.67em 0 }</c> would get a 10.7px margin
-    /// instead of the correct 21.4px.
+    /// Computed-value-time length resolution per CSS Values 4 §6. Resolves
+    /// <c>em</c>/<c>rem</c>/<c>lh</c>/<c>rlh</c>/<c>cap</c>/<c>ch</c>/<c>ex</c>/<c>ic</c>,
+    /// viewport units (<c>vh</c>/<c>vw</c>/<c>sv*</c>/<c>lv*</c>/<c>dv*</c>),
+    /// and container units (<c>cq*</c>) to absolute pixels using
+    /// <see cref="MediaContext"/> and the cascaded font-size. Reduces
+    /// <see cref="CssCalc"/> trees to literals where possible. Percentages are
+    /// left symbolic — they resolve at layout time against the containing block.
     /// </summary>
-    private static void ResolveFontRelativeLengths(
+    private void ResolveLengths(
         Dictionary<PropertyId, CssValue> values,
-        ComputedStyle? parentStyle)
+        ComputedStyle? parentStyle,
+        Element element)
     {
         var parentFontPx = parentStyle is not null
-            ? AbsolutePx(parentStyle.Get(PropertyId.FontSize), emBasis: 16d)
+            ? ParentFontPx(parentStyle)
             : 16d;
 
-        var fontPx = ResolveFontSize(values[PropertyId.FontSize], parentFontPx);
+        var fontPx = ResolveFontSizeValue(values[PropertyId.FontSize], parentFontPx);
         values[PropertyId.FontSize] = new CssLength(fontPx, CssLengthUnit.Px);
+
+        var ctx = BuildResolutionContext(fontPx, values, element);
 
         foreach (var property in PropertyRegistry.All)
         {
             if (property == PropertyId.FontSize) continue;
-            values[property] = ResolveEm(values[property], fontPx);
+            values[property] = CssCalcResolver.Resolve(values[property], ctx);
         }
     }
 
-    private static double ResolveFontSize(CssValue value, double parentFontPx)
-        => value switch
+    private CssResolutionContext BuildResolutionContext(double fontPx, Dictionary<PropertyId, CssValue> values, Element element)
+    {
+        var family = ExtractFontFamily(values);
+        var style = ExtractFontStyle(values);
+        var weight = ExtractFontWeight(values);
+        var metrics = FontMetrics.Resolve(family, fontPx, style, weight);
+        var (containerW, containerH) = ResolveContainerSize(element);
+        return CssResolutionContext.Default with
         {
-            CssLength { Unit: CssLengthUnit.Em } len => len.Value * parentFontPx,
-            CssLength { Unit: CssLengthUnit.Rem } len => len.Value * 16d,
-            CssLength len => AbsolutePx(len, parentFontPx),
-            CssPercentage pct => parentFontPx * pct.Value / 100d,
-            CssNumber n => n.Value,
-            _ => 16d,
+            FontSizePx = fontPx,
+            RootFontSizePx = 16d,
+            LineHeightPx = fontPx * 1.2,
+            RootLineHeightPx = 16d * 1.2,
+            XHeightPx = metrics.XHeightPx,
+            CapHeightPx = metrics.CapHeightPx,
+            ZeroAdvancePx = metrics.ZeroAdvancePx,
+            IcAdvancePx = metrics.IcAdvancePx,
+            ViewportWidthPx = _mediaContext.ViewportWidthPx,
+            ViewportHeightPx = _mediaContext.ViewportHeightPx,
+            SmallViewportWidthPx = _mediaContext.ViewportWidthPx,
+            SmallViewportHeightPx = _mediaContext.ViewportHeightPx,
+            LargeViewportWidthPx = _mediaContext.ViewportWidthPx,
+            LargeViewportHeightPx = _mediaContext.ViewportHeightPx,
+            DynamicViewportWidthPx = _mediaContext.ViewportWidthPx,
+            DynamicViewportHeightPx = _mediaContext.ViewportHeightPx,
+            ContainerWidthPx = containerW,
+            ContainerHeightPx = containerH,
         };
+    }
 
-    private static CssValue ResolveEm(CssValue value, double fontPx)
-        => value switch
+    private (double Width, double Height) ResolveContainerSize(Element element)
+    {
+        if (ContainerSizeLookup is { } lookup)
         {
-            CssLength { Unit: CssLengthUnit.Em } len => new CssLength(len.Value * fontPx, CssLengthUnit.Px),
-            CssLength { Unit: CssLengthUnit.Rem } len => new CssLength(len.Value * 16d, CssLengthUnit.Px),
-            CssValueList list => new CssValueList(list.Values.Select(v => ResolveEm(v, fontPx)).ToList()),
-            _ => value,
-        };
-
-    /// <summary>Convert an absolute (or font-relative) length to px. Viewport- and
-    /// glyph-relative units (vw/vh/ch/ex) are left to layout, which has the
-    /// viewport.</summary>
-    private static double AbsolutePx(CssValue value, double emBasis)
-        => value switch
-        {
-            CssLength len => len.Unit switch
+            for (var anc = element.ParentNode as Element; anc is not null; anc = anc.ParentNode as Element)
             {
-                CssLengthUnit.Px => len.Value,
-                CssLengthUnit.Pt => len.Value * 4d / 3d,
-                CssLengthUnit.Pc => len.Value * 16d,
-                CssLengthUnit.In => len.Value * 96d,
-                CssLengthUnit.Cm => len.Value * 96d / 2.54d,
-                CssLengthUnit.Mm => len.Value * 96d / 25.4d,
-                CssLengthUnit.Q => len.Value * 96d / 101.6d,
-                CssLengthUnit.Em => len.Value * emBasis,
-                CssLengthUnit.Rem => len.Value * 16d,
-                _ => len.Value,
+                var size = lookup(anc);
+                if (size is { } v)
+                    return (v.Width, v.Height);
+            }
+        }
+        // Spec-correct fallback per CSS Containment 3 §3.2 — small viewport.
+        return (_mediaContext.ViewportWidthPx, _mediaContext.ViewportHeightPx);
+    }
+
+    private static string ExtractFontFamily(Dictionary<PropertyId, CssValue> values)
+        => values[PropertyId.FontFamily] switch
+        {
+            CssKeyword k => k.Name,
+            CssString s => s.Value,
+            CssValueList list when list.Values.Count > 0 => list.Values[0] switch
+            {
+                CssKeyword k => k.Name,
+                CssString s => s.Value,
+                _ => "serif",
             },
-            CssNumber n => n.Value,
-            _ => emBasis,
+            _ => "serif",
         };
+
+    private static string ExtractFontStyle(Dictionary<PropertyId, CssValue> values)
+        => values[PropertyId.FontStyle] is CssKeyword k ? k.Name : "normal";
+
+    private static double ExtractFontWeight(Dictionary<PropertyId, CssValue> values)
+        => values[PropertyId.FontWeight] switch
+        {
+            CssNumber n => n.Value,
+            CssKeyword { Name: "bold" } => 700,
+            CssKeyword { Name: "normal" } => 400,
+            CssKeyword { Name: "lighter" } => 300,
+            CssKeyword { Name: "bolder" } => 700,
+            _ => 400,
+        };
+
+    private static double ParentFontPx(ComputedStyle parentStyle)
+    {
+        var v = parentStyle.Get(PropertyId.FontSize);
+        return v is CssLength { Unit: CssLengthUnit.Px } len ? len.Value : 16d;
+    }
+
+    private double ResolveFontSizeValue(CssValue value, double parentFontPx)
+    {
+        var ctx = CssResolutionContext.Default with
+        {
+            FontSizePx = parentFontPx,
+            RootFontSizePx = 16d,
+            LineHeightPx = parentFontPx * 1.2,
+            RootLineHeightPx = 16d * 1.2,
+            XHeightPx = parentFontPx * 0.5,
+            CapHeightPx = parentFontPx * 0.7,
+            ZeroAdvancePx = parentFontPx * 0.5,
+            IcAdvancePx = parentFontPx,
+            ViewportWidthPx = _mediaContext.ViewportWidthPx,
+            ViewportHeightPx = _mediaContext.ViewportHeightPx,
+            SmallViewportWidthPx = _mediaContext.ViewportWidthPx,
+            SmallViewportHeightPx = _mediaContext.ViewportHeightPx,
+            LargeViewportWidthPx = _mediaContext.ViewportWidthPx,
+            LargeViewportHeightPx = _mediaContext.ViewportHeightPx,
+            DynamicViewportWidthPx = _mediaContext.ViewportWidthPx,
+            DynamicViewportHeightPx = _mediaContext.ViewportHeightPx,
+            PercentageBasisPx = parentFontPx,
+        };
+        var resolved = CssCalcResolver.Resolve(value, ctx);
+        return resolved switch
+        {
+            CssLength { Unit: CssLengthUnit.Px } len => len.Value,
+            CssNumber n => n.Value,
+            _ => parentFontPx,
+        };
+    }
 
     private void RegisterLayers(IReadOnlyList<CssRule> rules, StyleOrigin origin, string? currentPath)
     {
@@ -711,9 +819,10 @@ public sealed class StyleEngine
         PropertyId property,
         ComputedStyle? parentStyle,
         IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> customProperties,
-        Dictionary<PropertyId, List<CascadedValue>> allCandidates)
+        Dictionary<PropertyId, List<CascadedValue>> allCandidates,
+        Element element)
     {
-        var value = ResolveVariables(cascaded.Value, customProperties);
+        var value = ResolveReferences(cascaded.Value, customProperties, element);
         switch (value)
         {
             case CssKeyword { Name: "inherit" } when parentStyle is not null:
@@ -725,9 +834,9 @@ public sealed class StyleEngine
             case CssKeyword { Name: "unset" }:
                 return PropertyRegistry.InitialValue(property);
             case CssKeyword { Name: "revert" }:
-                return ResolveRevert(property, cascaded, parentStyle, allCandidates, sameOriginOnly: false);
+                return ResolveRevert(property, cascaded, parentStyle, allCandidates, element, sameOriginOnly: false);
             case CssKeyword { Name: "revert-layer" }:
-                return ResolveRevert(property, cascaded, parentStyle, allCandidates, sameOriginOnly: true);
+                return ResolveRevert(property, cascaded, parentStyle, allCandidates, element, sameOriginOnly: true);
             default:
                 return value;
         }
@@ -738,6 +847,7 @@ public sealed class StyleEngine
         CascadedValue current,
         ComputedStyle? parentStyle,
         Dictionary<PropertyId, List<CascadedValue>> allCandidates,
+        Element element,
         bool sameOriginOnly)
     {
         if (!allCandidates.TryGetValue(property, out var list))
@@ -764,7 +874,7 @@ public sealed class StyleEngine
         }
         if (best is null)
             return DefaultForProperty(property, parentStyle);
-        var inner = ResolveSpecialKeywords(best, property, parentStyle, parentStyle?.CustomProperties ?? new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal), allCandidates);
+        var inner = ResolveSpecialKeywords(best, property, parentStyle, parentStyle?.CustomProperties ?? new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal), allCandidates, element);
         return inner;
     }
 
@@ -775,18 +885,21 @@ public sealed class StyleEngine
         return PropertyRegistry.InitialValue(property);
     }
 
-    private static CssValue ResolveVariables(
+    private static CssValue ResolveReferences(
         CssValue value,
-        IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> customProperties)
+        IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> customProperties,
+        Element element)
         => value switch
         {
             CssVarReference var when customProperties.TryGetValue(var.Name, out var tokens) =>
-                ResolveVariables(CssValueParser.Parse(tokens), customProperties),
-            CssVarReference { Fallback: not null } var => ResolveVariables(var.Fallback, customProperties),
-            CssValueList list => new CssValueList(list.Values.Select(v => ResolveVariables(v, customProperties)).ToList()),
+                ResolveReferences(CssValueParser.Parse(tokens), customProperties, element),
+            CssVarReference { Fallback: not null } var => ResolveReferences(var.Fallback, customProperties, element),
+            CssAttrReference attr => attr.Resolve(element.GetAttribute)
+                ?? (attr.Fallback is null ? value : ResolveReferences(attr.Fallback, customProperties, element)),
+            CssValueList list => new CssValueList(list.Values.Select(v => ResolveReferences(v, customProperties, element)).ToList()),
             CssFunctionValue function => new CssFunctionValue(
                 function.Name,
-                function.Arguments.Select(v => ResolveVariables(v, customProperties)).ToList()),
+                function.Arguments.Select(v => ResolveReferences(v, customProperties, element)).ToList()),
             _ => value,
         };
 

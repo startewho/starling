@@ -2,6 +2,7 @@ using Microsoft.Maui.Layouts;
 using Tessera.Css.Properties;
 using Tessera.Engine;
 using Tessera.Gui.Theme;
+using Tessera.Url;
 using MauiColor = Microsoft.Maui.Graphics.Color;
 using DomElement = Tessera.Dom.Element;
 
@@ -156,11 +157,18 @@ public sealed class WebviewPanel : Grid
         _selectAnchor = null;
         ClearHighlights();
 
-        using var bitmap = _pageRenderer.Render(page.Root);
-        _pageImage.Source = PageRenderer.ToImageSource(bitmap);
+        // Render at physical resolution × UiScale: physical pixels for crispness,
+        // UiScale for visual size (compensates for the iPad-idiom upscale Catalyst
+        // used to apply implicitly). UIImage.Scale stays at the device density,
+        // so the bitmap displays at (CSS px × UiScale) logical points.
+        var density = (float)DeviceDisplay.Current.MainDisplayInfo.Density;
+        if (!(density > 0.0f)) density = 1.0f;
+        var uiScale = (float)ThemeManager.UiScale;
+        using var bitmap = _pageRenderer.Render(page.Root, density * uiScale);
+        _pageImage.Source = PageRenderer.ToImageSource(bitmap, density);
 
-        var docWidth = Math.Max(1, page.Root.Frame.Width);
-        var docHeight = Math.Max(1, page.Root.Frame.Height);
+        var docWidth = Math.Max(1, page.Root.Frame.Width) * uiScale;
+        var docHeight = Math.Max(1, page.Root.Frame.Height) * uiScale;
         AbsoluteLayout.SetLayoutBounds(_pageImage, new Rect(0, 0, docWidth, docHeight));
         _pageCanvas.WidthRequest = docWidth;
         _pageCanvas.HeightRequest = docHeight;
@@ -178,8 +186,20 @@ public sealed class WebviewPanel : Grid
         var pos = e.GetPosition(_pageImage);
         if (pos is not { } p) return;
 
-        _lastPointerDoc = (p.X, p.Y);
-        var hit = BoxHitTester.HitTest(_currentPage.Root, p.X, p.Y);
+        // Pointer coords arrive in the _pageImage's logical-point space (CSS px
+        // × UiScale); the box tree and hit tester are in CSS px.
+        var cssX = p.X / ThemeManager.UiScale;
+        var cssY = p.Y / ThemeManager.UiScale;
+        _lastPointerDoc = (cssX, cssY);
+        var hit = BoxHitTester.HitTest(_currentPage.Root, cssX, cssY);
+
+#if MACCATALYST
+        // Update the system cursor on every move. NSCursor.Set is idempotent
+        // and the AppKit cursor stack remembers the last call until the next
+        // move event, so re-affirming here is cheap and persistent.
+        Platforms.MacCatalyst.PointerCursor.Set(BoxHitTester.ResolveCursor(hit));
+#endif
+
         var anchor = hit.LinkAnchor;
         if (ReferenceEquals(anchor, _hoverAnchor)) return;
 
@@ -193,6 +213,11 @@ public sealed class WebviewPanel : Grid
 
     private void OnPagePointerExited(object? sender, PointerEventArgs e)
     {
+#if MACCATALYST
+        // Hand the cursor back to whatever chrome / scroll-bar / window edge
+        // the pointer is moving over so we don't leave the I-beam stuck.
+        Platforms.MacCatalyst.PointerCursor.Reset();
+#endif
         if (_hoverAnchor is null) return;
         _hoverAnchor = null;
         ApplyHoverHighlight();
@@ -212,10 +237,18 @@ public sealed class WebviewPanel : Grid
         {
             var overlay = new BoxView { Color = tint, InputTransparent = true };
             AbsoluteLayout.SetLayoutFlags(overlay, AbsoluteLayoutFlags.None);
-            AbsoluteLayout.SetLayoutBounds(overlay, rect);
+            AbsoluteLayout.SetLayoutBounds(overlay, ScaleToPoints(rect));
             _pageCanvas.Children.Add(overlay);
             _highlightOverlays.Add(overlay);
         }
+    }
+
+    // Fragments are in CSS px; the _pageCanvas places overlays in logical
+    // points (CSS px × UiScale). Convert at the boundary.
+    private static Rect ScaleToPoints(Rect r)
+    {
+        var s = ThemeManager.UiScale;
+        return new Rect(r.X * s, r.Y * s, r.Width * s, r.Height * s);
     }
 
     private IEnumerable<Rect> LinkFragmentRects(DomElement anchor)
@@ -258,7 +291,15 @@ public sealed class WebviewPanel : Grid
         var pos = e.GetPosition(_pageImage);
         if (pos is not { } p) return;
 
-        var hit = BoxHitTester.HitTest(_currentPage.Root, p.X, p.Y);
+        // A primary click always collapses any existing selection. Right-clicks
+        // don't reach this handler (TapGestureRecognizer is primary-only), so
+        // the context-menu path keeps the selection intact.
+        if (_selectionOverlays.Count > 0)
+            ClearSelectionHighlights();
+
+        var cssX = p.X / ThemeManager.UiScale;
+        var cssY = p.Y / ThemeManager.UiScale;
+        var hit = BoxHitTester.HitTest(_currentPage.Root, cssX, cssY);
         var href = hit.LinkAnchor?.GetAttribute("href");
         if (string.IsNullOrWhiteSpace(href)) return;
 
@@ -283,7 +324,9 @@ public sealed class WebviewPanel : Grid
                 ClearSelectionHighlights();
                 break;
             case GestureStatus.Running when _selectAnchor is { } anchor && _panOrigin is { } origin:
-                var cursor = (origin.X + e.TotalX, origin.Y + e.TotalY);
+                // e.TotalX/Y is in logical points; origin is in CSS px.
+                var cursor = (origin.X + (e.TotalX / ThemeManager.UiScale),
+                              origin.Y + (e.TotalY / ThemeManager.UiScale));
                 UpdateSelectionHighlight(anchor, cursor);
                 break;
             case GestureStatus.Completed:
@@ -313,7 +356,7 @@ public sealed class WebviewPanel : Grid
                 InputTransparent = true,
             };
             AbsoluteLayout.SetLayoutFlags(overlay, AbsoluteLayoutFlags.None);
-            AbsoluteLayout.SetLayoutBounds(overlay, new Rect(f.X, f.Y, f.Width, f.Height));
+            AbsoluteLayout.SetLayoutBounds(overlay, ScaleToPoints(new Rect(f.X, f.Y, f.Width, f.Height)));
             _pageCanvas.Children.Add(overlay);
             _highlightOverlays.Add(overlay);
             _selectionOverlays.Add(overlay);
@@ -390,7 +433,8 @@ public sealed class WebviewPanel : Grid
             if (text.Contains(query, StringComparison.OrdinalIgnoreCase))
             {
                 _findCursor = idx + 1;
-                var targetY = Math.Max(0, y - _pageScroll.Height / 3);
+                // Fragment Y is CSS px; scroll target lives in logical points.
+                var targetY = Math.Max(0, (y * ThemeManager.UiScale) - (_pageScroll.Height / 3));
                 await _pageScroll.ScrollToAsync(0, targetY, animated: true);
                 _onStatus($"Find: '{query}' at y={y:F0}", false);
                 return;
@@ -404,9 +448,20 @@ public sealed class WebviewPanel : Grid
         href = href.Trim();
         if (href.Length == 0 || href.StartsWith("#", StringComparison.Ordinal))
             return null;
-        if (Uri.TryCreate(href, UriKind.Absolute, out var abs)) return abs.ToString();
-        if (baseUrl is not null && Uri.TryCreate(new Uri(baseUrl), href, out var combined))
-            return combined.ToString();
-        return null;
+
+        // System.Uri is unusable here: it parses protocol-relative hrefs like
+        // `//cdn.example.com/x` as UNC paths and hands back `file://cdn...`,
+        // which sent the URL bar to file:/// on any page that used them. Route
+        // through Tessera's WHATWG URL parser, which inherits the scheme from
+        // the base for `//host` and resolves relative paths correctly.
+        Tessera.Url.Url? parsedBase = null;
+        if (!string.IsNullOrEmpty(baseUrl))
+        {
+            var baseResult = UrlParser.Parse(baseUrl);
+            if (baseResult.IsOk) parsedBase = baseResult.Value;
+        }
+
+        var parsed = UrlParser.Parse(href, parsedBase);
+        return parsed.IsOk ? parsed.Value.ToString() : null;
     }
 }

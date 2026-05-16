@@ -168,3 +168,14 @@ public interface IParseErrorSink
         public void Report(HtmlParseError code, int line, int column) { /* drop */ }
     }
 }
+
+/// <summary>
+/// A parse-error sink that counts reports. Used by the parser to tag the
+/// "html.parse" diagnostic span with an error total without an O(n) walk.
+/// </summary>
+public sealed class CountingParseErrorSink : IParseErrorSink
+{
+    public int Count { get; private set; }
+
+    public void Report(HtmlParseError code, int line, int column) => Count++;
+}

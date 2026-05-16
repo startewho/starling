@@ -126,8 +126,8 @@ public sealed class TesseraEngine
         Document doc;
         using (_diag.Span("engine", "parse_html"))
         {
-            doc = Html.HtmlParser.Parse(html);
             Activity.Current?.SetTag("html.bytes", html.Length);
+            doc = Html.HtmlParser.Parse(html, _diag);
         }
         var displayText = ExtractDisplayText(doc);
 
@@ -257,7 +257,7 @@ public sealed class TesseraEngine
             return Result<LaidOutPage, RenderError>.Err(new RenderError(ex.Message));
         }
 
-        var doc = Html.HtmlParser.Parse(html);
+        var doc = Html.HtmlParser.Parse(html, _diag);
 
         // Page resources outlive this method — the caller's LaidOutPage owns
         // and disposes them. On any path that doesn't return Ok we dispose
@@ -304,14 +304,14 @@ public sealed class TesseraEngine
     /// per-sheet base URL so a <c>url("foo.woff2")</c> declared in a remote
     /// CSS resolves against that CSS's origin, not the document's.
     /// </summary>
-    private static IEnumerable<(StyleSheet Sheet, TesseraUrl? BaseUrl)> EnumerateAuthorSheets(
+    private IEnumerable<(StyleSheet Sheet, TesseraUrl? BaseUrl)> EnumerateAuthorSheets(
         Document doc, TesseraUrl? docUrl, StylesheetFetcher stylesheets)
     {
         foreach (var styleElement in doc.GetElementsByTagName("style"))
         {
             var source = styleElement.TextContent;
             if (string.IsNullOrWhiteSpace(source)) continue;
-            yield return (CssParser.ParseStyleSheet(source, StyleOrigin.Author), docUrl);
+            yield return (CssParser.ParseStyleSheet(source, StyleOrigin.Author, _diag), docUrl);
         }
         foreach (var entry in stylesheets.EnumerateLoaded())
             yield return (entry.Sheet, entry.BaseUrl);

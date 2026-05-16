@@ -21,6 +21,25 @@ public sealed class ComputedStyle
 
     public CssValue Get(PropertyId property) => _values[property];
 
+    /// <summary>Layout-time used-value resolution. Resolves any remaining
+    /// percentages or symbolic units (e.g. percentages, container units when
+    /// a container basis is supplied) using <paramref name="ctx"/>.</summary>
+    public CssValue UsedValue(PropertyId property, CssResolutionContext ctx)
+        => CssCalcResolver.Resolve(Get(property), ctx);
+
+    /// <summary>Resolve a property's value to a px length given a containing-block
+    /// basis in pixels. Returns 0 if the value is not length-typed.</summary>
+    public double UsedLengthPx(PropertyId property, double containingBlockPx, CssResolutionContext baseCtx)
+    {
+        var ctx = baseCtx with { PercentageBasisPx = containingBlockPx };
+        return UsedValue(property, ctx) switch
+        {
+            CssLength { Unit: CssLengthUnit.Px } len => len.Value,
+            CssNumber n => n.Value,
+            _ => 0,
+        };
+    }
+
     public CssLength GetLength(PropertyId property)
         => Get(property) as CssLength ?? CssLength.Zero;
 

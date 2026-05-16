@@ -5,10 +5,20 @@ using Tessera.Css.Values;
 namespace Tessera.Layout.Text;
 
 /// <summary>
-/// The font selection layout needs for measurement: a prioritised family list
-/// plus bold/italic flags. Layout doesn't resolve this to a concrete typeface
-/// — that's the paint module's job. The Skia-backed measurer resolves and
-/// caches per spec so each call doesn't re-walk the family list.
+/// One OpenType variation-axis setting. <see cref="Tag"/> is the four-letter
+/// axis identifier ("wght", "wdth", "opsz", "ital", "slnt", or any font-
+/// defined custom axis), <see cref="Value"/> the numeric coordinate on that
+/// axis. Sorted by tag in <see cref="FontSpec"/> so two specs reach the same
+/// cache entry regardless of authored order.
+/// </summary>
+public readonly record struct FontVariation(string Tag, float Value);
+
+/// <summary>
+/// The font selection layout needs for measurement: a prioritised family list,
+/// bold/italic flags, and a (possibly empty) set of OpenType variation-axis
+/// settings. Layout doesn't resolve this to a concrete typeface — that's the
+/// paint module's job. The Skia-backed measurer resolves and caches per spec
+/// so each call doesn't re-walk the family list.
 /// <para>
 /// <see cref="Equals(FontSpec?)"/> compares families element-wise so two
 /// instances built from the same cascade compare equal (the default record
@@ -16,9 +26,18 @@ namespace Tessera.Layout.Text;
 /// blow caches keyed on FontSpec).
 /// </para>
 /// </summary>
-public sealed record FontSpec(IReadOnlyList<string> Families, bool Bold, bool Italic)
+public sealed record FontSpec(
+    IReadOnlyList<string> Families,
+    bool Bold,
+    bool Italic,
+    IReadOnlyList<FontVariation> Variations)
 {
-    public static readonly FontSpec Default = new(["sans-serif"], false, false);
+    public FontSpec(IReadOnlyList<string> families, bool bold, bool italic)
+        : this(families, bold, italic, Array.Empty<FontVariation>())
+    {
+    }
+
+    public static readonly FontSpec Default = new(["sans-serif"], false, false, Array.Empty<FontVariation>());
 
     public bool Equals(FontSpec? other)
     {
@@ -31,6 +50,11 @@ public sealed record FontSpec(IReadOnlyList<string> Families, bool Bold, bool It
             if (!string.Equals(Families[i], other.Families[i], StringComparison.Ordinal))
                 return false;
         }
+        if (Variations.Count != other.Variations.Count) return false;
+        for (var i = 0; i < Variations.Count; i++)
+        {
+            if (Variations[i] != other.Variations[i]) return false;
+        }
         return true;
     }
 
@@ -40,6 +64,7 @@ public sealed record FontSpec(IReadOnlyList<string> Families, bool Bold, bool It
         hash.Add(Bold);
         hash.Add(Italic);
         foreach (var f in Families) hash.Add(f, StringComparer.Ordinal);
+        foreach (var v in Variations) hash.Add(v);
         return hash.ToHashCode();
     }
 
@@ -51,8 +76,115 @@ public sealed record FontSpec(IReadOnlyList<string> Families, bool Bold, bool It
     public static FontSpec FromStyle(ComputedStyle? style)
     {
         if (style is null) return Default;
-        return new FontSpec(ExtractFamilies(style), IsBold(style), IsItalic(style));
+        var bold = IsBold(style);
+        var italic = IsItalic(style);
+        var variations = ExtractVariations(style);
+        return new FontSpec(ExtractFamilies(style), bold, italic, variations);
     }
+
+    /// <summary>
+    /// Builds the variation-axis list. We layer three sources, last-write-wins:
+    /// <list type="number">
+    ///   <item>The <c>wght</c> axis derived from numeric <c>font-weight</c>
+    ///   (so a variable font reaches the requested weight even when no
+    ///   discrete bold face is loaded).</item>
+    ///   <item>The <c>wdth</c> axis from <c>font-stretch</c> (percentage or
+    ///   keyword), and <c>slnt</c> from oblique <c>font-style</c>.</item>
+    ///   <item>Explicit <c>font-variation-settings</c> overrides — the
+    ///   author's last word per CSS Fonts 4 §6.</item>
+    /// </list>
+    /// Output is sorted by tag so equality and caching are order-independent.
+    /// </summary>
+    private static FontVariation[] ExtractVariations(ComputedStyle style)
+    {
+        var axes = new Dictionary<string, float>(StringComparer.Ordinal);
+
+        // wght: 1–1000 per CSS Fonts 4. We feed the raw numeric value so a
+        // variable face delivers 350/550/etc. exactly. A keyword font-weight
+        // resolves to a number upstream (normal=400, bold=700).
+        if (style.Get(PropertyId.FontWeight) is CssNumber n && n.Value > 0)
+            axes["wght"] = (float)n.Value;
+
+        // wdth: 50%–200%. We accept either a percentage or the named keywords.
+        switch (style.Get(PropertyId.FontStretch))
+        {
+            case CssPercentage pct when pct.Value > 0:
+                axes["wdth"] = (float)pct.Value;
+                break;
+            case CssKeyword kw:
+                if (StretchKeyword(kw.Name) is { } stretchValue)
+                    axes["wdth"] = stretchValue;
+                break;
+        }
+
+        // slnt: degrees of slant, negative = forward. Activated by an oblique
+        // font-style with an angle, or the bare "oblique" keyword.
+        if (style.Get(PropertyId.FontStyle) is CssValueList styleList &&
+            styleList.Values.Count >= 2 &&
+            styleList.Values[0] is CssKeyword { Name: "oblique" } &&
+            styleList.Values[1] is CssDimension { Unit: "deg" } slnt)
+        {
+            axes["slnt"] = (float)-slnt.Value;
+        }
+
+        // Explicit overrides last.
+        if (style.Get(PropertyId.FontVariationSettings) is CssValueList settings)
+            ApplyExplicitSettings(settings.Values, axes);
+        else if (style.Get(PropertyId.FontVariationSettings) is { } single)
+            ApplyExplicitSettings(new[] { single }, axes);
+
+        if (axes.Count == 0) return Array.Empty<FontVariation>();
+
+        var result = new FontVariation[axes.Count];
+        var i = 0;
+        foreach (var kv in axes.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            result[i++] = new FontVariation(kv.Key, kv.Value);
+        return result;
+    }
+
+    private static void ApplyExplicitSettings(IReadOnlyList<CssValue> values, Dictionary<string, float> axes)
+    {
+        // The generic value parser leaves commas in the list as empty-name
+        // CssKeywords (the tokenizer's Comma token has Value=""). Walk pairs
+        // of (CssString tag, CssNumber value), skipping empty separators.
+        string? pendingTag = null;
+        foreach (var v in values)
+        {
+            switch (v)
+            {
+                case CssString s when s.Value.Length == 4:
+                    pendingTag = s.Value;
+                    break;
+                case CssNumber num when pendingTag is not null:
+                    axes[pendingTag] = (float)num.Value;
+                    pendingTag = null;
+                    break;
+                case CssKeyword kw when kw.Name.Length == 0:
+                    // comma — reset.
+                    pendingTag = null;
+                    break;
+                case CssKeyword kw when kw.Name == "normal":
+                    // `font-variation-settings: normal` — clear explicit axes.
+                    // Auto-derived wght/wdth survive since they live in `axes`
+                    // from earlier; explicit "normal" just means no overrides.
+                    return;
+            }
+        }
+    }
+
+    private static float? StretchKeyword(string name) => name switch
+    {
+        "ultra-condensed" => 50f,
+        "extra-condensed" => 62.5f,
+        "condensed" => 75f,
+        "semi-condensed" => 87.5f,
+        "normal" => 100f,
+        "semi-expanded" => 112.5f,
+        "expanded" => 125f,
+        "extra-expanded" => 150f,
+        "ultra-expanded" => 200f,
+        _ => null,
+    };
 
     private static IReadOnlyList<string> ExtractFamilies(ComputedStyle style)
     {

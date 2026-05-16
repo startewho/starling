@@ -52,7 +52,9 @@ public enum PropertyId
     Visibility,
     FontFamily,
     FontSize,
+    FontStretch,
     FontStyle,
+    FontVariationSettings,
     FontWeight,
     LineHeight,
     TextAlign,
@@ -124,6 +126,9 @@ public enum PropertyId
     ContentVisibility,
     WillChange,
     Isolation,
+    Container,
+    ContainerType,
+    ContainerName,
 
     // Scrolling
     ScrollBehavior,

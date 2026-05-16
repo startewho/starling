@@ -56,18 +56,39 @@ public sealed class SkiaGraphiteBackend : IDisposable
         _context = new Lazy<SkContext>(() => SkContext.Create());
     }
 
-    private readonly record struct FontCacheKey(FontSpec Spec, float Size);
+    private readonly record struct FontCacheKey(FontSpec Spec, float Size, int Probe);
 
-    public RenderedBitmap Render(PaintList list, LayoutSize viewport)
+    private static FontSpec FontSpecFromDrawText(DisplayList.DrawText text)
+        => new(text.FontFamilies, text.Bold, text.Italic);
+
+    private static int FirstCodepoint(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        if (char.IsHighSurrogate(text[0]) && text.Length > 1 && char.IsLowSurrogate(text[1]))
+            return char.ConvertToUtf32(text[0], text[1]);
+        return text[0];
+    }
+
+    private SkFont ResolveFont(FontSpec spec, int probeCodepoint, float size)
+        => _fontCache.GetOrAdd(
+            new FontCacheKey(spec, size, probeCodepoint),
+            k => SkFont.Create(_fonts.GetTypeface(k.Spec, _webFonts, k.Probe == 0 ? null : k.Probe), k.Size, k.Spec.Bold, k.Spec.Italic));
+
+    public RenderedBitmap Render(PaintList list, LayoutSize viewport, float scale = 1.0f)
     {
         ArgumentNullException.ThrowIfNull(list);
         if (viewport.Width <= 0 || viewport.Height <= 0)
             throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        if (!(scale > 0.0f))
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
 
-        var width = (int)Math.Ceiling(viewport.Width);
-        var height = (int)Math.Ceiling(viewport.Height);
+        // The display list is in logical (CSS) pixels; the backing buffer is
+        // sized in physical pixels (logical × density). A canvas-side scale
+        // transform bridges the two so coordinates downstream stay unchanged.
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
 
-        NativeCallTrace.Mark("render.begin", $"{width}x{height} items={list.Items.Count}");
+        NativeCallTrace.Mark("render.begin", $"{width}x{height} scale={scale} items={list.Items.Count}");
 
         var context = _context.Value;
         using var surface = SkSurface.Create(context, width, height);
@@ -77,8 +98,11 @@ public sealed class SkiaGraphiteBackend : IDisposable
         // the two backends are diffable.
         canvas.Clear(new TsColor(255, 255, 255, 255));
 
+        if (scale != 1.0f)
+            canvas.Scale(scale, scale);
+
         foreach (var item in list.Items)
-            Apply(canvas, item);
+            Apply(canvas, item, scale);
 
         surface.Flush(context);
         var pixels = surface.ReadPixels(context, width, height);
@@ -86,19 +110,19 @@ public sealed class SkiaGraphiteBackend : IDisposable
         return new RenderedBitmap(width, height, pixels);
     }
 
-    private void Apply(SkCanvas canvas, DisplayList.DisplayItem item)
+    private void Apply(SkCanvas canvas, DisplayList.DisplayItem item, float scale)
     {
         switch (item)
         {
             case DisplayList.FillRect fill:
                 if (fill.Bounds.Width <= 0 || fill.Bounds.Height <= 0) return;
-                canvas.FillRect(ToRect(fill.Bounds), ToColor(fill.Color));
+                canvas.FillRect(SnapRect(fill.Bounds, scale), ToColor(fill.Color));
                 break;
             case DisplayList.StrokeRect stroke:
-                canvas.StrokeRect(ToRect(stroke.Bounds), ToColor(stroke.Color), (float)stroke.Width);
+                canvas.StrokeRect(SnapRect(stroke.Bounds, scale), ToColor(stroke.Color), (float)stroke.Width);
                 break;
             case DisplayList.DrawText text:
-                DrawText(canvas, text);
+                DrawText(canvas, text, scale);
                 break;
             case DisplayList.DrawImage image:
                 DrawImage(canvas, image);
@@ -106,7 +130,7 @@ public sealed class SkiaGraphiteBackend : IDisposable
         }
     }
 
-    private void DrawText(SkCanvas canvas, DisplayList.DrawText text)
+    private void DrawText(SkCanvas canvas, DisplayList.DrawText text, float scale)
     {
         if (string.IsNullOrEmpty(text.Text)) return;
 
@@ -115,25 +139,109 @@ public sealed class SkiaGraphiteBackend : IDisposable
         // display-list X/Y is the baseline origin, so translate every glyph by
         // it before handing the run to ts_canvas_draw_text.
         //
-        // Resolve and cache the SkFont for (family-list, bold, italic, size)
-        // — text runs from the same style share an entry. The cache is owned
-        // by this backend instance and disposed with it.
-        var spec = new FontSpec(text.FontFamilies, text.Bold, text.Italic);
-        var font = _fontCache.GetOrAdd(
-            new FontCacheKey(spec, (float)text.FontSize),
-            k => SkFont.Create(_fonts.GetTypeface(k.Spec, _webFonts), k.Size, k.Spec.Bold, k.Spec.Italic));
-        var glyphs = font.ShapeText(text.Text);
-        if (glyphs.Length == 0) return;
+        // To honour unicode-range-subset web fonts, we partition the text
+        // into sub-runs by face affinity: each contiguous span of codepoints
+        // that resolves to the same face is shaped on its own face and laid
+        // out continuously. This breaks ligatures across face boundaries
+        // (intentional — a Latin/Cyrillic switch has no shared ligatures
+        // anyway).
+        var spec = FontSpecFromDrawText(text);
+        var color = ToColor(text.Color);
+        var size = (float)text.FontSize;
+        var pen = (float)text.X;
+        // Snap the baseline to a device-pixel row so every glyph in the run
+        // shares the same integer Y at the rasterizer — without this, fractional
+        // baselines blur ascenders/descenders across two rows. Horizontal pen
+        // stays subpixel; setSubpixel(true) on the font lets Skia hint glyphs at
+        // fractional X for smooth advances.
+        var baselineY = SnapToPixel((float)text.Y, scale);
 
-        var originX = (float)text.X;
-        var originY = (float)text.Y;
-        for (var i = 0; i < glyphs.Length; i++)
+        foreach (var (start, length, font) in PartitionByFace(text.Text, spec, size))
         {
-            glyphs[i].X += originX;
-            glyphs[i].Y += originY;
-        }
+            var sub = text.Text.Substring(start, length);
+            var glyphs = font.ShapeText(sub);
+            if (glyphs.Length == 0) continue;
 
-        canvas.DrawText(font, glyphs, ToColor(text.Color));
+            // Glyphs come back with pen positions relative to (0,0); shift by
+            // our running pen + the run's baseline.
+            float maxEnd = 0;
+            for (var i = 0; i < glyphs.Length; i++)
+            {
+                glyphs[i].X += pen;
+                glyphs[i].Y += baselineY;
+                if (glyphs[i].X > maxEnd) maxEnd = glyphs[i].X;
+            }
+            canvas.DrawText(font, glyphs, color);
+
+            // Advance the pen by the sub-run width. ShapeText doesn't return
+            // the trailing advance; the conventional trick is to append a
+            // sentinel and read its pen position. We do that via a fresh
+            // shape on the same sub-run plus an 'x' sentinel — cheap enough
+            // for the rare cross-face case.
+            pen = MeasureRunEnd(font, sub, pen);
+        }
+    }
+
+    private static float MeasureRunEnd(SkFont font, string text, float startPen)
+    {
+        // Re-shape with a trailing ASCII sentinel. The sentinel's pen X is the
+        // exact end of the input run — matches SkiaTextMeasurer's probe trick.
+        var glyphs = font.ShapeText(text + "x");
+        if (glyphs.Length < 1) return startPen;
+        return startPen + glyphs[^1].X;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="text"/> into maximal contiguous spans where
+    /// every codepoint resolves to the same typeface. The first family in
+    /// <paramref name="spec"/> whose face's <c>unicode-range</c> covers the
+    /// codepoint wins (system fallback families have no range and therefore
+    /// match anything).
+    /// </summary>
+    private IEnumerable<(int Start, int Length, SkFont Font)> PartitionByFace(string text, FontSpec spec, float size)
+    {
+        var i = 0;
+        while (i < text.Length)
+        {
+            int cp;
+            int width;
+            if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                cp = char.ConvertToUtf32(text[i], text[i + 1]);
+                width = 2;
+            }
+            else
+            {
+                cp = text[i];
+                width = 1;
+            }
+
+            var font = ResolveFont(spec, cp, size);
+            var start = i;
+            i += width;
+
+            // Extend the run while the next codepoint resolves to the same font.
+            while (i < text.Length)
+            {
+                int nextCp;
+                int nextWidth;
+                if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+                {
+                    nextCp = char.ConvertToUtf32(text[i], text[i + 1]);
+                    nextWidth = 2;
+                }
+                else
+                {
+                    nextCp = text[i];
+                    nextWidth = 1;
+                }
+                var nextFont = ResolveFont(spec, nextCp, size);
+                if (!ReferenceEquals(nextFont, font)) break;
+                i += nextWidth;
+            }
+
+            yield return (start, i - start, font);
+        }
     }
 
     private static void DrawImage(SkCanvas canvas, DisplayList.DrawImage item)
@@ -150,6 +258,29 @@ public sealed class SkiaGraphiteBackend : IDisposable
 
     private static TsRect ToRect(LayoutRect r)
         => new((float)r.X, (float)r.Y, (float)r.Width, (float)r.Height);
+
+    /// <summary>
+    /// Rounds a rect's edges to the device-pixel grid so abutting boxes share
+    /// pixel boundaries (no half-pixel gaps, no anti-aliased blurry borders).
+    /// Snapping is done in the post-scale space then divided back to the
+    /// canvas's logical units so the canvas's scale transform can drop the
+    /// coords directly onto integer device pixels.
+    /// </summary>
+    private static TsRect SnapRect(LayoutRect r, float scale)
+    {
+        var s = scale > 0 ? scale : 1f;
+        var x0 = (float)(Math.Round(r.X * s) / s);
+        var y0 = (float)(Math.Round(r.Y * s) / s);
+        var x1 = (float)(Math.Round((r.X + r.Width) * s) / s);
+        var y1 = (float)(Math.Round((r.Y + r.Height) * s) / s);
+        return new TsRect(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    private static float SnapToPixel(float value, float scale)
+    {
+        var s = scale > 0 ? scale : 1f;
+        return MathF.Round(value * s) / s;
+    }
 
     private static TsColor ToColor(CssColor c)
         => new(c.R, c.G, c.B, c.A);

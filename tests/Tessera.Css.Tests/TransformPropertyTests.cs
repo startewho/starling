@@ -66,7 +66,7 @@ public sealed class TransformPropertyTests
         var decls = Expand("rotate: 45deg;");
 
         decls.Single().Id.Should().Be(PropertyId.Rotate);
-        decls.Single().Value.Should().BeOfType<CssDimension>();
+        decls.Single().Value.Should().BeOfType<CssAngle>();
     }
 
     [Fact]

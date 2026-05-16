@@ -1,6 +1,7 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using Tessera.Common.Image;
+using Tessera.Gui.Imaging;
 using Tessera.Layout.Box;
 using Tessera.Paint.Backend;
 using Tessera.Paint.DisplayList;
@@ -46,7 +47,12 @@ public sealed class PageRenderer : IDisposable
     /// (<c>root.Frame</c>) — taller than the viewport — so the GUI's
     /// <c>ScrollView</c> scrolls the whole page.
     /// </summary>
-    public RenderedBitmap Render(BlockBox root)
+    /// <param name="scale">
+    /// Logical→physical pixel ratio. Pass the device's display density (1.0 on
+    /// non-Retina, 2.0 on Retina) so glyphs are baked at native resolution.
+    /// Defaults to 1.0 for the headless / test paths.
+    /// </param>
+    public RenderedBitmap Render(BlockBox root, float scale = 1.0f)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -55,29 +61,27 @@ public sealed class PageRenderer : IDisposable
         var surfaceSize = new LayoutSize(
             Math.Max(1, root.Frame.Width),
             Math.Max(1, root.Frame.Height));
-        return _backend.Render(displayList, surfaceSize);
+        return _backend.Render(displayList, surfaceSize, scale);
     }
 
     /// <summary>
-    /// Encodes a <see cref="RenderedBitmap"/> (straight RGBA8888) to an in-memory
-    /// PNG and wraps it as a MAUI <see cref="ImageSource"/>. MAUI's image
-    /// pipeline wants encoded bytes; the Skia backend produces raw pixels, so we
-    /// bridge through the existing ImageSharp PNG encoder. The encoded bytes are
-    /// captured so the returned source can be re-streamed if MAUI re-reads it.
+    /// Wraps a <see cref="RenderedBitmap"/> (straight RGBA8888) as a MAUI
+    /// <see cref="ImageSource"/> that preserves <paramref name="density"/> as
+    /// the <c>UIImage.Scale</c> on Mac Catalyst. The bitmap is in physical
+    /// pixels; the display target sizes itself in points, and the scale tells
+    /// UIKit how many physical pixels back each point — so a Retina render
+    /// reaches the screen without an intervening resample.
     /// </summary>
-    public static ImageSource ToImageSource(RenderedBitmap bitmap)
+    public static ImageSource ToImageSource(RenderedBitmap bitmap, float density = 1f)
     {
         ArgumentNullException.ThrowIfNull(bitmap);
-
-        byte[] png;
-        using (var image = SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(
-                   bitmap.Rgba, bitmap.Width, bitmap.Height))
-        using (var ms = new MemoryStream())
+        return new RgbaImageSource
         {
-            image.SaveAsPng(ms);
-            png = ms.ToArray();
-        }
-        return ImageSource.FromStream(() => new MemoryStream(png));
+            PixelWidth = bitmap.Width,
+            PixelHeight = bitmap.Height,
+            Density = density,
+            Pixels = bitmap.Rgba,
+        };
     }
 
     public void Dispose()

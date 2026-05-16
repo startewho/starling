@@ -1,3 +1,4 @@
+using Tessera.Common.Diagnostics;
 using Tessera.Dom;
 using Tessera.Html.TreeBuilder;
 
@@ -15,5 +16,6 @@ namespace Tessera.Html;
 /// </remarks>
 public static class HtmlParser
 {
-    public static Document Parse(string html) => HtmlTreeBuilder.Parse(html);
+    public static Document Parse(string html, IDiagnostics? diagnostics = null)
+        => HtmlTreeBuilder.Parse(html, diagnostics);
 }

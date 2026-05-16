@@ -43,6 +43,7 @@ public static class FontFaceParser
         var sources = new List<FontFaceSource>();
         var bold = false;
         var italic = false;
+        UnicodeRangeSet? unicodeRange = null;
 
         foreach (var decl in rule.Declarations)
         {
@@ -60,14 +61,114 @@ public static class FontFaceParser
                 case "font-style":
                     italic = ParseItalic(decl.Value);
                     break;
+                case "unicode-range":
+                    unicodeRange = ParseUnicodeRange(decl.Value);
+                    break;
             }
         }
 
         if (string.IsNullOrEmpty(family) || sources.Count == 0)
             return false;
 
-        fontFace = new FontFaceRule(family, sources, bold, italic);
+        fontFace = new FontFaceRule(family, sources, bold, italic, unicodeRange);
         return true;
+    }
+
+    private static UnicodeRangeSet? ParseUnicodeRange(IReadOnlyList<CssComponentValue> value)
+    {
+        // The CSS tokenizer doesn't emit a unicode-range token, so the values
+        // arrive as a sequence: an "U" ident, a "+" delim, then a mix of
+        // numbers, idents (hex letters), and "?" / "-" delims forming one
+        // entry per comma-separated chunk. We walk tokens, reassembling each
+        // chunk into the canonical "U+xxxx[-yyyy]" / "U+x?x?" form for
+        // TryParseSingleRange to consume.
+        var sb = new System.Text.StringBuilder();
+        var ranges = new List<(int, int)>();
+        void Flush()
+        {
+            var entry = sb.ToString().Trim();
+            sb.Clear();
+            if (entry.Length == 0) return;
+            if (TryParseSingleRange(entry, out var start, out var end))
+                ranges.Add((start, end));
+        }
+
+        foreach (var v in value)
+        {
+            if (v is not CssTokenValue token) continue;
+            switch (token.Token.Type)
+            {
+                case CssTokenType.Whitespace:
+                    // Drop — adjacent tokens in unicode-range never need a
+                    // separator inside a single entry.
+                    break;
+                case CssTokenType.Comma:
+                    Flush();
+                    break;
+                case CssTokenType.Ident:
+                    sb.Append(token.Token.Value);
+                    break;
+                case CssTokenType.Number:
+                    // Numbers come in as doubles; for unicode-range the
+                    // tokenizer may have eaten an integer prefix that we
+                    // need to re-emit hex-clean. We emit the raw digits the
+                    // tokenizer saw via integer ToString — fractional values
+                    // aren't legal here.
+                    sb.Append(((long)token.Token.Number).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                case CssTokenType.Dimension:
+                    sb.Append(((long)token.Token.Number).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    sb.Append(token.Token.Unit);
+                    break;
+                case CssTokenType.Delim:
+                    sb.Append(token.Token.Delimiter);
+                    break;
+                case CssTokenType.Hash:
+                    sb.Append('#').Append(token.Token.Value);
+                    break;
+            }
+        }
+        Flush();
+        return ranges.Count == 0 ? null : new UnicodeRangeSet(ranges);
+    }
+
+    private static bool TryParseSingleRange(string spec, out int start, out int end)
+    {
+        start = end = 0;
+        // Format: "U+xxx" / "U+xxx-yyy" / "U+x?x?" (wildcards). The CSS
+        // tokenizer eats the '+' as the sign of the following Number, so by
+        // the time we reassemble we may see "U400" not "U+400" — accept both.
+        var s = spec.AsSpan().Trim();
+        if (s.Length < 2) return false;
+        if (s[0] != 'U' && s[0] != 'u') return false;
+        s = s[1..];
+        if (s.Length > 0 && s[0] == '+') s = s[1..];
+
+        // Wildcard form: every '?' marks a hex nibble that varies. Replace with
+        // 0 for the low bound and F for the high bound.
+        if (s.IndexOf('?') >= 0)
+        {
+            Span<char> low = stackalloc char[s.Length];
+            Span<char> high = stackalloc char[s.Length];
+            for (var i = 0; i < s.Length; i++)
+            {
+                low[i] = s[i] == '?' ? '0' : s[i];
+                high[i] = s[i] == '?' ? 'F' : s[i];
+            }
+            return int.TryParse(low, System.Globalization.NumberStyles.HexNumber, null, out start)
+                && int.TryParse(high, System.Globalization.NumberStyles.HexNumber, null, out end);
+        }
+
+        // Range form "xxx-yyy" or single "xxx".
+        var dash = s.IndexOf('-');
+        if (dash < 0)
+        {
+            if (!int.TryParse(s, System.Globalization.NumberStyles.HexNumber, null, out start)) return false;
+            end = start;
+            return true;
+        }
+        return int.TryParse(s[..dash], System.Globalization.NumberStyles.HexNumber, null, out start)
+            && int.TryParse(s[(dash + 1)..], System.Globalization.NumberStyles.HexNumber, null, out end);
     }
 
     private static string? ParseFamilyName(IReadOnlyList<CssComponentValue> value)

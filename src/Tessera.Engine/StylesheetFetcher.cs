@@ -151,7 +151,7 @@ internal sealed class StylesheetFetcher : IDisposable
 
             Activity.Current?.SetTag("bytes", bytes.Length);
             var text = DecodeCss(contentType, bytes);
-            var sheet = CssParser.ParseStyleSheet(text, StyleOrigin.Author);
+            var sheet = CssParser.ParseStyleSheet(text, StyleOrigin.Author, _diag);
             _byUrl[key] = (sheet, url);
             _diag.Counter("engine.fetch.stylesheet", 1);
             return sheet;

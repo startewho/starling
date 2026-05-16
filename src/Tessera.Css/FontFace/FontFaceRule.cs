@@ -5,12 +5,20 @@ namespace Tessera.Css.FontFace;
 /// <see cref="Sources"/> entry — <see cref="LocalFontSource"/> via the system
 /// font manager, <see cref="UrlFontSource"/> via the document loader — and
 /// registers the first source that loads under <see cref="FamilyName"/>.
+/// <para>
+/// <see cref="UnicodeRange"/> restricts the codepoints the face applies to;
+/// it's how sites split a single web font into Latin / Cyrillic / CJK
+/// subsets (e.g. Google Fonts ships separate <c>@font-face</c> rules per
+/// script). When omitted (<c>null</c>) the face covers the full U+0–10FFFF
+/// range.
+/// </para>
 /// </summary>
 public sealed record FontFaceRule(
     string FamilyName,
     IReadOnlyList<FontFaceSource> Sources,
     bool Bold,
-    bool Italic);
+    bool Italic,
+    UnicodeRangeSet? UnicodeRange = null);
 
 /// <summary>A single entry in a <c>@font-face src:</c> list.</summary>
 public abstract record FontFaceSource;
