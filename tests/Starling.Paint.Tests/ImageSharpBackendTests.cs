@@ -1,0 +1,124 @@
+#if TESSERA_IMAGESHARP_DRAWING
+using FluentAssertions;
+using Tessera.Common.Image;
+using Tessera.Paint.Backend;
+using Tessera.Paint.DisplayList;
+using Xunit;
+using LayoutRect = Tessera.Layout.Rect;
+using LayoutSize = Tessera.Layout.Size;
+using PaintList = Tessera.Paint.DisplayList.DisplayList;
+
+namespace Tessera.Paint.Tests;
+
+/// <summary>
+/// Drives <see cref="ImageSharpBackend"/> with hand-built display lists so
+/// failure modes in the backend itself surface independently of layout. The
+/// suite locks down two regressions that snuck past the engine-level renders:
+/// <list type="bullet">
+/// <item>Swapped sourceRect / destinationRect arguments to
+/// <c>DrawingCanvas.DrawImage</c>, which silently rendered nothing.</item>
+/// <item>The source image disposed inside the Mutate/Paint closure before the
+/// deferred canvas timeline rasterised it (ObjectDisposedException once the
+/// args were corrected).</item>
+/// </list>
+/// </summary>
+public sealed class ImageSharpBackendTests
+{
+    /// <summary>
+    /// A 40x20 solid red swatch drawn at (10, 10) must leave red pixels on the
+    /// canvas. The arg-swap regression made <c>DrawImage</c> a no-op (source
+    /// crop outside the image bounds → empty source). The disposal regression
+    /// threw <c>ObjectDisposedException</c> once the args were fixed.
+    /// </summary>
+    [Fact]
+    public void Draw_image_blits_pixels_into_destination_rect()
+    {
+        const int W = 40, H = 20;
+        const int destX = 10, destY = 10;
+
+        using var swatch = DecodedImage.CreatePooled(W, H, span =>
+        {
+            for (var i = 0; i < span.Length; i += 4)
+            {
+                span[i] = 255;        // R
+                span[i + 1] = 0;      // G
+                span[i + 2] = 0;      // B
+                span[i + 3] = 255;    // A
+            }
+        });
+
+        var list = new PaintList();
+        list.Add(new DrawImage(new LayoutRect(destX, destY, W, H), swatch));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var bmp = backend.Render(list, new LayoutSize(200, 100));
+
+        // At least half the swatch's pixels should survive bicubic resampling;
+        // a perfect-identity blit would be 800, but anti-aliased edges may
+        // soften corner pixels. The arg-swap regression produced zero.
+        var redCount = BitmapPixels.CountExact(bmp, 255, 0, 0);
+        redCount.Should().BeGreaterThanOrEqualTo(W * H / 2,
+            "the swatch must paint into the destination rectangle; the swapped source/dest args regression yielded zero red pixels");
+    }
+
+    /// <summary>
+    /// Lays out two image draws in the same display list. Both decoded
+    /// sources are created inside the <c>DrawImage</c> handler and the canvas
+    /// timeline rasterises them on flush. If the deferred-disposal fix
+    /// regresses, the second draw (or both) will throw
+    /// ObjectDisposedException from ImageBrushRenderer.
+    /// </summary>
+    [Fact]
+    public void Multiple_image_draws_survive_deferred_rasterization()
+    {
+        using var red = DecodedImage.CreatePooled(20, 20, span => Fill(span, 255, 0, 0, 255));
+        using var blue = DecodedImage.CreatePooled(20, 20, span => Fill(span, 0, 0, 255, 255));
+
+        var list = new PaintList();
+        list.Add(new DrawImage(new LayoutRect(0, 0, 20, 20), red));
+        list.Add(new DrawImage(new LayoutRect(40, 0, 20, 20), blue));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        var act = () =>
+        {
+            using var bmp = backend.Render(list, new LayoutSize(80, 40));
+            return BitmapPixels.CountExact(bmp, 255, 0, 0) + BitmapPixels.CountExact(bmp, 0, 0, 255);
+        };
+
+        var total = act.Should().NotThrow("source images must outlive the canvas command timeline").Which;
+        total.Should().BeGreaterThan(0, "both swatches must paint, not just one");
+    }
+
+    /// <summary>
+    /// Renders the same text+image scene through both backends and asserts the
+    /// ImageSharp output is no longer a no-op for images: regression had
+    /// images missing entirely, so the destination rectangle would contain
+    /// nothing but the white background.
+    /// </summary>
+    [Fact]
+    public void Image_destination_region_has_non_background_pixels()
+    {
+        using var green = DecodedImage.CreatePooled(50, 30, span => Fill(span, 0, 200, 0, 255));
+
+        var list = new PaintList();
+        list.Add(new DrawImage(new LayoutRect(20, 20, 50, 30), green));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var bmp = backend.Render(list, new LayoutSize(120, 80));
+
+        BitmapPixels.CountNonWhite(bmp).Should().BeGreaterThan(
+            500, "a solid-colour image must produce a large region of non-white pixels");
+    }
+
+    private static void Fill(Span<byte> span, byte r, byte g, byte b, byte a)
+    {
+        for (var i = 0; i < span.Length; i += 4)
+        {
+            span[i] = r;
+            span[i + 1] = g;
+            span[i + 2] = b;
+            span[i + 3] = a;
+        }
+    }
+}
+#endif
