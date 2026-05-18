@@ -79,6 +79,37 @@ public sealed class OtelDiagnostics : IDiagnostics
         current.AddEvent(new ActivityEvent($"snapshot:{label}", tags: tags));
     }
 
+    public void LogException(string area, Exception exception, string? message = null)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var header = message ?? exception.Message;
+
+        // ILogger.LogError takes the exception object directly so OTLP/Aspire
+        // gets the full structured shape (type, message, stack) rather than a
+        // ToString'd string.
+        var logger = _loggers.GetOrAdd(area, a => _loggerFactory.CreateLogger($"Starling.{a}"));
+        logger.LogError(exception, "{Message}", header);
+
+        // Pin the exception on the active span so Aspire's trace view shows the
+        // failure inline. AddException is the OTel-spec'd shape (exception.type,
+        // exception.message, exception.stacktrace as event attributes); plain
+        // AddEvent loses the structured fields. Setting Status=Error also flips
+        // the span's UI badge from green to red.
+        var current = Activity.Current;
+        if (current is not null)
+        {
+            var tags = new ActivityTagsCollection
+            {
+                { "exception.type", exception.GetType().FullName },
+                { "exception.message", exception.Message },
+                { "exception.stacktrace", exception.ToString() },
+                { "area", area },
+            };
+            current.AddEvent(new ActivityEvent("exception", tags: tags));
+            current.SetStatus(ActivityStatusCode.Error, header);
+        }
+    }
+
     private static LogLevel MapLevel(DiagLevel level) => level switch
     {
         DiagLevel.Trace => LogLevel.Trace,

@@ -21,6 +21,12 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <InvariantGlobalization>true</InvariantGlobalization>
 
+    <!-- Point Six Labors license validation at the repo-root sixlabors.lic so
+         every consumer project finds it; the targets glob is rooted at each
+         project dir and won't walk up. No-op when EnableImageSharpDrawing3 is
+         unset (the licensing targets aren't imported). -->
+    <SixLaborsLicenseFile Condition="'$(SixLaborsLicenseFile)' == '' And Exists('$(MSBuildThisFileDirectory)sixlabors.lic')">$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
+
     <!--
       Strict-on-purpose, but a handful of CA / RCS rules are noisy on
       engine-internal code (no localization, lots of framework-instantiated

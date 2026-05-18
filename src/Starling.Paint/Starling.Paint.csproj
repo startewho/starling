@@ -4,6 +4,12 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Starling.Paint.Tests" />
+    <!-- GUI's PageRenderer routes through PaintBackendSelector so a
+         TESSERA_PAINT_BACKEND switch flips both layout (measurer) and raster
+         backend together — mixing them produces glyph-index/codepoint
+         confusion when ImageSharp's measurer hands codepoints to Skia's
+         shaped-text fast path. -->
+    <InternalsVisibleTo Include="Starling.Gui" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Starling.Common\Starling.Common.csproj" />
@@ -24,11 +30,24 @@
   <ItemGroup Condition=" '$(EnableImageSharpDrawing3)' == 'true' ">
     <PackageReference Include="SixLabors.ImageSharp" VersionOverride="4.0.*" />
     <PackageReference Include="SixLabors.ImageSharp.Drawing" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing.WebGPU" />
     <PackageReference Include="SixLabors.Fonts" />
   </ItemGroup>
   <PropertyGroup Condition=" '$(EnableImageSharpDrawing3)' == 'true' ">
     <DefineConstants>$(DefineConstants);TESSERA_IMAGESHARP_DRAWING</DefineConstants>
   </PropertyGroup>
+  <!--
+    wgpu-native (the Rust WebGPU runtime that SixLabors.ImageSharp.Drawing.WebGPU
+    binds via Silk.NET) ships its dylibs under runtimes/<rid>/native/ in NuGet.
+    For net10.0 consumers (Headless, Engine, tests) NuGet's normal runtime-asset
+    resolution copies the right RID into the output and no help is needed.
+    The MAUI Mac Catalyst SDK is the exception — it doesn't resolve osx-*
+    native assets from transitive packages, AND its install_name_tool step
+    chokes on files under runtimes/<rid>/native/. That case is handled by an
+    explicit copy rule in Starling.Gui.csproj that drops the dylib into a
+    wgpu-native/ sidecar dir (which MAUI's bundler leaves alone).
+    WgpuNativeLoader.Resolve probes both layouts at runtime.
+  -->
   <ItemGroup>
     <!-- Bundled fonts. EmbeddedResource (not None+CopyToOutputDirectory) so the
          font ships inside Tessera.Paint.dll and survives Mac Catalyst's .app

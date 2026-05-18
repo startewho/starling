@@ -63,8 +63,20 @@ public sealed class Painter
             // DisplayList is the renderer-neutral seam. Skia Graphite is the
             // default; setting TESSERA_PAINT_BACKEND=imagesharp swaps in the
             // ImageSharp.Drawing 3.0 backend on builds that enabled it.
-            using var backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
-            return backend.Render(displayList, viewport);
+            try
+            {
+                using var backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
+                return backend.Render(displayList, viewport);
+            }
+            catch (Exception ex)
+            {
+                // Surface failures (backend construction, WebGPU init, native
+                // shim missing, etc.) through diagnostics before unwinding so
+                // Aspire shows the full exception on the raster span instead
+                // of just a silently failed activity.
+                _diag.LogException("paint", ex, $"raster backend '{PaintBackendSelector.Selected}' failed");
+                throw;
+            }
         }
     }
 

@@ -49,6 +49,33 @@
   </ItemGroup>
 
   <!--
+    Catalyst-only copy for wgpu-native (used when the GUI is built with
+    EnableImageSharpDrawing3=true and the WebGPU paint backend is selected
+    at runtime).
+
+    Drop the dylib flat alongside the managed assemblies — that's where
+    .NET's NativeLibrary.Load("wgpu_native") searches by default after the
+    standard macOS lib-prefix / .dylib-suffix mangling. Silk.NET.WebGPU
+    loads its native library via NativeLibrary.Load (NOT [DllImport]), so
+    a SetDllImportResolver hook never fires; the only way to intercept is
+    to put the file where the default loader looks. The assembly directory
+    is the first probe location, ahead of the runtimes/<rid>/native/ tree
+    that Catalyst's RID graph doesn't propagate osx-arm64 into anyway.
+
+    Lives in the consuming project (not Starling.Paint) because <None> with
+    a non-runtimes Link doesn't flow through project references reliably.
+  -->
+  <PropertyGroup Condition=" '$(EnableImageSharpDrawing3)' == 'true' ">
+    <_WgpuNativePkg>$(NuGetPackageRoot)silk.net.webgpu.native.wgpu\2.23.0\runtimes</_WgpuNativePkg>
+  </PropertyGroup>
+  <ItemGroup Condition=" '$(EnableImageSharpDrawing3)' == 'true' And Exists('$(_WgpuNativePkg)\osx-arm64\native\libwgpu_native.dylib') ">
+    <None Include="$(_WgpuNativePkg)\osx-arm64\native\libwgpu_native.dylib">
+      <Link>libwgpu_native.dylib</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
     Tessera.Skia (pulled in transitively via Tessera.Paint) ships
     libtessera_skia.dylib as a native runtime asset. As of wp:M3-06k the GUI
     paints through the Skia DisplayList path, so the dylib is a *legitimate

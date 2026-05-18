@@ -46,37 +46,23 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
     }
 
     /// <summary>
-    /// Shape <paramref name="text"/> via SixLabors.Fonts 3's single-pass
-    /// <see cref="TextMeasurer.GetGlyphMetrics"/> — each entry's
-    /// <c>Advance</c> rectangle carries the positioned pen coordinates in
-    /// pixel units, so we read <c>Advance.X/Y</c> straight into
-    /// <see cref="ShapedGlyph"/>. GlyphId is set to the codepoint: the 3.x API
-    /// does not surface OpenType glyph indices, and the ImageSharp paint
-    /// backend re-renders by string anyway, so the codepoint is the only
-    /// identifier worth round-tripping.
+    /// Returns the run's advance with an empty <see cref="ShapedRun.Glyphs"/>
+    /// array — the documented "let the paint backend re-shape" signal (see
+    /// <see cref="ITextMeasurer.Shape"/>'s contract and
+    /// <see cref="DefaultTextMeasurer.Shape"/>). SixLabors.Fonts 3 does not
+    /// expose OpenType glyph indices on its public surface
+    /// (<c>FontMetrics.TryGetGlyphId</c> is internal; <c>GlyphMetrics</c>
+    /// carries only the codepoint), so we can't populate
+    /// <see cref="ShapedGlyph.GlyphId"/> correctly. Emitting codepoints there
+    /// poisons the Skia backend's shaped-text fast path, which passes the
+    /// field straight to the rasterizer as a glyph index — Latin codepoints
+    /// then resolve to the value-Nth glyph in the font (often Greek or
+    /// Cyrillic). Falling back is the correct, terminal fix: Skia re-shapes
+    /// via its own font, and the ImageSharp backend re-renders by string
+    /// anyway.
     /// </summary>
     public ShapedRun Shape(string text, double fontSize, FontSpec spec)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        if (text.Length == 0 || fontSize <= 0)
-            return new ShapedRun(Array.Empty<ShapedGlyph>(), 0d);
-
-        var font = GetFont((float)fontSize, spec);
-        var options = new TextOptions(font);
-        var metrics = TextMeasurer.GetGlyphMetrics(text, options).Span;
-        if (metrics.Length == 0)
-            return new ShapedRun(Array.Empty<ShapedGlyph>(), 0d);
-
-        var glyphs = new ShapedGlyph[metrics.Length];
-        for (var i = 0; i < metrics.Length; i++)
-        {
-            var m = metrics[i];
-            glyphs[i] = new ShapedGlyph((uint)m.CodePoint.Value, m.Advance.X, m.Advance.Y);
-        }
-
-        var advance = TextMeasurer.MeasureAdvance(text, options).Width;
-        return new ShapedRun(glyphs, advance);
-    }
+        => new(Array.Empty<ShapedGlyph>(), MeasureWidth(text, fontSize, spec));
 
     public double NormalLineHeight(double fontSize, FontSpec spec)
     {

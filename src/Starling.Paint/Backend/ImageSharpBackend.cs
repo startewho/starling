@@ -5,9 +5,11 @@ using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.Drawing.Processing.Backends;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using Tessera.Common.Diagnostics;
+using Tessera.Paint.Interop;
 using Tessera.Common.Image;
 using Tessera.Css.Values;
 using Tessera.Layout.Text;
@@ -22,6 +24,10 @@ namespace Tessera.Paint.Backend;
 /// ImageSharp.Drawing 3.0's canvas API. Compiled in only when the
 /// <c>EnableImageSharpDrawing3</c> MSBuild flag is set (which also defines
 /// <c>TESSERA_IMAGESHARP_DRAWING</c>); the default build path remains Skia.
+/// Supports two destinations: the default parallel-SIMD CPU rasterizer
+/// (<c>Image&lt;Rgba32&gt;</c>) and the GPU compute-shader Vello-style pipeline
+/// in <see cref="WebGPURenderTarget"/>. The per-item dispatch is identical
+/// because both paths drive the same <see cref="DrawingCanvas"/> API.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -32,7 +38,7 @@ namespace Tessera.Paint.Backend;
 /// <para>
 /// Text path: ImageSharp.Drawing 3.0 does not expose a public way to paint a
 /// caller-supplied (pre-shaped) glyph run — all text APIs route through the
-/// internal <see cref="TextRenderer"/>, which re-shapes via SixLabors.Fonts.
+/// internal text renderer, which re-shapes via SixLabors.Fonts.
 /// So the backend ignores <c>DrawText.Shaped</c> and re-shapes via
 /// <see cref="RichTextOptions"/>. Goldens between Skia and ImageSharp will
 /// diverge in glyph positioning at sub-pixel resolution; cross-backend tests
@@ -52,19 +58,21 @@ internal sealed class ImageSharpBackend : IPaintBackend
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
     private readonly IDiagnostics _diag;
+    private readonly bool _useWebGpu;
     private readonly FontCollection _fontCollection;
     private readonly ConcurrentDictionary<FontCacheKey, Font> _fontCache = new();
 
-    public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diagnostics = null)
+    public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diagnostics = null, bool useWebGpu = false)
     {
         ArgumentNullException.ThrowIfNull(fonts);
         _fonts = fonts;
         _webFonts = webFonts;
         _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _useWebGpu = useWebGpu;
         _fontCollection = LoadEmbeddedFontCollection();
     }
 
-    public string Name => "imagesharp";
+    public string Name => _useWebGpu ? "imagesharp-webgpu" : "imagesharp";
 
     public RenderedBitmap Render(PaintList list, LayoutSize viewport, float scale = 1.0f)
     {
@@ -82,9 +90,16 @@ internal sealed class ImageSharpBackend : IPaintBackend
         Activity.Current?.SetTag("raster.scale", scale);
         Activity.Current?.SetTag("raster.items", list.Items.Count);
 
+        return _useWebGpu
+            ? RenderWebGpu(list, width, height, scale)
+            : RenderCpu(list, width, height, scale);
+    }
+
+    private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale)
+    {
         using (_diag.Span("paint", "raster.context_init"))
         {
-            // ImageSharp has no persistent context; the span keeps the
+            // ImageSharp has no persistent CPU context; the span keeps the
             // trace shape identical to SkiaGraphiteBackend for diffability.
         }
 
@@ -98,7 +113,6 @@ internal sealed class ImageSharpBackend : IPaintBackend
             {
                 image.Mutate(x => x.Paint(canvas =>
                 {
-                    if (scale != 1.0f) canvas.Scale(scale);
                     foreach (var item in list.Items)
                         Apply(canvas, item, scale);
                 }));
@@ -119,24 +133,95 @@ internal sealed class ImageSharpBackend : IPaintBackend
         }
     }
 
-    private void Apply(IDrawingCanvas canvas, DisplayList.DisplayItem item, float scale)
+    // GPU path: WebGPU compute-shader (Vello-style) rasterizer in
+    // SixLabors.ImageSharp.Drawing.WebGPU. WebGPURenderTarget allocates an
+    // offscreen surface on the shared process device and exposes the same
+    // DrawingCanvas the CPU path uses, so Apply(canvas, item, scale) below is
+    // shared verbatim. The starting canvas is cleared to opaque white via a
+    // full-bounds Fill so the white-background invariant matches Skia.
+    private RenderedBitmap RenderWebGpu(PaintList list, int width, int height, float scale)
+    {
+        // Probe the WebGPU environment before constructing a render target so a
+        // missing/broken wgpu-native binary, no compatible GPU adapter, or a
+        // sandboxed Catalyst process surfaces as a clear actionable error
+        // rather than the generic "failed to initialize webgpu runtime" the
+        // constructor would otherwise throw.
+        var probe = WebGPUEnvironment.ProbeAvailability();
+        if (probe != WebGPUEnvironmentError.Success)
+            throw new InvalidOperationException(
+                $"WebGPU paint backend requested via TESSERA_PAINT_BACKEND=imagesharp-webgpu, " +
+                $"but WebGPUEnvironment.ProbeAvailability returned {probe}. " +
+                Environment.NewLine + Environment.NewLine +
+                "Native loader trail (Starling.Paint.Interop.WgpuNativeLoader):" + Environment.NewLine +
+                "  " + WgpuNativeLoader.Diagnose() +
+                Environment.NewLine + Environment.NewLine +
+                "Common causes: the wgpu-native dylib was not copied into the runtime layout " +
+                "(check runtimes/<rid>/native/libwgpu_native.{dylib,so} in the app bundle), " +
+                "no compatible GPU adapter is visible to the process, or a sandbox blocks " +
+                "Metal/Vulkan/D3D12 access. Fall back to TESSERA_PAINT_BACKEND=imagesharp " +
+                "(CPU) or =skia.");
+
+        WebGPURenderTarget target;
+        using (_diag.Span("paint", "raster.context_init"))
+            target = new WebGPURenderTarget(width, height);
+
+        try
+        {
+            DrawingCanvas canvas;
+            using (_diag.Span("paint", "raster.surface_alloc"))
+                canvas = target.CreateCanvas();
+
+            try
+            {
+                using (_diag.Span("paint", "raster.command_record"))
+                {
+                    canvas.Fill(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
+                    foreach (var item in list.Items)
+                        Apply(canvas, item, scale);
+                    // Flush seals queued commands into the canvas timeline so
+                    // the GPU pipeline executes before ReadbackImage samples
+                    // the texture. Without it, readback races the (un)submitted
+                    // command buffer and returns the initial clear color.
+                    canvas.Flush();
+                }
+            }
+            finally
+            {
+                canvas.Dispose();
+            }
+
+            byte[] pixels;
+            using (_diag.Span("paint", "raster.readback"))
+            {
+                using var image = target.ReadbackImage<Rgba32>();
+                pixels = new byte[checked(width * height * 4)];
+                image.CopyPixelDataTo(pixels);
+            }
+
+            return new RenderedBitmap(width, height, pixels);
+        }
+        finally
+        {
+            target.Dispose();
+        }
+    }
+
+    private void Apply(DrawingCanvas canvas, DisplayList.DisplayItem item, float scale)
     {
         switch (item)
         {
             case DisplayList.FillRect fill:
                 if (fill.Bounds.Width <= 0 || fill.Bounds.Height <= 0) return;
                 _diag.Counter("paint.fill_rect", 1);
-                {
-                    var r = SnapRect(fill.Bounds, scale);
-                    canvas.Fill(Brushes.Solid(ToColor(fill.Color)), new RectangleF(r.X, r.Y, r.Width, r.Height));
-                }
+                canvas.Fill(Brushes.Solid(ToColor(fill.Color)), ToDeviceRect(fill.Bounds, scale));
                 break;
             case DisplayList.StrokeRect stroke:
                 _diag.Counter("paint.stroke_rect", 1);
                 {
-                    var r = SnapRect(stroke.Bounds, scale);
-                    canvas.Draw(Pens.Solid(ToColor(stroke.Color), (float)stroke.Width),
-                        new RectangleF(r.X, r.Y, r.Width, r.Height));
+                    var r = ToDeviceRectF(stroke.Bounds, scale);
+                    canvas.Draw(
+                        Pens.Solid(ToColor(stroke.Color), (float)stroke.Width * scale),
+                        new RectanglePolygon(r));
                 }
                 break;
             case DisplayList.DrawText text:
@@ -145,22 +230,23 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 break;
             case DisplayList.DrawImage img:
                 _diag.Counter("paint.draw_image", 1);
-                DrawImage(canvas, img);
+                DrawImage(canvas, img, scale);
                 break;
         }
     }
 
-    private void DrawText(IDrawingCanvas canvas, DisplayList.DrawText text, float scale)
+    private void DrawText(DrawingCanvas canvas, DisplayList.DrawText text, float scale)
     {
         if (string.IsNullOrEmpty(text.Text)) return;
 
         var spec = FontSpecFromDrawText(text);
-        var size = (float)text.FontSize;
+        var size = (float)text.FontSize * scale;
         var probe = FirstCodepoint(text.Text);
         var font = ResolveFont(spec, probe, size);
         var color = ToColor(text.Color);
 
-        var baselineY = SnapToPixel((float)text.Y, scale);
+        var originX = (float)text.X * scale;
+        var baselineY = SnapToPixel((float)text.Y, scale) * scale;
 
         // No pre-shaped path: ImageSharp.Drawing 3.0 does not accept
         // caller-shaped glyph runs through its public canvas surface, so the
@@ -173,14 +259,14 @@ internal sealed class ImageSharpBackend : IPaintBackend
 
         var options = new RichTextOptions(font)
         {
-            Origin = new PointF((float)text.X, baselineY),
+            Origin = new PointF(originX, baselineY),
             TextAlignment = TextAlignment.Start,
             VerticalAlignment = VerticalAlignment.Bottom,
         };
         canvas.DrawText(options, text.Text, Brushes.Solid(color), pen: null);
     }
 
-    private static void DrawImage(IDrawingCanvas canvas, DisplayList.DrawImage item)
+    private static void DrawImage(DrawingCanvas canvas, DisplayList.DrawImage item, float scale)
     {
         if (item.Bounds.Width <= 0 || item.Bounds.Height <= 0) return;
         var decoded = item.Source;
@@ -190,12 +276,9 @@ internal sealed class ImageSharpBackend : IPaintBackend
         // exact byte length; DecodedImage's buffer is straight-alpha RGBA8888
         // which matches Rgba32's layout precisely.
         using var src = Image.LoadPixelData<Rgba32>(decoded.Pixels.Span, decoded.Width, decoded.Height);
-        var dest = new RectangleF(
-            (float)item.Bounds.X,
-            (float)item.Bounds.Y,
-            (float)item.Bounds.Width,
-            (float)item.Bounds.Height);
-        canvas.DrawImage(src, dest);
+        var dest = ToDeviceRect(item.Bounds, scale);
+        var source = new RectangleF(0, 0, decoded.Width, decoded.Height);
+        canvas.DrawImage(src, dest, source, KnownResamplers.Bicubic);
     }
 
     private readonly record struct FontCacheKey(FontSpec Spec, float Size, int Probe);
@@ -261,14 +344,28 @@ internal sealed class ImageSharpBackend : IPaintBackend
         return collection;
     }
 
-    private static SixLabors.ImageSharp.RectangleF SnapRect(LayoutRect r, float scale)
+    // ImageSharp.Drawing 3.0 dropped canvas-level transforms (no Scale/Translate),
+    // so layout-space coordinates are pre-multiplied by `scale` at the call site.
+    // SnapRect rounds in the post-scale (device-pixel) space — same algorithm as
+    // SkiaGraphiteBackend.SnapRect — and returns the device-pixel rect directly.
+    private static SixLabors.ImageSharp.RectangleF ToDeviceRectF(LayoutRect r, float scale)
     {
         var s = scale > 0 ? scale : 1f;
-        var x0 = (float)(Math.Round(r.X * s) / s);
-        var y0 = (float)(Math.Round(r.Y * s) / s);
-        var x1 = (float)(Math.Round((r.X + r.Width) * s) / s);
-        var y1 = (float)(Math.Round((r.Y + r.Height) * s) / s);
+        var x0 = (float)Math.Round(r.X * s);
+        var y0 = (float)Math.Round(r.Y * s);
+        var x1 = (float)Math.Round((r.X + r.Width) * s);
+        var y1 = (float)Math.Round((r.Y + r.Height) * s);
         return new SixLabors.ImageSharp.RectangleF(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    private static SixLabors.ImageSharp.Rectangle ToDeviceRect(LayoutRect r, float scale)
+    {
+        var s = scale > 0 ? scale : 1f;
+        var x0 = (int)Math.Round(r.X * s);
+        var y0 = (int)Math.Round(r.Y * s);
+        var x1 = (int)Math.Round((r.X + r.Width) * s);
+        var y1 = (int)Math.Round((r.Y + r.Height) * s);
+        return new SixLabors.ImageSharp.Rectangle(x0, y0, x1 - x0, y1 - y0);
     }
 
     private static float SnapToPixel(float value, float scale)
@@ -278,7 +375,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
     }
 
     private static Color ToColor(CssColor c)
-        => Color.FromRgba(c.R, c.G, c.B, c.A);
+        => Color.FromPixel(new Rgba32(c.R, c.G, c.B, c.A));
 
     public void Dispose()
     {
