@@ -15,6 +15,8 @@ public sealed class StyleEngine
 {
     private readonly List<StyleSheet> _sheets = [];
     private readonly Dictionary<StyleOrigin, LayerOrder> _layerOrders = new();
+    private readonly Dictionary<StyleSheet, SheetIndex> _sheetIndexes
+        = new(ReferenceEqualityComparer.Instance);
     private readonly IDiagnostics _diag;
     private MediaContext _mediaContext = MediaContext.Default;
 
@@ -53,12 +55,62 @@ public sealed class StyleEngine
         ArgumentNullException.ThrowIfNull(sheet);
         _sheets.Add(sheet);
         RegisterLayers(sheet.Rules, sheet.Origin, currentPath: null);
+        _sheetIndexes[sheet] = BuildSheetIndex(sheet);
     }
 
     public void RemoveStyleSheet(StyleSheet sheet)
     {
         ArgumentNullException.ThrowIfNull(sheet);
         _sheets.Remove(sheet);
+        _sheetIndexes.Remove(sheet);
+    }
+
+    /// <summary>
+    /// Per-sheet selector bucketing. Each top-level <see cref="StyleRule"/>
+    /// reachable through at-rule containers (<c>@media</c>, <c>@supports</c>,
+    /// <c>@layer</c>) is indexed by the rightmost simple selector of each
+    /// selector in its prelude. Rules nested *inside* a <see cref="StyleRule"/>
+    /// (CSS Nesting) are not indexed because their effective selector depends
+    /// on parent-selector context resolved at cascade time.
+    /// </summary>
+    private sealed class SheetIndex
+    {
+        public SelectorIndex<StyleRule> Selectors { get; } = new();
+        public Dictionary<StyleRule, SelectorList> ParsedSelectorLists { get; }
+            = new(ReferenceEqualityComparer.Instance);
+        public HashSet<StyleRule> IndexedRules { get; }
+            = new(ReferenceEqualityComparer.Instance);
+    }
+
+    private static SheetIndex BuildSheetIndex(StyleSheet sheet)
+    {
+        var index = new SheetIndex();
+        IndexRules(index, sheet.Rules);
+        return index;
+    }
+
+    private static void IndexRules(SheetIndex index, IReadOnlyList<CssRule> rules)
+    {
+        foreach (var rule in rules)
+        {
+            switch (rule)
+            {
+                case StyleRule styleRule:
+                    var parsed = SelectorParser.ParseSelectorList(styleRule.Prelude);
+                    index.ParsedSelectorLists[styleRule] = parsed;
+                    index.IndexedRules.Add(styleRule);
+                    index.Selectors.Add(parsed, styleRule);
+                    // Do NOT recurse into styleRule.NestedRulesOrEmpty — nested rules
+                    // need parent-selector context resolved at cascade time.
+                    break;
+                case AtRule atRule
+                    when atRule.Name.Equals("media", StringComparison.OrdinalIgnoreCase)
+                      || atRule.Name.Equals("supports", StringComparison.OrdinalIgnoreCase)
+                      || atRule.Name.Equals("layer", StringComparison.OrdinalIgnoreCase):
+                    IndexRules(index, atRule.Rules);
+                    break;
+            }
+        }
     }
 
     public bool MatchMedia(string query) => MatchMedia(query, _mediaContext);
@@ -135,6 +187,22 @@ public sealed class StyleEngine
         foreach (var sheet in _sheets)
         {
             var layerOrder = _layerOrders[sheet.Origin];
+            var sheetIndex = _sheetIndexes.GetValueOrDefault(sheet);
+            // Compute the candidate set for this sheet once per element. Each entry
+            // is a (StyleRule, matching-ComplexSelector) pair; multiple entries may
+            // share a rule. We group them so each top-level StyleRule is processed
+            // at most once, restricted to its bucket-matching selectors.
+            Dictionary<StyleRule, List<ComplexSelector>>? candidateRules = null;
+            if (sheetIndex is not null)
+            {
+                candidateRules = new Dictionary<StyleRule, List<ComplexSelector>>(ReferenceEqualityComparer.Instance);
+                foreach (var entry in sheetIndex.Selectors.GetCandidates(element))
+                {
+                    if (!candidateRules.TryGetValue(entry.Value, out var list))
+                        candidateRules[entry.Value] = list = new List<ComplexSelector>();
+                    list.Add(entry.Selector);
+                }
+            }
             GatherFromRules(
                 sheet.Rules,
                 sheet.Origin,
@@ -145,7 +213,9 @@ public sealed class StyleEngine
                 ref order,
                 layerOrder,
                 currentLayerPath: null,
-                parentSelectors: null);
+                parentSelectors: null,
+                sheetIndex,
+                candidateRules);
         }
 
         var inlineStyle = element.GetAttribute("style");
@@ -420,13 +490,38 @@ public sealed class StyleEngine
         ref int order,
         LayerOrder layerOrder,
         string? currentLayerPath,
-        SelectorList? parentSelectors)
+        SelectorList? parentSelectors,
+        SheetIndex? sheetIndex,
+        Dictionary<StyleRule, List<ComplexSelector>>? candidateRules)
     {
         foreach (var rule in rules)
         {
             switch (rule)
             {
                 case StyleRule styleRule:
+                    // Bucket filter: for top-level (non-nested) rules covered by
+                    // the index, restrict the selectors we evaluate to those whose
+                    // rightmost compound could match the element's id/class/tag
+                    // buckets. If none match AND the rule has no nested rules
+                    // (which require their own evaluation against the element via
+                    // CSS Nesting), we can skip the rule entirely.
+                    List<ComplexSelector>? matchedSelectors = null;
+                    var bucketFiltered = false;
+                    if (parentSelectors is null && sheetIndex is not null
+                        && sheetIndex.IndexedRules.Contains(styleRule))
+                    {
+                        bucketFiltered = true;
+                        if (candidateRules is null || !candidateRules.TryGetValue(styleRule, out matchedSelectors))
+                        {
+                            // No selector in this rule's own prelude can match.
+                            // If there are no nested rules, skip outright. Otherwise
+                            // recurse into nested rules with an empty matched-set
+                            // so the parent declarations aren't applied.
+                            if (styleRule.NestedRulesOrEmpty.Count == 0)
+                                break;
+                            matchedSelectors = new List<ComplexSelector>();
+                        }
+                    }
                     ProcessStyleRule(
                         styleRule,
                         origin,
@@ -437,7 +532,10 @@ public sealed class StyleEngine
                         ref order,
                         layerOrder,
                         currentLayerPath,
-                        parentSelectors);
+                        parentSelectors,
+                        sheetIndex,
+                        candidateRules,
+                        bucketFiltered ? matchedSelectors : null);
                     break;
                 case AtRule { Name: var name } atRule when name.Equals("media", StringComparison.OrdinalIgnoreCase):
                     var mqList = MediaQueryParser.ParseList(atRule.Prelude);
@@ -453,7 +551,9 @@ public sealed class StyleEngine
                             ref order,
                             layerOrder,
                             currentLayerPath,
-                            parentSelectors);
+                            parentSelectors,
+                            sheetIndex,
+                            candidateRules);
                     }
                     break;
                 case AtRule { Name: var name2 } atRule2 when name2.Equals("supports", StringComparison.OrdinalIgnoreCase):
@@ -469,7 +569,9 @@ public sealed class StyleEngine
                             ref order,
                             layerOrder,
                             currentLayerPath,
-                            parentSelectors);
+                            parentSelectors,
+                            sheetIndex,
+                            candidateRules);
                     }
                     break;
                 case AtRule { Name: var name3 } atRule3 when name3.Equals("layer", StringComparison.OrdinalIgnoreCase):
@@ -502,7 +604,9 @@ public sealed class StyleEngine
                         ref order,
                         layerOrder,
                         layerPath,
-                        parentSelectors);
+                        parentSelectors,
+                        sheetIndex,
+                        candidateRules);
                     break;
             }
         }
@@ -518,12 +622,30 @@ public sealed class StyleEngine
         ref int order,
         LayerOrder layerOrder,
         string? currentLayerPath,
-        SelectorList? parentSelectors)
+        SelectorList? parentSelectors,
+        SheetIndex? sheetIndex,
+        Dictionary<StyleRule, List<ComplexSelector>>? candidateRules,
+        List<ComplexSelector>? bucketMatchedSelectors)
     {
-        var effectiveSelectorList = ResolveSelectorList(styleRule.Prelude, parentSelectors);
+        SelectorList effectiveSelectorList;
+        IReadOnlyList<ComplexSelector> selectorsToEvaluate;
+
+        if (parentSelectors is null && sheetIndex is not null
+            && sheetIndex.ParsedSelectorLists.TryGetValue(styleRule, out var cached))
+        {
+            effectiveSelectorList = cached;
+            // Restrict evaluation to bucket-matching selectors when available;
+            // these are a superset filter — SelectorMatcher still confirms.
+            selectorsToEvaluate = bucketMatchedSelectors ?? (IReadOnlyList<ComplexSelector>)cached.Selectors;
+        }
+        else
+        {
+            effectiveSelectorList = ResolveSelectorList(styleRule.Prelude, parentSelectors);
+            selectorsToEvaluate = effectiveSelectorList.Selectors;
+        }
 
         var layerIndex = layerOrder.GetIndex(currentLayerPath);
-        foreach (var selector in effectiveSelectorList.Selectors)
+        foreach (var selector in selectorsToEvaluate)
         {
             if (!SelectorMatcher.Matches(selector, element, context))
                 continue;
@@ -550,7 +672,9 @@ public sealed class StyleEngine
                 ref order,
                 layerOrder,
                 currentLayerPath,
-                effectiveSelectorList);
+                effectiveSelectorList,
+                sheetIndex,
+                candidateRules);
         }
     }
 
