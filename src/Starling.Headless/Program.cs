@@ -26,8 +26,13 @@ internal static class Program
         // no-op. We tee the OTel-backed IDiagnostics with ConsoleDiagnostics
         // so plain `dotnet run` still emits stderr trace lines.
         using var telemetry = OtelBootstrap.Initialize("starling-headless");
+        // TESSERA_DIAG_TRACE=1 lowers the console-diag floor to Trace so paint
+        // span timings ([Trace] paint: - raster.command_record (Xms)) appear
+        // on stderr — useful for backend perf comparisons without spinning up
+        // an OTel collector. Default stays Info to keep normal CLI runs quiet.
+        var traceConsole = Environment.GetEnvironmentVariable("TESSERA_DIAG_TRACE") == "1";
         s_diagnostics = new CompositeDiagnostics(
-            new ConsoleDiagnostics(),
+            new ConsoleDiagnostics { MinLevel = traceConsole ? DiagLevel.Trace : DiagLevel.Info },
             telemetry.Diagnostics);
 
         if (args.Length == 0)

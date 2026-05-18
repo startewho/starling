@@ -7,6 +7,7 @@ internal enum PaintBackendKind
 {
     Skia,
     ImageSharp,
+    ImageSharpWebGpu,
 }
 
 /// <summary>
@@ -22,9 +23,10 @@ internal static class PaintBackendSelector
 
     internal static PaintBackendKind Selected => _selected.Value;
 
-    private static PaintBackendKind ReadEnv()
+    private static PaintBackendKind ReadEnv() => Parse(Environment.GetEnvironmentVariable(EnvVar));
+
+    internal static PaintBackendKind Parse(string? raw)
     {
-        var raw = Environment.GetEnvironmentVariable(EnvVar);
         if (string.IsNullOrWhiteSpace(raw))
             return PaintBackendKind.Skia;
 
@@ -32,8 +34,9 @@ internal static class PaintBackendSelector
         {
             "skia" => PaintBackendKind.Skia,
             "imagesharp" => PaintBackendKind.ImageSharp,
+            "imagesharp-webgpu" or "imagesharp-gpu" => PaintBackendKind.ImageSharpWebGpu,
             _ => throw new InvalidOperationException(
-                $"{EnvVar}='{raw}' is not a recognised paint backend. Allowed values: 'skia', 'imagesharp'."),
+                $"{EnvVar}='{raw}' is not a recognised paint backend. Allowed values: 'skia', 'imagesharp', 'imagesharp-webgpu'."),
         };
     }
 
@@ -43,7 +46,8 @@ internal static class PaintBackendSelector
         return Selected switch
         {
             PaintBackendKind.Skia => new SkiaGraphiteBackend(fonts, webFonts, diag),
-            PaintBackendKind.ImageSharp => CreateImageSharpBackend(fonts, webFonts, diag),
+            PaintBackendKind.ImageSharp => CreateImageSharpBackend(fonts, webFonts, diag, useWebGpu: false),
+            PaintBackendKind.ImageSharpWebGpu => CreateImageSharpBackend(fonts, webFonts, diag, useWebGpu: true),
             _ => throw new InvalidOperationException($"Unhandled paint backend: {Selected}."),
         };
     }
@@ -54,30 +58,26 @@ internal static class PaintBackendSelector
         return Selected switch
         {
             PaintBackendKind.Skia => new SkiaTextMeasurer(fonts, webFonts),
-            PaintBackendKind.ImageSharp => CreateImageSharpMeasurer(fonts, webFonts),
+            PaintBackendKind.ImageSharp or PaintBackendKind.ImageSharpWebGpu => CreateImageSharpMeasurer(fonts, webFonts),
             _ => throw new InvalidOperationException($"Unhandled paint backend: {Selected}."),
         };
     }
 
-    private static IPaintBackend CreateImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diag)
-    {
 #if TESSERA_IMAGESHARP_DRAWING
-        return new ImageSharpBackend(fonts, webFonts, diag);
+    private static ImageSharpBackend CreateImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diag, bool useWebGpu)
+        => new(fonts, webFonts, diag, useWebGpu);
+
+    private static ImageSharpTextMeasurer CreateImageSharpMeasurer(FontResolver fonts, FontFaceRegistry? webFonts)
+        => new(fonts, webFonts);
 #else
-        throw new InvalidOperationException(
-            $"{EnvVar}=imagesharp requires the assembly to be built with the MSBuild property " +
+    private static IPaintBackend CreateImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diag, bool useWebGpu)
+        => throw new InvalidOperationException(
+            $"{EnvVar}=imagesharp(-webgpu) requires the assembly to be built with the MSBuild property " +
             "EnableImageSharpDrawing3=true; this binary was compiled without it.");
-#endif
-    }
 
     private static ITextMeasurer CreateImageSharpMeasurer(FontResolver fonts, FontFaceRegistry? webFonts)
-    {
-#if TESSERA_IMAGESHARP_DRAWING
-        return new ImageSharpTextMeasurer(fonts, webFonts);
-#else
-        throw new InvalidOperationException(
-            $"{EnvVar}=imagesharp requires the assembly to be built with the MSBuild property " +
+        => throw new InvalidOperationException(
+            $"{EnvVar}=imagesharp(-webgpu) requires the assembly to be built with the MSBuild property " +
             "EnableImageSharpDrawing3=true; this binary was compiled without it.");
 #endif
-    }
 }

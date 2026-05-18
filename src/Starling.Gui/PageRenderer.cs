@@ -14,9 +14,9 @@ using PaintList = Tessera.Paint.DisplayList.DisplayList;
 namespace Tessera.Gui;
 
 /// <summary>
-/// Paints a laid-out box tree through the unified Skia <see cref="DisplayList"/>
-/// path — the exact same <c>DisplayListBuilder</c> + <c>SkiaGraphiteBackend</c>
-/// pipeline the headless renderer uses — and hands the result back as a MAUI
+/// Paints a laid-out box tree through the unified <see cref="DisplayList"/>
+/// path — the exact same <c>DisplayListBuilder</c> + paint-backend pipeline the
+/// headless renderer uses — and hands the result back as a MAUI
 /// <see cref="ImageSource"/>.
 /// </summary>
 /// <remarks>
@@ -27,28 +27,33 @@ namespace Tessera.Gui;
 /// native sub-views.
 /// <para>
 /// v1 presentation is an offscreen GPU render followed by a GPU→CPU pixel
-/// readback (<see cref="SkiaGraphiteBackend"/> already does the readback), then
-/// a PNG re-encode so MAUI's image pipeline can display it. A future WP can
-/// present the Graphite surface straight into a <c>CAMetalLayer</c>-backed
-/// <c>UIView</c> (no readback, no re-encode) — see the WP handoff log.
+/// readback (Skia Graphite already does the readback), then a PNG re-encode so
+/// MAUI's image pipeline can display it. A future WP can present the Graphite
+/// surface straight into a <c>CAMetalLayer</c>-backed <c>UIView</c> (no
+/// readback, no re-encode) — see the WP handoff log.
 /// </para>
 /// <para>
-/// One <see cref="SkiaGraphiteBackend"/> is held for the lifetime of the
-/// renderer: native context creation (Dawn instance/adapter/device + Graphite
-/// context) is the expensive step and is reused across every repaint, including
-/// the per-pointer-move <c>:hover</c> repaints.
+/// One backend is held for the lifetime of the renderer: native context
+/// creation (Dawn instance/adapter/device + Graphite context, or the
+/// ImageSharp font collection) is the expensive step and is reused across
+/// every repaint, including the per-pointer-move <c>:hover</c> repaints. The
+/// backend is selected via <see cref="PaintBackendSelector"/> so toggling
+/// <c>TESSERA_PAINT_BACKEND</c> switches the GUI alongside the headless
+/// path. Mixing measurer and backend across the two families produces
+/// glyph-index/codepoint confusion (Skia's shaped-text fast path interprets
+/// GlyphId as a font-table index), so both must come from the same source.
 /// </para>
 /// </remarks>
 public sealed class PageRenderer : IDisposable
 {
     private readonly IDiagnostics _diag;
-    private readonly SkiaGraphiteBackend _backend;
+    private readonly IPaintBackend _backend;
     private bool _disposed;
 
     public PageRenderer(IDiagnostics? diagnostics = null)
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _backend = new SkiaGraphiteBackend(FontResolver.Default, webFonts: null, _diag);
+        _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
     }
 
     /// <summary>
@@ -76,7 +81,18 @@ public sealed class PageRenderer : IDisposable
         var surfaceSize = new LayoutSize(
             Math.Max(1, root.Frame.Width),
             Math.Max(1, root.Frame.Height));
-        return _backend.Render(displayList, surfaceSize, scale);
+        try
+        {
+            return _backend.Render(displayList, surfaceSize, scale);
+        }
+        catch (Exception ex)
+        {
+            // Surface backend failures (WebGPU init, native shim missing, etc.)
+            // through diagnostics so Aspire's trace view shows the full
+            // exception on the GUI span instead of just a failed activity.
+            _diag.LogException("gui", ex, $"page render via '{_backend.Name}' failed");
+            throw;
+        }
     }
 
     /// <summary>

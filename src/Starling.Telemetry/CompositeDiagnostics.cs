@@ -43,6 +43,11 @@ public sealed class CompositeDiagnostics : IDiagnostics
             _inner[i].Snapshot(label, bytes);
     }
 
+    public void LogException(string area, Exception exception, string? message = null)
+    {
+        foreach (var d in _inner) d.LogException(area, exception, message);
+    }
+
     private sealed class CompositeSpan(IDisposable[] spans) : IDisposable
     {
         public void Dispose()

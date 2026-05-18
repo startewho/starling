@@ -47,7 +47,7 @@ var guiFramework = DetectGuiFramework();
 var guiProject = Path.Combine(repoRoot, "src", "Starling.Gui", "Starling.Gui.csproj");
 var guiBinary = BuildGuiAndResolveBinary(guiProject, guiFramework);
 
-builder.AddExecutable(
+var gui = builder.AddExecutable(
     name: "gui",
     command: guiBinary,
     workingDirectory: Path.GetDirectoryName(guiBinary)!)
@@ -56,12 +56,39 @@ builder.AddExecutable(
 // Headless CLI. Pre-baked to render the bundled hello.html fixture; the args
 // are absolute paths because Aspire's default cwd for a project resource is
 // the csproj directory (src/Tessera.Headless/), not the repo root.
-builder.AddProject<Projects.Starling_Headless>("headless")
+//
+// TESSERA_PAINT_BACKEND on the AppHost process is forwarded to the headless
+// resource — Aspire does not auto-propagate arbitrary host env vars, only
+// those added via WithEnvironment. Selecting `imagesharp` additionally
+// requires the headless build to compile in the backend, which means
+// building the AppHost with `/p:EnableImageSharpDrawing3=true` so the
+// property flows through the project references.
+var headless = builder.AddProject<Projects.Starling_Headless>("headless")
     .WithArgs(
         "render",
         Path.Combine(repoRoot, "testdata", "hello.html"),
         "-o", Path.Combine(Path.GetTempPath(), "tessera-headless-out.png"))
     .WithOtlpExporter();
+
+var paintBackend = Environment.GetEnvironmentVariable("TESSERA_PAINT_BACKEND");
+if (!string.IsNullOrWhiteSpace(paintBackend))
+{
+    headless.WithEnvironment("TESSERA_PAINT_BACKEND", paintBackend);
+    gui.WithEnvironment("TESSERA_PAINT_BACKEND", paintBackend);
+}
+
+// wgpu-native (Rust) honors RUST_LOG for tracing. Forward it through so we
+// can see why wgpuCreateInstance fails inside the Catalyst sandbox — the
+// dylib loads cleanly but the actual init call returns ApiInitializationFailed
+// with no detail from the .NET side. RUST_LOG=trace dumps backend selection,
+// adapter enumeration, and Metal/Vulkan/D3D init failures to stderr (which
+// Aspire captures).
+var rustLog = Environment.GetEnvironmentVariable("RUST_LOG");
+if (!string.IsNullOrWhiteSpace(rustLog))
+{
+    headless.WithEnvironment("RUST_LOG", rustLog);
+    gui.WithEnvironment("RUST_LOG", rustLog);
+}
 
 builder.Build().Run();
 

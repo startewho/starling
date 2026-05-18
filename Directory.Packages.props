@@ -6,12 +6,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Rendering -->
-    <!-- ImageSharp 3.1.12 (no license key) is the default for PNG encode.
-         Builds with EnableImageSharpDrawing3=true override this with 4.0 via
-         VersionOverride in Starling.Paint.csproj. -->
-    <PackageVersion Include="SixLabors.ImageSharp"         Version="3.1.12" />
+    <!-- Rendering. ImageSharp 3.1.12 (no license key) is the default for PNG
+         encode. Builds with EnableImageSharpDrawing3=true bump the whole
+         SixLabors stack to the 3.0/4.0 wave (Drawing 3, Fonts 3, ImageSharp 4),
+         which collectively require a Six Labors license key. The version is
+         conditional centrally so every consumer resolves the same number — a
+         per-project VersionOverride doesn't propagate transitively, so it
+         leaves consumer projects (Engine/Headless/Gui/...) pinned to 3.1.12
+         and NuGet rejects the downgrade. -->
+    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12"
+                    Condition=" '$(EnableImageSharpDrawing3)' != 'true' " />
+    <PackageVersion Include="SixLabors.ImageSharp" Version="4.0.*"
+                    Condition=" '$(EnableImageSharpDrawing3)' == 'true' " />
     <PackageVersion Include="SixLabors.ImageSharp.Drawing" Version="3.0.*" />
+    <PackageVersion Include="SixLabors.ImageSharp.Drawing.WebGPU" Version="1.0.*" />
     <PackageVersion Include="SixLabors.Fonts"              Version="3.*" />
 
     <!-- UI shell — .NET MAUI 10 (Mac Catalyst only at v1; see src/Starling.Gui).

@@ -20,6 +20,20 @@ public interface IDiagnostics
     IDisposable Span(string area, string operation);
     void Counter(string name, double value);
     void Snapshot(string label, ReadOnlySpan<byte> bytes);
+
+    /// <summary>
+    /// Records an exception as a structured error. The OTel sink attaches it to
+    /// <c>Activity.Current</c> (so it shows up on the active span in the Aspire
+    /// dashboard with full stack trace) and emits an error-level log through
+    /// <c>ILogger</c>. Console sinks print stack to stderr. Call this for
+    /// exceptions that you catch + handle, before rethrowing or recovering —
+    /// otherwise the exception unwinds silently past every span without
+    /// telemetry.
+    /// </summary>
+    /// <param name="area">Same area string used for <c>Log</c>/<c>Span</c>.</param>
+    /// <param name="exception">The exception to record.</param>
+    /// <param name="message">Optional context message (e.g. "WebGPU init failed"). Defaults to <c>exception.Message</c>.</param>
+    void LogException(string area, Exception exception, string? message = null);
 }
 
 public sealed class NoopDiagnostics : IDiagnostics
@@ -30,6 +44,7 @@ public sealed class NoopDiagnostics : IDiagnostics
     public IDisposable Span(string area, string operation) => NoopSpan.Instance;
     public void Counter(string name, double value) { }
     public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
+    public void LogException(string area, Exception exception, string? message = null) { }
 
     private sealed class NoopSpan : IDisposable
     {
@@ -59,6 +74,16 @@ public sealed class ConsoleDiagnostics : IDiagnostics
 
     public void Snapshot(string label, ReadOnlySpan<byte> bytes)
         => Log(DiagLevel.Debug, "snapshot", $"{label} ({bytes.Length} bytes)");
+
+    public void LogException(string area, Exception exception, string? message = null)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var header = message ?? exception.Message;
+        // Errors always print regardless of MinLevel — silently swallowing
+        // exceptions is the bug we're trying to fix.
+        Console.Error.WriteLine($"[Error] {area}: {header}");
+        Console.Error.WriteLine(exception);
+    }
 
     private sealed class TraceSpan(ConsoleDiagnostics owner, string area, string operation) : IDisposable
     {
