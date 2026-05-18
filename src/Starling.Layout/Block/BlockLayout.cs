@@ -141,15 +141,22 @@ internal sealed class BlockLayout
     /// </summary>
     private static void ResolveAutoHorizontalMargins(Box.Box child, double containerWidth, double usedWidth)
     {
-        // If width is `auto`, auto margins compute to 0 (already done by ResolveBoxModel).
-        if (!HasExplicitWidth(child.Style)) return;
-
         var leftAuto = IsAutoMargin(child.Style, PropertyId.MarginLeft);
         var rightAuto = IsAutoMargin(child.Style, PropertyId.MarginRight);
         if (!leftAuto && !rightAuto) return;
 
+        // CSS 2.1 §10.3.3 says auto margins absorb slack when width is not
+        // auto. §10.4 extends this to the max-width / min-width clamp: after
+        // the tentative width is constrained, the leftover horizontal space
+        // is redistributed to auto margins, even though the *computed* width
+        // value is `auto`. Without this, `body { max-width: 35em; margin: auto }`
+        // (the words.html / Justin Jackson layout, MDN article body, etc.)
+        // pins to the left instead of centering. Compute the slack from the
+        // used width — if it's zero (true auto width, no clamp) the autos
+        // collapse to 0 the same way the §10.3.3 path produces.
         var outerWidth = usedWidth + child.Padding.Horizontal + child.Border.Horizontal;
         var slack = containerWidth - outerWidth - child.Margin.Left - child.Margin.Right;
+        if (slack <= 0) return;
 
         double newLeft = child.Margin.Left;
         double newRight = child.Margin.Right;
@@ -212,10 +219,47 @@ internal sealed class BlockLayout
 
     private double ContentWidth(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §10.4: tentative width is `width` if specified, otherwise the
+        // available space within the parent. The tentative width is then
+        // clamped by `max-width` (upper bound) and `min-width` (lower bound).
+        // Honouring max-width is what makes the classic "max-width: 35em"
+        // narrow-column layout work (justinjackson.ca/words.html, MDN, etc).
         var explicitWidth = ResolveLength(box.Style, PropertyId.Width, containerWidth, _viewport, allowAuto: true);
-        if (explicitWidth is { } w) return w;
-        var available = containerWidth - box.Margin.Horizontal - box.Border.Horizontal - box.Padding.Horizontal;
-        return Math.Max(0, available);
+        double tentative;
+        if (explicitWidth is { } w)
+        {
+            tentative = w;
+        }
+        else
+        {
+            var available = containerWidth - box.Margin.Horizontal - box.Border.Horizontal - box.Padding.Horizontal;
+            tentative = Math.Max(0, available);
+        }
+
+        // max-width: `none` (the initial value) is a no-op; any concrete length
+        // or percentage clamps the tentative width down.
+        var maxWidth = ResolveMaxLength(box.Style, PropertyId.MaxWidth, containerWidth, _viewport);
+        if (maxWidth is { } mx && tentative > mx)
+            tentative = mx;
+
+        // min-width: initial value `0` is a no-op; a concrete length/percentage
+        // expands the box back up when it's narrower than the floor.
+        var minWidth = ResolveLength(box.Style, PropertyId.MinWidth, containerWidth, _viewport) ?? 0;
+        if (tentative < minWidth)
+            tentative = minWidth;
+
+        return Math.Max(0, tentative);
+    }
+
+    // max-* properties accept the keyword `none` (the initial value) to mean
+    // "no upper bound". ResolveLength maps `none` to 0, which would collapse
+    // the box; intercept it here so callers can skip the clamp.
+    private static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
+    {
+        if (style is null) return null;
+        var value = style.Get(property);
+        if (value is CssKeyword k && k.Name == "none") return null;
+        return ResolveLength(style, property, percentageBasis, viewport);
     }
 
     private static double ResolveBorderWidth(ComputedStyle? style, PropertyId widthId, PropertyId styleId, Size? viewport = null)

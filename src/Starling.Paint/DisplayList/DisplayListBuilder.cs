@@ -17,15 +17,26 @@ namespace Tessera.Paint.DisplayList;
 /// </remarks>
 public sealed class DisplayListBuilder
 {
-    public DisplayList Build(BlockBox root)
+    /// <summary>
+    /// Builds a display list from a laid-out box tree. <paramref name="styleOverride"/>
+    /// is an optional per-box hook used to swap in fresh styles without
+    /// re-laying out — interactive shells call it with hover/focus-recascaded
+    /// styles so <c>a:hover { color: red }</c> repaints in red at the same
+    /// glyph positions. Returning <c>null</c> for a box keeps the
+    /// layout-time <see cref="Box.Style"/>.
+    /// </summary>
+    public DisplayList Build(BlockBox root, Func<Box, ComputedStyle?>? styleOverride = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         var list = new DisplayList();
-        Visit(root, new Rect(0, 0, root.Frame.Width, root.Frame.Height), list, originX: 0, originY: 0);
+        Visit(root, new Rect(0, 0, root.Frame.Width, root.Frame.Height), list, originX: 0, originY: 0, styleOverride);
         return list;
     }
 
-    private static void Visit(Box box, Rect rootBounds, DisplayList list, double originX, double originY)
+    private static ComputedStyle? EffectiveStyle(Box box, Func<Box, ComputedStyle?>? styleOverride)
+        => styleOverride?.Invoke(box) ?? box.Style;
+
+    private static void Visit(Box box, Rect rootBounds, DisplayList list, double originX, double originY, Func<Box, ComputedStyle?>? styleOverride)
     {
         var frameX = originX + box.Frame.X;
         var frameY = originY + box.Frame.Y;
@@ -37,7 +48,7 @@ public sealed class DisplayListBuilder
         var hasFrame = box.Frame.Width > 0 && box.Frame.Height > 0;
         var paintsBox = box.Kind is BoxKind.BlockContainer or BoxKind.AnonymousBlock
             || (box.Kind == BoxKind.Inline && hasFrame);
-        if (paintsBox && box.Style is { } style)
+        if (paintsBox && EffectiveStyle(box, styleOverride) is { } style)
         {
             var bg = style.GetColor(PropertyId.BackgroundColor);
             if (bg is { A: > 0 })
@@ -53,7 +64,7 @@ public sealed class DisplayListBuilder
         // anonymous-block parent's content box.
         if (box is TextBox textBox)
         {
-            EmitTextFragments(textBox, frameX, frameY, list);
+            EmitTextFragments(textBox, frameX, frameY, list, styleOverride);
             return; // Text boxes have no children.
         }
 
@@ -74,7 +85,7 @@ public sealed class DisplayListBuilder
         var contentOriginX = frameX + box.Border.Left + box.Padding.Left;
         var contentOriginY = frameY + box.Border.Top + box.Padding.Top;
         foreach (var child in box.Children)
-            Visit(child, rootBounds, list, contentOriginX, contentOriginY);
+            Visit(child, rootBounds, list, contentOriginX, contentOriginY, styleOverride);
     }
 
     private static void EmitBorders(Box box, double x, double y, DisplayList list, ComputedStyle style)
@@ -100,10 +111,10 @@ public sealed class DisplayListBuilder
             list.Add(new FillRect(new Rect(x, y, left, box.Frame.Height), leftColor));
     }
 
-    private static void EmitTextFragments(TextBox text, double x, double y, DisplayList list)
+    private static void EmitTextFragments(TextBox text, double x, double y, DisplayList list, Func<Box, ComputedStyle?>? styleOverride)
     {
         if (text.Fragments.Count == 0) return;
-        var style = text.Style;
+        var style = EffectiveStyle(text, styleOverride);
         var color = style?.GetColor(PropertyId.Color) ?? CssColor.Black;
         var fontSize = style?.Get(PropertyId.FontSize) switch
         {

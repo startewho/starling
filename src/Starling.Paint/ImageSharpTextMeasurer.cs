@@ -22,18 +22,15 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
 {
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
-    private readonly FontCollection _collection = new();
-    private readonly Dictionary<string, FontFamily> _bundledFamilies =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly FontCollection _collection;
     private readonly ConcurrentDictionary<FontCacheKey, Font> _fontCache = new();
-    private FontFamily? _fallbackFamily;
     private bool _disposed;
 
     public ImageSharpTextMeasurer(FontResolver? fonts = null, FontFaceRegistry? webFonts = null)
     {
         _fonts = fonts ?? FontResolver.Default;
         _webFonts = webFonts;
-        LoadBundledFonts();
+        _collection = ImageSharpFontLookup.LoadCollection();
     }
 
     public double MeasureWidth(string text, double fontSize, FontSpec spec)
@@ -103,50 +100,7 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
     }
 
     private Font CreateFont(FontSpec spec, float size)
-    {
-        var style = (spec.Bold, spec.Italic) switch
-        {
-            (true, true) => FontStyle.BoldItalic,
-            (true, false) => FontStyle.Bold,
-            (false, true) => FontStyle.Italic,
-            _ => FontStyle.Regular,
-        };
-
-        foreach (var family in spec.Families)
-        {
-            if (_bundledFamilies.TryGetValue(family, out var fam))
-                return fam.CreateFont(size, style);
-        }
-
-        var fallback = _fallbackFamily
-            ?? throw new InvalidOperationException(
-                "No SixLabors.Fonts family available. The bundled OpenSans-Regular.ttf " +
-                "failed to load from Starling.Paint's embedded resources.");
-        return fallback.CreateFont(size, style);
-    }
-
-    private void LoadBundledFonts()
-    {
-        var asm = typeof(ImageSharpTextMeasurer).Assembly;
-        foreach (var name in asm.GetManifestResourceNames())
-        {
-            if (!name.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)
-                && !name.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
-                continue;
-            using var stream = asm.GetManifestResourceStream(name);
-            if (stream is null) continue;
-            try
-            {
-                var family = _collection.Add(stream);
-                _bundledFamilies[family.Name] = family;
-                _fallbackFamily ??= family;
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                // Skip unreadable resources; the fallback chain still has a chance.
-            }
-        }
-    }
+        => ImageSharpFontLookup.CreateFont(_collection, spec, size);
 
     private readonly record struct FontCacheKey(FontSpec Spec, float Size);
 
@@ -155,8 +109,6 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
         if (_disposed) return;
         _disposed = true;
         _fontCache.Clear();
-        _bundledFamilies.Clear();
-        _fallbackFamily = null;
     }
 }
 #endif

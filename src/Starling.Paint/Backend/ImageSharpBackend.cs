@@ -69,7 +69,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         _webFonts = webFonts;
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _useWebGpu = useWebGpu;
-        _fontCollection = LoadEmbeddedFontCollection();
+        _fontCollection = ImageSharpFontLookup.LoadCollection();
     }
 
     public string Name => _useWebGpu ? "imagesharp-webgpu" : "imagesharp";
@@ -107,6 +107,13 @@ internal sealed class ImageSharpBackend : IPaintBackend
         using (_diag.Span("paint", "raster.surface_alloc"))
             image = new Image<Rgba32>(width, height, new Rgba32(255, 255, 255, 255));
 
+        // Image sources used by DrawImage outlive the canvas closure: the
+        // DrawingCanvas records commands and rasterizes them when the
+        // Mutate/Paint scope unwinds, so disposing image sources inside the
+        // closure throws ObjectDisposedException from ImageBrushRenderer.
+        // Stage them in a list and dispose after the mutation completes.
+        var pendingImageSources = new List<IDisposable>();
+
         try
         {
             using (_diag.Span("paint", "raster.command_record"))
@@ -114,7 +121,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 image.Mutate(x => x.Paint(canvas =>
                 {
                     foreach (var item in list.Items)
-                        Apply(canvas, item, scale);
+                        Apply(canvas, item, scale, pendingImageSources);
                 }));
             }
 
@@ -129,6 +136,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         }
         finally
         {
+            foreach (var src in pendingImageSources) src.Dispose();
             image.Dispose();
         }
     }
@@ -171,13 +179,14 @@ internal sealed class ImageSharpBackend : IPaintBackend
             using (_diag.Span("paint", "raster.surface_alloc"))
                 canvas = target.CreateCanvas();
 
+            var pendingImageSources = new List<IDisposable>();
             try
             {
                 using (_diag.Span("paint", "raster.command_record"))
                 {
                     canvas.Fill(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
                     foreach (var item in list.Items)
-                        Apply(canvas, item, scale);
+                        Apply(canvas, item, scale, pendingImageSources);
                     // Flush seals queued commands into the canvas timeline so
                     // the GPU pipeline executes before ReadbackImage samples
                     // the texture. Without it, readback races the (un)submitted
@@ -188,6 +197,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
             finally
             {
                 canvas.Dispose();
+                foreach (var src in pendingImageSources) src.Dispose();
             }
 
             byte[] pixels;
@@ -206,7 +216,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         }
     }
 
-    private void Apply(DrawingCanvas canvas, DisplayList.DisplayItem item, float scale)
+    private void Apply(DrawingCanvas canvas, DisplayList.DisplayItem item, float scale, List<IDisposable> pendingImageSources)
     {
         switch (item)
         {
@@ -230,7 +240,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 break;
             case DisplayList.DrawImage img:
                 _diag.Counter("paint.draw_image", 1);
-                DrawImage(canvas, img, scale);
+                DrawImage(canvas, img, scale, pendingImageSources);
                 break;
         }
     }
@@ -266,7 +276,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         canvas.DrawText(options, text.Text, Brushes.Solid(color), pen: null);
     }
 
-    private static void DrawImage(DrawingCanvas canvas, DisplayList.DrawImage item, float scale)
+    private static void DrawImage(DrawingCanvas canvas, DisplayList.DrawImage item, float scale, List<IDisposable> pendingImageSources)
     {
         if (item.Bounds.Width <= 0 || item.Bounds.Height <= 0) return;
         var decoded = item.Source;
@@ -275,10 +285,14 @@ internal sealed class ImageSharpBackend : IPaintBackend
         // ImageSharp's LoadPixelData<TPixel> wants a ReadOnlySpan<byte> of the
         // exact byte length; DecodedImage's buffer is straight-alpha RGBA8888
         // which matches Rgba32's layout precisely.
-        using var src = Image.LoadPixelData<Rgba32>(decoded.Pixels.Span, decoded.Width, decoded.Height);
-        var dest = ToDeviceRect(item.Bounds, scale);
-        var source = new RectangleF(0, 0, decoded.Width, decoded.Height);
-        canvas.DrawImage(src, dest, source, KnownResamplers.Bicubic);
+        var src = Image.LoadPixelData<Rgba32>(decoded.Pixels.Span, decoded.Width, decoded.Height);
+        pendingImageSources.Add(src);
+        // DrawingCanvas.DrawImage signature is (image, sourceRect, destinationRect, resampler) —
+        // sourceRect is the integer crop inside the source image and
+        // destinationRect is the float-precision target on the canvas.
+        var sourceRect = new SixLabors.ImageSharp.Rectangle(0, 0, decoded.Width, decoded.Height);
+        var destRect = ToDeviceRectF(item.Bounds, scale);
+        canvas.DrawImage(src, sourceRect, destRect, KnownResamplers.Bicubic);
     }
 
     private readonly record struct FontCacheKey(FontSpec Spec, float Size, int Probe);
@@ -298,51 +312,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         => _fontCache.GetOrAdd(new FontCacheKey(spec, size, probeCodepoint), k => CreateFont(k.Spec, k.Size));
 
     private Font CreateFont(FontSpec spec, float size)
-    {
-        var style = (spec.Bold, spec.Italic) switch
-        {
-            (true, true) => FontStyle.BoldItalic,
-            (true, false) => FontStyle.Bold,
-            (false, true) => FontStyle.Italic,
-            _ => FontStyle.Regular,
-        };
-
-        foreach (var family in spec.Families)
-        {
-            if (_fontCollection.TryGet(family, out var match))
-                return match.CreateFont(size, style);
-        }
-
-        // Fallback: any family present in the embedded collection (bundled OpenSans).
-        foreach (var family in _fontCollection.Families)
-            return family.CreateFont(size, style);
-
-        throw new InvalidOperationException(
-            "ImageSharpBackend: no fonts available. Ensure Starling.Paint.dll bundles at least one TTF/OTF embedded resource.");
-    }
-
-    private static FontCollection LoadEmbeddedFontCollection()
-    {
-        var collection = new FontCollection();
-        var asm = typeof(ImageSharpBackend).Assembly;
-        foreach (var name in asm.GetManifestResourceNames())
-        {
-            if (!name.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)
-                && !name.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
-                continue;
-            using var stream = asm.GetManifestResourceStream(name);
-            if (stream is null) continue;
-            try
-            {
-                collection.Add(stream);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                // Skip unreadable font; FontCollection.Add throws on malformed data.
-            }
-        }
-        return collection;
-    }
+        => ImageSharpFontLookup.CreateFont(_fontCollection, spec, size);
 
     // ImageSharp.Drawing 3.0 dropped canvas-level transforms (no Scale/Translate),
     // so layout-space coordinates are pre-multiplied by `scale` at the call site.

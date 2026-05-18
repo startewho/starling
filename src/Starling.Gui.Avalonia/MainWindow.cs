@@ -104,6 +104,7 @@ public sealed class MainWindow : Window, IBrowserController
 
         _urlBar = new UrlBar(_tm);
         _urlBar.Submitted += async (_, _) => await NavigateAsync(_urlBar.Address.Text, ignoreEmpty: false);
+        _urlBar.FindClicked += (_, _) => _webview.FocusFind();
 
         var reloadCell = new Panel { Children = { _reloadButton, _stopButton } };
 
@@ -376,5 +377,28 @@ public sealed class MainWindow : Window, IBrowserController
         _webview.Dispose();
         _session.Dispose();
         base.OnClosed(e);
+    }
+
+    protected override async void OnKeyDown(KeyEventArgs e)
+    {
+        // Cmd on macOS, Ctrl elsewhere — Avalonia's KeyModifiers.Meta maps to
+        // Command on macOS so we accept either to keep behaviour uniform.
+        var primary = e.KeyModifiers.HasFlag(KeyModifiers.Meta)
+                   || e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        if (primary && e.Key == Key.F)
+        {
+            e.Handled = true;
+            _webview.FocusFind();
+            return;
+        }
+        if (primary && e.Key == Key.C)
+        {
+            // Don't steal Cmd-C from a focused TextBox (URL bar, find entry).
+            if (FocusManager?.GetFocusedElement() is TextBox) { base.OnKeyDown(e); return; }
+            e.Handled = true;
+            await _webview.CopySelectionAsync();
+            return;
+        }
+        base.OnKeyDown(e);
     }
 }
