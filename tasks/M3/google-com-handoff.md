@@ -86,6 +86,9 @@ blocker; defer to M6 wp:M3-09.
 | B5-4 — Observers | ✅ | `src/Starling.Bindings/Observers/{MutationObserverBinding,IntersectionObserverBinding,ResizeObserverBinding,MutationRecord}.cs`, `src/Starling.Bindings/WindowBinding.cs`, `src/Starling.Js/Runtime/JsRealm.cs`, `tests/Starling.Bindings.Tests/{MutationObserverTests,IntersectionObserverTests,ResizeObserverTests}.cs` (JS surface complete; record-firing stubbed pending DOM/render hooks) |
 | B6-3 — position sticky | ✅ | `src/Starling.Layout/Position/Sticky.cs` (clamped-relative), `src/Starling.Layout/Position/{PositionLayout,PositionProperties,PositionParser}.cs`, `tests/Starling.Layout.Tests/Position/StickyLayoutTests.cs` |
 | B4-3 — BigInt | ✅ | `src/Starling.Js/Runtime/{JsValue,BigIntOps,JsRealm,JsRuntime,AbstractOperations,JsVm,SameValueZeroComparer}.cs`, `src/Starling.Js/Intrinsics/BigIntCtor.cs`, `src/Starling.Js/{Bytecode/{Chunk,JsCompiler},Ast/Expressions,Parse/JsParser}.cs`, `tests/Starling.Js.Tests/Intrinsics/BigIntTests.cs` (60 tests; mixed-type strict, asIntN/asUintN) |
+| gap:closure-write-back — live closure bindings | ✅ | `src/Starling.Js/Runtime/{Cell,JsFunction,JsVm,JsRuntime,JsRealm}.cs`, `src/Starling.Js/Bytecode/{Opcode,Chunk,Disassembler,JsCompiler,JsCompiler.CaptureAnalysis}.cs`, `tests/Starling.Js.Tests/Runtime/{JsClosureWriteBackTests,JsClosureTests}.cs` (16 tests; cells only for captured slots) |
+| gap:opcode-fast-path accessors | ✅ | `src/Starling.Js/Runtime/JsVm.cs` (LoadGlobal/StoreGlobal/SpreadInto/RestObject/RestArray now route through AO), `src/Starling.Bindings/WindowBinding.cs` (location accessor revert), `tests/Starling.Js.Tests/Runtime/AccessorOpcodeTests.cs` (11 tests) |
+| B4-6 — WeakRef + FinalizationRegistry | ✅ | `src/Starling.Js/Runtime/{JsWeakRef,JsFinalizationRegistry,JsRealm,JsRuntime}.cs`, `src/Starling.Js/Intrinsics/{WeakRefCtor,FinalizationRegistryCtor}.cs`, `tests/Starling.Js.Tests/Intrinsics/{WeakRefTests,FinalizationRegistryTests}.cs` (18 tests; KeptAlive + cleanup at drain-end; GC-timing tests skipped) |
 
 ### B0 surface delivered
 
@@ -173,6 +176,12 @@ session. Other rows in the queue are free for other agents/sessions.
 | **B5-4** Observers | claude-cody (agent) | complete (2026-05-19) |
 | **B6-3** sticky positioning | claude-cody (agent) | complete (2026-05-19) |
 | **B4-3** BigInt | claude-cody (agent) | complete (2026-05-19) |
+| **gap:closure-write-back** | claude-cody (agent) | complete (2026-05-19) |
+| **gap:opcode-fast-path accessors** | claude-cody (agent) | complete (2026-05-19) |
+| **B4-6** WeakRef + FinalizationRegistry | claude-cody (agent) | complete (2026-05-19) |
+| **gap:operator-bundle** instanceof/in/delete/compound-assign | claude-cody (agent) | in progress (2026-05-19) |
+| **gap:script-top-var-not-global** | claude-cody (agent) | in progress (2026-05-19) |
+| **@@toStringTag** Object.prototype.toString | claude-cody (agent) | in progress (2026-05-19) |
 
 ## Work queue
 
