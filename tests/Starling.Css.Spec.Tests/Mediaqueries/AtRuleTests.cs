@@ -2,6 +2,10 @@
 // Source: testdata/webref/css/mediaqueries.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.Media;
+
 namespace Starling.Css.Spec.Tests.Mediaqueries;
 
 /// <summary>
@@ -15,6 +19,14 @@ public sealed class AtRuleTests
     /// <para>At-rule <c>@media</c>.</para>
     /// </summary>
     [Spec("mediaqueries", "https://drafts.csswg.org/mediaqueries-4/")]
-    [PendingFact("at-rule '@media' not asserted yet", trackingWp: "wp:spec-mediaqueries")]
-    public void Parses_at_media() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_at_media()
+    {
+        var sheet = CssParser.ParseStyleSheet("@media (min-width: 400px) { }");
+        var at = sheet.Rules.OfType<AtRule>().Single();
+        at.Name.Should().Be("media");
+        var list = MediaQueryParser.ParseList(at.Prelude);
+        MediaQueryEvaluator.Evaluate(list, new MediaContext(ViewportWidthPx: 500)).Should().BeTrue();
+        MediaQueryEvaluator.Evaluate(list, new MediaContext(ViewportWidthPx: 300)).Should().BeFalse();
+    }
 }

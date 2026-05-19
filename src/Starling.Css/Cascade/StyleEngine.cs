@@ -1306,6 +1306,7 @@ public sealed class StyleEngine
         Element element)
         => value switch
         {
+            CssPendingSubstitution pending => ResolvePendingSubstitution(pending, customProperties, element),
             CssVarReference var when customProperties.TryGetValue(var.Name, out var tokens) =>
                 ResolveReferences(CssValueParser.Parse(tokens), customProperties, element),
             CssVarReference { Fallback: not null } var => ResolveReferences(var.Fallback, customProperties, element),
@@ -1317,6 +1318,42 @@ public sealed class StyleEngine
                 function.Arguments.Select(v => ResolveReferences(v, customProperties, element)).ToList()),
             _ => value,
         };
+
+    /// <summary>
+    /// CSS Variables L1 §3.7: resolve a pending-substitution value. Substitutes
+    /// var() references in the original shorthand components, re-runs the
+    /// shorthand expander, and returns the value for the longhand this placeholder
+    /// stands for. If the resolved shorthand doesn't populate that longhand
+    /// (either because resolution produced no value for it or because a var()
+    /// remained unresolvable), the longhand falls back to its initial value.
+    /// </summary>
+    private static CssValue ResolvePendingSubstitution(
+        CssPendingSubstitution pending,
+        IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> customProperties,
+        Element element)
+    {
+        // Substitute var() in each component. A multi-component custom property
+        // value (e.g. `--side: 1px solid red`) parses as a CssValueList; per
+        // §3.7's "substitute the tokens" semantics those components splice into
+        // the surrounding shorthand context rather than appearing as a single
+        // nested list.
+        var resolved = new List<CssValue>(pending.Values.Count);
+        foreach (var v in pending.Values)
+        {
+            var r = ResolveReferences(v, customProperties, element);
+            if (r is CssValueList nested)
+                resolved.AddRange(nested.Values);
+            else
+                resolved.Add(r);
+        }
+
+        foreach (var decl in PropertyRegistry.ExpandResolved(pending.Shorthand, resolved, important: false))
+        {
+            if (decl.Id == pending.Longhand)
+                return decl.Value;
+        }
+        return PropertyRegistry.InitialValue(pending.Longhand);
+    }
 
     private sealed record CascadedValue(
         CssValue Value,

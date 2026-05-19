@@ -13,6 +13,7 @@ using Starling.Gui.Avalonia.Mcp;
 using Starling.Gui.Avalonia.Theme;
 using Tessera.Common;
 using Tessera.Common.Diagnostics;
+using Tessera.Css.Media;
 using Tessera.Engine;
 using Tessera.Gui;
 using Tessera.Telemetry;
@@ -212,8 +213,15 @@ public sealed class MainWindow : Window, IBrowserController
         middle.Children.Add(_devtools); Grid.SetColumn(_devtools, 2);
     }
 
-    private void ToggleTheme()
-        => _tm.SetTheme(_tm.Theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark);
+    private async void ToggleTheme()
+    {
+        _tm.SetTheme(_tm.Theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark);
+        // The cascade picks up prefers-color-scheme at style-engine
+        // construction time, so flipping the theme has to re-run the load
+        // for `@media (prefers-color-scheme: dark)` rules to apply.
+        if (_session.History.Current is not null && !_busy)
+            await RunNavigation(ct => _session.ReloadInteractiveAsync(BuildOptions(), ct), "Theme reload");
+    }
 
     private void ToggleDevTools()
     {
@@ -402,7 +410,10 @@ public sealed class MainWindow : Window, IBrowserController
         _reloadButton.SetEnabled(_session.History.Current is not null && !_busy);
     }
 
-    private static RenderOptions BuildOptions() => new(Viewport, FontSize: 16f);
+    private RenderOptions BuildOptions() => new(Viewport, FontSize: 16f)
+    {
+        PreferredColorScheme = _tm.Theme == ThemeMode.Dark ? ColorScheme.Dark : ColorScheme.Light,
+    };
 
     // ---- IBrowserController -------------------------------------------------
     // MCP tool calls land here, marshaled to the UI thread by BrowserControlBridge.

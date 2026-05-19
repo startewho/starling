@@ -90,10 +90,33 @@ internal sealed class ImageSharpBackend : IPaintBackend
         Activity.Current?.SetTag("raster.scale", scale);
         Activity.Current?.SetTag("raster.items", list.Items.Count);
 
+        if (_useWebGpu && (width > MaxWebGpuTextureDimension || height > MaxWebGpuTextureDimension))
+        {
+            // wgpu's default uncaptured-error handler is a Rust panic that
+            // calls abort(), so a CreateTexture call exceeding
+            // maxTextureDimension2D crashes the entire process before any
+            // C# try/catch can intercept it. Real pages (e.g. tall scrolling
+            // articles like netclaw.dev) routinely exceed the WebGPU spec
+            // default of 8192 px in the long axis, so guard the GPU path and
+            // fall back to the pure-managed CPU rasterizer for this frame
+            // rather than aborting. The GPU path remains available for the
+            // next frame if the page reflows back under the limit.
+            _diag.Counter("paint.webgpu.fallback_cpu.oversize", 1);
+            Activity.Current?.SetTag("raster.webgpu.fallback_reason", "exceeds_max_texture_dimension");
+            return RenderCpu(list, width, height, scale);
+        }
+
         return _useWebGpu
             ? RenderWebGpu(list, width, height, scale)
             : RenderCpu(list, width, height, scale);
     }
+
+    // WebGPU spec default for maxTextureDimension2D (also wgpu-native's
+    // downlevel default). Going beyond this triggers a wgpu validation error,
+    // which wgpu's default uncaptured-error handler turns into a process
+    // abort — so we have to detect the overflow before calling CreateTexture
+    // rather than wrap it in try/catch.
+    private const int MaxWebGpuTextureDimension = 8192;
 
     private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale)
     {

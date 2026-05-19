@@ -2,6 +2,11 @@
 // Source: testdata/webref/css/css-conditional.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.Media;
+using Tessera.Css.Cascade;
+
 namespace Starling.Css.Spec.Tests.CssConditional;
 
 /// <summary>
@@ -15,13 +20,30 @@ public sealed class AtRuleTests
     /// <para>At-rule <c>@media</c>.</para>
     /// </summary>
     [Spec("css-conditional", "https://drafts.csswg.org/css-conditional-3/#at-ruledef-media")]
-    [PendingFact("at-rule '@media' not asserted yet", trackingWp: "wp:spec-css-conditional")]
-    public void Parses_at_media() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_at_media()
+    {
+        var sheet = CssParser.ParseStyleSheet("@media (max-width: 600px) { }");
+        var at = sheet.Rules.OfType<AtRule>().Single();
+        at.Name.Should().Be("media");
+        var list = MediaQueryParser.ParseList(at.Prelude);
+        MediaQueryEvaluator.Evaluate(list, new MediaContext(ViewportWidthPx: 500)).Should().BeTrue();
+        MediaQueryEvaluator.Evaluate(list, new MediaContext(ViewportWidthPx: 700)).Should().BeFalse();
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-conditional-3/#at-ruledef-supports"/>
     /// <para>At-rule <c>@supports</c>.</para>
     /// </summary>
     [Spec("css-conditional", "https://drafts.csswg.org/css-conditional-3/#at-ruledef-supports")]
-    [PendingFact("at-rule '@supports' not asserted yet", trackingWp: "wp:spec-css-conditional")]
-    public void Parses_at_supports() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_at_supports()
+    {
+        var sheet = CssParser.ParseStyleSheet("@supports (color: red) { }");
+        var at = sheet.Rules.OfType<AtRule>().Single();
+        at.Name.Should().Be("supports");
+        SupportsEvaluator.Evaluate(at.Prelude).Should().BeTrue();
+        // Negation: unknown property is unsupported.
+        var sheet2 = CssParser.ParseStyleSheet("@supports (does-not-exist: 1) { }");
+        SupportsEvaluator.Evaluate(sheet2.Rules.OfType<AtRule>().Single().Prelude).Should().BeFalse();
+    }
 }

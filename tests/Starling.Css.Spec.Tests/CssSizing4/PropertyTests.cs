@@ -2,6 +2,11 @@
 // Source: testdata/webref/css/css-sizing-4.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.Properties;
+using Tessera.Css.Values;
+
 namespace Starling.Css.Spec.Tests.CssSizing4;
 
 /// <summary>
@@ -10,6 +15,14 @@ namespace Starling.Css.Spec.Tests.CssSizing4;
 [Spec("css-sizing-4", "https://drafts.csswg.org/css-sizing-4/")]
 public sealed class PropertyTests
 {
+
+    private static List<PropertyDeclaration> Expand(string css)
+    {
+        var sheet = CssParser.ParseStyleSheet($"x {{ {css} }}");
+        var rule = (StyleRule)sheet.Rules[0];
+        return rule.Declarations.SelectMany(PropertyRegistry.Parse).ToList();
+    }
+
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-sizing-4/"/>
     /// <para>Property <c>width</c>.</para>
@@ -57,8 +70,17 @@ public sealed class PropertyTests
     /// <para>Property <c>aspect-ratio</c> — value <c>auto || &lt;ratio&gt;</c>; initial <c>auto</c>.</para>
     /// </summary>
     [Spec("css-sizing-4", "https://drafts.csswg.org/css-sizing-4/#propdef-aspect-ratio")]
-    [PendingFact("property 'aspect-ratio' not asserted yet", trackingWp: "wp:spec-css-sizing-4")]
-    public void Parses_aspect_ratio() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_aspect_ratio()
+    {
+        var decls = Expand("aspect-ratio: 16 / 9;");
+        var value = decls.Single(d => d.Id == PropertyId.AspectRatio).Value;
+        value.Should().BeOfType<CssValueList>();
+        var list = (CssValueList)value;
+        list.Values.Should().HaveCount(3);
+        list.Values[0].Should().Be(new CssNumber(16));
+        list.Values[2].Should().Be(new CssNumber(9));
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-sizing-4/#propdef-contain-intrinsic-width"/>
     /// <para>Property <c>contain-intrinsic-width</c> — value <c>auto? [ none | &lt;length [0,∞]&gt; ]</c>; initial <c>none</c>.</para>

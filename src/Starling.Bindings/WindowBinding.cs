@@ -45,6 +45,10 @@ public static class WindowBinding
     private static readonly ConditionalWeakTable<Document, JsObject> LocationCache = new();
     // Track the Window so we can fire load events on it later.
     private static readonly ConditionalWeakTable<JsRealm, Document> RealmToDocument = new();
+    // realm → layout host (optional): supplied by the engine when a
+    // pre-script layout snapshot is available. Bindings consult it for
+    // getBoundingClientRect / offsetWidth / getComputedStyle.
+    private static readonly ConditionalWeakTable<JsRealm, ILayoutHost> RealmToLayoutHost = new();
 
     /// <summary>Install the full Window / EventTarget / Node / Element /
     /// Document surface on <paramref name="runtime"/>'s realm and bind it to
@@ -57,6 +61,8 @@ public static class WindowBinding
         RealmToRuntime.AddOrUpdate(realm, runtime);
         RealmToDocument.AddOrUpdate(realm, document);
         DocMeta.AddOrUpdate(document, new DocumentMeta(options.DocumentUrl ?? "about:blank", options));
+        if (options.LayoutHost is { } layoutHost)
+            RealmToLayoutHost.AddOrUpdate(realm, layoutHost);
 
         // 1) EventTarget + Event + Node/Element/Document prototypes.
         EventTargetBinding.Install(realm);

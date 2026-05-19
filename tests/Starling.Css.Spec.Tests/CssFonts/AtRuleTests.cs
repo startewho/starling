@@ -2,6 +2,10 @@
 // Source: testdata/webref/css/css-fonts.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.FontFace;
+
 namespace Starling.Css.Spec.Tests.CssFonts;
 
 /// <summary>
@@ -15,8 +19,23 @@ public sealed class AtRuleTests
     /// <para>At-rule <c>@font-face</c>.</para>
     /// </summary>
     [Spec("css-fonts", "https://drafts.csswg.org/css-fonts-4/#at-font-face-rule")]
-    [PendingFact("at-rule '@font-face' not asserted yet", trackingWp: "wp:spec-css-fonts")]
-    public void Parses_at_font_face() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_at_font_face()
+    {
+        var sheet = CssParser.ParseStyleSheet("""
+            @font-face {
+                font-family: "Open Sans";
+                src: url("OpenSans.ttf") format("truetype");
+            }
+            """);
+        var rule = FontFaceParser.ParseAll(sheet).Should().ContainSingle().Subject;
+        rule.FamilyName.Should().Be("Open Sans");
+        rule.Bold.Should().BeFalse();
+        rule.Italic.Should().BeFalse();
+        rule.Sources.Should().ContainSingle()
+            .Which.Should().BeOfType<UrlFontSource>()
+            .Which.Url.Should().Be("OpenSans.ttf");
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-fonts-4/#at-ruledef-font-feature-values"/>
     /// <para>At-rule <c>@font-feature-values</c>.</para>

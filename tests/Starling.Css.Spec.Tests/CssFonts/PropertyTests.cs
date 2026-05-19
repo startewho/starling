@@ -2,6 +2,11 @@
 // Source: testdata/webref/css/css-fonts.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.Properties;
+using Tessera.Css.Values;
+
 namespace Starling.Css.Spec.Tests.CssFonts;
 
 /// <summary>
@@ -11,19 +16,37 @@ namespace Starling.Css.Spec.Tests.CssFonts;
 public sealed class PropertyTests
 {
 
+    private static List<PropertyDeclaration> Expand(string css)
+    {
+        var sheet = CssParser.ParseStyleSheet($"x {{ {css} }}");
+        var rule = (StyleRule)sheet.Rules[0];
+        return rule.Declarations.SelectMany(PropertyRegistry.Parse).ToList();
+    }
+
+
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-fonts-4/#propdef-font-family"/>
     /// <para>Property <c>font-family</c> — value <c>[ &lt;font-family-name&gt; | &lt;generic-font-family&gt; ]#</c>; initial <c>depends on user agent</c>.</para>
     /// </summary>
     [Spec("css-fonts", "https://drafts.csswg.org/css-fonts-4/#propdef-font-family")]
-    [PendingFact("property 'font-family' not asserted yet", trackingWp: "wp:spec-css-fonts")]
-    public void Parses_font_family() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_font_family()
+    {
+        var decls = Expand("font-family: sans-serif;");
+        decls.Single().Id.Should().Be(PropertyId.FontFamily);
+        decls.Single().Value.Should().Be(new CssKeyword("sans-serif"));
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-fonts-4/#propdef-font-weight"/>
     /// <para>Property <c>font-weight</c> — value <c>&lt;font-weight-absolute&gt; | bolder | lighter</c>; initial <c>normal</c>.</para>
     /// </summary>
     [Spec("css-fonts", "https://drafts.csswg.org/css-fonts-4/#propdef-font-weight")]
-    [PendingFact("property 'font-weight' not asserted yet", trackingWp: "wp:spec-css-fonts")]
-    public void Parses_font_weight() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_font_weight()
+    {
+        var decls = Expand("font-weight: 700;");
+        decls.Single().Id.Should().Be(PropertyId.FontWeight);
+        decls.Single().Value.Should().Be(new CssNumber(700));
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-fonts-4/#propdef-font-width"/>
     /// <para>Property <c>font-width</c> — value <c>normal | &lt;percentage [0,∞]&gt; | ultra-condensed | extra-condensed | condensed | semi-condensed | semi-expanded | expanded | extra-expanded | ultra-expanded</c>; initial <c>normal</c>.</para>
@@ -36,8 +59,13 @@ public sealed class PropertyTests
     /// <para>Property <c>font-style</c> — value <c>normal | italic | left | right | oblique &lt;angle [-90deg,90deg]&gt;?</c>; initial <c>normal</c>.</para>
     /// </summary>
     [Spec("css-fonts", "https://drafts.csswg.org/css-fonts-4/#propdef-font-style")]
-    [PendingFact("property 'font-style' not asserted yet", trackingWp: "wp:spec-css-fonts")]
-    public void Parses_font_style() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_font_style()
+    {
+        var decls = Expand("font-style: italic;");
+        decls.Single().Id.Should().Be(PropertyId.FontStyle);
+        decls.Single().Value.Should().Be(new CssKeyword("italic"));
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-fonts-4/#propdef-font-size"/>
     /// <para>Property <c>font-size</c> — value <c>&lt;absolute-size&gt; | &lt;relative-size&gt; | &lt;length-percentage [0,∞]&gt; | math</c>; initial <c>medium</c>.</para>

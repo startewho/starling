@@ -109,6 +109,31 @@ public sealed class ImageSharpBackendTests
             500, "a solid-colour image must produce a large region of non-white pixels");
     }
 
+    /// <summary>
+    /// Pages that exceed wgpu's <c>maxTextureDimension2D</c> default (8192 px)
+    /// must not crash the host: the GPU path falls back to the CPU rasterizer
+    /// for that frame because wgpu's default uncaptured-error handler turns
+    /// a CreateTexture validation error into a process <c>abort()</c>, which
+    /// no C# try/catch can intercept. Regression: loading netclaw.dev under
+    /// the AppHost default (<c>TESSERA_PAINT_BACKEND=imagesharp-gpu</c>)
+    /// aborted Starling.Gui.Avalonia inside <c>wgpuDeviceCreateTexture</c>.
+    /// </summary>
+    [Fact]
+    public void Oversized_viewport_falls_back_to_cpu_instead_of_aborting()
+    {
+        var list = new PaintList();
+        list.Add(new DisplayList.FillRect(new LayoutRect(0, 0, 100, 100), new Tessera.Css.Values.CssColor(0, 0, 255, 255)));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+
+        Action act = () =>
+        {
+            using var bmp = backend.Render(list, new LayoutSize(1024, 9000));
+        };
+
+        act.Should().NotThrow("a viewport taller than maxTextureDimension2D must fall back to CPU, not invoke wgpuDeviceCreateTexture");
+    }
+
     private static void Fill(Span<byte> span, byte r, byte g, byte b, byte a)
     {
         for (var i = 0; i < span.Length; i += 4)

@@ -96,6 +96,8 @@ public sealed class ComputedStyle
             CssVarReference var => var.Fallback is null
                 ? $"var({var.Name})"
                 : $"var({var.Name}, {ToCssText(var.Fallback)})",
+            CssPendingSubstitution pending =>
+                $"{pending.Shorthand}({string.Join(" ", pending.Values.Select(ToCssText))})",
             _ => value.ToString() ?? string.Empty,
         };
 }

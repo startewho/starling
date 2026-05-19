@@ -250,6 +250,43 @@ claude.ai's hardness comes from: heavy React, intersection observers, fetch stre
 
 **Est. duration**: 4 weeks.
 
+## M12 — Tiled compositor + layer tree
+
+**Entry**: M5 (paint backend stable on ImageSharp). Sequenced after M11 in
+the linear plan but can run in parallel with M6–M8 since it only touches
+`Starling.{Layout,Paint}` + `Starling.Gui.Avalonia`.
+
+**Goal**: The paint pipeline matches the Chrome/Safari shape — a CSS
+stacking-context layer tree, per-layer tile cache, compositor-thread
+composite, and CSS `transform`/`opacity` animations driven on the
+compositor without re-painting. Demoable end state: scrolling a 200000-px
+page is smooth, transforming a promoted div for 5 seconds straight does
+not bump any paint counter, and the wgpu max-texture-dimension fallback
+hack in `ImageSharpBackend` is gone (texture allocations are now bounded
+by the 256² tile size).
+
+**Work** (see `tasks/M12/`):
+
+- `wp:M12-01-viewport-clip` — paint only what's on screen.
+- `wp:M12-02-picture-cache` — WebRender-style single-bitmap cache for scroll smoothness.
+- `wp:M12-03-stacking-contexts` — tag promotable boxes during layout.
+- `wp:M12-04-layer-tree` — split paint into a tree of `CompositorLayer`s.
+- `wp:M12-05-tile-grid` — per-layer 256² tile cache with LRU.
+- `wp:M12-06-invalidation` — per-tile dirty tracking; one-button repaint stays local.
+- `wp:M12-07-compositor-thread` — composite off the UI thread.
+- `wp:M12-08-prefetch-ring` — speculative tile paint around the viewport.
+- `wp:M12-09-compositor-anim` — transform/opacity animations as pure composite.
+
+**Exit**:
+- Tile cache hit rate ≥ 95% on a sustained scroll of a content-heavy page.
+- Per-frame paint time on a `transform: translateX(...)` animation of a
+  promoted div is < 1 ms (composite-only).
+- The `MaxWebGpuTextureDimension` guard in `ImageSharpBackend` is removed.
+- `dotnet test` green; new compositor counters surfaced in the Aspire
+  dashboard.
+
+**Est. duration**: 6–8 weeks (serial; parallelizable to ~4 with two agents).
+
 ## Aggregate timeline
 
 | Milestone | Duration | Cumulative |

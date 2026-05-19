@@ -242,6 +242,47 @@ public static class PropertyRegistry
         if (values.Count == 0)
             yield break;
 
+        // CSS Variables L1 §3.7 — when a shorthand contains var(), every longhand
+        // it maps to is set to a pending-substitution value; the shorthand cannot
+        // be expanded until the var() references resolve at computed-value time.
+        if (ShorthandLonghands.TryGetValue(name, out var longhands)
+            && values.Any(ContainsVarReference))
+        {
+            foreach (var longhand in longhands)
+                yield return new PropertyDeclaration(
+                    longhand,
+                    new CssPendingSubstitution(name, values, longhand),
+                    important);
+            yield break;
+        }
+
+        foreach (var item in ExpandResolved(name, values, important))
+            yield return item;
+    }
+
+    /// <summary>
+    /// Re-runs the shorthand expander after var() substitution. Used by the
+    /// cascade to resolve <see cref="CssPendingSubstitution"/> values. Callers
+    /// must have already substituted all var() references in <paramref name="values"/>;
+    /// any remaining <see cref="CssVarReference"/>s are treated as invalid components.
+    /// </summary>
+    internal static IEnumerable<PropertyDeclaration> ExpandResolved(
+        string name,
+        IReadOnlyList<CssValue> values,
+        bool important)
+    {
+        if (values.Count == 0)
+            yield break;
+        var list = values as List<CssValue> ?? values.ToList();
+        foreach (var item in ExpandSwitch(name, list, important))
+            yield return item;
+    }
+
+    private static IEnumerable<PropertyDeclaration> ExpandSwitch(
+        string name,
+        List<CssValue> values,
+        bool important)
+    {
         switch (name)
         {
             case "margin":
@@ -938,6 +979,97 @@ public static class PropertyRegistry
 
     private static bool IsTimingFunctionName(string name)
         => name is "cubic-bezier" or "steps" or "linear";
+
+    /// <summary>
+    /// Map from shorthand property name to the set of longhand properties it
+    /// resets. Used to seed pending-substitution values when a shorthand
+    /// contains a <c>var()</c> reference (CSS Variables L1 §3.7). Per spec the
+    /// shorthand resets every mapped longhand; longhands that the resolved
+    /// shorthand doesn't explicitly populate fall back to their initial value
+    /// at computed time.
+    /// </summary>
+    private static readonly Dictionary<string, PropertyId[]> ShorthandLonghands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["margin"] = [PropertyId.MarginTop, PropertyId.MarginRight, PropertyId.MarginBottom, PropertyId.MarginLeft],
+        ["padding"] = [PropertyId.PaddingTop, PropertyId.PaddingRight, PropertyId.PaddingBottom, PropertyId.PaddingLeft],
+        ["border-width"] = [PropertyId.BorderTopWidth, PropertyId.BorderRightWidth, PropertyId.BorderBottomWidth, PropertyId.BorderLeftWidth],
+        ["border-style"] = [PropertyId.BorderTopStyle, PropertyId.BorderRightStyle, PropertyId.BorderBottomStyle, PropertyId.BorderLeftStyle],
+        ["border-color"] = [PropertyId.BorderTopColor, PropertyId.BorderRightColor, PropertyId.BorderBottomColor, PropertyId.BorderLeftColor],
+        ["border-radius"] = [PropertyId.BorderTopLeftRadius, PropertyId.BorderTopRightRadius, PropertyId.BorderBottomRightRadius, PropertyId.BorderBottomLeftRadius],
+        ["overflow"] = [PropertyId.OverflowX, PropertyId.OverflowY],
+        ["background"] = [PropertyId.BackgroundColor, PropertyId.BackgroundImage, PropertyId.BackgroundPosition, PropertyId.BackgroundSize, PropertyId.BackgroundRepeat],
+        ["border"] =
+        [
+            PropertyId.BorderTopWidth, PropertyId.BorderRightWidth, PropertyId.BorderBottomWidth, PropertyId.BorderLeftWidth,
+            PropertyId.BorderTopStyle, PropertyId.BorderRightStyle, PropertyId.BorderBottomStyle, PropertyId.BorderLeftStyle,
+            PropertyId.BorderTopColor, PropertyId.BorderRightColor, PropertyId.BorderBottomColor, PropertyId.BorderLeftColor,
+        ],
+        ["flex"] = [PropertyId.FlexGrow, PropertyId.FlexShrink, PropertyId.FlexBasis],
+        ["flex-flow"] = [PropertyId.FlexDirection, PropertyId.FlexWrap],
+        ["gap"] = [PropertyId.RowGap, PropertyId.ColumnGap],
+        ["grid-gap"] = [PropertyId.RowGap, PropertyId.ColumnGap],
+        ["grid-row-gap"] = [PropertyId.RowGap],
+        ["grid-column-gap"] = [PropertyId.ColumnGap],
+        ["grid-template"] = [PropertyId.GridTemplateRows, PropertyId.GridTemplateColumns, PropertyId.GridTemplateAreas],
+        ["grid"] = [PropertyId.GridTemplateRows, PropertyId.GridTemplateColumns, PropertyId.GridTemplateAreas],
+        ["grid-column"] = [PropertyId.GridColumnStart, PropertyId.GridColumnEnd],
+        ["grid-row"] = [PropertyId.GridRowStart, PropertyId.GridRowEnd],
+        ["grid-area"] = [PropertyId.GridRowStart, PropertyId.GridColumnStart, PropertyId.GridRowEnd, PropertyId.GridColumnEnd],
+        ["place-items"] = [PropertyId.AlignItems, PropertyId.JustifyItems],
+        ["place-content"] = [PropertyId.AlignContent, PropertyId.JustifyContent],
+        ["place-self"] = [PropertyId.AlignSelf, PropertyId.JustifySelf],
+        ["margin-inline"] = [PropertyId.MarginInlineStart, PropertyId.MarginInlineEnd],
+        ["margin-block"] = [PropertyId.MarginBlockStart, PropertyId.MarginBlockEnd],
+        ["padding-inline"] = [PropertyId.PaddingInlineStart, PropertyId.PaddingInlineEnd],
+        ["padding-block"] = [PropertyId.PaddingBlockStart, PropertyId.PaddingBlockEnd],
+        ["inset"] = [PropertyId.Top, PropertyId.Right, PropertyId.Bottom, PropertyId.Left],
+        ["inset-inline"] = [PropertyId.InsetInlineStart, PropertyId.InsetInlineEnd],
+        ["inset-block"] = [PropertyId.InsetBlockStart, PropertyId.InsetBlockEnd],
+        ["border-inline-width"] = [PropertyId.BorderInlineStartWidth, PropertyId.BorderInlineEndWidth],
+        ["border-inline-style"] = [PropertyId.BorderInlineStartStyle, PropertyId.BorderInlineEndStyle],
+        ["border-inline-color"] = [PropertyId.BorderInlineStartColor, PropertyId.BorderInlineEndColor],
+        ["border-block-width"] = [PropertyId.BorderBlockStartWidth, PropertyId.BorderBlockEndWidth],
+        ["border-block-style"] = [PropertyId.BorderBlockStartStyle, PropertyId.BorderBlockEndStyle],
+        ["border-block-color"] = [PropertyId.BorderBlockStartColor, PropertyId.BorderBlockEndColor],
+        ["border-inline-start"] = [PropertyId.BorderInlineStartWidth, PropertyId.BorderInlineStartStyle, PropertyId.BorderInlineStartColor],
+        ["border-inline-end"] = [PropertyId.BorderInlineEndWidth, PropertyId.BorderInlineEndStyle, PropertyId.BorderInlineEndColor],
+        ["border-block-start"] = [PropertyId.BorderBlockStartWidth, PropertyId.BorderBlockStartStyle, PropertyId.BorderBlockStartColor],
+        ["border-block-end"] = [PropertyId.BorderBlockEndWidth, PropertyId.BorderBlockEndStyle, PropertyId.BorderBlockEndColor],
+        ["border-inline"] =
+        [
+            PropertyId.BorderInlineStartWidth, PropertyId.BorderInlineStartStyle, PropertyId.BorderInlineStartColor,
+            PropertyId.BorderInlineEndWidth, PropertyId.BorderInlineEndStyle, PropertyId.BorderInlineEndColor,
+        ],
+        ["border-block"] =
+        [
+            PropertyId.BorderBlockStartWidth, PropertyId.BorderBlockStartStyle, PropertyId.BorderBlockStartColor,
+            PropertyId.BorderBlockEndWidth, PropertyId.BorderBlockEndStyle, PropertyId.BorderBlockEndColor,
+        ],
+        ["border-top"] = [PropertyId.BorderTopWidth, PropertyId.BorderTopStyle, PropertyId.BorderTopColor],
+        ["border-right"] = [PropertyId.BorderRightWidth, PropertyId.BorderRightStyle, PropertyId.BorderRightColor],
+        ["border-bottom"] = [PropertyId.BorderBottomWidth, PropertyId.BorderBottomStyle, PropertyId.BorderBottomColor],
+        ["border-left"] = [PropertyId.BorderLeftWidth, PropertyId.BorderLeftStyle, PropertyId.BorderLeftColor],
+        ["scroll-margin"] = [PropertyId.ScrollMarginTop, PropertyId.ScrollMarginRight, PropertyId.ScrollMarginBottom, PropertyId.ScrollMarginLeft],
+        ["scroll-padding"] = [PropertyId.ScrollPaddingTop, PropertyId.ScrollPaddingRight, PropertyId.ScrollPaddingBottom, PropertyId.ScrollPaddingLeft],
+        ["overscroll-behavior"] = [PropertyId.OverscrollBehaviorX, PropertyId.OverscrollBehaviorY],
+        ["text-decoration"] = [PropertyId.TextDecorationLine, PropertyId.TextDecorationStyle, PropertyId.TextDecorationColor, PropertyId.TextDecorationThickness],
+        ["transition"] = [PropertyId.TransitionProperty, PropertyId.TransitionDuration, PropertyId.TransitionTimingFunction, PropertyId.TransitionDelay],
+        ["animation"] =
+        [
+            PropertyId.AnimationName, PropertyId.AnimationDuration, PropertyId.AnimationTimingFunction,
+            PropertyId.AnimationDelay, PropertyId.AnimationIterationCount, PropertyId.AnimationDirection,
+            PropertyId.AnimationFillMode, PropertyId.AnimationPlayState,
+        ],
+    };
+
+    private static bool ContainsVarReference(CssValue value)
+        => value switch
+        {
+            CssVarReference => true,
+            CssValueList list => list.Values.Any(ContainsVarReference),
+            CssFunctionValue fn => fn.Arguments.Any(ContainsVarReference),
+            _ => false,
+        };
 
     private static bool IsColorLike(CssValue value)
         => value is CssColor or CssKeyword { Name: "currentColor" or "transparent" } or CssFunctionValue { Name: "rgb" or "rgba" or "hsl" or "hsla" or "hwb" or "lab" or "lch" or "oklab" or "oklch" or "color" };
