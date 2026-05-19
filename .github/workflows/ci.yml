@@ -25,40 +25,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpng16-16 libjpeg-turbo8 libwebp7
       - name: Restore (locked)
         run: dotnet restore --locked-mode
-      # The native Skia shim (libtessera_skia.*) is a HARD REQUIREMENT — Skia
-      # Graphite is the engine's sole rasterizer, there is no managed fallback.
-      # Starling.Skia.csproj has a BeforeTargets="Build" guard that fails the
-      # build with an actionable error if the shim for the current OS is
-      # missing, so `dotnet build` below cannot pass without it.
-      #
-      # The shim is built out-of-band by native.yml and is gitignored (never
-      # committed). This step restores it from the most recent successful
-      # native.yml run into the repo-root runtimes/<rid>/native tree that both
-      # the csproj copy and NativeLoader probe.
-      #
-      # Coverage today: native.yml builds osx-arm64 only. The macos runner goes
-      # green; ubuntu/windows will fail the Build step until the win-x64 and
-      # linux-x64 native builds exist. That red is intentional and honest — it
-      # reflects real missing platform support, not a CI gap to paper over.
-      - name: Restore native Skia shim
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          run_id=$(gh run list --workflow native.yml --branch main \
-            --status success --limit 1 --json databaseId \
-            --jq '.[0].databaseId')
-          if [ -z "$run_id" ]; then
-            echo "No successful native.yml run found — cannot restore the Skia shim." >&2
-            exit 1
-          fi
-          gh run download "$run_id" --dir native-artifacts
-          mkdir -p runtimes
-          # native.yml lays artifacts out as runtimes/<rid>/native/<lib>.
-          cp -R native-artifacts/*/runtimes/. runtimes/ 2>/dev/null || \
-            cp -R native-artifacts/runtimes/. runtimes/
-          find runtimes -name 'libtessera_skia.*' -o -name 'tessera_skia.dll'
-        shell: bash
       - name: Build
         run: dotnet build --no-restore -c Release
       - name: Test (unit)
@@ -84,12 +50,13 @@ jobs:
         run: dotnet format --verify-no-changes
       - name: interop seam policy — confine native interop
         # Interop seam policy: native LibraryImport/DllImport is confined to the
-        # designated interop projects — Starling.Skia and Starling.Codecs. Every
-        # other engine project stays P/Invoke-free. The two interop projects are
-        # enforced-clean by *omission* from the grep list below: they are simply
-        # never added. If the Shell needs platform interop later, narrow this
-        # list rather than relax the policy.
-        # NOTE: Starling.Skia is forward-declared — the project lands in wp:M3-06h.
+        # designated interop project — Starling.Codecs (image decode). Every
+        # other engine project stays P/Invoke-free. Codecs is enforced-clean by
+        # *omission* from the grep list below: it is simply never added. If the
+        # Shell needs platform interop later, narrow this list rather than
+        # relax the policy. The native Skia/Graphite shim that previously also
+        # qualified as an interop seam was removed in wp:M5-skia-removal —
+        # paint is now pure-managed via ImageSharp.Drawing 3.
         run: |
           set -e
           ! grep -rn --include='*.cs' 'DllImport\|LibraryImport' \

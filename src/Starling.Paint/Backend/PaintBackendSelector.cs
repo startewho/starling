@@ -5,7 +5,6 @@ namespace Tessera.Paint.Backend;
 
 internal enum PaintBackendKind
 {
-    Skia,
     ImageSharp,
     ImageSharpWebGpu,
 }
@@ -13,7 +12,15 @@ internal enum PaintBackendKind
 /// <summary>
 /// Reads <c>TESSERA_PAINT_BACKEND</c> once and dispenses the matching paint
 /// backend and text measurer so layout and raster never disagree within a
-/// single render. Mirrors Tessera.Codecs.NativeImageDecoder.SelectBackend.
+/// single render.
+/// <para>
+/// After the Skia/Graphite native shim was removed, ImageSharp.Drawing 3.0 is
+/// the only paint backend. The env var still exists so callers can opt into
+/// the experimental WebGPU compute-shader target
+/// (<c>TESSERA_PAINT_BACKEND=imagesharp-webgpu</c>). Any other non-empty
+/// value is rejected loudly rather than silently falling back, so a typo in
+/// an Aspire manifest or CI matrix surfaces immediately.
+/// </para>
 /// </summary>
 internal static class PaintBackendSelector
 {
@@ -28,15 +35,14 @@ internal static class PaintBackendSelector
     internal static PaintBackendKind Parse(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
-            return PaintBackendKind.Skia;
+            return PaintBackendKind.ImageSharp;
 
         return raw.Trim().ToLowerInvariant() switch
         {
-            "skia" => PaintBackendKind.Skia,
             "imagesharp" => PaintBackendKind.ImageSharp,
             "imagesharp-webgpu" or "imagesharp-gpu" => PaintBackendKind.ImageSharpWebGpu,
             _ => throw new InvalidOperationException(
-                $"{EnvVar}='{raw}' is not a recognised paint backend. Allowed values: 'skia', 'imagesharp', 'imagesharp-webgpu'."),
+                $"{EnvVar}='{raw}' is not a recognised paint backend. Allowed values: 'imagesharp', 'imagesharp-webgpu'."),
         };
     }
 
@@ -45,9 +51,8 @@ internal static class PaintBackendSelector
         ArgumentNullException.ThrowIfNull(fonts);
         return Selected switch
         {
-            PaintBackendKind.Skia => new SkiaGraphiteBackend(fonts, webFonts, diag),
-            PaintBackendKind.ImageSharp => CreateImageSharpBackend(fonts, webFonts, diag, useWebGpu: false),
-            PaintBackendKind.ImageSharpWebGpu => CreateImageSharpBackend(fonts, webFonts, diag, useWebGpu: true),
+            PaintBackendKind.ImageSharp => new ImageSharpBackend(fonts, webFonts, diag, useWebGpu: false),
+            PaintBackendKind.ImageSharpWebGpu => new ImageSharpBackend(fonts, webFonts, diag, useWebGpu: true),
             _ => throw new InvalidOperationException($"Unhandled paint backend: {Selected}."),
         };
     }
@@ -55,29 +60,6 @@ internal static class PaintBackendSelector
     internal static ITextMeasurer CreateMeasurer(FontResolver fonts, FontFaceRegistry? webFonts)
     {
         ArgumentNullException.ThrowIfNull(fonts);
-        return Selected switch
-        {
-            PaintBackendKind.Skia => new SkiaTextMeasurer(fonts, webFonts),
-            PaintBackendKind.ImageSharp or PaintBackendKind.ImageSharpWebGpu => CreateImageSharpMeasurer(fonts, webFonts),
-            _ => throw new InvalidOperationException($"Unhandled paint backend: {Selected}."),
-        };
+        return new ImageSharpTextMeasurer(fonts, webFonts);
     }
-
-#if TESSERA_IMAGESHARP_DRAWING
-    private static ImageSharpBackend CreateImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diag, bool useWebGpu)
-        => new(fonts, webFonts, diag, useWebGpu);
-
-    private static ImageSharpTextMeasurer CreateImageSharpMeasurer(FontResolver fonts, FontFaceRegistry? webFonts)
-        => new(fonts, webFonts);
-#else
-    private static IPaintBackend CreateImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diag, bool useWebGpu)
-        => throw new InvalidOperationException(
-            $"{EnvVar}=imagesharp(-webgpu) requires the assembly to be built with the MSBuild property " +
-            "EnableImageSharpDrawing3=true; this binary was compiled without it.");
-
-    private static ITextMeasurer CreateImageSharpMeasurer(FontResolver fonts, FontFaceRegistry? webFonts)
-        => throw new InvalidOperationException(
-            $"{EnvVar}=imagesharp(-webgpu) requires the assembly to be built with the MSBuild property " +
-            "EnableImageSharpDrawing3=true; this binary was compiled without it.");
-#endif
 }

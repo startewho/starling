@@ -88,9 +88,9 @@ only — CI runs without the flag.
 
 ## Interop policy — managed-first, native at vetted seams
 
-Native interop (`[LibraryImport]`/`[DllImport]`) is confined to two
-**designated interop projects**: `src/Starling.Skia` (graphics) and
-`src/Starling.Codecs` (image decode). Every other engine module under
+Native interop (`[LibraryImport]`/`[DllImport]`) is confined to one
+**designated interop project**: `src/Starling.Codecs` (image decode). Every
+other engine module under
 `src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/`
 stays **pure managed** — no P/Invoke, no native dependencies beyond what the
 .NET BCL ships. **TLS path: BouncyCastle.** `Starling.Net` uses
@@ -101,22 +101,22 @@ integration; re-attempting SslStream — or formally re-blessing BouncyCastle as
 the long-term path — is a tracked open item in `wp:M3-06-native-interop-pivot`'s
 handoff log. The interop-seam policy is still satisfied either way, because
 BouncyCastle adds no native dependency. CI greps the engine-project allowlist
-(every engine project *except* the two interop projects); the lint job fails if
-you regress it. The GUI shell (`src/Starling.Gui`, .NET MAUI) and the Aspire
+(every engine project *except* the Codecs interop project); the lint job fails
+if you regress it. The GUI shell (`src/Starling.Gui`, .NET MAUI) and the Aspire
 AppHost/ServiceDefaults projects are exempt — they link against UIKit/Cocoa
 (Catalyst) and ASP.NET host plumbing respectively, which is fine because the
 engine never imports from any of them. The engine projects must continue to
 build and test cleanly without those heavier platforms loaded.
 
-**The native Skia shim is a hard requirement, not optional.** Skia Graphite is
-the engine's sole rasterizer — there is no managed fallback (the interim
-ImageSharp fallback was removed deliberately). `libtessera_skia` is gitignored
-and never committed, so a fresh checkout will fail `dotnet build` until you
-build it: `./native/build-skia.sh` then the shim CMake build — see
-[`native/README.md`](native/README.md). Do **not** "fix" a missing-shim build
-error by reintroducing a fallback; build the shim. Currently produced for
-osx-arm64 only; win-x64/linux-x64 native builds are unrun, so those CI legs are
-honestly red until they exist.
+**Paint backend: ImageSharp.Drawing 3 (managed).** The previous native
+Skia/Graphite shim (`src/Starling.Skia` + `native/`) was removed in
+`wp:M5-skia-removal`; the engine paints exclusively via
+`src/Starling.Paint/Backend/ImageSharpBackend.cs` (SixLabors.ImageSharp 4 +
+ImageSharp.Drawing 3 + Fonts 3, pure-managed, requires the repo-root
+`sixlabors.lic`). An experimental WebGPU compute target is opt-in via
+`TESSERA_PAINT_BACKEND=imagesharp-webgpu`. There is no native graphics shim
+to build — a fresh checkout's `dotnet build` should succeed without any
+non-.NET prerequisites.
 
 ## Decision hierarchy when something's ambiguous
 

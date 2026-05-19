@@ -15,9 +15,9 @@ namespace Tessera.Paint;
 
 /// <summary>
 /// Paint façade for the full pipeline: parse → style → layout → display list →
-/// raster. Skia Graphite is the default rasterizer; ImageSharp.Drawing 3.0 is
-/// selectable via the <c>TESSERA_PAINT_BACKEND</c> env var on builds compiled
-/// with <c>EnableImageSharpDrawing3=true</c>.
+/// raster. ImageSharp.Drawing 3.0 is the sole paint backend after the
+/// Skia/Graphite native shim was removed; the engine is once again pure
+/// managed end-to-end.
 /// </summary>
 public sealed class Painter
 {
@@ -32,10 +32,11 @@ public sealed class Painter
 
     /// <summary>
     /// Run the full pipeline: build a box tree, lay it out, build a paint
-    /// display list, and rasterize it with Skia Graphite. The caller supplies
-    /// a parsed <see cref="Document"/> and the viewport size in CSS px. Pass an
-    /// <paramref name="images"/> resolver to render <c>&lt;img&gt;</c> elements;
-    /// without one, every <c>&lt;img&gt;</c> degrades to its <c>alt</c> text.
+    /// display list, and rasterize it with ImageSharp.Drawing 3. The caller
+    /// supplies a parsed <see cref="Document"/> and the viewport size in CSS
+    /// px. Pass an <paramref name="images"/> resolver to render
+    /// <c>&lt;img&gt;</c> elements; without one, every <c>&lt;img&gt;</c>
+    /// degrades to its <c>alt</c> text.
     /// <paramref name="externalStylesheet"/> supplies parsed CSS for each
     /// <c>&lt;link rel="stylesheet"&gt;</c> element — the painter inserts the
     /// returned sheet at that element's position in document order so the
@@ -60,9 +61,8 @@ public sealed class Painter
 
         using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
-            // DisplayList is the renderer-neutral seam. Skia Graphite is the
-            // default; setting TESSERA_PAINT_BACKEND=imagesharp swaps in the
-            // ImageSharp.Drawing 3.0 backend on builds that enabled it.
+            // DisplayList is the renderer-neutral seam. ImageSharp.Drawing 3
+            // is the only backend after the Skia shim removal.
             try
             {
                 using var backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
@@ -120,12 +120,13 @@ public sealed class Painter
         using (_diag.Span("paint", "style_cascade"))
             style = CreateStyleEngine(document, defaultFontSize, externalStylesheet, _diag);
 
-        // Layout measures with Skia's real shaped metrics (SkiaTextMeasurer) so
-        // line breaks, widths, and baselines match exactly what the Skia
-        // Graphite backend draws. The measurer caches sized SkFont handles, so
-        // it is created per layout call and disposed when done. (The layout
-        // engine's own DefaultTextMeasurer remains for paint-free layout unit
-        // tests, but the Painter pipeline is always Skia.)
+        // Layout measures with ImageSharp's SixLabors.Fonts metrics
+        // (ImageSharpTextMeasurer) so line breaks, widths, and baselines
+        // match what the ImageSharp.Drawing 3 backend draws. The measurer
+        // caches sized Font handles, so it is created per layout call and
+        // disposed when done. (The layout engine's own DefaultTextMeasurer
+        // remains for paint-free layout unit tests, but the Painter pipeline
+        // is always ImageSharp.)
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {

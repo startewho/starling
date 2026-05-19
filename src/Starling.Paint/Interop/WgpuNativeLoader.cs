@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -73,7 +72,7 @@ internal static class WgpuNativeLoader
         }
     }
 
-#pragma warning disable CA2255 // ModuleInitializer in libraries — see Tessera.Skia.Interop.NativeLoader for the same trade-off
+#pragma warning disable CA2255 // ModuleInitializer in libraries: needed to install the resolver before Silk.NET WebGPU's first call
     [ModuleInitializer]
     internal static void Initialize()
     {
@@ -230,4 +229,3 @@ internal static class WgpuNativeLoader
         return $"lib{LibraryName}.so";
     }
 }
-#endif
