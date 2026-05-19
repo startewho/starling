@@ -4,7 +4,7 @@ milestone: M5
 status: "complete"
 claimed_by: "agent-copilot-claude-opus-4.7"
 claimed_at: "2026-05-19T15:17:03Z"
-completed_at: "2026-05-19T16:05:00Z"
+completed_at: "2026-05-19T15:20:06Z"
 branch: "main"
 depends_on:
   - wp:M5-css-03-keyframes-rule
@@ -105,3 +105,4 @@ Reuses the timing-function and interpolator infrastructure built in
     from a comma-separated shorthand. These all blocked behind a downstream
     "animation/transition compositor" task that should live in M6 cascade
     integration.
+- 2026-05-19T15:20:06Z — merged; complete
