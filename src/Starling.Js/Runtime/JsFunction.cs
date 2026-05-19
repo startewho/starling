@@ -59,6 +59,12 @@ public sealed class JsFunction : JsObject
     /// B1b-2a).</summary>
     public IReadOnlyList<InstanceFieldInit>? InstanceFieldInitializers { get; set; }
 
+    /// <summary>B1b-2c — function kind. Normal functions run synchronously
+    /// and return their body's value. Async functions return a Promise;
+    /// generator functions return a Generator object; async generators
+    /// return an Async-Iterator yielding Promises.</summary>
+    public JsFunctionKind Kind { get; set; } = JsFunctionKind.Normal;
+
     public JsFunction(string name, Chunk body, int arityDeclared)
         : this(name, body, arityDeclared, Array.Empty<JsValue>())
     {
@@ -98,6 +104,7 @@ public sealed class JsFunction : JsObject
             // still resolve super correctly. For class methods/ctors compiled
             // via DefineClass the template carries the slot.
             HomeObject = template.HomeObject,
+            Kind = template.Kind,
         };
         fn.SetPrototypeOf(realm.FunctionPrototype);
 
@@ -144,4 +151,23 @@ public enum ClassConstructorKind
     /// <summary>Derived-class constructor — <c>this</c> is uninitialized until
     /// <c>super(...)</c> completes.</summary>
     Derived,
+}
+
+/// <summary>B1b-2c — function kind, distinguishes how the body executes.
+/// Set by the compiler from the AST flags and consulted by the VM when a
+/// function is invoked.</summary>
+public enum JsFunctionKind : byte
+{
+    /// <summary>Plain function — body runs synchronously.</summary>
+    Normal = 0,
+    /// <summary>Async function — invocation returns a Promise; the body runs
+    /// on a worker thread and suspends at <c>await</c> via the VM's
+    /// <see cref="Tessera.Js.Bytecode.Opcode.Suspend"/> opcode.</summary>
+    Async = 1,
+    /// <summary>Generator function — invocation returns a Generator
+    /// (iterator) object; body suspends at each <c>yield</c>.</summary>
+    Generator = 2,
+    /// <summary>Async generator — invocation returns an Async-Iterator;
+    /// body suspends at both <c>yield</c> and <c>await</c>.</summary>
+    AsyncGenerator = 3,
 }

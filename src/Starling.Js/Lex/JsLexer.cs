@@ -70,6 +70,75 @@ public sealed class JsLexer
         _peeked = token;
     }
 
+    /// <summary>B1b-2c — disambiguate <c>async ( ... )</c>. Look ahead at the
+    /// next <c>(</c> ... <c>)</c> chunk and see whether it is followed by
+    /// <c>=&gt;</c>. Returns true if so. Does not mutate parser-visible state
+    /// (snapshots position + peeked token).</summary>
+    /// <remarks>
+    /// Called only after the parser has confirmed the current token is the
+    /// <c>async</c> identifier and the peeked token is <c>LParen</c>. The
+    /// scan starts at the current position, walking forward over balanced
+    /// parens. Strings/templates inside are not lexed precisely — we treat
+    /// them as inert characters since balancing only cares about parens.
+    /// This is approximate but adequate for disambiguation.
+    /// </remarks>
+    public bool LookaheadIsAsyncArrow()
+    {
+        // Called after the parser has confirmed _current == "async" identifier
+        // and _peeked == LParen. The lexer's _i pointer therefore sits just
+        // past the peeked '(' character. We need to walk balanced parens to
+        // find the closing ')', then check if it's followed by '=>'.
+        var i = _i;
+        var depth = 1; // already inside the opening (
+        for (; i < _src.Length; i++)
+        {
+            var c = _src[i];
+            if (c == '"' || c == '\'')
+            {
+                var quote = c;
+                i++;
+                while (i < _src.Length && _src[i] != quote)
+                {
+                    if (_src[i] == '\\') i++;
+                    i++;
+                }
+                continue;
+            }
+            if (c == '`')
+            {
+                i++;
+                while (i < _src.Length && _src[i] != '`') i++;
+                continue;
+            }
+            if (c == '/' && i + 1 < _src.Length && _src[i + 1] == '/')
+            {
+                while (i < _src.Length && _src[i] != '\n') i++;
+                continue;
+            }
+            if (c == '/' && i + 1 < _src.Length && _src[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < _src.Length && !(_src[i] == '*' && _src[i + 1] == '/')) i++;
+                i++; // skip the '/'
+                continue;
+            }
+            if (c == '(') depth++;
+            else if (c == ')')
+            {
+                depth--;
+                if (depth == 0) { i++; break; }
+            }
+        }
+        // Skip whitespace and comments, check for '=>'.
+        while (i < _src.Length)
+        {
+            var c = _src[i];
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { i++; continue; }
+            break;
+        }
+        return i + 1 < _src.Length && _src[i] == '=' && _src[i + 1] == '>';
+    }
+
     /// <summary>Drain to a list. Useful for tests; not for production parsing.</summary>
     public List<JsToken> Drain()
     {

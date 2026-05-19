@@ -229,5 +229,15 @@ public enum Opcode : byte
     /// receiver/key live across the read.</summary>
     Dup2,
 
+    // ----- Generators / async (B1b-2c) -----
+    /// <summary>[u8 kind] — Suspend the current frame. <c>kind</c>:
+    /// 0 = yield (sync generator), 1 = await (async). Pops the yielded /
+    /// awaited value, hands it to the suspension scheduler (the worker
+    /// thread blocks until the caller resumes), then pushes the
+    /// resume-value back onto the stack. For <c>await</c>, the
+    /// resume-value is the resolved value (or, if the awaited promise
+    /// rejected, a <c>JsThrow</c> is raised at this point).</summary>
+    Suspend,
+
     Halt,           // end-of-program sentinel
 }

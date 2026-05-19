@@ -221,7 +221,8 @@ public sealed partial class JsCompiler
             // recursive references inside the body resolve to the same
             // closure instance.
             EmitFunctionConstructor(fd.Name.Name, chunk,
-                CountSimpleParams(fd.Params), sub._upvalues);
+                CountSimpleParams(fd.Params), sub._upvalues,
+                ResolveFunctionKind(fd.Async, fd.Generator));
             if (isScriptTop)
             {
                 var nameIdx = _b.AddConstant(fd.Name.Name);
@@ -261,8 +262,13 @@ public sealed partial class JsCompiler
     /// resulting function value on the top of the stack.</summary>
     private void EmitFunctionConstructor(
         string name, Chunk body, int arity, IReadOnlyList<UpvalueRef> upvalues)
+        => EmitFunctionConstructor(name, body, arity, upvalues, Runtime.JsFunctionKind.Normal);
+
+    private void EmitFunctionConstructor(
+        string name, Chunk body, int arity, IReadOnlyList<UpvalueRef> upvalues,
+        Runtime.JsFunctionKind kind)
     {
-        var fn = new Runtime.JsFunction(name, body, arity);
+        var fn = new Runtime.JsFunction(name, body, arity) { Kind = kind };
         var fnIdx = _b.AddConstant(fn);
 
         if (upvalues.Count == 0)
@@ -869,6 +875,12 @@ public sealed partial class JsCompiler
             case ArrowFunctionExpression arrow:
                 EmitArrowFunction(arrow);
                 return;
+            case YieldExpression yld:
+                EmitYield(yld);
+                return;
+            case AwaitExpression aw:
+                EmitAwait(aw);
+                return;
             case ClassExpression cls:
                 EmitClassExpression(cls);
                 return;
@@ -926,14 +938,16 @@ public sealed partial class JsCompiler
                 arrow.Start, arrow.End),
             _ => throw new InvalidOperationException("arrow body must be block or expression"),
         };
-        var fe = BuildFunctionExpressionShim(null, arrow.Params, body, arrow.Start, arrow.End);
+        var fe = BuildFunctionExpressionShim(null, arrow.Params, body, arrow.Start, arrow.End,
+            isAsync: arrow.Async, isGenerator: arrow.Generator);
         EmitFunctionExpression(fe);
     }
 
     private static FunctionExpression BuildFunctionExpressionShim(
         Identifier? name, IReadOnlyList<Expression> @params, BlockStatement body,
-        Tessera.Js.Lex.JsPosition start, Tessera.Js.Lex.JsPosition end)
-        => new(name, @params, body, Generator: false, start, end);
+        Tessera.Js.Lex.JsPosition start, Tessera.Js.Lex.JsPosition end,
+        bool isAsync = false, bool isGenerator = false)
+        => new(name, @params, body, Generator: isGenerator, start, end, Async: isAsync);
 
     private void EmitIdLoad(string name)
     {
@@ -1351,7 +1365,87 @@ public sealed partial class JsCompiler
         // surfaces this through the new-instance `name` slot.
         var name = fe.Name?.Name ?? "";
         var chunk = sub._b.Build(name);
-        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues);
+        var kind = ResolveFunctionKind(fe.Async, fe.Generator);
+        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind);
+    }
+
+    /// <summary>B1b-2c — emit <c>yield expr</c> / <c>yield</c> / <c>yield* iter</c>.
+    /// Pushes the value to yield, then emits a Suspend opcode (kind=0).
+    /// On resume, the value passed to <c>.next(v)</c> is pushed back.</summary>
+    private void EmitYield(YieldExpression yld)
+    {
+        if (yld.Delegate)
+        {
+            // yield* iter — desugar via the iterator protocol:
+            //   const _it = GetIterator(expr);
+            //   let _r;
+            //   while (!(_r = IteratorStep(_it)).done) yield _r.value;
+            // Stack progression (LL):
+            //   [it] -- iterator-record handle on stack
+            //   loopStart: [it] IteratorStep -> [it, step | undefined]
+            //   If undefined, branch out (preserving 'it'). Else extract
+            //   .value, yield it, loop back.
+            EmitExpression(yld.Argument!);
+            _b.Emit(Opcode.GetIterator); // [it]
+            var loopStart = _b.Position;
+            _b.Emit(Opcode.IteratorStep); // [it, step|undefined]
+            // Branch out if step === undefined (iterator done).
+            // JumpIfNotNullish jumps when the popped value is not nullish.
+            // We want to fall through to the loop body when step is an
+            // object and exit when step is undefined. Use Dup then
+            // JumpIfNotNullish to keep step on stack for the body.
+            _b.Emit(Opcode.Dup); // [it, step, step]
+            var keepGoing = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one
+            // Done: pop the residual undefined and pop the iterator-record handle.
+            _b.Emit(Opcode.Pop); // pop undefined (step)
+            _b.Emit(Opcode.Pop); // pop iterator-record
+            var afterEnd = _b.EmitJump(Opcode.Jump);
+            // Body: step is on top, it underneath. Extract step.value, yield.
+            _b.PatchJump(keepGoing);
+            _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("value")); // [it, value]
+            _b.Emit(Opcode.Suspend);
+            _b.EmitU8Raw(0); // yield kind
+            // After resume, value-sent is on top; discard it (yield*'s
+            // received-value semantics simplified — we don't forward
+            // .next(v) into the inner iterator).
+            _b.Emit(Opcode.Pop);
+            // Jump back to loopStart. Jump operand is computed from the
+            // byte after the operand, so we need delta from (jumpOpPos+3) to loopStart.
+            var jumpBackPos = _b.EmitJump(Opcode.Jump); // returns position of operand bytes
+            // jumpBackPos is the position of operand; jump source after operand = jumpBackPos + 2.
+            var delta = loopStart - (jumpBackPos + 2);
+            _b.PatchI16(jumpBackPos, (short)delta);
+            _b.PatchJump(afterEnd);
+            _b.Emit(Opcode.LoadUndefined);
+            return;
+        }
+
+        // Simple yield: push the value to yield (or undefined), then Suspend.
+        if (yld.Argument is not null) EmitExpression(yld.Argument);
+        else _b.Emit(Opcode.LoadUndefined);
+        _b.Emit(Opcode.Suspend);
+        _b.EmitU8Raw(0); // kind = 0 (yield)
+        // After resume, stack-top holds the value passed to .next(v); that
+        // becomes the result of the yield expression.
+    }
+
+    /// <summary>B1b-2c — emit <c>await expr</c>. Pushes the awaited value,
+    /// then Suspend with kind=1. On resume, the resolved value is on top
+    /// (or a JsThrow propagates if the promise rejected).</summary>
+    private void EmitAwait(AwaitExpression aw)
+    {
+        EmitExpression(aw.Argument);
+        _b.Emit(Opcode.Suspend);
+        _b.EmitU8Raw(1); // kind = 1 (await)
+    }
+
+    /// <summary>B1b-2c — map AST async/generator flags to runtime kind.</summary>
+    private static Runtime.JsFunctionKind ResolveFunctionKind(bool isAsync, bool isGenerator)
+    {
+        if (isAsync && isGenerator) return Runtime.JsFunctionKind.AsyncGenerator;
+        if (isAsync) return Runtime.JsFunctionKind.Async;
+        if (isGenerator) return Runtime.JsFunctionKind.Generator;
+        return Runtime.JsFunctionKind.Normal;
     }
 
     private void EmitObjectLiteral(ObjectExpression oe)

@@ -55,6 +55,14 @@ public sealed partial class JsParser
         {
             return ParseVar("let");
         }
+        // B1b-2c — `async function` at statement level → async function decl.
+        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+            && _lex.Peek().Kind == JsTokenKind.Function)
+        {
+            var asyncStart = _current.Start;
+            Advance(); // async
+            return ParseFunctionDeclaration(asyncStart, isAsync: true);
+        }
         return ParseExpressionStatement();
     }
 
@@ -410,8 +418,13 @@ public sealed partial class JsParser
     /// binding — outside callers don't see it.
     /// </summary>
     private FunctionExpression ParseFunctionExpression()
+        => ParseFunctionExpressionInner(_current.Start, isAsync: false);
+
+    internal FunctionExpression ParseFunctionExpression(JsPosition start, bool isAsync)
+        => ParseFunctionExpressionInner(isAsync ? start : _current.Start, isAsync);
+
+    private FunctionExpression ParseFunctionExpressionInner(JsPosition start, bool isAsync)
     {
-        var start = _current.Start;
         Advance(); // 'function'
         var generator = Match(JsTokenKind.Star);
         Identifier? name = null;
@@ -424,12 +437,17 @@ public sealed partial class JsParser
         var parameters = ParseParameterList();
         Expect(JsTokenKind.RParen, "expected ')'");
         var body = ParseBlock();
-        return new FunctionExpression(name, parameters, body, generator, start, body.End);
+        return new FunctionExpression(name, parameters, body, generator, start, body.End, Async: isAsync);
     }
 
     private FunctionDeclaration ParseFunctionDeclaration()
+        => ParseFunctionDeclarationInner(_current.Start, isAsync: false);
+
+    internal FunctionDeclaration ParseFunctionDeclaration(JsPosition start, bool isAsync)
+        => ParseFunctionDeclarationInner(isAsync ? start : _current.Start, isAsync);
+
+    private FunctionDeclaration ParseFunctionDeclarationInner(JsPosition start, bool isAsync)
     {
-        var start = _current.Start;
         Advance(); // function
         var generator = Match(JsTokenKind.Star);
         var nameTok = Expect(JsTokenKind.Identifier, "function name expected");
@@ -438,7 +456,7 @@ public sealed partial class JsParser
         var parameters = ParseParameterList();
         Expect(JsTokenKind.RParen, "expected ')'");
         var body = ParseBlock();
-        return new FunctionDeclaration(name, parameters, body, generator, start, body.End);
+        return new FunctionDeclaration(name, parameters, body, generator, start, body.End, Async: isAsync);
     }
 
     // -----------------------------------------------------------------------

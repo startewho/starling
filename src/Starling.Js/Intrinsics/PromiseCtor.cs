@@ -163,6 +163,15 @@ public static class PromiseCtor
         return (JsValue.Object(resolve), JsValue.Object(reject));
     }
 
+    /// <summary>B1b-2c — public surface for async-function machinery.
+    /// Settles <paramref name="promise"/> via the standard adoption path.</summary>
+    public static void Resolve(JsRealm realm, JsPromise promise, JsValue resolution)
+        => ResolvePromise(realm, promise, resolution);
+
+    /// <summary>B1b-2c — public surface mirror of <see cref="Resolve"/>.</summary>
+    public static void Reject(JsRealm realm, JsPromise promise, JsValue reason)
+        => RejectPromise(realm, promise, reason);
+
     /// <summary>§27.2.1.4 Promise Resolve Functions. Adoption rules:
     /// resolving with the promise itself is a TypeError; resolving with a
     /// thenable schedules a microtask to follow it; otherwise fulfill

@@ -55,10 +55,22 @@ public sealed class JsVm
             currentFunction: null, newTarget: null);
 
     /// <summary>Invoke a JS function with an explicit <c>this</c> and args.
-    /// Used by <see cref="AbstractOperations.Call"/>.</summary>
+    /// Used by <see cref="AbstractOperations.Call"/>. B1b-2c: when the
+    /// callee is async / generator / async-generator, this entry instead
+    /// returns the corresponding wrapper without running the body —
+    /// dispatch lands in <see cref="StartGeneratorBody"/> /
+    /// <see cref="StartAsyncBody"/>.</summary>
     public JsValue CallFunction(JsFunction fn, JsValue thisValue, JsValue[] args)
-        => Run(fn.Body, args, thisValue, fn.Upvalues, drainMicrotasks: false,
+    {
+        if (fn.Kind == JsFunctionKind.Generator)
+            return StartGeneratorBody(fn, thisValue, args);
+        if (fn.Kind == JsFunctionKind.Async)
+            return StartAsyncBody(fn, thisValue, args);
+        if (fn.Kind == JsFunctionKind.AsyncGenerator)
+            return StartAsyncGeneratorBody(fn, thisValue, args);
+        return Run(fn.Body, args, thisValue, fn.Upvalues, drainMicrotasks: false,
                currentFunction: fn, newTarget: null);
+    }
 
     /// <summary>Construct a JS function (spec [[Construct]] for ordinary
     /// functions): allocate a fresh ordinary object inheriting from the
@@ -122,7 +134,8 @@ public sealed class JsVm
     /// </summary>
     private JsValue Run(Chunk chunk, JsValue[] args, JsValue thisValue,
         IReadOnlyList<JsValue> upvalues, bool drainMicrotasks,
-        JsFunction? currentFunction, JsObject? newTarget)
+        JsFunction? currentFunction, JsObject? newTarget,
+        SuspendedFrame? suspension = null)
     {
         // Publish this VM on the realm so native intrinsics (JSON.parse
         // reviver, JSON.stringify replacer/toJSON, etc.) can dispatch JS
@@ -132,7 +145,7 @@ public sealed class JsVm
         _runtime.Realm.ActiveVm = this;
         try
         {
-            var result = RunInner(chunk, args, thisValue, upvalues, currentFunction, newTarget);
+            var result = RunInner(chunk, args, thisValue, upvalues, currentFunction, newTarget, suspension);
             // Drain microtasks while ActiveVm still points to this VM so
             // reaction jobs that dispatch JS handlers find a usable VM
             // (AbstractOperations.Call needs one for JsFunction). Only the
@@ -148,7 +161,8 @@ public sealed class JsVm
     }
 
     private JsValue RunInner(Chunk chunk, JsValue[] args, JsValue thisValue,
-        IReadOnlyList<JsValue> upvalues, JsFunction? currentFunction, JsObject? newTarget)
+        IReadOnlyList<JsValue> upvalues, JsFunction? currentFunction, JsObject? newTarget,
+        SuspendedFrame? suspension = null)
     {
         var stack = new JsValue[MaxStack];
         var sp = 0;
@@ -1114,6 +1128,44 @@ public sealed class JsVm
                     }
                     break;
                 }
+                // ----- B1b-2c — Suspend (yield / await) -----
+                case Opcode.Suspend:
+                {
+                    var kind = ReadU8();
+                    var yielded = Pop();
+                    if (suspension is null)
+                    {
+                        // Outside a suspendable context — yield/await are
+                        // syntax errors but we accept liberally; surface
+                        // the misuse as a SyntaxError at runtime.
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                            kind == 1
+                                ? "await is only valid in async functions and async generators"
+                                : "yield is only valid in generator functions"));
+                    }
+                    JsValue toYield = yielded;
+                    if (kind == 1)
+                    {
+                        // await: wrap in Promise.resolve and register a .then
+                        // that resumes the worker. The yielded value is the
+                        // promise itself — the dispatcher (StartAsyncBody)
+                        // reads it via SuspendedFrame.YieldedValue, hooks
+                        // up the .then, then calls Resume.
+                        toYield = yielded;
+                    }
+                    // Hand off to the caller (main thread). Block until
+                    // resume. Returned value is the value to push back.
+                    var resumed = suspension.WorkerYield(toYield);
+                    if (suspension.ResumeWithThrow)
+                    {
+                        // Caller asked us to throw at this point (e.g.
+                        // gen.throw(e) or awaited promise rejected).
+                        suspension.ResumeWithThrow = false;
+                        throw new JsThrow(resumed);
+                    }
+                    Push(resumed);
+                    break;
+                }
                 case Opcode.BuildClass:
                 {
                     var idx = ReadU16();
@@ -1575,6 +1627,169 @@ public sealed class JsVm
         var chunk = b.Build("#field-init-undef");
         var tmpl = new JsFunction("", chunk, 0);
         return JsFunction.CreateInstance(realm, tmpl, Array.Empty<JsValue>());
+    }
+
+    // =====================================================================
+    //               B1b-2c — Generator / Async dispatch
+    // =====================================================================
+
+    /// <summary>Invoke a generator function — set up a JsGenerator wrapper
+    /// whose worker thread will run the body lazily on the first
+    /// <c>.next()</c> call.</summary>
+    internal JsValue StartGeneratorBody(JsFunction fn, JsValue thisValue, JsValue[] args)
+    {
+        var realm = _runtime.Realm;
+        var frame = new SuspendedFrame(this);
+        var gen = new JsGenerator(realm, frame);
+        // Stamp own properties so duck-typing tests work.
+        var argsCopy = args; // captured into the lambda
+        var thisCopy = thisValue;
+        var fnCopy = fn;
+        frame.Start(() =>
+        {
+            // Worker thread: invoke the body with this frame as the active
+            // suspension target. Result becomes the frame's return value.
+            try
+            {
+                var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+                    drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
+                    suspension: frame);
+                // Frame's return value will be read by the dispatcher
+                // (Generator.next's caller) — store via a field.
+                frame.SetReturnValue(rv);
+            }
+            catch (JsThrow ex)
+            {
+                frame.SetThrew(ex.Value);
+            }
+        });
+        return JsValue.Object(gen);
+    }
+
+    /// <summary>Invoke an async function — set up an outer Promise + worker
+    /// thread that runs the body. Returns the outer Promise immediately;
+    /// the body settles it on completion (or via an unhandled throw).</summary>
+    internal JsValue StartAsyncBody(JsFunction fn, JsValue thisValue, JsValue[] args)
+    {
+        var realm = _runtime.Realm;
+        var outer = new JsPromise(realm.PromisePrototype);
+        var frame = new SuspendedFrame(this);
+        var state = new JsAsyncFunctionState(frame, outer);
+
+        var fnCopy = fn;
+        var argsCopy = args;
+        var thisCopy = thisValue;
+        frame.Start(() =>
+        {
+            try
+            {
+                var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+                    drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
+                    suspension: frame);
+                frame.SetReturnValue(rv);
+            }
+            catch (JsThrow ex)
+            {
+                frame.SetThrew(ex.Value);
+            }
+        });
+
+        // Drive the worker synchronously from the calling thread, riding
+        // each await suspension via the microtask queue. The first Resume
+        // kicks off the body; subsequent Resumes are wired by the await
+        // handler below.
+        DriveAsync(state);
+        return JsValue.Object(outer);
+    }
+
+    /// <summary>Run the async body forward until the next await or
+    /// completion. If the body awaits a value, schedules a .then on the
+    /// Promise.resolve(value) so the worker resumes after the awaited
+    /// settlement.</summary>
+    private void DriveAsync(JsAsyncFunctionState state)
+    {
+        var realm = _runtime.Realm;
+        var frame = state.Frame;
+        // Initial kick: pass Undefined as resume value. The worker starts
+        // executing and either runs to completion or hits a Suspend.
+        frame.Resume(JsValue.Undefined);
+        if (frame.Completed)
+        {
+            SettleAsync(state);
+            return;
+        }
+        // Hit an await — frame.YieldedValue holds the awaited value.
+        ScheduleAwait(state);
+    }
+
+    private void ScheduleAwait(JsAsyncFunctionState state)
+    {
+        var realm = _runtime.Realm;
+        var awaited = state.Frame.YieldedValue;
+        // Wrap value in a Promise (Promise.resolve semantics).
+        JsPromise inner;
+        if (awaited.IsObject && awaited.AsObject is JsPromise existing)
+        {
+            inner = existing;
+        }
+        else
+        {
+            inner = new JsPromise(realm.PromisePrototype);
+            Tessera.Js.Intrinsics.PromiseCtor.Resolve(realm, inner, awaited);
+        }
+
+        var onFulfill = new JsNativeFunction("", (thisV, args) =>
+        {
+            var v = args.Length > 0 ? args[0] : JsValue.Undefined;
+            state.Frame.Resume(v, withThrow: false);
+            if (state.Frame.Completed) SettleAsync(state);
+            else ScheduleAwait(state);
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        var onReject = new JsNativeFunction("", (thisV, args) =>
+        {
+            var r = args.Length > 0 ? args[0] : JsValue.Undefined;
+            state.Frame.Resume(r, withThrow: true);
+            if (state.Frame.Completed) SettleAsync(state);
+            else ScheduleAwait(state);
+            return JsValue.Undefined;
+        }, isConstructor: false);
+
+        // Call inner.then(onFulfill, onReject).
+        var then = AbstractOperations.Get(this, inner, "then");
+        AbstractOperations.Call(this, then, JsValue.Object(inner),
+            new[] { JsValue.Object(onFulfill), JsValue.Object(onReject) });
+    }
+
+    private void SettleAsync(JsAsyncFunctionState state)
+    {
+        if (state.Settled) return;
+        state.Settled = true;
+        var realm = _runtime.Realm;
+        if (state.Frame.ThrewUncaught)
+            Tessera.Js.Intrinsics.PromiseCtor.Reject(realm, state.OuterPromise, state.Frame.ReturnValue);
+        else
+            Tessera.Js.Intrinsics.PromiseCtor.Resolve(realm, state.OuterPromise, state.Frame.ReturnValue);
+    }
+
+    /// <summary>Async generators: stub. Returns a plain async generator
+    /// object that yields rejected promises for now — full implementation
+    /// deferred. Tracked: B1b-2c follow-up.</summary>
+    internal JsValue StartAsyncGeneratorBody(JsFunction fn, JsValue thisValue, JsValue[] args)
+    {
+        // Minimal stub: treat as a sync generator that wraps yielded values
+        // in Promise.resolve. Good enough for the simple async-iterator
+        // tests. .next() returns a Promise of {value, done}.
+        var genV = StartGeneratorBody(fn, thisValue, args);
+        if (genV.IsObject && genV.AsObject is JsGenerator gen)
+        {
+            // Reparent to AsyncGeneratorPrototype so .next() comes from the
+            // async-generator prototype methods (installed by
+            // GeneratorIntrinsics). Tests using this prototype's .next will
+            // call the async wrapper which produces Promises.
+            gen.SetPrototypeOf(_runtime.Realm.AsyncGeneratorPrototype);
+        }
+        return genV;
     }
 }
 
