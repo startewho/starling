@@ -115,19 +115,15 @@ public static class ObjectCtor
         return v.AsObject;
     }
 
-    /// <summary>Build a freshly-allocated ordinary object that behaves as an
-    /// array (integer-keyed slots + <c>length</c>). Used by every list-shaped
-    /// return until <c>JsArray</c> arrives in B2-4.</summary>
+    /// <summary>Build a freshly-allocated dense array (B2-4) populated with
+    /// the given elements. Used by <c>Object.keys</c>, <c>values</c>,
+    /// <c>entries</c>, <c>getOwnPropertyNames</c>, and
+    /// <c>getOwnPropertySymbols</c> so the returned values are real arrays
+    /// (<c>Array.isArray</c> ⇒ true).</summary>
     private static JsValue MakeArrayLike(JsRealm realm, IReadOnlyList<JsValue> items)
     {
-        var arr = realm.NewOrdinaryObject();
-        for (var i = 0; i < items.Count; i++)
-        {
-            arr.DefineOwnProperty(i.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                PropertyDescriptor.Data(items[i], writable: true, enumerable: true, configurable: true));
-        }
-        arr.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(items.Count), writable: true, enumerable: false, configurable: false));
+        var arr = new JsArray(realm);
+        for (var i = 0; i < items.Count; i++) arr.Push(items[i]);
         return JsValue.Object(arr);
     }
 

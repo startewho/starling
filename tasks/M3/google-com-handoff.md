@@ -63,6 +63,10 @@ blocker; defer to M6 wp:M3-09.
 | B3-4 — Promise + microtasks | ✅ | `src/Starling.Js/Runtime/{MicrotaskQueue,JsPromise,JsRealm,JsRuntime,JsVm}.cs`, `src/Starling.Js/Intrinsics/PromiseCtor.cs`, `tests/Starling.Js.Tests/Intrinsics/PromiseTests.cs` |
 | B6-1 — Flex layout | ✅ | `src/Starling.Layout/Flex/{FlexProperties,FlexParser,FlexLayout}.cs`, `src/Starling.Layout/Block/BlockLayout.cs` (dispatch), `tests/Starling.Layout.Tests/Flex/FlexLayoutTests.cs` |
 | B6-2 — absolute/fixed positioning | ✅ | `src/Starling.Layout/Position/{PositionProperties,PositionParser,PositionLayout}.cs`, `src/Starling.Layout/{Block/BlockLayout,LayoutEngine}.cs`, `tests/Starling.Layout.Tests/Position/PositionLayoutTests.cs` |
+| B2-2-followup — realm-aware intrinsics | ✅ | `src/Starling.Js/Intrinsics/{StringCtor,NumberCtor,BooleanCtor,MathObj,JsonObj,ConsoleObj,Globals,IntrinsicHelpers}.cs`, `src/Starling.Js/Runtime/JsRuntime.cs` (RegisterGlobal), `tests/Starling.Js.Tests/Intrinsics/IntrinsicChainTests.cs` |
+| B2-4 — Array intrinsic + JsArray | ✅ | `src/Starling.Js/Runtime/JsArray.cs`, `src/Starling.Js/Intrinsics/ArrayCtor.cs`, `src/Starling.Js/{Bytecode/{Opcode,JsCompiler},Runtime/{JsObject,JsRealm,JsVm,JsRuntime},Intrinsics/ObjectCtor}.cs`, `tests/Starling.Js.Tests/Intrinsics/ArrayTests.cs` |
+| B5-1 — Window / document / EventTarget | ✅ | `src/Starling.Bindings/{EventTargetBinding,DomWrappers,NodeBindings,QuerySelectorEngine,WindowBinding}.cs`, `src/Starling.Js/Runtime/{JsRealm,JsObject}.cs`, `tests/Starling.Bindings.Tests/WindowDocumentTests.cs` (DomBindingHost deleted) |
+| B5-2 — Timers | ✅ | `src/Starling.Bindings/{TimersBinding,Starling.Bindings.csproj}`, `tests/Starling.Bindings.Tests/TimersTests.cs` |
 
 ### B0 surface delivered
 
@@ -128,6 +132,18 @@ session. Other rows in the queue are free for other agents/sessions.
 | **B1b-2b** Destructuring | claude-cody (agent, lane-A) | complete (2026-05-19) |
 | **B3-1** Symbol + well-known symbols | claude-cody (agent, lane-D) | in progress (2026-05-18) |
 | **B4-5** TypedArray/ArrayBuffer/DataView | claude-cody (agent, lane-E) | complete (2026-05-19) |
+| **B4-1-followup-a** regex literal parser | claude-cody (agent) | in progress (2026-05-19) |
+| **B5-3-followup-a** WithActiveVm helper | claude-cody (agent) | in progress (2026-05-19) |
+| **B5-3-followup-b** revert NoWarn | claude-cody (agent) | in progress (2026-05-19) |
+| **B5-1-followup** DOM array-likes | claude-cody (agent) | in progress (2026-05-19) |
+| **B2-2-followup** realm-aware intrinsics | claude-cody (agent) | complete (2026-05-19) |
+| **B2-4** Array + JsArray | claude-cody (agent) | complete (2026-05-19) |
+| **B5-2** Timers | claude-cody (agent) | complete (2026-05-19) |
+| **B5-1** Window/document/EventTarget | claude-cody (agent) | complete (2026-05-19) |
+| **B5-3** fetch + XMLHttpRequest | claude-cody (agent) | in progress (2026-05-19) |
+| **B3-2** Iterator protocol | claude-cody (agent) | in progress (2026-05-19) |
+| **B4-1** RegExp | claude-cody (agent) | in progress (2026-05-19) |
+| **B3-4-followup-a/b** Parser fix + AggregateError swap | claude-cody (agent) | in progress (2026-05-19) |
 
 ## Work queue
 
@@ -171,6 +187,12 @@ depends on the earlier's surface).
 | **B6-1** | Flex layout (direction, wrap=nowrap, justify-content, align-items, flex shorthand, gap) | **lane G** | (none) | `src/Starling.Layout/Flex/*` (new) |
 | **B6-2** | `position: absolute` / `fixed` | **lane G** | (none) | `src/Starling.Layout/Position/*` (new) |
 | **B6-3** | `position: sticky` | **lane G** | B6-1, B6-2 | `src/Starling.Layout/Position/Sticky.cs` |
+| **B4-1-followup-a** | Wire regex-literal syntax `/foo/g` into the parser. The lexer already emits `RegExpLiteral` tokens (B1a) but the parser never consumes them — B4-1 was scoped not to touch `JsParser.cs`. Without this, every real-world JS bundle that uses inline regex (most do) is broken. Pin a test: `/\d+/g.test("abc 123") === true` evaluates directly. **Files:** `src/Starling.Js/Parse/JsParser.cs` (PrimaryExpression), maybe a `Bytecode/Opcode.cs` LoadRegExp instruction or just lower to `new RegExp(source, flags)`. | **lane A** | B4-1 (done) | `src/Starling.Js/Parse/JsParser.cs` |
+| **B4-1-followup-b** | `String.prototype.matchAll` currently returns a `JsArray` of all matches; the spec requires a real iterator. Now that B3-2 has shipped, swap to construct a `JsRegExpStringIterator` (new tiny class mirroring `JsArrayIterator`'s shape) inheriting from `%IteratorPrototype%`. Pin a test that `[..."abc abc".matchAll(/[a-z]+/g)].length === 2`. | **lane C** | B3-2 (done), B4-1 (done) | `src/Starling.Js/Intrinsics/StringCtor.cs`, new `Intrinsics/RegExpStringIterator.cs` |
+| **B3-2-followup-a** | Implement `break` / `continue` in the bytecode compiler. The compiler today doesn't emit either (a pre-existing M3-03 gap surfaced by B3-2). `iterator.return()` on abrupt for…of completion is wired in opcodes (`IteratorClose`) but currently unreachable. Pin tests: `for (var x of [1,2,3]) { if (x===2) break; sum += x }` → sum === 1; same with `continue`; same with a user iterable that records `return()` being invoked. **Files:** `Bytecode/JsCompiler.cs` (break/continue label stacks), `Bytecode/Opcode.cs` (maybe new `Jmp`-with-label variants if not present), `Runtime/JsVm.cs` (if any dispatch tweaks). | **lane A** | B3-2 (done) | `src/Starling.Js/Bytecode/JsCompiler.cs` |
+| **B5-3-followup-a** | Expose a public `JsRuntime.WithActiveVm(Action body)` helper so bindings stop using the empty-chunk-through-`JsVm.Run` hack (currently in `TimersBinding`, `FetchBinding`, `XhrBinding`). The helper sets `realm.ActiveVm` via the existing internal setter, runs `body`, drains microtasks, and restores the previous `ActiveVm`. Then migrate the three bindings to call it. Pin a test that timer + fetch microtask drain still settle promise reactions correctly after the migration. | **lane F** | B5-2 (done), B5-3 (done) | `src/Starling.Js/Runtime/{JsRuntime,JsRealm}.cs`, `src/Starling.Bindings/{TimersBinding,FetchBinding,XhrBinding}.cs` |
+| **B5-3-followup-b** | Revert the three `Directory.Build.props` NoWarn entries (RCS1194, CA1859, IDE0005) that B5-3 added as a temporary workaround for the in-flight B4-1 RegExp branch. RegExp has landed and the suite builds clean; the NoWarn block now silently hides real analyzer signal across the solution. Verify the suite still builds + tests pass after the revert; if any analyzer fires, fix the underlying code rather than re-adding the suppression. | (cleanup) | B4-1 (done), B5-3 (done) | `Directory.Build.props` |
+| **B5-1-followup** | Migrate the array-shaped DOM result surfaces (`Element.children`, `Element.childNodes`, `Document.querySelectorAll`, `getElementsByTagName`, `getElementsByClassName`, `Headers.entries`/`keys`/`values`) from the old `MakeArrayLike` plain-object pattern to real `JsArray` (and, where the spec wants live collections / iterators, route through B3-2 iterator objects). B5-1 was written before B2-4 + B3-2 shipped, so it used the placeholder shape. Pin tests asserting `Array.isArray(document.querySelectorAll('*'))` and that the result behaves like an array (has `.map`, `.filter`, etc.). | **lane F** | B2-4 (done), B3-2 (done), B5-1 (done) | `src/Starling.Bindings/{NodeBindings,FetchBinding}.cs` |
 | **B7** | End-to-end google.com search smoke test (offline fixtures + optional live gate) | **final** | everything | `tests/Starling.Engine.Tests/GoogleSearchTests.cs` (new), `testdata/sites/google-*.html` |
 
 ### Concurrency map

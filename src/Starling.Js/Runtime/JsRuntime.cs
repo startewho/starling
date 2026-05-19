@@ -39,11 +39,13 @@ public sealed class JsRuntime
         Realm = new JsRealm();
         ObjectCtor.Install(Realm);
         FunctionCtor.Install(Realm); // B2-2 — single-line region so the B3-4 merge stays trivial.
+        ArrayCtor.Install(Realm);    // B2-4
         ErrorCtor.Install(Realm);
         StringCtor.Install(Realm);
         NumberCtor.Install(Realm);
         BooleanCtor.Install(Realm);
         SymbolCtor.Install(Realm);
+        IteratorIntrinsics.Install(Realm); // B3-2 — depends on SymbolCtor for @@iterator.
         Globals.Install(Realm);
         MathObj.Install(Realm);
         JsonObj.Install(Realm);
@@ -52,6 +54,7 @@ public sealed class JsRuntime
         TypedArrayCtors.Install(Realm);
         ConsoleObj.Install(Realm);
         PromiseCtor.Install(Realm); // B3-4 — depends on Object/Function/Error protos.
+        RegExpCtor.Install(Realm);  // B4-1 — depends on Function/Error/Array protos.
         Global.Set("globalThis", JsValue.Object(Global));
         Global.Set("undefined", JsValue.Undefined);
         Global.Set("NaN", JsValue.NaN);
@@ -71,13 +74,53 @@ public sealed class JsRuntime
     /// host scheduler is installed — the host pumps its own loop.</summary>
     public void DrainMicrotasks() => Realm.Microtasks.DrainAll();
 
-    /// <summary>Register a host-side function as a global named <paramref name="name"/>.</summary>
-    public void RegisterGlobal(string name, Func<JsValue[], JsValue> body)
-        => Global.Set(name, JsValue.Object(new JsNativeFunction(name, body)));
+    /// <summary>Lazily-allocated primary VM used by <see cref="WithActiveVm"/>
+    /// when there's no script-driven VM on the stack. Held privately so it
+    /// stays an implementation detail of the helper.</summary>
+    private JsVm? _primaryVm;
 
-    /// <summary>Register a host-side function with full (thisValue, args) signature.</summary>
+    private JsVm GetOrCreatePrimaryVm() => _primaryVm ??= new JsVm(this);
+
+    /// <summary>
+    /// Run <paramref name="body"/> with <see cref="JsRealm.ActiveVm"/> set, then
+    /// drain the microtask queue. Use when re-entering JS from host code
+    /// (timers, fetch completions, event dispatch) where there's no enclosing
+    /// <see cref="JsVm.Run(Tessera.Js.Bytecode.Chunk)"/> on the stack to
+    /// publish the VM and drain reactions. Restores the previous
+    /// <see cref="JsRealm.ActiveVm"/> on exit, even when the body throws.
+    /// </summary>
+    public void WithActiveVm(Action body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        var previous = Realm.ActiveVm;
+        Realm.ActiveVm = previous ?? GetOrCreatePrimaryVm();
+        try
+        {
+            body();
+            DrainMicrotasks();
+        }
+        finally
+        {
+            Realm.ActiveVm = previous;
+        }
+    }
+
+    /// <summary>Register a host-side function as a global named <paramref name="name"/>.
+    /// Uses the realm-aware <see cref="JsNativeFunction"/> ctor so the function
+    /// inherits from <c>Function.prototype</c> (call/apply/bind chain). The
+    /// host doesn't tell us the declared arity, so <c>length</c> is set to the
+    /// ECMAScript-default of <c>0</c>; callers needing a specific arity should
+    /// either redefine the property or use the full (thisValue, args)
+    /// overload paired with a manual <c>length</c> stamp.</summary>
+    public void RegisterGlobal(string name, Func<JsValue[], JsValue> body)
+        => Global.Set(name, JsValue.Object(new JsNativeFunction(Realm, name, length: 0, (_, a) => body(a), isConstructor: false)));
+
+    /// <summary>Register a host-side function with full (thisValue, args) signature.
+    /// As with the simpler overload, <c>length</c> defaults to <c>0</c>; the
+    /// caller can override by editing the function's own <c>length</c>
+    /// property after registration.</summary>
     public void RegisterGlobal(string name, Func<JsValue, JsValue[], JsValue> body)
-        => Global.Set(name, JsValue.Object(new JsNativeFunction(name, body)));
+        => Global.Set(name, JsValue.Object(new JsNativeFunction(Realm, name, length: 0, body, isConstructor: false)));
 
     /// <summary>Set or replace a global value (variable or object).</summary>
     public void SetGlobal(string name, JsValue value) => Global.Set(name, value);

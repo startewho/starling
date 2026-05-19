@@ -17,17 +17,14 @@ public static class NumberCtor
         var proto = realm.NumberPrototype;
 
         JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction("Number", (thisV, args) =>
+        ctor = new JsNativeFunction(realm, "Number", length: 1, (thisV, args) =>
         {
             var n = args.Length == 0 ? 0 : ToNumber(args[0]);
             if (thisV.IsObject && ReferenceEquals(thisV.AsObject, ctor))
                 return JsValue.Object(realm.BoxNumber(JsValue.Number(n)));
             return JsValue.Number(n);
         }, isConstructor: true);
-        ctor.SetPrototypeOf(realm.FunctionPrototype);
         DefineData(ctor, "prototype", JsValue.Object(proto), false, false, false);
-        DefineData(ctor, "name", JsValue.String("Number"), false, false, true);
-        DefineData(ctor, "length", JsValue.Number(1), false, false, true);
         DefineData(proto, "constructor", JsValue.Object(ctor), true, false, true);
 
         DefineConst(ctor, "EPSILON", Math.Pow(2, -52));
@@ -39,19 +36,19 @@ public static class NumberCtor
         DefineConst(ctor, "NEGATIVE_INFINITY", double.NegativeInfinity);
         DefineConst(ctor, "NaN", double.NaN);
 
-        DefineMethod(ctor, "isFinite", (_, args) => JsValue.Boolean(args.Length > 0 && args[0].IsNumber && double.IsFinite(args[0].AsNumber)), 1);
-        DefineMethod(ctor, "isInteger", (_, args) => JsValue.Boolean(args.Length > 0 && IsInteger(args[0])), 1);
-        DefineMethod(ctor, "isNaN", (_, args) => JsValue.Boolean(args.Length > 0 && args[0].IsNumber && double.IsNaN(args[0].AsNumber)), 1);
-        DefineMethod(ctor, "isSafeInteger", (_, args) => JsValue.Boolean(args.Length > 0 && IsSafeInteger(args[0])), 1);
-        DefineMethod(ctor, "parseFloat", (_, args) => ParseFloat(args), 1);
-        DefineMethod(ctor, "parseInt", (_, args) => ParseInt(args), 2);
+        IntrinsicHelpers.DefineMethod(realm, ctor, "isFinite", 1, (_, args) => JsValue.Boolean(args.Length > 0 && args[0].IsNumber && double.IsFinite(args[0].AsNumber)));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "isInteger", 1, (_, args) => JsValue.Boolean(args.Length > 0 && IsInteger(args[0])));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "isNaN", 1, (_, args) => JsValue.Boolean(args.Length > 0 && args[0].IsNumber && double.IsNaN(args[0].AsNumber)));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "isSafeInteger", 1, (_, args) => JsValue.Boolean(args.Length > 0 && IsSafeInteger(args[0])));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "parseFloat", 1, (_, args) => ParseFloat(args));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "parseInt", 2, (_, args) => ParseInt(args));
 
-        DefineMethod(proto, "toString", (thisV, args) => JsValue.String(NumberToString(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)), 1);
-        DefineMethod(proto, "toFixed", (thisV, args) => JsValue.String(ToFixed(ThisNumber(realm, thisV), ToDigits(args, 0), realm)), 1);
-        DefineMethod(proto, "toPrecision", (thisV, args) => ToPrecision(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm), 1);
-        DefineMethod(proto, "toExponential", (thisV, args) => JsValue.String(ToExponential(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)), 1);
-        DefineMethod(proto, "valueOf", (thisV, _) => JsValue.Number(ThisNumber(realm, thisV)), 0);
-        DefineMethod(proto, "toLocaleString", (thisV, _) => JsValue.String(JsValue.ToStringValue(JsValue.Number(ThisNumber(realm, thisV)))), 0);
+        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 1, (thisV, args) => JsValue.String(NumberToString(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)));
+        IntrinsicHelpers.DefineMethod(realm, proto, "toFixed", 1, (thisV, args) => JsValue.String(ToFixed(ThisNumber(realm, thisV), ToDigits(args, 0), realm)));
+        IntrinsicHelpers.DefineMethod(realm, proto, "toPrecision", 1, (thisV, args) => ToPrecision(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm));
+        IntrinsicHelpers.DefineMethod(realm, proto, "toExponential", 1, (thisV, args) => JsValue.String(ToExponential(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)));
+        IntrinsicHelpers.DefineMethod(realm, proto, "valueOf", 0, (thisV, _) => JsValue.Number(ThisNumber(realm, thisV)));
+        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, _) => JsValue.String(JsValue.ToStringValue(JsValue.Number(ThisNumber(realm, thisV)))));
 
         realm.NumberConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Number", PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));
@@ -268,14 +265,6 @@ public static class NumberCtor
     }
 
     private static void DefineConst(JsObject target, string name, double value) => DefineData(target, name, JsValue.Number(value), false, false, false);
-
-    private static void DefineMethod(JsObject target, string name, Func<JsValue, JsValue[], JsValue> body, int length)
-    {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        DefineData(fn, "name", JsValue.String(name), false, false, true);
-        DefineData(fn, "length", JsValue.Number(length), false, false, true);
-        target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
-    }
 
     private static void DefineData(JsObject target, string name, JsValue value, bool writable, bool enumerable, bool configurable)
         => target.DefineOwnProperty(name, PropertyDescriptor.Data(value, writable, enumerable, configurable));

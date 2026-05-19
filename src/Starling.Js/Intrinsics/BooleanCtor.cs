@@ -11,21 +11,18 @@ public static class BooleanCtor
         var proto = realm.BooleanPrototype;
 
         JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction("Boolean", (thisV, args) =>
+        ctor = new JsNativeFunction(realm, "Boolean", length: 1, (thisV, args) =>
         {
             var b = JsValue.ToBoolean(args.Length > 0 ? args[0] : JsValue.Undefined);
             if (thisV.IsObject && ReferenceEquals(thisV.AsObject, ctor))
                 return JsValue.Object(realm.BoxBoolean(JsValue.Boolean(b)));
             return JsValue.Boolean(b);
         }, isConstructor: true);
-        ctor.SetPrototypeOf(realm.FunctionPrototype);
         DefineData(ctor, "prototype", JsValue.Object(proto), false, false, false);
-        DefineData(ctor, "name", JsValue.String("Boolean"), false, false, true);
-        DefineData(ctor, "length", JsValue.Number(1), false, false, true);
         DefineData(proto, "constructor", JsValue.Object(ctor), true, false, true);
 
-        DefineMethod(proto, "toString", (thisV, _) => JsValue.String(ThisBoolean(realm, thisV) ? "true" : "false"), 0);
-        DefineMethod(proto, "valueOf", (thisV, _) => JsValue.Boolean(ThisBoolean(realm, thisV)), 0);
+        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0, (thisV, _) => JsValue.String(ThisBoolean(realm, thisV) ? "true" : "false"));
+        IntrinsicHelpers.DefineMethod(realm, proto, "valueOf", 0, (thisV, _) => JsValue.Boolean(ThisBoolean(realm, thisV)));
 
         realm.BooleanConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Boolean", PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));
@@ -40,14 +37,6 @@ public static class BooleanCtor
             if (slot is { } d && d.Value.IsBoolean) return d.Value.AsBool;
         }
         throw new JsThrow(realm.NewTypeError("Boolean.prototype method called on incompatible receiver"));
-    }
-
-    private static void DefineMethod(JsObject target, string name, Func<JsValue, JsValue[], JsValue> body, int length)
-    {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        DefineData(fn, "name", JsValue.String(name), false, false, true);
-        DefineData(fn, "length", JsValue.Number(length), false, false, true);
-        target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 
     private static void DefineData(JsObject target, string name, JsValue value, bool writable, bool enumerable, bool configurable)

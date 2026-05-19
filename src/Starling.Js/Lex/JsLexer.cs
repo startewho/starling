@@ -59,6 +59,17 @@ public sealed class JsLexer
         return _peeked.Value;
     }
 
+    /// <summary>Push a previously-consumed token back into the lookahead slot.
+    /// Used by the parser when reclassifying a <c>/</c> token as the head of a
+    /// regex literal (then immediately calls <see cref="ScanRegExp"/>, whose
+    /// peeked-slash rollback fixes the underlying byte position).</summary>
+    public void PushBack(JsToken token)
+    {
+        if (_peeked is not null)
+            throw new InvalidOperationException("PushBack called with a token already peeked");
+        _peeked = token;
+    }
+
     /// <summary>Drain to a list. Useful for tests; not for production parsing.</summary>
     public List<JsToken> Drain()
     {
@@ -124,9 +135,11 @@ public sealed class JsLexer
     /// tuple <c>(pattern: string, flags: string)</c>.</summary>
     public JsToken ScanRegExp()
     {
-        if (_peeked is { } pq && pq.Kind == JsTokenKind.Slash)
+        if (_peeked is { } pq && (pq.Kind == JsTokenKind.Slash || pq.Kind == JsTokenKind.SlashEq))
         {
-            // Roll back the peeked `/` — we're going to re-lex it as a regex.
+            // Roll back the peeked `/` (or `/=`) — we're going to re-lex it
+            // as a regex; the lexeme that follows the leading slash is part
+            // of the regex pattern.
             _i -= pq.Lexeme.Length;
             _col -= pq.Lexeme.Length;
             _peeked = null;

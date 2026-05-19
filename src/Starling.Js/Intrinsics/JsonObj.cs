@@ -35,7 +35,8 @@ public static class JsonObj
 
         var json = realm.NewOrdinaryObject();
 
-        var parse = new JsNativeFunction("parse", (thisValue, args) =>
+        // JSON.parse: spec length === 2 (text, reviver).
+        IntrinsicHelpers.DefineMethod(realm, json, "parse", 2, (thisValue, args) =>
         {
             var text = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
             var reviver = args.Length > 1 ? args[1] : JsValue.Undefined;
@@ -49,9 +50,10 @@ public static class JsonObj
                 value = InternalizeJsonProperty(root, "", reviver, realm);
             }
             return value;
-        }, isConstructor: false);
+        });
 
-        var stringify = new JsNativeFunction("stringify", (thisValue, args) =>
+        // JSON.stringify: spec length === 3 (value, replacer, space).
+        IntrinsicHelpers.DefineMethod(realm, json, "stringify", 3, (thisValue, args) =>
         {
             var value = args.Length > 0 ? args[0] : JsValue.Undefined;
             var replacer = args.Length > 1 ? args[1] : JsValue.Undefined;
@@ -62,20 +64,10 @@ public static class JsonObj
                 PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
             var result = state.SerializeProperty("", holder);
             return result is null ? JsValue.Undefined : JsValue.String(result);
-        }, isConstructor: false);
-
-        DefineBuiltin(json, "parse", parse);
-        DefineBuiltin(json, "stringify", stringify);
+        });
 
         realm.GlobalObject.DefineOwnProperty("JSON",
             PropertyDescriptor.Data(JsValue.Object(json),
-                writable: true, enumerable: false, configurable: true));
-    }
-
-    private static void DefineBuiltin(JsObject host, string name, JsNativeFunction fn)
-    {
-        host.DefineOwnProperty(name,
-            PropertyDescriptor.Data(JsValue.Object(fn),
                 writable: true, enumerable: false, configurable: true));
     }
 

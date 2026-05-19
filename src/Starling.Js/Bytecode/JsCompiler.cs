@@ -251,6 +251,9 @@ public sealed class JsCompiler
                 PatchBackwardJump(jBack, loopStart);
                 _b.PatchJump(jzWhile);
                 return;
+            case ForOfStatement fo:
+                EmitForOf(fo);
+                return;
             case ReturnStatement r:
                 if (r.Argument is null) _b.Emit(Opcode.ReturnUndefined);
                 else
@@ -302,6 +305,106 @@ public sealed class JsCompiler
         }
     }
 
+    /// <summary>
+    /// §14.7.5 ForIn/OfBodyEvaluation — desugared to the spec iterator loop:
+    /// <code>
+    ///   handle = GetIterator(rhs)
+    ///   loop:
+    ///     step = IteratorStep(handle)   // pushed: iterator-result or undefined
+    ///     if step === undefined goto done
+    ///     value = step.value
+    ///     &lt;bind value to LHS pattern/identifier&gt;
+    ///     &lt;body&gt;
+    ///     goto loop
+    ///   done:
+    ///     pop handle
+    ///     IteratorClose(handle)         // no-op when record.Done is true
+    /// </code>
+    /// <c>break</c>/<c>continue</c> targeting the for…of land in a follow-up
+    /// when the compiler grows label/break tracking (no other loop in the
+    /// compiler currently supports break/continue either).
+    /// </summary>
+    private void EmitForOf(ForOfStatement fo)
+    {
+        // Open a fresh scope so loop-var bindings don't leak.
+        _scopes.Add(new());
+
+        // Step 1: evaluate the iterable + materialise an iterator-record handle.
+        EmitExpression(fo.Right);
+        _b.Emit(Opcode.GetIterator);
+        var handleSlot = _b.ReserveLocal();
+        _b.Emit(Opcode.StoreLocal, (byte)handleSlot);
+
+        // Pre-declare any identifiers introduced by the LHS so the body sees
+        // them as locals. For VariableDeclaration we declare each binding;
+        // for a bare AssignmentTarget we leave the resolver to fall through
+        // to the parent scope.
+        if (fo.Left is VariableDeclaration vd0)
+        {
+            foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+        }
+
+        var loopStart = _b.Position;
+        _b.Emit(Opcode.LoadLocal, (byte)handleSlot);
+        _b.Emit(Opcode.IteratorStep);
+        // Stack top is iterator-result-object or undefined. Compare with
+        // undefined; jump to done when so.
+        _b.Emit(Opcode.Dup);
+        _b.Emit(Opcode.LoadUndefined);
+        _b.Emit(Opcode.StrictEq);
+        var jExit = _b.EmitJump(Opcode.JumpIfTrue);
+        // Stack: [iterResult]. Extract .value.
+        _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("value"));
+        // Stack: [value]. Bind to LHS.
+        EmitForOfBinding(fo.Left);
+        // Body.
+        EmitStatement(fo.Body);
+        var jBack = _b.EmitJump(Opcode.Jump);
+        PatchBackwardJump(jBack, loopStart);
+        _b.PatchJump(jExit);
+        // Stack on exit: [undefined-sentinel]. Pop it.
+        _b.Emit(Opcode.Pop);
+        // IteratorClose on normal completion is a no-op (record.Done=true)
+        // but we emit the opcode so abrupt completions in M3-05 just stack
+        // it into the cleanup path uniformly.
+        _b.Emit(Opcode.LoadLocal, (byte)handleSlot);
+        _b.Emit(Opcode.IteratorClose);
+
+        _scopes.RemoveAt(_scopes.Count - 1);
+    }
+
+    private void EmitForOfBinding(AstNode left)
+    {
+        // Stack top: [value]. Consume it into LHS.
+        switch (left)
+        {
+            case VariableDeclaration vd:
+                if (vd.Declarations.Count != 1)
+                    throw new NotSupportedException("for…of binding requires exactly one declarator");
+                var d = vd.Declarations[0];
+                if (d.Id is Identifier id)
+                {
+                    StoreBindingIdentifier(id.Name);
+                }
+                else
+                {
+                    EmitPatternFromStack(d.Id, isDeclaration: true);
+                }
+                return;
+            case Identifier id2:
+                StoreBindingIdentifier(id2.Name);
+                return;
+            case MemberExpression me:
+                StoreMemberTarget(me);
+                return;
+            case Expression pattern:
+                EmitPatternFromStack(pattern, isDeclaration: false);
+                return;
+            default:
+                throw new NotSupportedException($"for…of LHS '{left.GetType().Name}' not supported");
+        }
+    }
+
     private void PatchBackwardJump(int operandPos, int target)
     {
         var jumpFrom = operandPos + 2;
@@ -350,6 +453,13 @@ public sealed class JsCompiler
                 return;
             case BigIntLiteral bi:
                 _b.EmitU16(Opcode.LoadConst, _b.AddConstant(new JsBigIntPlaceholder(bi.Digits)));
+                return;
+            case RegExpLiteral rx:
+                // Source + flags live as string constants; the VM compiles
+                // and wraps a fresh JsRegExp per execution so each evaluation
+                // gets an independent `lastIndex` slot (§13.2.7.3).
+                _b.EmitU16(Opcode.LoadRegExp, _b.AddConstant(rx.Source));
+                _b.EmitU16Raw(_b.AddConstant(rx.Flags));
                 return;
             case Identifier id:
                 EmitIdLoad(id.Name);
@@ -641,6 +751,10 @@ public sealed class JsCompiler
         if (call.Arguments.Count > 255)
             throw new NotSupportedException("more than 255 call args not supported");
 
+        var hasSpread = false;
+        foreach (var arg in call.Arguments)
+            if (arg is SpreadElement) { hasSpread = true; break; }
+
         // Method call form: obj.method() or obj[key]() must bind
         // this=obj inside the callee. Emit obj once, Dup it, load the
         // property, then args, then CallMethod which consumes
@@ -660,24 +774,65 @@ public sealed class JsCompiler
                 var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
                 _b.EmitU16(Opcode.LoadProperty, nameIdx);  // [obj, fn]
             }
-            foreach (var arg in call.Arguments)
+            if (hasSpread)
             {
-                if (arg is SpreadElement)
-                    throw new NotSupportedException("spread in call args is M3-04c work");
-                EmitExpression(arg);
+                // Build args array first, then apply.
+                EmitArgsAsArray(call.Arguments);
+                _b.Emit(Opcode.CallApplyMethod);
+                return;
             }
+            foreach (var arg in call.Arguments) EmitExpression(arg);
             _b.Emit(Opcode.CallMethod, (byte)call.Arguments.Count);
             return;
         }
 
         EmitExpression(call.Callee);
-        foreach (var arg in call.Arguments)
+        if (hasSpread)
         {
-            if (arg is SpreadElement)
-                throw new NotSupportedException("spread in call args is M3-04c work");
-            EmitExpression(arg);
+            EmitArgsAsArray(call.Arguments);
+            _b.Emit(Opcode.CallApply);
+            return;
         }
+        foreach (var arg in call.Arguments) EmitExpression(arg);
         _b.Emit(Opcode.Call, (byte)call.Arguments.Count);
+    }
+
+    /// <summary>Materialise a possibly-spread argument list as a dense
+    /// JsArray on the stack. Used by the CallApply / NewApply opcodes when
+    /// at least one argument is a spread.</summary>
+    private void EmitArgsAsArray(IReadOnlyList<Expression> args)
+    {
+        _b.Emit(Opcode.NewArray);
+        var pushMode = false;
+        var nextIdx = 0;
+        foreach (var arg in args)
+        {
+            if (arg is SpreadElement sp)
+            {
+                EmitExpression(sp.Argument);    // [arr, iterable]
+                _b.Emit(Opcode.SpreadIterable); // [arr]
+                pushMode = true;
+                continue;
+            }
+            if (!pushMode)
+            {
+                _b.Emit(Opcode.Dup);            // [arr, arr]
+                EmitExpression(arg);            // [arr, arr, v]
+                _b.EmitU16(Opcode.StoreProperty,
+                    _b.AddConstant(nextIdx.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                _b.Emit(Opcode.Pop);            // [arr]
+                nextIdx++;
+            }
+            else
+            {
+                _b.Emit(Opcode.Dup);            // [arr, arr]
+                _b.Emit(Opcode.Dup);            // [arr, arr, arr]
+                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
+                EmitExpression(arg);            // [arr, arr, len, v]
+                _b.Emit(Opcode.StoreComputed);  // [arr, v]
+                _b.Emit(Opcode.Pop);            // [arr]
+            }
+        }
     }
 
     private void EmitFunctionExpression(FunctionExpression fe)
@@ -956,22 +1111,64 @@ public sealed class JsCompiler
 
     private void EmitArrayLiteral(ArrayExpression ae)
     {
-        _b.Emit(Opcode.NewObject);
+        // B2-4: arrays are now dense JsArray exotics, so the magic length
+        // slot is derived from the indexed slots. We still walk each element
+        // and StoreProperty its index — JsArray's exotic [[Set]] routes
+        // indexed writes into the dense backing. B3-2: spread elements
+        // dispatch through SpreadIterable which walks @@iterator.
+        _b.Emit(Opcode.NewArray);
+        // Track the next dense index that a plain element should land at.
+        // Once a spread runs, subsequent plain elements use Array.prototype.push
+        // semantics via a length-derived index — implemented here by reading
+        // the current length back from the array. Track via a "pushMode"
+        // flag: once true, every plain element goes through the same length+
+        // index loop.
+        var pushMode = false;
         for (var i = 0; i < ae.Elements.Count; i++)
         {
             var element = ae.Elements[i];
-            if (element is null) continue;
-            if (element is SpreadElement)
-                throw new NotSupportedException("array literal spread waits for iterator protocol");
+            if (element is null)
+            {
+                // Hole: skip but make sure length advances if it's the last hole.
+                continue;
+            }
+            if (element is SpreadElement spread)
+            {
+                // SpreadIterable peeks the target — no Dup needed.
+                EmitExpression(spread.Argument); // [arr, iterable]
+                _b.Emit(Opcode.SpreadIterable); // [arr]
+                pushMode = true;
+                continue;
+            }
+            if (!pushMode)
+            {
+                _b.Emit(Opcode.Dup);
+                EmitExpression(element);
+                _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                _b.Emit(Opcode.Pop);
+            }
+            else
+            {
+                // Push via length: arr[arr.length] = value
+                _b.Emit(Opcode.Dup);            // [arr, arr]
+                _b.Emit(Opcode.Dup);            // [arr, arr, arr]
+                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
+                EmitExpression(element);        // [arr, arr, len, value]
+                _b.Emit(Opcode.StoreComputed);  // [arr, value]
+                _b.Emit(Opcode.Pop);            // [arr]
+            }
+        }
+        // Pad trailing holes (null elements in the AST = elided slots) by
+        // bumping length up via the magic property. JsArray.SetLength handles
+        // grow-with-undefined. Skipped when pushMode is active since length
+        // already tracks pushed values.
+        if (!pushMode && ae.Elements.Count > 0 && ae.Elements[^1] is null)
+        {
             _b.Emit(Opcode.Dup);
-            EmitExpression(element);
-            _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            _b.EmitU16(Opcode.LoadConst, _b.AddConstant((double)ae.Elements.Count));
+            _b.EmitU16(Opcode.StoreProperty, _b.AddConstant("length"));
             _b.Emit(Opcode.Pop);
         }
-        _b.Emit(Opcode.Dup);
-        _b.EmitU16(Opcode.LoadConst, _b.AddConstant((double)ae.Elements.Count));
-        _b.EmitU16(Opcode.StoreProperty, _b.AddConstant("length"));
-        _b.Emit(Opcode.Pop);
     }
 
     private static string PropertyName(Expression key) => key switch
@@ -985,12 +1182,16 @@ public sealed class JsCompiler
     private void EmitNew(NewExpression ne)
     {
         EmitExpression(ne.Callee);
+        var hasSpread = false;
         foreach (var arg in ne.Arguments)
+            if (arg is SpreadElement) { hasSpread = true; break; }
+        if (hasSpread)
         {
-            if (arg is SpreadElement)
-                throw new NotSupportedException("spread in new args is M3-04c work");
-            EmitExpression(arg);
+            EmitArgsAsArray(ne.Arguments);
+            _b.Emit(Opcode.NewApply);
+            return;
         }
+        foreach (var arg in ne.Arguments) EmitExpression(arg);
         if (ne.Arguments.Count > 255)
             throw new NotSupportedException("more than 255 new args not supported");
         _b.Emit(Opcode.New, (byte)ne.Arguments.Count);

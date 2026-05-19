@@ -102,7 +102,7 @@ public class PromiseTests
             globalThis.recovered = 0;
             globalThis.afterCatch = 0;
             Promise.reject('bad')
-                [""catch""](function(r) { globalThis.recovered = 1; return 99; })
+                .catch(function(r) { globalThis.recovered = 1; return 99; })
                 .then(function(v) { globalThis.afterCatch = v; });
         ");
         rt.GetGlobal("recovered").AsNumber.Should().Be(1);
@@ -116,7 +116,7 @@ public class PromiseTests
             globalThis.ran = 0;
             globalThis.value = 0;
             Promise.resolve(7)
-                [""finally""](function() { globalThis.ran = 1; })
+                .finally(function() { globalThis.ran = 1; })
                 .then(function(v) { globalThis.value = v; });
         ");
         rt.GetGlobal("ran").AsNumber.Should().Be(1);
@@ -130,8 +130,8 @@ public class PromiseTests
             globalThis.ran = 0;
             globalThis.reason = '';
             Promise.reject('nope')
-                [""finally""](function() { globalThis.ran = 1; })
-                [""catch""](function(r) { globalThis.reason = r; });
+                .finally(function() { globalThis.ran = 1; })
+                .catch(function(r) { globalThis.reason = r; });
         ");
         rt.GetGlobal("ran").AsNumber.Should().Be(1);
         rt.GetGlobal("reason").AsString.Should().Be("nope");
@@ -143,8 +143,8 @@ public class PromiseTests
         var rt = Run(@"
             globalThis.reason = '';
             Promise.resolve(1)
-                [""finally""](function() { throw 'finally-bad'; })
-                [""catch""](function(r) { globalThis.reason = r; });
+                .finally(function() { throw 'finally-bad'; })
+                .catch(function(r) { globalThis.reason = r; });
         ");
         rt.GetGlobal("reason").AsString.Should().Be("finally-bad");
     }
@@ -166,7 +166,7 @@ public class PromiseTests
         var rt = Run(@"
             globalThis.reason = '';
             Promise.all([Promise.resolve(1), Promise.reject('first-bad'), Promise.reject('second-bad')])
-                [""catch""](function(r) { globalThis.reason = r; });
+                .catch(function(r) { globalThis.reason = r; });
         ");
         rt.GetGlobal("reason").AsString.Should().Be("first-bad");
     }
@@ -214,7 +214,7 @@ public class PromiseTests
         var rt = Run(@"
             globalThis.reason = '';
             Promise.race([Promise.reject('first'), Promise.resolve(2)])
-                [""catch""](function(r) { globalThis.reason = r; });
+                .catch(function(r) { globalThis.reason = r; });
         ");
         rt.GetGlobal("reason").AsString.Should().Be("first");
     }
@@ -233,20 +233,60 @@ public class PromiseTests
     [Fact]
     public void Promise_any_rejects_with_AggregateError_when_all_reject()
     {
-        // AggregateError is a plain object with name+errors+message until the
-        // full Error hierarchy (B2-3) lands its constructor. The errors array
-        // preserves source order.
+        // Promise.any rejects with a real AggregateError instance built via
+        // realm.NewAggregateError; the errors slot is a JsArray preserving
+        // source order.
         var rt = Run(@"
             globalThis.name = '';
             globalThis.errs = '';
             Promise.any([Promise.reject('a'), Promise.reject('b')])
-                [""catch""](function(e) {
+                .catch(function(e) {
                     globalThis.name = e.name;
                     globalThis.errs = e.errors[0] + ',' + e.errors[1] + ':' + e.errors.length;
                 });
         ");
         rt.GetGlobal("name").AsString.Should().Be("AggregateError");
         rt.GetGlobal("errs").AsString.Should().Be("a,b:2");
+    }
+
+    [Fact]
+    public void Promise_any_aggregate_error_is_real_AggregateError_instance()
+    {
+        // instanceof is not yet wired (mirrors ErrorTests style); walk the
+        // prototype chain manually instead.
+        var rt = Run(@"
+            globalThis.isAgg = false;
+            globalThis.isErr = false;
+            globalThis.msg = '';
+            Promise.any([Promise.reject(1), Promise.reject(2)])
+                .catch(function(e) {
+                    globalThis.isAgg = Object.getPrototypeOf(e) === AggregateError.prototype;
+                    globalThis.isErr = Object.getPrototypeOf(AggregateError.prototype) === Error.prototype;
+                    globalThis.msg = e.message;
+                });
+        ");
+        rt.GetGlobal("isAgg").AsBool.Should().BeTrue();
+        rt.GetGlobal("isErr").AsBool.Should().BeTrue();
+        rt.GetGlobal("msg").AsString.Should().Be("All promises were rejected");
+    }
+
+    [Fact]
+    public void Promise_any_aggregate_error_preserves_numeric_reasons()
+    {
+        var rt = Run(@"
+            globalThis.e0 = 0;
+            globalThis.e1 = 0;
+            globalThis.len = 0;
+            Promise.any([Promise.reject(1), Promise.reject(2)])
+                .catch(function(e) {
+                    globalThis.e0 = e.errors[0];
+                    globalThis.e1 = e.errors[1];
+                    globalThis.len = e.errors.length;
+                });
+        ");
+        rt.GetGlobal("e0").AsNumber.Should().Be(1);
+        rt.GetGlobal("e1").AsNumber.Should().Be(2);
+        rt.GetGlobal("len").AsNumber.Should().Be(2);
     }
 
     [Fact]
@@ -267,7 +307,7 @@ public class PromiseTests
         var rt = Run(@"
             globalThis.r = '';
             var d = Promise.withResolvers();
-            d.promise[""catch""](function(e) { globalThis.r = e; });
+            d.promise.catch(function(e) { globalThis.r = e; });
             d.reject('nope');
         ");
         rt.GetGlobal("r").AsString.Should().Be("nope");
@@ -332,7 +372,7 @@ public class PromiseTests
             globalThis.reason = null;
             var d = Promise.withResolvers();
             d.resolve(d.promise);
-            d.promise[""catch""](function(e) { globalThis.reason = e; });
+            d.promise.catch(function(e) { globalThis.reason = e; });
         ");
         var reason = rt.GetGlobal("reason");
         reason.IsObject.Should().BeTrue();

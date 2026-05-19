@@ -21,6 +21,8 @@ public enum Opcode : byte
     LoadUpvalue,    // [u8 idx] → push current frame's upvalue at idx
     LoadThis,       // → push the current frame's `this` binding
     NewObject,      // → push a fresh empty JsObject
+    NewArray,       // → push a fresh empty JsArray (B2-4)
+    LoadRegExp,     // [u16 srcIdx][u16 flagsIdx] → push a fresh JsRegExp built from constant-pool source/flags strings
     LoadTrue,       // → push true
     LoadFalse,      // → push false
     LoadNull,       // → push null
@@ -83,5 +85,17 @@ public enum Opcode : byte
     SpreadInto,     // pop src and dst objects, copy own enumerable props from src onto dst (object-literal spread)
     RestArray,      // [u16 start] pop src, push Array-like object with src[start..length)
     RestObject,     // [u16 excludedCount] pop N keys + src, push own-enumerable copy excluding keys
+
+    // ----- Iterator protocol (B3-2) -----
+    GetIterator,    // pop value, push an opaque iterator-record handle (a JsObject internal)
+    IteratorStep,   // peek iterator-record; push iterator-result object, or push undefined on done. Sets the "done" slot when finished.
+    IteratorClose,  // pop iterator-record; invoke .return() if present
+    SpreadIterable, // pop iterable + peek target JsArray; append all iterable's values to target via @@iterator
+
+    // ----- Apply-style calls (B3-2: call with materialized args array) -----
+    CallApply,        // pop args-array + callee; this=Undefined
+    CallApplyMethod,  // pop args-array + callee + receiver; this=receiver
+    NewApply,         // pop args-array + ctor
+
     Halt,           // end-of-program sentinel
 }

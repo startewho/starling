@@ -29,11 +29,10 @@ namespace Tessera.Js.Intrinsics;
 ///     iterators. Full iterator protocol arrives with B3-2.
 ///   </description></item>
 ///   <item><description>
-///     <c>Promise.any</c>'s aggregate rejection is a plain object with
-///     <c>name="AggregateError"</c> + an <c>errors</c> array-like (and a
-///     <c>message</c>) — the real <c>AggregateError</c> constructor lands
-///     with the Error hierarchy (B2-3). The shape is observationally
-///     identical for the cases the spec mandates.
+///     <c>Promise.any</c>'s aggregate rejection is a real
+///     <c>AggregateError</c> instance built via
+///     <c>realm.NewAggregateError</c> with an own <c>errors</c> JsArray
+///     of the rejection reasons.
 ///   </description></item>
 ///   <item><description>
 ///     Uncaught microtask exceptions surface through the realm's console
@@ -474,8 +473,8 @@ public static class PromiseCtor
     }
 
     /// <summary>§27.2.4.3 Promise.any. Resolves with the first fulfillment;
-    /// if every input rejects, rejects with an AggregateError-shaped object
-    /// (full <c>AggregateError</c> ctor lands with B2-3).</summary>
+    /// if every input rejects, rejects with an <c>AggregateError</c> whose
+    /// <c>errors</c> own property is a JsArray of the rejection reasons.</summary>
     private static JsValue Any(JsRealm realm, JsValue iterable)
     {
         var items = ArrayLikeToList(realm, iterable);
@@ -585,34 +584,30 @@ public static class PromiseCtor
     /// <summary>Build the array-like return object for <c>Promise.all</c> +
     /// <c>allSettled</c>. Mirrors <c>ObjectCtor.MakeArrayLike</c> — a real
     /// <c>JsArray</c> lands in B2-4.</summary>
-    private static JsValue MakeArrayLike(JsRealm realm, IReadOnlyList<JsValue> items)
+    private static JsValue MakeArrayLike(JsRealm realm, JsValue[] items)
     {
         var arr = realm.NewObjectWithProto(realm.ArrayPrototype);
-        for (var i = 0; i < items.Count; i++)
+        for (var i = 0; i < items.Length; i++)
         {
             arr.DefineOwnProperty(i.ToString(CultureInfo.InvariantCulture),
                 PropertyDescriptor.Data(items[i], writable: true, enumerable: true, configurable: true));
         }
         arr.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(items.Count), writable: true, enumerable: false, configurable: false));
+            PropertyDescriptor.Data(JsValue.Number(items.Length), writable: true, enumerable: false, configurable: false));
         return JsValue.Object(arr);
     }
 
-    /// <summary>Until B2-3 lands a real <c>AggregateError</c> constructor, fake
-    /// the shape: plain object with name='AggregateError', message, and an
-    /// errors array-like. Tests can match on those fields; once the real
-    /// ctor arrives, swap this for <c>realm.NewAggregateError(errors, msg)</c>.</summary>
+    /// <summary>Build a real AggregateError instance via
+    /// <c>realm.NewAggregateError</c> (B2-3) and attach the rejection reasons
+    /// as an own <c>errors</c> array (B2-4 JsArray). Used by §27.2.4.3
+    /// Promise.any when every input rejects.</summary>
     private static JsValue MakeAggregateError(JsRealm realm, IReadOnlyList<JsValue> errors, string message)
     {
-        // TODO(B2-3): replace with realm.NewAggregateError once it lands.
-        var obj = realm.NewObjectWithProto(realm.AggregateErrorPrototype);
-        obj.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String("AggregateError"), writable: true, enumerable: false, configurable: true));
-        obj.DefineOwnProperty("message",
-            PropertyDescriptor.Data(JsValue.String(message), writable: true, enumerable: false, configurable: true));
-        obj.DefineOwnProperty("errors",
-            PropertyDescriptor.Data(MakeArrayLike(realm, errors), writable: true, enumerable: false, configurable: true));
-        return JsValue.Object(obj);
+        var errValue = realm.NewAggregateError(message);
+        var errorsArray = new JsArray(realm, errors);
+        errValue.AsObject.DefineOwnProperty("errors",
+            PropertyDescriptor.Data(JsValue.Object(errorsArray), writable: true, enumerable: false, configurable: true));
+        return errValue;
     }
 
     /// <summary>Install a builtin method descriptor (W=true, E=false, C=true)
