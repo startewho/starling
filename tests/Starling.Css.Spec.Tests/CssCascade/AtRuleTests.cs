@@ -2,6 +2,14 @@
 // Source: testdata/webref/css/css-cascade.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.Media;
+using Tessera.Css.Cascade;
+using Tessera.Css.Properties;
+using Tessera.Css.Values;
+using Tessera.Dom;
+
 namespace Starling.Css.Spec.Tests.CssCascade;
 
 /// <summary>
@@ -15,13 +23,33 @@ public sealed class AtRuleTests
     /// <para>At-rule <c>@import</c>.</para>
     /// </summary>
     [Spec("css-cascade", "https://drafts.csswg.org/css-cascade-5/#at-ruledef-import")]
-    [PendingFact("at-rule '@import' not asserted yet", trackingWp: "wp:spec-css-cascade")]
-    public void Parses_at_import() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_at_import()
+    {
+        var sheet = CssParser.ParseStyleSheet("@import url(\"styles.css\");");
+        var at = sheet.Rules.OfType<AtRule>().Single();
+        ImportRuleParser.TryParse(at, out var imp).Should().BeTrue();
+        imp.Url.Should().Be("styles.css");
+        imp.LayerName.Should().BeNull();
+        imp.SupportsCondition.Should().BeNull();
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-cascade-5/#at-ruledef-layer"/>
     /// <para>At-rule <c>@layer</c>.</para>
     /// </summary>
     [Spec("css-cascade", "https://drafts.csswg.org/css-cascade-5/#at-ruledef-layer")]
-    [PendingFact("at-rule '@layer' not asserted yet", trackingWp: "wp:spec-css-cascade")]
-    public void Parses_at_layer() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_at_layer()
+    {
+        // CSS Cascade 5 §6: unlayered styles beat layered styles for non-important.
+        var doc = new Document();
+        var p = doc.CreateElement("p");
+        doc.AppendChild(p);
+        var engine = new StyleEngine(includeUserAgentStyleSheet: false);
+        engine.AddStyleSheet(CssParser.ParseStyleSheet("""
+            @layer base { p { color: red; } }
+            p { color: blue; }
+            """));
+        engine.Compute(p).GetColor(PropertyId.Color).Should().Be(new Tessera.Css.Values.CssColor(0, 0, 255));
+    }
 }

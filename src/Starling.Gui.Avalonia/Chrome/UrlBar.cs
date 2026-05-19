@@ -5,9 +5,11 @@ using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Starling.Gui.Avalonia.Theme;
 
 namespace Starling.Gui.Avalonia.Chrome;
@@ -124,7 +126,14 @@ public sealed class UrlBar : Border
         _display = new Panel { Background = new SolidColorBrush(Colors.Transparent) };
         _display.Children.Add(displayRow);
         _display.Children.Add(Address);
-        ChromeKit.AttachClick(_display, ShowEditor);
+        // Only enter edit mode on the *first* click — once the TextBox is
+        // focused, subsequent clicks must fall through so they position the
+        // caret instead of re-selecting the entire URL.
+        ChromeKit.AttachClick(_display, () =>
+        {
+            if (Address.IsFocused) return;
+            ShowEditor();
+        });
 
         // Find chip on the far right
         var findBtn = BuildFindChip(tm);
@@ -177,6 +186,44 @@ public sealed class UrlBar : Border
     /// <summary>The host the parent should attach the focus ring on, so the
     /// glow sits behind the URL bar in z-order.</summary>
     public Control FocusRing => _focusRing;
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        // Avalonia keeps keyboard focus on a TextBox when the user clicks
+        // non-focusable chrome (Borders, Panels). Listen at the top level so
+        // we can hand focus away — that, in turn, fires LostFocus and the
+        // existing handler collapses the editor back to the display segments.
+        if (TopLevel.GetTopLevel(this) is { } top)
+            top.AddHandler(InputElement.PointerPressedEvent, OnTopLevelPointerPressed,
+                RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        if (TopLevel.GetTopLevel(this) is { } top)
+            top.RemoveHandler(InputElement.PointerPressedEvent, OnTopLevelPointerPressed);
+    }
+
+    private void OnTopLevelPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!Address.IsFocused) return;
+        if (e.Source is Visual v && IsDescendantOf(v, this)) return;
+        // Outside click — move keyboard focus to the top level so the
+        // TextBox's LostFocus fires and the editor collapses.
+        TopLevel.GetTopLevel(this)?.Focus();
+    }
+
+    private static bool IsDescendantOf(Visual? v, Visual root)
+    {
+        while (v is not null)
+        {
+            if (ReferenceEquals(v, root)) return true;
+            v = v.GetVisualParent();
+        }
+        return false;
+    }
 
     private TextBlock MonoSegment(string text, Color color) => new()
     {

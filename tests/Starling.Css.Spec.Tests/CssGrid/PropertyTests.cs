@@ -2,6 +2,11 @@
 // Source: testdata/webref/css/css-grid.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
+using FluentAssertions;
+using Tessera.Css.Parser;
+using Tessera.Css.Properties;
+using Tessera.Css.Values;
+
 namespace Starling.Css.Spec.Tests.CssGrid;
 
 /// <summary>
@@ -11,12 +16,27 @@ namespace Starling.Css.Spec.Tests.CssGrid;
 public sealed class PropertyTests
 {
 
+    private static List<PropertyDeclaration> Expand(string css)
+    {
+        var sheet = CssParser.ParseStyleSheet($"x {{ {css} }}");
+        var rule = (StyleRule)sheet.Rules[0];
+        return rule.Declarations.SelectMany(PropertyRegistry.Parse).ToList();
+    }
+
+
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-grid-2/#propdef-grid-template-columns"/>
     /// <para>Property <c>grid-template-columns</c> — value <c>none | &lt;track-list&gt; | &lt;auto-track-list&gt; | subgrid &lt;line-name-list&gt;?</c>; initial <c>none</c>.</para>
     /// </summary>
     [Spec("css-grid", "https://drafts.csswg.org/css-grid-2/#propdef-grid-template-columns")]
-    [PendingFact("property 'grid-template-columns' not asserted yet", trackingWp: "wp:spec-css-grid")]
-    public void Parses_grid_template_columns() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_grid_template_columns()
+    {
+        var decls = Expand("grid-template-columns: 100px 1fr 2fr;");
+        var value = decls.Single(d => d.Id == PropertyId.GridTemplateColumns).Value;
+        value.Should().BeOfType<CssValueList>();
+        ((CssValueList)value).Values.Should().HaveCount(3);
+        ((CssValueList)value).Values[0].Should().Be(new CssLength(100, CssLengthUnit.Px));
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-grid-2/#propdef-grid-template-rows"/>
     /// <para>Property <c>grid-template-rows</c> — value <c>none | &lt;track-list&gt; | &lt;auto-track-list&gt; | subgrid &lt;line-name-list&gt;?</c>; initial <c>none</c>.</para>
@@ -57,8 +77,13 @@ public sealed class PropertyTests
     /// <para>Property <c>grid-auto-flow</c> — value <c>[ row | column ] || dense</c>; initial <c>row</c>.</para>
     /// </summary>
     [Spec("css-grid", "https://drafts.csswg.org/css-grid-2/#propdef-grid-auto-flow")]
-    [PendingFact("property 'grid-auto-flow' not asserted yet", trackingWp: "wp:spec-css-grid")]
-    public void Parses_grid_auto_flow() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_grid_auto_flow()
+    {
+        var decls = Expand("grid-auto-flow: row dense;");
+        decls.Should().ContainSingle();
+        decls[0].Id.Should().Be(PropertyId.GridAutoFlow);
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-grid-2/#propdef-grid"/>
     /// <para>Property <c>grid</c> — value <c>&lt;'grid-template'&gt; | &lt;'grid-template-rows'&gt; / [ auto-flow &amp;&amp; dense? ] &lt;'grid-auto-columns'&gt;? | [ auto-flow &amp;&amp; dense? ] &lt;'grid-auto-rows'&gt;? / &lt;'grid-template-columns'&gt;</c>; initial <c>none</c>.</para>
@@ -99,20 +124,37 @@ public sealed class PropertyTests
     /// <para>Property <c>grid-row</c> — value <c>&lt;grid-line&gt; [ / &lt;grid-line&gt; ]?</c>; initial <c>auto</c>.</para>
     /// </summary>
     [Spec("css-grid", "https://drafts.csswg.org/css-grid-2/#propdef-grid-row")]
-    [PendingFact("property 'grid-row' not asserted yet", trackingWp: "wp:spec-css-grid")]
-    public void Parses_grid_row() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_grid_row()
+    {
+        var decls = Expand("grid-row: 2 / span 3;");
+        decls.Single(d => d.Id == PropertyId.GridRowStart).Value.Should().Be(new CssNumber(2));
+        decls.Single(d => d.Id == PropertyId.GridRowEnd).Value.Should().BeOfType<CssValueList>();
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-grid-2/#propdef-grid-column"/>
     /// <para>Property <c>grid-column</c> — value <c>&lt;grid-line&gt; [ / &lt;grid-line&gt; ]?</c>; initial <c>auto</c>.</para>
     /// </summary>
     [Spec("css-grid", "https://drafts.csswg.org/css-grid-2/#propdef-grid-column")]
-    [PendingFact("property 'grid-column' not asserted yet", trackingWp: "wp:spec-css-grid")]
-    public void Parses_grid_column() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_grid_column()
+    {
+        var decls = Expand("grid-column: 1 / 3;");
+        decls.Single(d => d.Id == PropertyId.GridColumnStart).Value.Should().Be(new CssNumber(1));
+        decls.Single(d => d.Id == PropertyId.GridColumnEnd).Value.Should().Be(new CssNumber(3));
+    }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-grid-2/#propdef-grid-area"/>
     /// <para>Property <c>grid-area</c> — value <c>&lt;grid-line&gt; [ / &lt;grid-line&gt; ]{0,3}</c>; initial <c>auto</c>.</para>
     /// </summary>
     [Spec("css-grid", "https://drafts.csswg.org/css-grid-2/#propdef-grid-area")]
-    [PendingFact("property 'grid-area' not asserted yet", trackingWp: "wp:spec-css-grid")]
-    public void Parses_grid_area() => throw new NotImplementedException();
+    [SpecFact]
+    public void Parses_grid_area()
+    {
+        var decls = Expand("grid-area: 1 / 2 / 3 / 4;");
+        decls.Single(d => d.Id == PropertyId.GridRowStart).Value.Should().Be(new CssNumber(1));
+        decls.Single(d => d.Id == PropertyId.GridColumnStart).Value.Should().Be(new CssNumber(2));
+        decls.Single(d => d.Id == PropertyId.GridRowEnd).Value.Should().Be(new CssNumber(3));
+        decls.Single(d => d.Id == PropertyId.GridColumnEnd).Value.Should().Be(new CssNumber(4));
+    }
 }

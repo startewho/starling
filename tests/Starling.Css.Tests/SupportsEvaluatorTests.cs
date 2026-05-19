@@ -5,9 +5,11 @@ using Tessera.Css.Properties;
 using Tessera.Css.Values;
 using Tessera.Dom;
 using Xunit;
+using Starling.Spec;
 
 namespace Tessera.Css.Tests;
 
+[Spec("css-conditional-3", "https://www.w3.org/TR/css-conditional-3/")]
 public sealed class SupportsEvaluatorTests
 {
     private static bool Evaluate(string condition)

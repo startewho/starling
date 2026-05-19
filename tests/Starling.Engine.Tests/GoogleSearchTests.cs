@@ -20,28 +20,24 @@ namespace Tessera.Engine.Tests;
 /// page served from a local <see cref="HttpListener"/>.
 ///
 /// <para>
-/// Scope-down vs. the original goal: the engine's <see cref="TesseraEngine.RenderAsync"/>
-/// path does <em>not</em> yet execute page JavaScript — the bindings layer
-/// (window/document/fetch/timers) is wired, but the engine doesn't pump JS
-/// during render. So the offline fixtures inline the visible result text
-/// statically; the engine's <see cref="RenderOutcome.DisplayText"/> picks
-/// them up from the static DOM. The JS plumbing itself is exercised in
-/// <see cref="Search_fetches_results_via_js_fetch_and_populates_dom"/>
-/// directly against <c>JsRuntime</c> + <c>FetchBinding</c>, mirroring the
-/// <c>FetchTests</c> shape.
+/// <see cref="TesseraEngine.RenderAsync"/> now executes page JavaScript
+/// between HTML parse and layout (see <c>RunScriptsAsync</c> in
+/// <c>Engine.cs</c>): inline + classic external scripts run in document
+/// order, DOMContentLoaded and load fire, and fetch/XHR completions are
+/// pumped to quiescence before display text is extracted. The offline
+/// fixtures still inline their visible result text statically — the engine
+/// would also surface JS-populated results, but the fixture stays static
+/// so the test isolates the layout/paint path. <see cref="Search_fetches_results_via_js_fetch_and_populates_dom"/>
+/// covers the JS-driven shape directly against <c>JsRuntime</c> +
+/// <c>FetchBinding</c>; <c>EngineJsExecutionTests</c> covers the
+/// engine-level fetch→DOM-mutation→DisplayText round trip.
 /// </para>
 ///
-/// <para>Known follow-ups (not in this task's scope, flagged for the next agent):</para>
+/// <para>Known follow-ups:</para>
 /// <list type="bullet">
-///   <item>Engine.cs has no JS-execution step inside RenderAsync — JS-only
-///   pages produce a static-only render. Wire JsRuntime + WindowBinding into
-///   the render pipeline, fire DOMContentLoaded, drain microtasks, then
-///   re-layout off the post-script DOM. Pin a test that asserts
-///   <c>document.body.innerText</c> updates land in <c>DisplayText</c>.</item>
-///   <item>Bytecode compiler does not yet lower <c>ForStatement</c>
-///   (B3-2-followup-a in the handoff doc, wp:M3-03). The JS fetch test
-///   uses <c>Array.prototype.forEach</c> instead; revisit when that gap
-///   closes so the test mirrors the idiomatic real-world pattern.</item>
+///   <item><c>setTimeout</c> / <c>setInterval</c> are not installed in the
+///   engine's JS environment (no host event loop to advance). Pages that
+///   bootstrap via a 0ms timer will hang silently rather than render.</item>
 ///   <item>Pre-existing failures (<c>Snapshot_nginx_org_renders_match_golden</c>,
 ///   <c>Underlined_link_emits_text_and_underline_fill</c>) are not regressions
 ///   for this task — see the handoff doc.</item>

@@ -2,6 +2,7 @@ using Tessera.Common.Diagnostics;
 using Tessera.Common.Image;
 using Tessera.Css;
 using Tessera.Css.Cascade;
+using Tessera.Css.Media;
 using Tessera.Css.Parser;
 using Tessera.Dom;
 using Tessera.Layout.Tree;
@@ -49,8 +50,9 @@ public sealed class Painter
         float? defaultFontSize = null,
         IImageResolver? images = null,
         Func<Element, StyleSheet?>? externalStylesheet = null,
-        FontFaceRegistry? webFonts = null)
-        => RenderDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null);
+        FontFaceRegistry? webFonts = null,
+        ColorScheme colorScheme = ColorScheme.Light)
+        => RenderDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme);
 
     /// <summary>
     /// Render at a specific frame timestamp — drives CSS animations and
@@ -68,11 +70,12 @@ public sealed class Painter
         IImageResolver? images,
         Func<Element, StyleSheet?>? externalStylesheet,
         FontFaceRegistry? webFonts,
-        double? nowMs)
+        double? nowMs,
+        ColorScheme colorScheme = ColorScheme.Light)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var root = LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs);
+        var root = LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs, colorScheme);
 
         PaintList displayList;
         using (_diag.Span("paint", "display_list"))
@@ -111,8 +114,9 @@ public sealed class Painter
         float? defaultFontSize = null,
         IImageResolver? images = null,
         Func<Element, StyleSheet?>? externalStylesheet = null,
-        FontFaceRegistry? webFonts = null)
-        => LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null);
+        FontFaceRegistry? webFonts = null,
+        ColorScheme colorScheme = ColorScheme.Light)
+        => LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme);
 
     /// <summary>Layout at a frame timestamp — see the matching RenderDocument
     /// overload for semantics.</summary>
@@ -123,14 +127,15 @@ public sealed class Painter
         IImageResolver? images,
         Func<Element, StyleSheet?>? externalStylesheet,
         FontFaceRegistry? webFonts,
-        double? nowMs)
+        double? nowMs,
+        ColorScheme colorScheme = ColorScheme.Light)
     {
-        var (root, _) = LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs);
+        var (root, _) = LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs, colorScheme);
         return root;
     }
 
     /// <summary>
-    /// Same as <see cref="LayoutDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?)"/> but also returns the
+    /// Same as <see cref="LayoutDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?, ColorScheme)"/> but also returns the
     /// <see cref="StyleEngine"/> used for the cascade, so interactive callers
     /// can recompute styles for individual elements when state changes
     /// (<c>:hover</c>, <c>:focus</c>, <c>:active</c>) without re-running layout.
@@ -141,8 +146,9 @@ public sealed class Painter
         float? defaultFontSize = null,
         IImageResolver? images = null,
         Func<Element, StyleSheet?>? externalStylesheet = null,
-        FontFaceRegistry? webFonts = null)
-        => LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null);
+        FontFaceRegistry? webFonts = null,
+        ColorScheme colorScheme = ColorScheme.Light)
+        => LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme);
 
     /// <summary>Layout overload that threads a frame timestamp through the
     /// cascade. See the matching RenderDocument overload for semantics.</summary>
@@ -153,7 +159,8 @@ public sealed class Painter
         IImageResolver? images,
         Func<Element, StyleSheet?>? externalStylesheet,
         FontFaceRegistry? webFonts,
-        double? nowMs)
+        double? nowMs,
+        ColorScheme colorScheme = ColorScheme.Light)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -161,7 +168,7 @@ public sealed class Painter
 
         StyleEngine style;
         using (_diag.Span("paint", "style_cascade"))
-            style = CreateStyleEngine(document, defaultFontSize, externalStylesheet, _diag);
+            style = CreateStyleEngine(document, defaultFontSize, externalStylesheet, _diag, colorScheme);
 
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
@@ -185,7 +192,7 @@ public sealed class Painter
     /// <paramref name="nowMs"/>. Used by the frame loop so the
     /// <see cref="StyleEngine.AnimationEngine"/> / <see cref="StyleEngine.TransitionEngine"/>
     /// state seeded on a retained engine survives across paints (the
-    /// fresh-engine path of <see cref="RenderDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?, double?)"/>
+    /// fresh-engine path of <see cref="RenderDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?, double?, ColorScheme)"/>
     /// would reseed every call, restarting animations on each frame).
     /// Callers tick the engines before invoking this.
     /// </summary>
@@ -228,9 +235,14 @@ public sealed class Painter
         Document document,
         float? defaultFontSize,
         Func<Element, StyleSheet?>? externalStylesheet,
-        IDiagnostics diag)
+        IDiagnostics diag,
+        ColorScheme colorScheme)
     {
         var style = new StyleEngine(diagnostics: diag);
+        // Expose the UA's preferred color scheme through @media
+        // (prefers-color-scheme: …). Author rules under that query are
+        // evaluated against this on every Compute call.
+        style.MediaContext = style.MediaContext with { ColorScheme = colorScheme };
 
         if (defaultFontSize is > 0)
         {

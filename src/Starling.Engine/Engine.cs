@@ -5,9 +5,14 @@ using SixLabors.ImageSharp;
 using Tessera.Common;
 using Tessera.Common.Diagnostics;
 using Tessera.Common.Encoding;
+using Tessera.Bindings;
 using Tessera.Css;
 using Tessera.Css.Parser;
 using Tessera.Dom;
+using Tessera.Js.Bytecode;
+using Tessera.Js.Parse;
+using Tessera.Js.Runtime;
+using Tessera.Loop;
 using Tessera.Net;
 using Tessera.Paint;
 using Tessera.Url;
@@ -23,7 +28,7 @@ namespace Tessera.Engine;
 /// </summary>
 /// <remarks>
 /// As of the M1 static-rendering closure the renderer uses the document-level
-/// pipeline in <see cref="Painter.RenderDocument(Document, Tessera.Layout.Size, float?, Tessera.Layout.Tree.IImageResolver?, System.Func{Element, Tessera.Css.Parser.StyleSheet?}?, FontFaceRegistry?)"/> for file and network inputs.
+/// pipeline in <see cref="Painter.RenderDocument(Document, Tessera.Layout.Size, float?, Tessera.Layout.Tree.IImageResolver?, System.Func{Element, Tessera.Css.Parser.StyleSheet?}?, FontFaceRegistry?, Tessera.Css.Media.ColorScheme)"/> for file and network inputs.
 /// </remarks>
 public sealed class TesseraEngine
 {
@@ -129,7 +134,6 @@ public sealed class TesseraEngine
             Activity.Current?.SetTag("html.bytes", html.Length);
             doc = Html.HtmlParser.Parse(html, _diag);
         }
-        var displayText = ExtractDisplayText(doc);
 
         using var images = new ImageFetcher(_diag, _httpFactory);
         using var stylesheets = new StylesheetFetcher(_diag, _httpFactory);
@@ -150,6 +154,37 @@ public sealed class TesseraEngine
                 .ConfigureAwait(false);
         }
 
+        // Run page JavaScript. Mutations to the DOM (text content, new
+        // elements, <img src=…> writes) land on `doc` and feed into the
+        // layout/paint pass below. Best-effort: a script that throws is
+        // logged via the realm's console sink and the remaining scripts
+        // still run.
+        using (var scripts = new ScriptFetcher(_diag, _httpFactory))
+        {
+            using (_diag.Span("engine", "fetch_scripts"))
+            {
+                await scripts.FetchAllAsync(doc, baseUrl: u, ct).ConfigureAwait(false);
+            }
+            if (scripts.Scripts.Count > 0)
+            {
+                using (_diag.Span("engine", "run_scripts"))
+                {
+                    await RunScriptsAsync(doc, u, scripts.Scripts, ct).ConfigureAwait(false);
+                }
+                // Scripts may have added <img> or new stylesheet links;
+                // re-run the resource fetch so the post-script DOM is
+                // fully loaded before paint. URL dedupe makes the second
+                // pass cheap for unchanged content.
+                using (_diag.Span("engine", "fetch_resources_post_js"))
+                {
+                    await Task.WhenAll(
+                        images.FetchAllAsync(doc, baseUrl: u, ct),
+                        stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
+                    ).ConfigureAwait(false);
+                }
+            }
+        }
+
         // Prefetch CSS-referenced background-image url()s now so the paint
         // pipeline can resolve them synchronously when emitting display items.
         using (_diag.Span("engine", "fetch_backgrounds"))
@@ -158,6 +193,11 @@ public sealed class TesseraEngine
                 .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
                 .ConfigureAwait(false);
         }
+
+        // Extract display text from the post-script DOM so JS-driven
+        // mutations (innerText/textContent writes, appended children, fetch
+        // result rendering) land in RenderOutcome.DisplayText.
+        var displayText = ExtractDisplayText(doc);
 
         Tessera.Common.Image.RenderedBitmap bitmap;
         using (_diag.Span("engine", "render_document"))
@@ -168,7 +208,8 @@ public sealed class TesseraEngine
                 options.FontSize,
                 images,
                 stylesheets.Resolve,
-                webFonts);
+                webFonts,
+                colorScheme: options.PreferredColorScheme);
             Activity.Current?.SetTag("image.w", bitmap.Width);
             Activity.Current?.SetTag("image.h", bitmap.Height);
         }
@@ -288,13 +329,27 @@ public sealed class TesseraEngine
                     .ConfigureAwait(false);
             }
 
+            using (var scripts = new ScriptFetcher(_diag, _httpFactory))
+            {
+                await scripts.FetchAllAsync(doc, baseUrl: u, ct).ConfigureAwait(false);
+                if (scripts.Scripts.Count > 0)
+                {
+                    await RunScriptsAsync(doc, u, scripts.Scripts, ct).ConfigureAwait(false);
+                    await Task.WhenAll(
+                        images.FetchAllAsync(doc, baseUrl: u, ct),
+                        stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
+                    ).ConfigureAwait(false);
+                }
+            }
+
             await images
                 .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
                 .ConfigureAwait(false);
 
             var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
             var (root, style) = _painter.LayoutDocumentWithStyle(
-                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts);
+                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                colorScheme: options.PreferredColorScheme);
 
             var title = ExtractTitle(doc);
             return Result<LaidOutPage, RenderError>.Ok(
@@ -333,6 +388,159 @@ public sealed class TesseraEngine
             page.Images,
             page.WebFonts,
             nowMs: (double)nowMs);
+    }
+
+    /// <summary>
+    /// Install <c>window</c> / <c>document</c> / <c>fetch</c> / observers on a
+    /// fresh <see cref="JsRuntime"/>, run every collected script against the
+    /// shared <paramref name="document"/>, then drain microtasks and fire
+    /// <c>DOMContentLoaded</c> + <c>load</c>. Script errors are logged through
+    /// the realm's console sink rather than bubbled — one bad bundle should
+    /// not abort the render.
+    /// </summary>
+    /// <remarks>
+    /// First-cut wiring scope: classic scripts only (modules and other
+    /// <c>type</c> values are filtered out by <see cref="ScriptFetcher"/>).
+    /// <c>requestAnimationFrame</c> / <c>cancelAnimationFrame</c> are
+    /// installed and ride the same simulated <see cref="WebEventLoop"/>
+    /// clock as the timers, so a page that bootstraps via rAF settles
+    /// during <see cref="PumpPendingAsync"/> alongside <c>setTimeout</c>
+    /// chains. The interactive shell still drives presentation through
+    /// <c>RenderFrame</c>; in the headless renderer the loop is purely
+    /// simulated.
+    /// <see cref="PumpPendingAsync"/> drives both the JS microtask queue
+    /// and the <see cref="WebEventLoop"/> simulated clock so chained
+    /// <c>setTimeout</c> bootstrappers settle within a wall-clock budget.
+    /// </remarks>
+    private async Task RunScriptsAsync(
+        Document document, TesseraUrl baseUrl, IReadOnlyList<LoadedScript> scripts, CancellationToken ct)
+    {
+        var runtime = new JsRuntime();
+        var consoleErrors = 0;
+        var previousSink = runtime.Realm.ConsoleSink;
+        runtime.Realm.ConsoleSink = (level, message) =>
+        {
+            previousSink(level, message);
+            var diagLevel = level switch
+            {
+                ConsoleLevel.Error => DiagLevel.Warn,
+                ConsoleLevel.Warn => DiagLevel.Warn,
+                _ => DiagLevel.Info,
+            };
+            _diag.Log(diagLevel, "engine.js", $"[{level}] {message}");
+            if (level == ConsoleLevel.Error) consoleErrors++;
+        };
+
+        using var http = _httpFactory();
+        WindowBinding.Install(runtime, document, new WindowInstallOptions(
+            DocumentUrl: baseUrl.ToString(),
+            HttpClient: http));
+
+        // setTimeout / setInterval ride on a simulated WebEventLoop clock.
+        // PumpPendingAsync advances it in small steps after each microtask
+        // drain — that fires due timers, whose callbacks land back on the JS
+        // realm's microtask queue for the next pump tick. rAF callbacks
+        // ride the same clock; `AdvanceBy` routes through `RunFrame`, so a
+        // page that bootstraps via `requestAnimationFrame` instead of
+        // `setTimeout` settles on the same pump.
+        var loop = new WebEventLoop();
+        TimersBinding.Install(runtime, loop);
+        AnimationFrameBinding.Install(runtime, loop);
+
+        foreach (var script in scripts)
+        {
+            ct.ThrowIfCancellationRequested();
+            var label = script.IsInline ? "<inline>" : (script.BaseUrl?.ToString() ?? "<unknown>");
+            try
+            {
+                var program = new JsParser(script.Source).ParseProgram();
+                var chunk = JsCompiler.Compile(program);
+                new JsVm(runtime).Run(chunk);
+                _diag.Counter("engine.script.ok", 1);
+            }
+            catch (JsThrow ex)
+            {
+                _diag.Counter("engine.script.failed", 1);
+                _diag.Log(DiagLevel.Warn, "engine.js", $"Uncaught script error ({label}): {JsValue.ToStringValue(ex.Value)}");
+            }
+            catch (Exception ex)
+            {
+                _diag.Counter("engine.script.failed", 1);
+                _diag.Log(DiagLevel.Warn, "engine.js", $"Script compile/run failure ({label}): {ex.Message}");
+            }
+        }
+
+        // §1: DOMContentLoaded — synchronous handlers see the parsed DOM.
+        runtime.WithActiveVm(() => WindowBinding.FireDomContentLoaded(runtime));
+
+        // §2: pump any in-flight async work (fetch / XHR completing on a
+        // worker thread, microtasks chained off those completions, timer
+        // callbacks waiting on simulated time) until quiescent or budget.
+        await PumpPendingAsync(runtime, loop, ct).ConfigureAwait(false);
+
+        // §3: load event after subresources have settled. Listeners that
+        // schedule more work get one more drain pass before we return.
+        runtime.WithActiveVm(() => WindowBinding.FireLoad(runtime));
+        await PumpPendingAsync(runtime, loop, ct, idleMs: 50, maxMs: 500).ConfigureAwait(false);
+
+        if (consoleErrors > 0)
+            _diag.Counter("engine.script.console_errors", consoleErrors);
+    }
+
+    /// <summary>
+    /// Drive the JS realm and the host <see cref="WebEventLoop"/> to a quiet
+    /// point. Each iteration drains realm microtasks if any are pending,
+    /// otherwise advances the simulated clock by <c>SimulatedStepMs</c> so
+    /// the next batch of due timers fires (their callbacks may enqueue more
+    /// microtasks via <c>WithActiveVm</c>, picked up on the next iteration).
+    /// When there's nothing pending and nothing scheduled, we sleep briefly
+    /// on wall-clock — that's the slot off-thread fetch / XHR completions
+    /// use to enqueue their resolve jobs. Exits when no work has been
+    /// observed for <paramref name="idleMs"/> consecutive milliseconds, the
+    /// simulated clock hits <paramref name="maxSimulatedMs"/> without
+    /// progress, or the wall-clock <paramref name="maxMs"/> budget runs out.
+    /// </summary>
+    private static async Task PumpPendingAsync(
+        JsRuntime runtime,
+        WebEventLoop loop,
+        CancellationToken ct,
+        int idleMs = 100,
+        int maxMs = 5000,
+        int maxSimulatedMs = 5000)
+    {
+        const int SimulatedStepMs = 50;
+        var wall = System.Diagnostics.Stopwatch.StartNew();
+        var idle = System.Diagnostics.Stopwatch.StartNew();
+        var simulated = 0;
+        while (wall.ElapsedMilliseconds < maxMs)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (runtime.Realm.Microtasks.PendingCount > 0)
+            {
+                runtime.WithActiveVm(() => { });
+                idle.Restart();
+                continue;
+            }
+
+            if ((loop.PendingTimerCount > 0 || loop.PendingAnimationFrameCount > 0) && simulated < maxSimulatedMs)
+            {
+                var step = Math.Min(SimulatedStepMs, maxSimulatedMs - simulated);
+                // AdvanceBy fires every timer due ≤ new now, then runs one
+                // rAF frame at that timestamp. Each callback runs
+                // synchronously and drains realm microtasks via
+                // WithActiveVm — chained setTimeout(fn, 0)s and
+                // requestAnimationFrame(f) loops settle inline.
+                loop.AdvanceBy(step);
+                simulated += step;
+                idle.Restart();
+                continue;
+            }
+
+            if (idle.ElapsedMilliseconds >= idleMs)
+                return;
+            await Task.Delay(20, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -647,6 +855,14 @@ public sealed class TesseraEngine
 public sealed record RenderOptions(Size Viewport, float FontSize = 32f)
 {
     public static RenderOptions Default { get; } = new(new Size(800, 600));
+
+    /// <summary>
+    /// The UA's preferred <c>color-scheme</c>, surfaced to the page through
+    /// <c>@media (prefers-color-scheme: …)</c>. The interactive shell binds
+    /// this to its light/dark theme toggle so sites with dark-mode rules
+    /// re-cascade when the user flips the theme.
+    /// </summary>
+    public Tessera.Css.Media.ColorScheme PreferredColorScheme { get; init; } = Tessera.Css.Media.ColorScheme.Light;
 }
 
 public sealed record RenderOutcome(string OutputPath, int Width, int Height, string DisplayText);

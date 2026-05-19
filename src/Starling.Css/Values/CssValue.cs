@@ -288,6 +288,20 @@ public sealed record CssValueList(IReadOnlyList<CssValue> Values) : CssValue;
 public sealed record CssVarReference(string Name, CssValue? Fallback) : CssValue;
 
 /// <summary>
+/// CSS Variables L1 §3.7 pending-substitution value. When a shorthand declaration
+/// uses <c>var()</c> the shorthand cannot be expanded at parse time, since the
+/// var() may resolve to any combination of components. Instead every longhand the
+/// shorthand maps to is set to a pending-substitution value carrying the raw
+/// shorthand components; at computed-value time the var() references are
+/// substituted and the shorthand is re-expanded, then the appropriate longhand
+/// value is extracted.
+/// </summary>
+public sealed record CssPendingSubstitution(
+    string Shorthand,
+    IReadOnlyList<CssValue> Values,
+    Properties.PropertyId Longhand) : CssValue;
+
+/// <summary>
 /// env(name, fallback?) per CSS Environment Variables. Resolution requires
 /// platform integration; this value preserves the syntax for later evaluation.
 /// </summary>
