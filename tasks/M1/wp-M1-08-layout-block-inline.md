@@ -11,7 +11,7 @@ depends_on:
   - "wp:M0-03-paint-stub"
 blocks:
   - "wp:M1-09-paint-display-list"
-subsystem: "Tessera.Layout"
+subsystem: "Starling.Layout"
 plan_refs:
   - "browser-plan/07_LAYOUT.md#block-formatting-context-bfc"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-08-layout-block-inline"

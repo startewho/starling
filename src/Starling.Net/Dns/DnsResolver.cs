@@ -1,7 +1,7 @@
 using System.Net;
-using Tessera.Common;
+using Starling.Common;
 
-namespace Tessera.Net.Dns;
+namespace Starling.Net.Dns;
 
 /// <summary>
 /// Pure-managed DNS resolver. Public API: <see cref="ResolveAsync"/>.

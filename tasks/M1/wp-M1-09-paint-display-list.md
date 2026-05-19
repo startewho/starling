@@ -10,7 +10,7 @@ depends_on:
   - "wp:M1-08-layout-block-inline"
 blocks:
   - "wp:M2-07-network-end-to-end"
-subsystem: "Tessera.Paint"
+subsystem: "Starling.Paint"
 plan_refs:
   - "browser-plan/08_FONTS_PAINT.md#display-list"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-09-paint-display-list"

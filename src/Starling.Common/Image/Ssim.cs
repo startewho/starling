@@ -1,4 +1,4 @@
-namespace Tessera.Common.Image;
+namespace Starling.Common.Image;
 
 /// <summary>
 /// Pure-managed, window-based Structural Similarity Index (SSIM) metric.

@@ -9,7 +9,7 @@ branch: "main"
 depends_on:
   - "wp:M2-05-http1"
 blocks: []
-subsystem: "Tessera.Engine"
+subsystem: "Starling.Engine"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#encoding-sniffing"
   - "browser-plan/04_HTML_PARSING.md#encoding"
@@ -24,21 +24,21 @@ completed_at: "2026-05-13T14:52:13Z"
 
 Cover the WHATWG Encoding Standard label set well enough to clear the M2
 exit criterion "WPT `encoding/` ≥ 95% on labels we support". The current
-`TesseraEngine.TryResolveEncoding` handles the UTF + ASCII + Latin-1 family
+`StarlingEngine.TryResolveEncoding` handles the UTF + ASCII + Latin-1 family
 but does NOT register `System.Text.Encoding.CodePages`, so any legacy
 single-byte or East-Asian label (windows-1252, ISO-8859-2…16, shift_jis,
 gbk, big5, euc-kr, …) silently falls back to UTF-8 with replacement chars.
 
 ## Inputs
 
-- `TesseraEngine.TryResolveEncoding` and its existing test theory
+- `StarlingEngine.TryResolveEncoding` and its existing test theory
   `ResolveEncoding_handles_common_inputs`.
 - The WHATWG Encoding Standard label table:
   <https://encoding.spec.whatwg.org/#names-and-labels>.
 
 ## Outputs
 
-- `src/Tessera.Engine/Engine.cs` — register
+- `src/Starling.Engine/Engine.cs` — register
   `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)` once at
   engine bootstrap. Extend the label-to-Encoding mapping to cover, at
   minimum, the legacy labels enumerated by the WHATWG table that map to
@@ -52,13 +52,13 @@ gbk, big5, euc-kr, …) silently falls back to UTF-8 with replacement chars.
   - `euc-kr`
   - `koi8-r`, `koi8-u`
   - `macintosh`, `x-mac-cyrillic`
-- `src/Tessera.Common/Encoding/WhatwgEncodingLabels.cs` (new) — a
+- `src/Starling.Common/Encoding/WhatwgEncodingLabels.cs` (new) — a
   generated-style lookup table mapping every WHATWG label alias to its
   canonical encoding name. Single source of truth shared by HTTP header
   charset sniffing, meta charset sniffing, and BOM sniffing.
-- `tests/Tessera.Engine.Tests/EngineHttpTests.cs` — extend
+- `tests/Starling.Engine.Tests/EngineHttpTests.cs` — extend
   `ResolveEncoding_handles_common_inputs` with the new label families.
-- `tests/Tessera.Engine.Tests/EngineEncodingTests.cs` (new) — drive a
+- `tests/Starling.Engine.Tests/EngineEncodingTests.cs` (new) — drive a
   curated subset of WPT `encoding/` (vendor under
   `testdata/wpt/encoding/`) and assert ≥ 95% pass on the supported label
   set. Document any specific subtests excluded and why.

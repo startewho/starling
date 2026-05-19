@@ -39,7 +39,7 @@ promoted layer = pure composite, no paint, no layout, no style recomputation
 - `wp:M12-07-compositor-thread` shipped: compositor reads from immutable
   snapshots; animations write to a sidecar timeline the compositor reads
   per frame.
-- Animation engine from M5 (`Tessera.Css.Animation`).
+- Animation engine from M5 (`Starling.Css.Animation`).
 
 ## Outputs
 

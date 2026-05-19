@@ -1,4 +1,4 @@
-namespace Tessera.Css.Properties;
+namespace Starling.Css.Properties;
 
 public enum PropertyId
 {

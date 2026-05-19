@@ -1,4 +1,4 @@
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// Fully buffered HTTP response. Body is post-decoding: transfer-encoding and

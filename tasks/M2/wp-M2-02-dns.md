@@ -10,7 +10,7 @@ depends_on:
   - "wp:M2-01-url-parser"
 blocks:
   - "wp:M2-05-http1"
-subsystem: "Tessera.Net"
+subsystem: "Starling.Net"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#dns"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-02-dns"
@@ -31,9 +31,9 @@ Resolves `example.com`, `localhost`. 10 unit tests + 1 integration test.
   state machine merged to main). Claimed by agent-claude-cody.
   Branch `wp-M2-02-dns`. Claim posted as its own commit per AGENTS.md.
 - 2026-05-11T17:25Z — landed pure-managed DNS resolver in
-  src/Tessera.Net/Dns/: wire-format codec, transport seam,
+  src/Starling.Net/Dns/: wire-format codec, transport seam,
   UDP transport, resolver with localhost + dotted-quad short-circuits,
   TTL-aware LRU cache. 12 unit tests + acceptance criteria from plan
   §M2-02 met (resolves localhost; 10+ tests; 1 integration via
-  FakeDnsTransport). 18/18 in Tessera.Net.Tests; 206/206 in full
+  FakeDnsTransport). 18/18 in Starling.Net.Tests; 206/206 in full
   repo. Marking complete; M2-03 (TCP) and M2-05 (HTTP/1) now unblocked.

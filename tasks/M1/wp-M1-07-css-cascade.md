@@ -10,7 +10,7 @@ depends_on:
   - "wp:M1-06-css-selectors"
 blocks:
   - "wp:M1-08-layout-block-inline"
-subsystem: "Tessera.Css"
+subsystem: "Starling.Css"
 plan_refs:
   - "browser-plan/06_CSS.md#cascade"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-07-css-cascade"

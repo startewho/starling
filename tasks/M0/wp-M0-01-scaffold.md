@@ -22,7 +22,7 @@ plan_refs:
 # wp:M0-01 — Solution scaffold
 
 ## Goal
-Land `Tessera.sln`, `Directory.Build.props`, `Directory.Packages.props`,
+Land `Starling.sln`, `Directory.Build.props`, `Directory.Packages.props`,
 `.editorconfig`, `.gitignore`, `.github/workflows/ci.yml`, all 13 source
 projects + 13 test projects + 1 e2e + 1 bench + 1 headless project, so
 subsequent packages have somewhere to write code.
@@ -31,11 +31,11 @@ subsequent packages have somewhere to write code.
 None.
 
 ## Outputs
-- `Tessera.sln`
+- `Starling.sln`
 - `Directory.Build.props` / `Directory.Packages.props`
-- `src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine,Shell,Headless}`
-- `tests/Tessera.*.Tests` + `tests/Tessera.E2E`
-- `bench/Tessera.Bench`
+- `src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine,Shell,Headless}`
+- `tests/Starling.*.Tests` + `tests/Starling.E2E`
+- `bench/Starling.Bench`
 - `.github/workflows/ci.yml`
 
 ## Acceptance

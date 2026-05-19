@@ -1,15 +1,15 @@
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Layout.Block;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Layout.Block;
 
-namespace Tessera.Layout.Position;
+namespace Starling.Layout.Position;
 
 /// <summary>
 /// Reads <c>position</c>, the four inset properties (<c>top</c>/<c>right</c>/
 /// <c>bottom</c>/<c>left</c>), and <c>z-index</c> off a
 /// <see cref="ComputedStyle"/> into a typed <see cref="PositionedProps"/>.
-/// Mirrors the convention used by <see cref="Tessera.Layout.Flex.FlexParser"/>.
+/// Mirrors the convention used by <see cref="Starling.Layout.Flex.FlexParser"/>.
 /// </summary>
 internal static class PositionParser
 {

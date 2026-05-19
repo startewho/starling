@@ -1,12 +1,12 @@
 using System.Runtime.CompilerServices;
-using Tessera.Bindings.Observers;
-using Tessera.Dom;
-using Tessera.Dom.Events;
-using Tessera.Js.Runtime;
-using Tessera.Net;
-using Tessera.Net.Http.Cookies;
+using Starling.Bindings.Observers;
+using Starling.Dom;
+using Starling.Dom.Events;
+using Starling.Js.Runtime;
+using Starling.Net;
+using Starling.Net.Http.Cookies;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-1 — install <c>window</c> / <c>document</c> / <c>location</c> /
@@ -368,7 +368,7 @@ public readonly record struct WindowInstallOptions(
     string? UserAgent = null,
     double InnerWidth = 0,
     double InnerHeight = 0,
-    TesseraHttpClient? HttpClient = null,
+    StarlingHttpClient? HttpClient = null,
     CookieJar? CookieJar = null,
     ILayoutHost? LayoutHost = null);
 

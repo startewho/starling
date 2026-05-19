@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Tessera.Layout.Text;
+namespace Starling.Layout.Text;
 
 /// <summary>
 /// One shaped glyph in a run: a glyph id and its pen position relative to the

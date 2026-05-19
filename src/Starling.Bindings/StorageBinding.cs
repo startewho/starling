@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
-using Tessera.Dom;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-5 — HTML §12.3 Web Storage. Installs <c>localStorage</c> and

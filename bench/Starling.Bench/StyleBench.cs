@@ -1,10 +1,10 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Css.Cascade;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Html;
+using Starling.Css.Cascade;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Html;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // CSS cascade against the §C.5 "0 allocations per element (reuse ComputedStyle
 // slots)" budget and the M1 cascade exit. `Compute_FullTree_*` exercises the

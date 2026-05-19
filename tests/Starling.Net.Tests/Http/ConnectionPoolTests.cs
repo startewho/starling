@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Net.Http;
+using Starling.Net.Http;
 using Xunit;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 public class ConnectionPoolTests
 {

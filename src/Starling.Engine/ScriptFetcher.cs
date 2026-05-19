@@ -1,19 +1,19 @@
 using System.Diagnostics;
 using System.Text;
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Encoding;
-using Tessera.Dom;
-using Tessera.Net;
-using Tessera.Url;
-using TesseraUrl = global::Tessera.Url.Url;
+using Starling.Common.Diagnostics;
+using Starling.Common.Encoding;
+using Starling.Dom;
+using Starling.Net;
+using Starling.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Collects every classic <c>&lt;script&gt;</c> element in <see cref="Document"/>
 /// order, resolves its source (inline <c>TextContent</c> or a
 /// fetched <c>src</c>), and exposes the result list. The engine's
-/// <see cref="TesseraEngine"/> then feeds each entry through a single
+/// <see cref="StarlingEngine"/> then feeds each entry through a single
 /// <c>JsRuntime</c> so DOM mutations from earlier scripts are visible to later
 /// ones.
 /// </summary>
@@ -34,12 +34,12 @@ namespace Tessera.Engine;
 internal sealed class ScriptFetcher : IDisposable
 {
     private readonly IDiagnostics _diag;
-    private readonly Func<TesseraHttpClient> _httpFactory;
+    private readonly Func<StarlingHttpClient> _httpFactory;
     private readonly Dictionary<string, string> _byUrl = new(StringComparer.Ordinal);
     private readonly List<LoadedScript> _scripts = new();
-    private TesseraHttpClient? _sharedHttp;
+    private StarlingHttpClient? _sharedHttp;
 
-    public ScriptFetcher(IDiagnostics diag, Func<TesseraHttpClient> httpFactory)
+    public ScriptFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
@@ -50,7 +50,7 @@ internal sealed class ScriptFetcher : IDisposable
     /// fetched from (so syntax errors can be located precisely).</summary>
     public IReadOnlyList<LoadedScript> Scripts => _scripts;
 
-    public async Task FetchAllAsync(Document document, TesseraUrl? baseUrl, CancellationToken ct)
+    public async Task FetchAllAsync(Document document, StarlingUrl? baseUrl, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -101,7 +101,7 @@ internal sealed class ScriptFetcher : IDisposable
             || trimmed.Equals("application/x-javascript", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task<string?> FetchAsync(TesseraUrl url, CancellationToken ct)
+    private async Task<string?> FetchAsync(StarlingUrl url, CancellationToken ct)
     {
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
@@ -215,7 +215,7 @@ internal sealed class ScriptFetcher : IDisposable
         catch (ArgumentException) { return null; }
     }
 
-    private static TesseraUrl? ResolveAbsolute(string href, TesseraUrl? baseUrl)
+    private static StarlingUrl? ResolveAbsolute(string href, StarlingUrl? baseUrl)
     {
         var parsed = baseUrl is null
             ? UrlParser.Parse(href)
@@ -234,4 +234,4 @@ internal sealed class ScriptFetcher : IDisposable
 
 /// <summary>One <c>&lt;script&gt;</c>'s source text plus the URL syntax errors
 /// should be reported against.</summary>
-internal sealed record LoadedScript(Element Element, string Source, TesseraUrl? BaseUrl, bool IsInline);
+internal sealed record LoadedScript(Element Element, string Source, StarlingUrl? BaseUrl, bool IsInline);

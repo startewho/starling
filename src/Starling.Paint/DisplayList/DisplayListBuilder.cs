@@ -1,12 +1,12 @@
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Layout;
-using Tessera.Layout.Box;
-using Tessera.Layout.Text;
-using Tessera.Layout.Tree;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Layout;
+using Starling.Layout.Box;
+using Starling.Layout.Text;
+using Starling.Layout.Tree;
 
-namespace Tessera.Paint.DisplayList;
+namespace Starling.Paint.DisplayList;
 
 /// <summary>
 /// Walks a laid-out box tree and emits a display list in paint order.
@@ -211,7 +211,7 @@ public sealed class DisplayListBuilder
     private static double? ResolveBgSizeDim(CssValue? value, double basis)
         => value switch
         {
-            CssLength len => Tessera.Layout.Block.BlockLayout.ToPx(len),
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
             CssPercentage pct => basis * pct.Value / 100d,
             CssNumber n => n.Value,
             _ => null,
@@ -237,7 +237,7 @@ public sealed class DisplayListBuilder
     private static double ResolveBgPositionAxis(CssValue? value, double boxSize, double imgSize, bool axisX)
         => value switch
         {
-            CssLength len => Tessera.Layout.Block.BlockLayout.ToPx(len),
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
             CssPercentage pct => (boxSize - imgSize) * pct.Value / 100d,
             CssNumber n => n.Value,
             CssKeyword { Name: "left" } => 0,
@@ -312,7 +312,7 @@ public sealed class DisplayListBuilder
         var color = style?.GetColor(PropertyId.Color) ?? CssColor.Black;
         var fontSize = style?.Get(PropertyId.FontSize) switch
         {
-            CssLength len => Tessera.Layout.Block.BlockLayout.ToPx(len),
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
             _ => 16d,
         };
         var spec = FontSpec.FromStyle(style);

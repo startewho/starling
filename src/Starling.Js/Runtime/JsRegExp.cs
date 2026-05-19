@@ -1,6 +1,6 @@
-using Tessera.Js.RegExp;
+using Starling.Js.RegExp;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// ES2024 §22.2.7 RegExp instance — an exotic object holding a compiled regex

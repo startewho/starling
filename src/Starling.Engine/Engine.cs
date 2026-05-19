@@ -2,24 +2,24 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using SixLabors.ImageSharp;
-using Tessera.Common;
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Encoding;
-using Tessera.Bindings;
-using Tessera.Css;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
-using Tessera.Loop;
-using Tessera.Net;
-using Tessera.Paint;
-using Tessera.Url;
-using LayoutSize = Tessera.Layout.Size;
-using TesseraUrl = global::Tessera.Url.Url;
+using Starling.Common;
+using Starling.Common.Diagnostics;
+using Starling.Common.Encoding;
+using Starling.Bindings;
+using Starling.Css;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
+using Starling.Loop;
+using Starling.Net;
+using Starling.Paint;
+using Starling.Url;
+using LayoutSize = Starling.Layout.Size;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Engine façade. One call: load a URL, parse HTML, run the static
@@ -28,17 +28,17 @@ namespace Tessera.Engine;
 /// </summary>
 /// <remarks>
 /// As of the M1 static-rendering closure the renderer uses the document-level
-/// pipeline in <see cref="Painter.RenderDocument(Document, Tessera.Layout.Size, float?, Tessera.Layout.Tree.IImageResolver?, System.Func{Element, Tessera.Css.Parser.StyleSheet?}?, FontFaceRegistry?, Tessera.Css.Media.ColorScheme)"/> for file and network inputs.
+/// pipeline in <see cref="Painter.RenderDocument(Document, Starling.Layout.Size, float?, Starling.Layout.Tree.IImageResolver?, System.Func{Element, Starling.Css.Parser.StyleSheet?}?, FontFaceRegistry?, Starling.Css.Media.ColorScheme)"/> for file and network inputs.
 /// </remarks>
-public sealed class TesseraEngine
+public sealed class StarlingEngine
 {
     private const int MaxRedirects = 10;
 
     private readonly IDiagnostics _diag;
     private readonly Painter _painter;
-    private readonly Func<TesseraHttpClient> _httpFactory;
+    private readonly Func<StarlingHttpClient> _httpFactory;
 
-    static TesseraEngine()
+    static StarlingEngine()
     {
         // Register the BCL CodePages provider once so WHATWG legacy
         // single-byte (windows-1250…1258, ISO-8859-2…16, KOI8-*, mac*)
@@ -47,12 +47,12 @@ public sealed class TesseraEngine
         System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
 
-    public TesseraEngine(IDiagnostics? diagnostics = null, Painter? painter = null,
-        Func<TesseraHttpClient>? httpFactory = null)
+    public StarlingEngine(IDiagnostics? diagnostics = null, Painter? painter = null,
+        Func<StarlingHttpClient>? httpFactory = null)
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _painter = painter ?? new Painter(diag: _diag);
-        _httpFactory = httpFactory ?? (() => new TesseraHttpClient());
+        _httpFactory = httpFactory ?? (() => new StarlingHttpClient());
     }
 
     /// <summary>
@@ -104,7 +104,7 @@ public sealed class TesseraEngine
             }
             else if (u.IsHttp || u.IsHttps)
             {
-                Result<(string Html, TesseraUrl FinalUrl), RenderError> fetched;
+                Result<(string Html, StarlingUrl FinalUrl), RenderError> fetched;
                 using (_diag.Span("engine", "fetch_html"))
                 {
                     fetched = await FetchHtmlAsync(u, ct).ConfigureAwait(false);
@@ -213,7 +213,7 @@ public sealed class TesseraEngine
         // result rendering) land in RenderOutcome.DisplayText.
         var displayText = ExtractDisplayText(doc);
 
-        Tessera.Common.Image.RenderedBitmap bitmap;
+        Starling.Common.Image.RenderedBitmap bitmap;
         using (_diag.Span("engine", "render_document"))
         {
             bitmap = _painter.RenderDocument(
@@ -393,7 +393,7 @@ public sealed class TesseraEngine
     /// static side), so the same <see cref="LaidOutPage"/> can drive an arbitrary
     /// frame sequence. Callers typically loop calling this once per rAF tick.
     /// </summary>
-    public Tessera.Common.Image.RenderedBitmap RenderFrame(LaidOutPage page, long nowMs)
+    public Starling.Common.Image.RenderedBitmap RenderFrame(LaidOutPage page, long nowMs)
     {
         ArgumentNullException.ThrowIfNull(page);
 
@@ -432,7 +432,7 @@ public sealed class TesseraEngine
     /// <c>setTimeout</c> bootstrappers settle within a wall-clock budget.
     /// </remarks>
     private async Task RunScriptsAsync(
-        Document document, TesseraUrl baseUrl, IReadOnlyList<LoadedScript> scripts,
+        Document document, StarlingUrl baseUrl, IReadOnlyList<LoadedScript> scripts,
         ILayoutHost? layoutHost, CancellationToken ct)
     {
         var runtime = new JsRuntime();
@@ -572,8 +572,8 @@ public sealed class TesseraEngine
     /// per-sheet base URL so a <c>url("foo.woff2")</c> declared in a remote
     /// CSS resolves against that CSS's origin, not the document's.
     /// </summary>
-    private IEnumerable<(StyleSheet Sheet, TesseraUrl? BaseUrl)> EnumerateAuthorSheets(
-        Document doc, TesseraUrl? docUrl, StylesheetFetcher stylesheets)
+    private IEnumerable<(StyleSheet Sheet, StarlingUrl? BaseUrl)> EnumerateAuthorSheets(
+        Document doc, StarlingUrl? docUrl, StylesheetFetcher stylesheets)
     {
         foreach (var styleElement in doc.GetElementsByTagName("style"))
         {
@@ -610,7 +610,7 @@ public sealed class TesseraEngine
     /// and the page's `&lt;img src="/images/..."&gt;` must resolve against
     /// the www host; the original (pre-redirect) URL would 404.
     /// </summary>
-    private async Task<Result<(string Html, TesseraUrl FinalUrl), RenderError>> FetchHtmlAsync(TesseraUrl url, CancellationToken ct)
+    private async Task<Result<(string Html, StarlingUrl FinalUrl), RenderError>> FetchHtmlAsync(StarlingUrl url, CancellationToken ct)
     {
         using var http = _httpFactory();
         var current = url;
@@ -621,62 +621,62 @@ public sealed class TesseraEngine
             var response = await http.GetAsync(current, ct).ConfigureAwait(false);
             NativeCallTrace.Mark("http.get.done", response.IsErr ? "err" : "ok");
             if (response.IsErr)
-                return Result<(string, TesseraUrl), RenderError>.Err(new RenderError(
+                return Result<(string, StarlingUrl), RenderError>.Err(new RenderError(
                     $"Network error fetching {current}: {response.Error}"));
 
             var resp = response.Value;
             if (IsRedirect(resp.StatusCode))
             {
                 if (redirects == MaxRedirects)
-                    return Result<(string, TesseraUrl), RenderError>.Err(new RenderError(
+                    return Result<(string, StarlingUrl), RenderError>.Err(new RenderError(
                         $"Too many redirects fetching {url}"));
 
                 var redirected = ResolveRedirect(current, resp);
                 if (redirected.IsErr)
-                    return Result<(string, TesseraUrl), RenderError>.Err(redirected.Error);
+                    return Result<(string, StarlingUrl), RenderError>.Err(redirected.Error);
 
                 current = redirected.Value;
                 continue;
             }
 
             if (resp.StatusCode is < 200 or >= 400)
-                return Result<(string, TesseraUrl), RenderError>.Err(new RenderError(
+                return Result<(string, StarlingUrl), RenderError>.Err(new RenderError(
                     $"HTTP {resp.StatusCode} {resp.ReasonPhrase} from {current}"));
 
             var contentType = resp.Headers.GetFirst("Content-Type");
             var encoding = ResolveEncoding(contentType, resp.Body.Span);
-            return Result<(string, TesseraUrl), RenderError>.Ok((encoding.GetString(resp.Body.Span), current));
+            return Result<(string, StarlingUrl), RenderError>.Ok((encoding.GetString(resp.Body.Span), current));
         }
 
-        return Result<(string, TesseraUrl), RenderError>.Err(new RenderError(
+        return Result<(string, StarlingUrl), RenderError>.Err(new RenderError(
             $"Too many redirects fetching {url}"));
     }
 
     private static bool IsRedirect(int statusCode)
         => statusCode is 301 or 302 or 303 or 307 or 308;
 
-    private static Result<TesseraUrl, RenderError> ResolveRedirect(TesseraUrl current, Net.Http.HttpResponse response)
+    private static Result<StarlingUrl, RenderError> ResolveRedirect(StarlingUrl current, Net.Http.HttpResponse response)
     {
         var location = response.Headers.GetFirst("Location");
         if (string.IsNullOrWhiteSpace(location))
-            return Result<TesseraUrl, RenderError>.Err(new RenderError(
+            return Result<StarlingUrl, RenderError>.Err(new RenderError(
                 $"HTTP {response.StatusCode} redirect from {current} did not include a Location header"));
 
         var redirectUrl = ExpandRedirectLocation(location, current);
         var parsed = UrlParser.Parse(redirectUrl, current);
         if (parsed.IsErr)
-            return Result<TesseraUrl, RenderError>.Err(new RenderError(
+            return Result<StarlingUrl, RenderError>.Err(new RenderError(
                 $"Redirect Location parse failed from {current}: {parsed.Error}"));
 
         var next = parsed.Value;
         if (!next.IsHttp && !next.IsHttps)
-            return Result<TesseraUrl, RenderError>.Err(new RenderError(
+            return Result<StarlingUrl, RenderError>.Err(new RenderError(
                 $"Unsupported redirect scheme '{next.Scheme}' from {current}"));
 
-        return Result<TesseraUrl, RenderError>.Ok(next);
+        return Result<StarlingUrl, RenderError>.Ok(next);
     }
 
-    private static string ExpandRedirectLocation(string location, TesseraUrl current)
+    private static string ExpandRedirectLocation(string location, StarlingUrl current)
     {
         var trimmed = location.Trim();
         if (trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
@@ -780,7 +780,7 @@ public sealed class TesseraEngine
         if (trimmed.Length == 0) return null;
 
         // WHATWG Encoding Standard "names and labels" lookup is the single
-        // source of truth (src/Tessera.Common/Encoding/WhatwgEncodingLabels.cs).
+        // source of truth (src/Starling.Common/Encoding/WhatwgEncodingLabels.cs).
         // The WHATWG canonical "windows-1252" maps the entire ISO-8859-1 /
         // US-ASCII family, matching real-world browser behaviour: bytes
         // 0x80..0x9F are mapped to their windows-1252 glyphs (e.g. 0x92 →
@@ -883,7 +883,7 @@ public sealed record RenderOptions(Size Viewport, float FontSize = 32f)
     /// this to its light/dark theme toggle so sites with dark-mode rules
     /// re-cascade when the user flips the theme.
     /// </summary>
-    public Tessera.Css.Media.ColorScheme PreferredColorScheme { get; init; } = Tessera.Css.Media.ColorScheme.Light;
+    public Starling.Css.Media.ColorScheme PreferredColorScheme { get; init; } = Starling.Css.Media.ColorScheme.Light;
 }
 
 public sealed record RenderOutcome(string OutputPath, int Width, int Height, string DisplayText);

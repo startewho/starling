@@ -2,7 +2,7 @@
 
 ## Posture
 
-Be honest: building a managed-first .NET browser that runs google.com **search** and claude.ai **sign-in** is a multi-engineer-year undertaking. (Managed-first: the engine is pure-managed; native interop is confined to two vetted seams — `Tessera.Skia` for graphics and `Tessera.Codecs` for image decode.) The plan stages work so the project is **demoable end-to-end** at every step, not "lots of pieces with nothing assembled."
+Be honest: building a managed-first .NET browser that runs google.com **search** and claude.ai **sign-in** is a multi-engineer-year undertaking. (Managed-first: the engine is pure-managed; native interop is confined to two vetted seams — `Starling.Skia` for graphics and `Starling.Codecs` for image decode.) The plan stages work so the project is **demoable end-to-end** at every step, not "lots of pieces with nothing assembled."
 
 Each milestone has:
 - **Entry**: what must exist before starting.
@@ -15,7 +15,7 @@ Each milestone has:
 
 **Entry**: nothing.
 
-**Goal**: `tessera render file://hello.html -o hello.png` writes a PNG showing the words "Hello, world." in a sans-serif font on a white background.
+**Goal**: `starling render file://hello.html -o hello.png` writes a PNG showing the words "Hello, world." in a sans-serif font on a white background.
 
 **Work**:
 - [02_PROJECT_SETUP.md](02_PROJECT_SETUP.md) entirely.
@@ -28,7 +28,7 @@ Each milestone has:
 **Exit**:
 - All 13 projects compile.
 - CI green on win/mac/linux.
-- `tessera render file://testdata/hello.html -o out.png` succeeds and the image hash matches the golden.
+- `starling render file://testdata/hello.html -o out.png` succeeds and the image hash matches the golden.
 
 **Est. duration**: 1 week.
 
@@ -57,16 +57,16 @@ Each milestone has:
 
 **Entry**: M1.
 
-**Goal**: `tessera render https://example.com -o out.png` works end-to-end (DNS → TCP → TLS → HTTP/1.1 → parse → layout → paint).
+**Goal**: `starling render https://example.com -o out.png` works end-to-end (DNS → TCP → TLS → HTTP/1.1 → parse → layout → paint).
 
 **Work**:
 - [03_NETWORKING.md](03_NETWORKING.md): URL, DNS, TCP, TLS 1.3 via `SslStream`, HTTP/1.1 (client only), cookies, basic cache, brotli/gzip decoding.
-- Image decoding (`<img>` rendering) via OS-native codecs (`Tessera.Codecs`).
+- Image decoding (`<img>` rendering) via OS-native codecs (`Starling.Codecs`).
 - Encoding sniffing across HTTP `Content-Type` charset, BOM, meta.
 - The headless renderer wires the network → parser pipeline.
 
 **Exit**:
-- `tessera render https://example.com` succeeds; rendered PNG matches expected within SSIM 0.99.
+- `starling render https://example.com` succeeds; rendered PNG matches expected within SSIM 0.99.
 - HTTPS to `https://anthropic.com` (the marketing site, JS-light) reaches first paint within 2s on a wired connection.
 - WPT `url/` 100%, `encoding/` ≥ 95%.
 - Connection pool reuses across 2 sequential requests.
@@ -77,14 +77,14 @@ Each milestone has:
 
 **Entry**: M2.
 
-**Goal**: `tessera js script.js` evaluates ES2024-level code. No DOM access yet. Console output works.
+**Goal**: `starling js script.js` evaluates ES2024-level code. No DOM access yet. Console output works.
 
 **Work**:
 - [09_JS_ENGINE.md](09_JS_ENGINE.md) almost entirely: lexer, parser, bytecode compiler, register VM, intrinsics (Object/Array/String/Number/Math/JSON/Date/RegExp), Promise + microtasks (microtask queue, but no fetch yet).
 - Modules: ES module loader hooked up against the file URL scheme.
 - **Native-interop pivot** (runs alongside the JS work — see `tasks/M3/wp-M3-06*`):
   adopt the interop seam policy ("managed-first, native at vetted seams").
-  Introduce `Tessera.Skia` (Skia Graphite + ANGLE graphics) and `Tessera.Codecs`
+  Introduce `Starling.Skia` (Skia Graphite + ANGLE graphics) and `Starling.Codecs`
   (OS-native image decode) as the two designated `LibraryImport` projects; swap
   BouncyCastle TLS for `SslStream`; repurpose the CI lint job from a blanket
   P/Invoke ban to the engine-project allowlist.
@@ -92,7 +92,7 @@ Each milestone has:
 **Exit**:
 - Test262 pass rate ≥ 80% (excluding stage-3+ proposals).
 - Hand-picked microbenchmarks within 10x of V8 on simple loops.
-- `tessera js testdata/js/sunspider/*.js` completes in ≤ 5x reference wall-clock.
+- `starling js testdata/js/sunspider/*.js` completes in ≤ 5x reference wall-clock.
 
 **Est. duration**: 8–10 weeks. **The single largest milestone.**
 
@@ -100,7 +100,7 @@ Each milestone has:
 
 **Entry**: M3.
 
-**Goal**: Hand-written interactive HTML pages (counter button, fetch-and-render-list demo) work in `tessera render --wait-for=networkidle`.
+**Goal**: Hand-written interactive HTML pages (counter button, fetch-and-render-list demo) work in `starling render --wait-for=networkidle`.
 
 **Work**:
 - [10_WEB_APIS.md](10_WEB_APIS.md): DOM bindings (Window, Document, Element, Event, Mouse/KeyboardEvent), addEventListener/dispatchEvent, setTimeout/setInterval, requestAnimationFrame, MutationObserver, fetch.
@@ -119,7 +119,7 @@ Each milestone has:
 
 **Entry**: M4.
 
-**Goal**: First **shippable** desktop browser. `Tessera.Shell` launches on win/mac/linux, has tabs, URL bar, back/forward, can browse the modern static web.
+**Goal**: First **shippable** desktop browser. `Starling.Shell` launches on win/mac/linux, has tabs, URL bar, back/forward, can browse the modern static web.
 
 **Work**:
 - [11_AVALONIA_SHELL.md](11_AVALONIA_SHELL.md) entirely.
@@ -143,7 +143,7 @@ Each milestone has:
 
 **Work**:
 - [03_NETWORKING.md](03_NETWORKING.md) HTTP/2 + HPACK + flow control.
-- WebSocket framing in `Tessera.Net/Ws/` + `WebSocket` binding.
+- WebSocket framing in `Starling.Net/Ws/` + `WebSocket` binding.
 - Service-worker stubs (so sites that register them don't crash, but no actual SW execution).
 - Cookies: full RFC 6265bis; partitioned cookies (CHIPS).
 - HSTS preload list.
@@ -159,7 +159,7 @@ Each milestone has:
 
 **Entry**: M6.
 
-**Goal**: `tessera render https://www.google.com/search?q=hello` produces a rendered search-results page that is visually recognizable. Clicking a result navigates.
+**Goal**: `starling render https://www.google.com/search?q=hello` produces a rendered search-results page that is visually recognizable. Clicking a result navigates.
 
 This is where the long tail of "spec coverage gaps that real sites trip" gets paid.
 
@@ -183,7 +183,7 @@ This is where the long tail of "spec coverage gaps that real sites trip" gets pa
 
 **Entry**: M7.
 
-**Goal**: `tessera render https://claude.ai/` reaches a working sign-in page. Form submission proceeds (we don't need to actually authenticate; just reach the next page).
+**Goal**: `starling render https://claude.ai/` reaches a working sign-in page. Form submission proceeds (we don't need to actually authenticate; just reach the next page).
 
 claude.ai's hardness comes from: heavy React, intersection observers, fetch streaming, web workers (maybe), modern CSS (clamp, color functions, custom properties), aggressive bundling with dynamic imports, possibly WebAssembly for crypto.
 
@@ -231,7 +231,7 @@ claude.ai's hardness comes from: heavy React, intersection observers, fetch stre
 - Permission prompts (geolocation, notifications) — even if they always say "no".
 - Devtools panels: DOM tree, computed styles, network, console.
 - HTTP cache on disk.
-- Image decoder isolation (decode in `Tessera.Net` or a child process).
+- Image decoder isolation (decode in `Starling.Net` or a child process).
 - Sandbox the WebContent process where the platform supports it.
 
 **Est. duration**: 6 weeks.
@@ -245,7 +245,7 @@ claude.ai's hardness comes from: heavy React, intersection observers, fetch stre
 **Work**:
 - Bug bash.
 - Polish UX.
-- Auto-update (managed via a signed `tessera.update.json` from a hosted endpoint).
+- Auto-update (managed via a signed `starling.update.json` from a hosted endpoint).
 - Public release on GitHub.
 
 **Est. duration**: 4 weeks.

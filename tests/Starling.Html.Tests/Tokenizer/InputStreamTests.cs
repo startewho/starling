@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Html.InputStream;
+using Starling.Html.InputStream;
 using Xunit;
 
-namespace Tessera.Html.Tests.Tokenizer;
+namespace Starling.Html.Tests.Tokenizer;
 
 public class InputStreamTests
 {

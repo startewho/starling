@@ -1,4 +1,4 @@
-namespace Tessera.Net.Tcp;
+namespace Starling.Net.Tcp;
 
 /// <summary>
 /// Async, byte-oriented TCP connection. Closed via <see cref="IAsyncDisposable"/>.

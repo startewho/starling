@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Tessera.Url;
+namespace Starling.Url;
 
 /// <summary>
 /// URL value type modeled on the WHATWG URL spec

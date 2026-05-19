@@ -1,4 +1,4 @@
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 internal static class Fixtures
 {

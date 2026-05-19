@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// The seven JS primitive value types plus Object. Backing for

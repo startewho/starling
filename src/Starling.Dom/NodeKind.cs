@@ -1,4 +1,4 @@
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 /// <summary>
 /// DOM node type discriminator. Matches the integer codes from the

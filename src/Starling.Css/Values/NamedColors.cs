@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>CSS Color 4 §6.1 named colors — the full CSS3 list of 148 names plus transparent.</summary>
 public static class NamedColors

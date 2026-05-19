@@ -1,4 +1,4 @@
-namespace Tessera.Css.FontFace;
+namespace Starling.Css.FontFace;
 
 /// <summary>
 /// A parsed <c>@font-face</c> at-rule. The font-face fetcher resolves each

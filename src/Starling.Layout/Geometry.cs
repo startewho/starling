@@ -1,4 +1,4 @@
-namespace Tessera.Layout;
+namespace Starling.Layout;
 
 public readonly record struct Size(double Width, double Height)
 {

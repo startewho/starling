@@ -1,11 +1,11 @@
-using Tessera.Css.FontFace;
-using Tessera.Paint.WebFonts;
+using Starling.Css.FontFace;
+using Starling.Paint.WebFonts;
 
-namespace Tessera.Paint;
+namespace Starling.Paint;
 
 /// <summary>
 /// Per-document registry of <c>@font-face</c>-declared typefaces. The
-/// <c>FontFaceFetcher</c> in <c>Tessera.Engine</c> populates this once
+/// <c>FontFaceFetcher</c> in <c>Starling.Engine</c> populates this once
 /// stylesheets have landed and their <c>url()</c> sources are fetched and
 /// loaded.
 /// <para>

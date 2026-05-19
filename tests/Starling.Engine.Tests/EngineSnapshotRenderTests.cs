@@ -2,7 +2,7 @@ using FluentAssertions;
 using SixLabors.ImageSharp;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Offline snapshot-fixture render test. Serves the vendored
@@ -17,7 +17,7 @@ namespace Tessera.Engine.Tests;
 /// pipeline is the offline twin of the live one.
 ///
 /// To regenerate the golden after an intentional rendering change, run
-/// with <c>TESSERA_UPDATE_GOLDENS=1</c>; the test will write the produced
+/// with <c>STARLING_UPDATE_GOLDENS=1</c>; the test will write the produced
 /// PNG into the golden path and pass.
 /// </summary>
 [Trait("Category", "GoldenImage")]
@@ -41,10 +41,10 @@ public class EngineSnapshotRenderTests
 
         using var server = await SnapshotHttpServer.StartAsync(snapshotDir);
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-snapshot-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-snapshot-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://localhost:{server.Port}/",
                 new RenderOptions(new Size(ViewportWidth, ViewportHeight), DefaultFontSize),
@@ -59,7 +59,7 @@ public class EngineSnapshotRenderTests
             // loudly before the SSIM assert.
             result.Value.DisplayText.Should().Contain("nginx");
 
-            if (Environment.GetEnvironmentVariable("TESSERA_UPDATE_GOLDENS") == "1")
+            if (Environment.GetEnvironmentVariable("STARLING_UPDATE_GOLDENS") == "1")
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(goldenPath)!);
                 File.Copy(output, goldenPath, overwrite: true);
@@ -67,14 +67,14 @@ public class EngineSnapshotRenderTests
             }
 
             File.Exists(goldenPath).Should().BeTrue(
-                $"golden missing: {goldenPath}. Run with TESSERA_UPDATE_GOLDENS=1 to regenerate.");
+                $"golden missing: {goldenPath}. Run with STARLING_UPDATE_GOLDENS=1 to regenerate.");
 
             if (PngComparison.BytesEqual(output, goldenPath)) return;
             var ssim = PngComparison.Ssim(output, goldenPath);
             ssim.Should().BeGreaterThanOrEqualTo(SsimFloor,
                 $"snapshot drift for {Host}; bytes differ and SSIM dropped to {ssim:F4}. " +
                 "If the change is intentional, re-vendor the snapshot and " +
-                "regenerate the golden with TESSERA_UPDATE_GOLDENS=1.");
+                "regenerate the golden with STARLING_UPDATE_GOLDENS=1.");
         }
         finally
         {

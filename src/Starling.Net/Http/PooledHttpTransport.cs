@@ -1,7 +1,7 @@
-using Tessera.Net.Tcp;
-using Tessera.Net.Tls;
+using Starling.Net.Tcp;
+using Starling.Net.Tls;
 
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// Concrete <see cref="IHttpTransport"/> wrapping a TCP connection optionally

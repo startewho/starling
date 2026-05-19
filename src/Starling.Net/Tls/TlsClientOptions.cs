@@ -1,4 +1,4 @@
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
 public sealed record TlsClientOptions(
     string ServerName,

@@ -7,7 +7,7 @@ prototype of the **Sidecar** browser chrome (vertical tab sidebar, slim toolbar,
 URL bar with mini load chart, status bar) plus a docked **DevTools** surface
 (Performance / Console / Internals). It is a strong, sample-data-driven spec.
 
-The actual GUI (`src/Tessera.Gui/`) is **.NET MAUI / Mac Catalyst**, built
+The actual GUI (`src/Starling.Gui/`) is **.NET MAUI / Mac Catalyst**, built
 imperatively in C#. There is no React in the repo and no way to run JSX in MAUI,
 so the handoff is consumed as a **visual/behavioral spec only** — every token and
 component is hand-translated to C#. The current `MainPage.cs` is the M2-era shell
@@ -55,7 +55,7 @@ switchable at runtime (the design's Tweaks panel flips these live).
 - **`Theme/ThemeManager.cs`** (new) — writes the active token set into the
   app-level `ResourceDictionary` so widgets bind via `DynamicResource` and a
   theme switch repaints without rebuilding the tree. This is the MAUI analogue of
-  `[data-theme]` on `.tessera`. Exposes `SetTheme/SetDensity/SetType`.
+  `[data-theme]` on `.starling`. Exposes `SetTheme/SetDensity/SetType`.
 - Register `ThemeManager` as a singleton in `MauiProgram.cs`; seed the dictionary
   in `App.CreateWindow`.
 - **Reuse:** the existing `Border` + `RoundRectangle` StrokeShape idiom and the
@@ -122,14 +122,14 @@ via `GraphicsView` + `IDrawable` — the MAUI primitive for this. One reusable
 
 | File | Change |
 |------|--------|
-| `src/Tessera.Gui/MainPage.cs` | Rewrite layout to Sidecar; extract webview into `WebviewPanel`; drop `Palette` |
-| `src/Tessera.Gui/MauiProgram.cs` | Register `ThemeManager` singleton |
-| `src/Tessera.Gui/App.cs` | Seed theme `ResourceDictionary` on window create |
-| `src/Tessera.Gui/Tessera.Gui.csproj` | Add `MauiFont` entries for Geist / Geist Mono |
-| `src/Tessera.Gui/Resources/Fonts/` (new) | Bundle Geist + Geist Mono `.ttf` |
-| `src/Tessera.Gui/Theme/` (new) | `ThemeTokens.cs`, `ThemeManager.cs` |
-| `src/Tessera.Gui/Chrome/` (new) | `Icons.cs`, `Sidebar.cs`, `Favicon.cs`, `Toolbar.cs`, `UrlBar.cs`, `MiniLoadChart.cs`, `BuildPill.cs`, `StatusBar.cs`, `WebviewPanel.cs` |
-| `src/Tessera.Gui/DevTools/` (new) | `DevToolsPanel.cs`, `SampleData.cs`, `ConsolePanel.cs`, `PerformancePanel.cs`, `FlameChartDrawable.cs`, `InternalsPanel.cs`, card/sparkline drawables |
+| `src/Starling.Gui/MainPage.cs` | Rewrite layout to Sidecar; extract webview into `WebviewPanel`; drop `Palette` |
+| `src/Starling.Gui/MauiProgram.cs` | Register `ThemeManager` singleton |
+| `src/Starling.Gui/App.cs` | Seed theme `ResourceDictionary` on window create |
+| `src/Starling.Gui/Starling.Gui.csproj` | Add `MauiFont` entries for Geist / Geist Mono |
+| `src/Starling.Gui/Resources/Fonts/` (new) | Bundle Geist + Geist Mono `.ttf` |
+| `src/Starling.Gui/Theme/` (new) | `ThemeTokens.cs`, `ThemeManager.cs` |
+| `src/Starling.Gui/Chrome/` (new) | `Icons.cs`, `Sidebar.cs`, `Favicon.cs`, `Toolbar.cs`, `UrlBar.cs`, `MiniLoadChart.cs`, `BuildPill.cs`, `StatusBar.cs`, `WebviewPanel.cs` |
+| `src/Starling.Gui/DevTools/` (new) | `DevToolsPanel.cs`, `SampleData.cs`, `ConsolePanel.cs`, `PerformancePanel.cs`, `FlameChartDrawable.cs`, `InternalsPanel.cs`, card/sparkline drawables |
 
 ## Key decisions
 
@@ -149,8 +149,8 @@ via `GraphicsView` + `IDrawable` — the MAUI primitive for this. One reusable
 
 ## Verification
 
-1. **Compile smoke:** `dotnet build src/Tessera.Gui/Tessera.Gui.csproj -f net10.0-maccatalyst -t:CoreCompile`
-2. **Run:** `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer dotnet run --project src/Tessera.Gui/Tessera.Gui.csproj --framework net10.0-maccatalyst`
+1. **Compile smoke:** `dotnet build src/Starling.Gui/Starling.Gui.csproj -f net10.0-maccatalyst -t:CoreCompile`
+2. **Run:** `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer dotnet run --project src/Starling.Gui/Starling.Gui.csproj --framework net10.0-maccatalyst`
 3. **Chrome:** sidebar renders with pinned/today tabs + build pill; toolbar +
    URL bar + status bar match the dark artboard in `design/index.html`.
 4. **Theme switch:** flipping dark/light/contrast + comfy/compact + sans/mono

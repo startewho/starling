@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Tessera.Url;
+namespace Starling.Url;
 
 /// <summary>
 /// Decode <c>data:</c> URLs into their MIME type + payload bytes per

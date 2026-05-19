@@ -102,7 +102,7 @@ These promotions belong in the per-spec implementation work packages
 ## Regenerating the strict candidate set
 
 ```bash
-cd /Users/cody/code/tessera
+cd /Users/cody/code/starling
 python3 - <<'PY'
 import re, pathlib
 LEGACY = pathlib.Path("tests/Starling.Css.Tests")

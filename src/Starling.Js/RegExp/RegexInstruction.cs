@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>Pike-VM opcodes per Russ Cox's "RE: VM approach" paper.</summary>
 public enum RegexOp

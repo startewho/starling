@@ -1,6 +1,6 @@
 # third_party/REVISIONS.md — pinned native dependency manifest
 
-This file is the **lockfile** for Tessera's native graphics stack. It hard-pins
+This file is the **lockfile** for Starling's native graphics stack. It hard-pins
 the exact revisions of Skia, Dawn, and ANGLE that the native build
 (`native/build-skia.*`) checks out and compiles. Nothing here floats.
 
@@ -46,7 +46,7 @@ the exact revisions of Skia, Dawn, and ANGLE that the native build
   Graphite (`skia_enable_graphite`) and the Dawn backend (`skia_use_dawn`)
   landed and stabilized. Chrome shipped Skia Graphite to stable on Apple Silicon
   during the M13x line; `chrome/m140` is a conservative, already-stabilized
-  choice for the first Tessera native build.
+  choice for the first Starling native build.
 - **Commit (`SKIA_COMMIT`):** `5db0949ba318d248ebc3d33c73ad1251bf95c243`
   <!-- Confirmed 2026-05-14 against the live `chrome/m140` branch tip
        (`git ls-remote https://skia.googlesource.com/skia refs/heads/chrome/m140`).
@@ -105,7 +105,7 @@ and platform-specific**. They are handled out-of-band:
   manually or when this file changes. Never by PR `ci.yml` (a Skia build is
   20–40 min; PR CI must stay fast).
 - **Consumed as a versioned release artifact / internal package** — downstream
-  .NET projects (`src/Tessera.Skia`, WP 06h) restore the prebuilt
+  .NET projects (`src/Starling.Skia`, WP 06h) restore the prebuilt
   `runtimes/<rid>/native/` payload; they do not rebuild Skia.
 - **Never committed to git** — `runtimes/` and `third_party/skia/` are
   `.gitignore`d. Only the *scripts* that reproduce the build live in the repo.

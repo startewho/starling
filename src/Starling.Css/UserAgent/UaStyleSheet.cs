@@ -1,6 +1,6 @@
-using Tessera.Css.Parser;
+using Starling.Css.Parser;
 
-namespace Tessera.Css.UserAgent;
+namespace Starling.Css.UserAgent;
 
 public static class UaStyleSheet
 {

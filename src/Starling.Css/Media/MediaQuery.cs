@@ -1,4 +1,4 @@
-namespace Tessera.Css.Media;
+namespace Starling.Css.Media;
 
 // Media Queries Level 5 §2: a media query is "modifier media-type [and condition]"
 // or just a "condition without media type".

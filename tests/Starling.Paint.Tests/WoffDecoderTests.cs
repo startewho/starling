@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using FluentAssertions;
-using Tessera.Paint.WebFonts;
+using Starling.Paint.WebFonts;
 using Xunit;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 public sealed class WoffDecoderTests
 {

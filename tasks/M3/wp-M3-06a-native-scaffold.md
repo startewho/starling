@@ -69,7 +69,7 @@ downstream can start until the revisions are pinned.
 - Pick a Skia milestone branch that has Graphite + Dawn support landed; record
   the exact `DEPS`-resolved Dawn/ANGLE commit hashes, not floating refs — the
   whole point is reproducible builds.
-- `Tessera.sln`, `Directory.Packages.props`, and `tasks/INDEX.md` are
+- `Starling.sln`, `Directory.Packages.props`, and `tasks/INDEX.md` are
   merge-conflict hotspots across the M3-06 fleet — note any touch in the handoff
   log.
 

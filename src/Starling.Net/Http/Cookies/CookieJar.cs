@@ -1,7 +1,7 @@
 using System.Text;
-using TesseraUrl = global::Tessera.Url.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Net.Http.Cookies;
+namespace Starling.Net.Http.Cookies;
 
 /// <summary>
 /// In-memory cookie store. Implements the storage and retrieval algorithms
@@ -62,7 +62,7 @@ public sealed class CookieJar
     /// silently dropped per RFC 6265bis §5.5 — we surface a count of
     /// accepted cookies for telemetry only.
     /// </summary>
-    public int StoreFromHeaders(TesseraUrl requestUrl, IReadOnlyList<string> setCookieHeaders)
+    public int StoreFromHeaders(StarlingUrl requestUrl, IReadOnlyList<string> setCookieHeaders)
     {
         ArgumentNullException.ThrowIfNull(requestUrl);
         ArgumentNullException.ThrowIfNull(setCookieHeaders);
@@ -97,7 +97,7 @@ public sealed class CookieJar
     /// Build the <c>Cookie</c> header value for an outgoing request.
     /// Returns an empty string when no cookies apply.
     /// </summary>
-    public string BuildCookieHeader(TesseraUrl requestUrl)
+    public string BuildCookieHeader(StarlingUrl requestUrl)
     {
         ArgumentNullException.ThrowIfNull(requestUrl);
         var host = requestUrl.Host;
@@ -277,7 +277,7 @@ public sealed class CookieJar
     }
 
     /// <summary>§5.1.4 default-path: the request URL's path with the last slash truncation.</summary>
-    private static string DefaultPath(TesseraUrl url)
+    private static string DefaultPath(StarlingUrl url)
     {
         var p = string.IsNullOrEmpty(url.Path) ? "/" : url.Path;
         if (p[0] != '/') return "/";

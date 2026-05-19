@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Tessera.Gui;
+namespace Starling.Gui;
 
 /// <summary>
 /// Normalizes what the user types into the URL bar into a fully-qualified

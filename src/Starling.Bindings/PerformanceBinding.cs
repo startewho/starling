@@ -1,7 +1,7 @@
 using System.Diagnostics;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-5 — High Resolution Time Level 3 (W3C). Installs <c>performance</c> on

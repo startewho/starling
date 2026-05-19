@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>§27.2 Promise state.</summary>
 public enum PromiseState : byte

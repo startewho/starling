@@ -1,4 +1,4 @@
-namespace Tessera.Common.Diagnostics;
+namespace Starling.Common.Diagnostics;
 
 public enum DiagLevel
 {

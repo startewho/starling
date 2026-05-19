@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout.Box;
 using Xunit;
 
-namespace Tessera.Layout.Tests;
+namespace Starling.Layout.Tests;
 
 public sealed class LayoutEngineTests
 {
@@ -183,7 +183,7 @@ public sealed class LayoutEngineTests
     // When an <img> can't be resolved (network failure, unsupported format,
     // data: scheme stripped) we degrade to its accessible name so the page
     // doesn't lose user-visible content. The <svg> branch is the same story
-    // for inline SVG, which Tessera does not yet render — google.com's logo
+    // for inline SVG, which Starling does not yet render — google.com's logo
     // is an inline <svg aria-label="Google">, so without this fallback the
     // user sees a vanishing inline.
 

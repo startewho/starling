@@ -1,8 +1,8 @@
-using Tessera.Common.Diagnostics;
-using Tessera.Dom;
-using Tessera.Html.TreeBuilder;
+using Starling.Common.Diagnostics;
+using Starling.Dom;
+using Starling.Html.TreeBuilder;
 
-namespace Tessera.Html;
+namespace Starling.Html;
 
 /// <summary>
 /// Stable façade over the active HTML parser implementation.

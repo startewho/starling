@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Every state in the WHATWG HTML tokenizer state machine

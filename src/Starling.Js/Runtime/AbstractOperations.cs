@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// ES2024 abstract operations not pinned to a single value (those live on
@@ -20,7 +20,7 @@ public static class AbstractOperations
     {
         if (input.Kind != JsValueKind.Object) return input;
         var obj = input.AsObject;
-        var exotic = obj.Get(Tessera.Js.Intrinsics.SymbolCtor.ToPrimitive);
+        var exotic = obj.Get(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive);
         if (IsCallable(exotic))
         {
             var r = Call(vm, exotic, input, new[] { JsValue.String(hint) });
@@ -294,7 +294,7 @@ public static class AbstractOperations
         JsValue method;
         if (value.IsObject)
         {
-            method = GetMethod(vm, value, Tessera.Js.Intrinsics.SymbolCtor.Iterator);
+            method = GetMethod(vm, value, Starling.Js.Intrinsics.SymbolCtor.Iterator);
         }
         else if (value.IsNullish)
         {
@@ -303,7 +303,7 @@ public static class AbstractOperations
         else
         {
             var boxed = ToObject(realm, value);
-            method = GetMethod(vm, JsValue.Object(boxed), Tessera.Js.Intrinsics.SymbolCtor.Iterator);
+            method = GetMethod(vm, JsValue.Object(boxed), Starling.Js.Intrinsics.SymbolCtor.Iterator);
         }
         if (method.IsUndefined || method.IsNull)
             throw new JsThrow(realm.NewTypeError("value is not iterable"));

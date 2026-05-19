@@ -1,6 +1,6 @@
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs;
+namespace Starling.Codecs;
 
 /// <summary>
 /// Decodes a compressed image byte stream into a backend-neutral

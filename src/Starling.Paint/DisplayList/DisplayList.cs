@@ -1,4 +1,4 @@
-namespace Tessera.Paint.DisplayList;
+namespace Starling.Paint.DisplayList;
 
 /// <summary>An ordered, flat list of paint operations.</summary>
 public sealed class DisplayList

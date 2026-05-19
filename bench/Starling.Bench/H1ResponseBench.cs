@@ -1,8 +1,8 @@
 using System.Text;
 using BenchmarkDotNet.Attributes;
-using Tessera.Net.Http.H1;
+using Starling.Net.Http.H1;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // HTTP/1.1 response parsing — every fetch path hits this. The keep-alive
 // connection pool (wp:M2-07c) calls `H1ResponseParser` per response, so any

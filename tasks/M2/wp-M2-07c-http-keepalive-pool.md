@@ -9,7 +9,7 @@ branch: "main"
 depends_on:
   - "wp:M2-05-http1"
 blocks: []
-subsystem: "Tessera.Net"
+subsystem: "Starling.Net"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#http11"
   - "browser-plan/13_MILESTONES.md#m2--networking-and-live-html"
@@ -23,24 +23,24 @@ completed_at: "2026-05-13T14:51:15Z"
 
 Reuse TCP+TLS connections across sequential requests to the same origin.
 M2 exit criteria require "connection pool reuses across 2 sequential
-requests"; the current `TesseraHttpClient.Dispose()` is a no-op with a
+requests"; the current `StarlingHttpClient.Dispose()` is a no-op with a
 stale comment that defers pooling to M3+. Pooling is also a real
 multiplier — a page with 10 subresources currently pays 10× TCP+TLS
 handshake cost.
 
 ## Inputs
 
-- `TesseraHttpClient` request/response path (wp:M2-05 ✓).
+- `StarlingHttpClient` request/response path (wp:M2-05 ✓).
 - Existing transport abstractions: `TcpTransport`, `BcTlsTransport`.
 
 ## Outputs
 
-- `src/Tessera.Net/Http/ConnectionPool.cs` — per-origin pool keyed on
+- `src/Starling.Net/Http/ConnectionPool.cs` — per-origin pool keyed on
   `(scheme, host, port)`. Holds a bounded queue of idle, kept-alive
   `IHttpTransport` instances with their last-used timestamps. Methods:
   `TryAcquire`, `Release`, `DrainExpired(TimeSpan idleTimeout)`,
   `DisposeAll`.
-- `src/Tessera.Net/TesseraHttpClient.cs` —
+- `src/Starling.Net/StarlingHttpClient.cs` —
   - On send: ask the pool for an existing connection before dialing a new
     one.
   - On response complete: if both sides advertise keep-alive (HTTP/1.1
@@ -48,15 +48,15 @@ handshake cost.
     return the transport to the pool; otherwise close it.
   - Implement `Dispose` to call `pool.DisposeAll()` (remove the stale
     "pooling is M3+" comment).
-- `src/Tessera.Net/Http/H1/H1ResponseParser.cs` — surface whether the
+- `src/Starling.Net/Http/H1/H1ResponseParser.cs` — surface whether the
   response indicated keep-alive (presence of `Connection: close` or
   HTTP/1.0 without `Connection: keep-alive` → close).
-- `tests/Tessera.Net.Tests/ConnectionPoolTests.cs` — unit tests:
+- `tests/Starling.Net.Tests/ConnectionPoolTests.cs` — unit tests:
   - Acquire/release round-trip returns the same transport instance.
   - `Connection: close` does NOT return the transport to the pool.
   - Idle expiry drains a connection past `idleTimeout`.
   - Pool capacity bound respected (oldest evicted first).
-- `tests/Tessera.Engine.Tests/EngineHttpTests.cs` — extend the local stub
+- `tests/Starling.Engine.Tests/EngineHttpTests.cs` — extend the local stub
   server to count distinct TCP accepts; assert that two sequential
   requests to the same origin result in exactly one TCP accept when both
   responses are keep-alive.

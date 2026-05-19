@@ -1,9 +1,9 @@
-using Tessera.Codecs.Linux;
-using Tessera.Codecs.Mac;
-using Tessera.Codecs.Windows;
-using Tessera.Common.Image;
+using Starling.Codecs.Linux;
+using Starling.Codecs.Mac;
+using Starling.Codecs.Windows;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs;
+namespace Starling.Codecs;
 
 /// <summary>
 /// Public entry point for OS-native image decoding. Sniffs the format, then

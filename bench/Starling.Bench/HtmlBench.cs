@@ -1,8 +1,8 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Html;
-using Tessera.Html.Tokenizer;
+using Starling.Html;
+using Starling.Html.Tokenizer;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // Anchored against the M1 exit (`html5lib` tokenizer 100% / tree-construction
 // ≥ 95%) and the §C.5 zero-allocation budget for the tokenizer per character.

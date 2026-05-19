@@ -26,7 +26,7 @@
          dev inspector is non-essential for the smoke test. Re-add when the
          package catches up. -->
     <!-- Host.CreateApplicationBuilder() lives here; needed because
-         AddTesseraTelemetry constrains TBuilder : IHostApplicationBuilder. -->
+         AddStarlingTelemetry constrains TBuilder : IHostApplicationBuilder. -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <!-- MCP server attributes (McpServerTool, McpServerToolType). The HTTP
          transport is hand-rolled in GuiMcpServer.cs, so this is only needed

@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Net.Dns;
+using Starling.Net.Dns;
 using Xunit;
 
-namespace Tessera.Net.Tests.Dns;
+namespace Starling.Net.Tests.Dns;
 
 public class DnsMessageTests
 {

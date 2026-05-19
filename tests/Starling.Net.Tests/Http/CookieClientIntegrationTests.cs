@@ -1,9 +1,9 @@
 using System.Text;
 using FluentAssertions;
-using Tessera.Net.Http.Cookies;
+using Starling.Net.Http.Cookies;
 using Xunit;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 public class CookieClientIntegrationTests
 {
@@ -31,7 +31,7 @@ public class CookieClientIntegrationTests
         });
 
         var jar = new CookieJar();
-        using var client = new TesseraHttpClient(new TesseraHttpClientOptions { CookieJar = jar });
+        using var client = new StarlingHttpClient(new StarlingHttpClientOptions { CookieJar = jar });
 
         var ct = TestContext.Current.CancellationToken;
         var url = $"http://localhost:{server.Port}/";
@@ -61,7 +61,7 @@ public class CookieClientIntegrationTests
         });
 
         var jar = new CookieJar();
-        using var client = new TesseraHttpClient(new TesseraHttpClientOptions { CookieJar = jar });
+        using var client = new StarlingHttpClient(new StarlingHttpClientOptions { CookieJar = jar });
 
         var ct = TestContext.Current.CancellationToken;
         var url = $"http://localhost:{server.Port}/";
@@ -69,7 +69,7 @@ public class CookieClientIntegrationTests
         r.IsOk.Should().BeTrue();
         // HttpOnly only hides the cookie from JS — over the wire it is still
         // sent on subsequent same-origin HTTP requests.
-        jar.BuildCookieHeader(global::Tessera.Url.UrlParser.Parse(url).Value)
+        jar.BuildCookieHeader(global::Starling.Url.UrlParser.Parse(url).Value)
             .Should().Be("secret=xyz");
     }
 }

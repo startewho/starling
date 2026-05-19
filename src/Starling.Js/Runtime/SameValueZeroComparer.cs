@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §7.2.11 SameValueZero — used as the key-equality predicate for Map/Set.

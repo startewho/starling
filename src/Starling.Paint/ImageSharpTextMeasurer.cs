@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using SixLabors.Fonts;
-using Tessera.Layout.Text;
+using Starling.Layout.Text;
 
-namespace Tessera.Paint;
+namespace Starling.Paint;
 
 /// <summary>
 /// <see cref="ITextMeasurer"/> backed by SixLabors.Fonts 3.x: real shaped glyph

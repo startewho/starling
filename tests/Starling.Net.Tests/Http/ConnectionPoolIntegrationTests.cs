@@ -2,13 +2,13 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using FluentAssertions;
-using Tessera.Net.Http;
+using Starling.Net.Http;
 using Xunit;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 /// <summary>
-/// End-to-end tests that exercise <see cref="TesseraHttpClient"/>'s use of the
+/// End-to-end tests that exercise <see cref="StarlingHttpClient"/>'s use of the
 /// connection pool. Drives a real loopback HTTP/1.1 server that holds the TCP
 /// connection open for keep-alive responses, then asserts the second request
 /// reused the same socket (no new accept) or didn't (new accept).
@@ -21,7 +21,7 @@ public class ConnectionPoolIntegrationTests
         using var server = await KeepAliveStubServer.StartAsync(req =>
             ResponseBuilder.KeepAlive("hi", "text/plain"));
 
-        using var client = new TesseraHttpClient();
+        using var client = new StarlingHttpClient();
         var url = $"http://localhost:{server.Port}/";
 
         var r1 = await client.GetAsync(url, TestContext.Current.CancellationToken);
@@ -49,7 +49,7 @@ public class ConnectionPoolIntegrationTests
         using var serverB = await KeepAliveStubServer.StartAsync(_ =>
             ResponseBuilder.KeepAlive("b", "text/plain"));
 
-        using var client = new TesseraHttpClient();
+        using var client = new StarlingHttpClient();
 
         var r1 = await client.GetAsync(
             $"http://localhost:{serverA.Port}/", TestContext.Current.CancellationToken);
@@ -74,7 +74,7 @@ public class ConnectionPoolIntegrationTests
         using var server = await KeepAliveStubServer.StartAsync(_ =>
             ResponseBuilder.Close("bye", "text/plain"));
 
-        using var client = new TesseraHttpClient();
+        using var client = new StarlingHttpClient();
         var origin = OriginKey.Create("http", "localhost", server.Port);
 
         var r1 = await client.GetAsync(
@@ -99,8 +99,8 @@ public class ConnectionPoolIntegrationTests
 
         // Tiny idle timeout so we can age the entry out without waiting.
         var pool = new ConnectionPool(maxPerOrigin: 6, idleTimeout: TimeSpan.FromMilliseconds(50));
-        using var client = new TesseraHttpClient(
-            new TesseraHttpClientOptions { ConnectionPool = pool });
+        using var client = new StarlingHttpClient(
+            new StarlingHttpClientOptions { ConnectionPool = pool });
         var origin = OriginKey.Create("http", "localhost", server.Port);
 
         var r1 = await client.GetAsync(
@@ -127,7 +127,7 @@ public class ConnectionPoolIntegrationTests
         var server = await KeepAliveStubServer.StartAsync(_ =>
             ResponseBuilder.KeepAlive("ok", "text/plain"));
 
-        var client = new TesseraHttpClient();
+        var client = new StarlingHttpClient();
         var origin = OriginKey.Create("http", "localhost", server.Port);
 
         try
@@ -156,7 +156,7 @@ public class ConnectionPoolIntegrationTests
         using var server = await KeepAliveStubServer.StartAsync(_ =>
             ResponseBuilder.KeepAlive("ok", "text/plain"));
 
-        using var client = new TesseraHttpClient();
+        using var client = new StarlingHttpClient();
         var url = $"http://localhost:{server.Port}/";
 
         var t1 = client.GetAsync(url, TestContext.Current.CancellationToken);

@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using Tessera.Common.Diagnostics;
-using Tessera.Css.Tokenizer;
+using Starling.Common.Diagnostics;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Parser;
+namespace Starling.Css.Parser;
 
 public sealed class CssParser
 {

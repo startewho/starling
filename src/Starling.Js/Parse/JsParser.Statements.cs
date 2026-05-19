@@ -1,7 +1,7 @@
-using Tessera.Js.Ast;
-using Tessera.Js.Lex;
+using Starling.Js.Ast;
+using Starling.Js.Lex;
 
-namespace Tessera.Js.Parse;
+namespace Starling.Js.Parse;
 
 /// <summary>
 /// Statement-level parsing — wp:M3-02b. Extends the expression parser

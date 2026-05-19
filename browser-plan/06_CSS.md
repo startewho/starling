@@ -18,8 +18,8 @@
 ## Project layout
 
 ```
-src/Tessera.Css/
-├── Tessera.Css.csproj
+src/Starling.Css/
+├── Starling.Css.csproj
 ├── Tokenizer/
 │   ├── CssTokenizer.cs
 │   └── CssToken.cs

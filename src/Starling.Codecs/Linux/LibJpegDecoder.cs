@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs.Linux;
+namespace Starling.Codecs.Linux;
 
 /// <summary>
 /// JPEG decode via libjpeg-turbo's TurboJPEG API (<c>libturbojpeg.so.0</c>).

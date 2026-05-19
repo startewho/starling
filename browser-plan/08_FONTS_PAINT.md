@@ -2,7 +2,7 @@
 
 ## Scope
 
-**In:** Display list IR, ImageSharp paint backend, font loading and shaping via SixLabors.Fonts, font fallback, image decoding (PNG/JPEG/GIF/WebP via OS-native codecs in `Tessera.Codecs`), stacking context paint order, compositing.
+**In:** Display list IR, ImageSharp paint backend, font loading and shaping via SixLabors.Fonts, font fallback, image decoding (PNG/JPEG/GIF/WebP via OS-native codecs in `Starling.Codecs`), stacking context paint order, compositing.
 **Out:** GPU acceleration (no managed GPU pipeline in v1), SVG paint (M5+, basic only), video (no), `<canvas>` rendering (M7+).
 
 ## Spec refs
@@ -17,14 +17,14 @@
 
 | Library | Version | Surface we use |
 |---|---|---|
-| `SixLabors.ImageSharp` | 3.1.12 | `Image<Rgba32>` raster surface + image **encode**; transitional raster/encode bridge only — image **decode** moved to `Tessera.Codecs` |
+| `SixLabors.ImageSharp` | 3.1.12 | `Image<Rgba32>` raster surface + image **encode**; transitional raster/encode bridge only — image **decode** moved to `Starling.Codecs` |
 | `SixLabors.ImageSharp.Drawing` | 2.1.7 | `image.Mutate(ctx => ctx.Fill(...).DrawText(...))`, path drawing, clipping |
 | `SixLabors.Fonts` | 2.1.3 | TTF/OTF/WOFF/WOFF2 loading; variable fonts; OpenType GSUB/GPOS shaping; BiDi |
 
 All three are pure managed, MIT-licensed, no native deps — they sit in
-`Tessera.Paint`, which stays P/Invoke-free under the interop seam policy.
+`Starling.Paint`, which stays P/Invoke-free under the interop seam policy.
 Image **decoding** is no longer ImageSharp's job: it now goes through
-`Tessera.Codecs`, one of the two designated native-interop projects, which
+`Starling.Codecs`, one of the two designated native-interop projects, which
 wraps the OS-native codecs (macOS ImageIO, Windows WIC, Linux libjpeg/libpng/
 libwebp). ImageSharp is kept (transitionally) as a raster surface and encode
 path only.
@@ -42,8 +42,8 @@ OpenType GSUB/GPOS, Latin/Greek/Cyrillic, BiDi (UAX #9), variable fonts. Per ups
 ## Project layout
 
 ```
-src/Tessera.Paint/
-├── Tessera.Paint.csproj
+src/Starling.Paint/
+├── Starling.Paint.csproj
 ├── IPainter.cs
 ├── Painter.cs                          # façade
 ├── DisplayList/
@@ -63,7 +63,7 @@ src/Tessera.Paint/
 │   ├── FontResolver.cs                 # @font-face + system loader + bundled fallback
 │   └── BundledFonts.cs
 ├── Images/
-│   ├── ImageDecoder.cs                 # delegates to Tessera.Codecs (OS-native decode)
+│   ├── ImageDecoder.cs                 # delegates to Starling.Codecs (OS-native decode)
 │   └── ImageCache.cs
 └── Effects/
     ├── BoxShadow.cs
@@ -191,7 +191,7 @@ case Restore:
 ### Performance note
 
 ImageSharp is CPU-bound and slower than a GPU rasterizer — acceptable for the
-current managed backend (a Skia-based backend is planned via `Tessera.Skia`, the
+current managed backend (a Skia-based backend is planned via `Starling.Skia`, the
 designated graphics-interop seam). Hot paths:
 - Pre-allocate the result `Image<Rgba32>` once per page; clear instead of recreate.
 - Reuse `IPath` objects.
@@ -263,7 +263,7 @@ public sealed class FontResolver
 ### Source order
 
 1. `@font-face`-declared faces (loaded from `url(...)` via the network stack and decoded with SixLabors.Fonts).
-2. **Bundled fonts** (ship in `Tessera.Paint`):
+2. **Bundled fonts** (ship in `Starling.Paint`):
    - Inter — sans-serif (matches Avalonia.Fonts.Inter).
    - JetBrains Mono — monospace.
    - Source Serif Pro — serif.
@@ -274,7 +274,7 @@ public sealed class FontResolver
 3. **System fonts** — discover via SixLabors.Fonts' `SystemFonts.Collection`. Cross-platform.
 4. **Last-resort sans-serif** — bundled Inter at any weight, force-mapped.
 
-Bundle binary fonts as `.ttf` (or `.woff2`) in `Tessera.Paint/Resources/Fonts/`. Total ~25MB; acceptable.
+Bundle binary fonts as `.ttf` (or `.woff2`) in `Starling.Paint/Resources/Fonts/`. Total ~25MB; acceptable.
 
 ### Generic family map
 
@@ -307,13 +307,13 @@ public interface IRasterImage
 }
 ```
 
-Decoding goes through `Tessera.Codecs` — the OS-native codec seam (macOS ImageIO,
+Decoding goes through `Starling.Codecs` — the OS-native codec seam (macOS ImageIO,
 Windows WIC, Linux libjpeg/libpng/libwebp). Formats: PNG, JPEG, GIF (first frame in
-v1), BMP, WebP. `Tessera.Codecs` is one of the two designated native-interop
-projects; `Tessera.Paint` itself stays P/Invoke-free and just consumes the decoded
+v1), BMP, WebP. `Starling.Codecs` is one of the two designated native-interop
+projects; `Starling.Paint` itself stays P/Invoke-free and just consumes the decoded
 RGBA buffers. **No SVG decoder** in the OS codecs — for SVG images:
 
-OUT-OF-SCOPE-V1 fully; M5+ minimal SVG (path, rect, circle, fill/stroke, text) implemented in `Tessera.Paint/Svg/` and rasterized into an `Image<Rgba32>`.
+OUT-OF-SCOPE-V1 fully; M5+ minimal SVG (path, rect, circle, fill/stroke, text) implemented in `Starling.Paint/Svg/` and rasterized into an `Image<Rgba32>`.
 
 Animated GIFs: render the first frame in v1. Animation in M6+.
 
@@ -370,7 +370,7 @@ Future optimization for damage tracking. v1: full repaint every frame on any inv
 
 ## Acceptance Tests
 
-- [ ] `Tessera.Headless render testdata/fonts/sample.html -o out.png` produces a PNG where text is anti-aliased and kerned (visual diff against golden).
+- [ ] `Starling.Headless render testdata/fonts/sample.html -o out.png` produces a PNG where text is anti-aliased and kerned (visual diff against golden).
 - [ ] `border-radius` with `box-shadow` produces a recognizable rounded shadow (golden image).
 - [ ] `linear-gradient(90deg, red, blue)` paints a horizontal gradient.
 - [ ] PNG, JPEG, GIF, WebP `<img src>` all load and paint at intrinsic size.
@@ -378,4 +378,4 @@ Future optimization for damage tracking. v1: full repaint every frame on any inv
 - [ ] Emoji `<p>👋</p>` renders in color.
 - [ ] RTL text (`<p dir=rtl>שלום</p>`) renders right-to-left with correct glyph order.
 - [ ] Painting a 1920×1080 page with ~500 boxes completes in ≤ 50ms on the CI runner.
-- [ ] No P/Invoke and no Skia references: `grep -rn 'DllImport\|LibraryImport\|Skia' src/Tessera.Paint/` is empty.
+- [ ] No P/Invoke and no Skia references: `grep -rn 'DllImport\|LibraryImport\|Skia' src/Starling.Paint/` is empty.

@@ -12,7 +12,7 @@ blocks:
   - "wp:M0-04-headless-cli"
   - "wp:M1-08-layout-block-inline"
   - "wp:M1-09-paint-display-list"
-subsystem: "Tessera.Paint"
+subsystem: "Starling.Paint"
 plan_refs:
   - "browser-plan/08_FONTS_PAINT.md"
   - "browser-plan/14_AGENT_TASKS.md#wpm0-03-paint-stub"
@@ -28,12 +28,12 @@ drawn in a bundled sans-serif font.
 - wp:M0-02-common complete.
 
 ## Outputs
-- `src/Tessera.Paint/Painter.cs`
-- `src/Tessera.Paint/FontResolver.cs`
-- Bundled Inter font under `src/Tessera.Paint/Resources/Fonts/`.
+- `src/Starling.Paint/Painter.cs`
+- `src/Starling.Paint/FontResolver.cs`
+- Bundled Inter font under `src/Starling.Paint/Resources/Fonts/`.
 
 ## Acceptance
-- 2 unit tests pass in `tests/Tessera.Paint.Tests`.
+- 2 unit tests pass in `tests/Starling.Paint.Tests`.
 - Headless CLI can produce a PNG with text on a white background.
 
 ## Handoff log

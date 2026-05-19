@@ -35,10 +35,10 @@ is the **search results page**:
   results for Google specifically. Everything below assumes **Path B**
   (real JS execution + DOM bindings + fetch).
 
-ALPN already defaults to `["http/1.1"]` in `TesseraHttpClientOptions`
-(src/Starling.Net/TesseraHttpClient.cs:428). A safety check added in A1
+ALPN already defaults to `["http/1.1"]` in `StarlingHttpClientOptions`
+(src/Starling.Net/StarlingHttpClient.cs:428). A safety check added in A1
 fails fast if a peer negotiates `h2` despite our list
-(src/Starling.Net/TesseraHttpClient.cs:268-281). HTTP/2 itself is not a
+(src/Starling.Net/StarlingHttpClient.cs:268-281). HTTP/2 itself is not a
 blocker; defer to M6 wp:M3-09.
 
 ## What's done
@@ -46,7 +46,7 @@ blocker; defer to M6 wp:M3-09.
 | Item | Status | Files |
 |---|---|---|
 | A0 — Baseline render | ✅ | `/tmp/google_b0_b1.png`, browser-plan/03_NETWORKING.md unchanged |
-| A1 — ALPN safety check | ✅ | `src/Starling.Net/TesseraHttpClient.cs:264-281` |
+| A1 — ALPN safety check | ✅ | `src/Starling.Net/StarlingHttpClient.cs:264-281` |
 | B0 — JS runtime foundations | ✅ | `src/Starling.Js/Runtime/{PropertyDescriptor,JsObject,JsRealm,AbstractOperations,JsBoundFunction,JsRuntime,JsVm}.cs` |
 | B1a — Lexer hardening | ✅ | `src/Starling.Js/Lex/{JsLexer,JsTokenKind,JsLexError}.cs` |
 | B1b-1 — Modern syntax slice | ✅ | `src/Starling.Js/{Ast/Expressions.cs,Parse/JsParser.cs,Bytecode/{JsCompiler,Opcode}.cs,Runtime/JsVm.cs}` |
@@ -136,8 +136,8 @@ blocker; defer to M6 wp:M3-09.
 - `Runtime/JsModernSyntaxTests.cs` (14)
 
 Pre-existing failures on `main` (not regressions):
-- `Tessera.Engine.Tests.EngineSnapshotRenderTests.Snapshot_nginx_org_renders_match_golden` (SSIM 0.39)
-- `Tessera.Paint.Tests.DisplayListBuilderTests.Underlined_link_emits_text_and_underline_fill`
+- `Starling.Engine.Tests.EngineSnapshotRenderTests.Snapshot_nginx_org_renders_match_golden` (SSIM 0.39)
+- `Starling.Paint.Tests.DisplayListBuilderTests.Underlined_link_emits_text_and_underline_fill`
 
 ## Active assignments (2026-05-18)
 
@@ -228,7 +228,7 @@ depends on the earlier's surface).
 | **B4-6** | `WeakRef` + `FinalizationRegistry` | **lane E** | B3-3 | `src/Starling.Js/Intrinsics/{WeakRefCtor,FinalizationRegistryCtor}.cs` |
 | **B5-1** | `Window` / `document` real bindings (replace `DomBindingHost`); `EventTarget` + `addEventListener` / `removeEventListener` / `dispatchEvent` | **lane F** | B2-1, B2-2 | `src/Starling.Bindings/{WindowBinding,DocumentBinding,EventTargetBinding}.cs` (new) |
 | **B5-2** | Timers — `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval` against `WebEventLoop` | **lane F** | B3-4 | `src/Starling.Bindings/TimersBinding.cs` |
-| **B5-3** | `fetch` + `XMLHttpRequest` (against `TesseraHttpClient`) | **lane F** | B3-4, B5-1 | `src/Starling.Bindings/{FetchBinding,XhrBinding}.cs` |
+| **B5-3** | `fetch` + `XMLHttpRequest` (against `StarlingHttpClient`) | **lane F** | B3-4, B5-1 | `src/Starling.Bindings/{FetchBinding,XhrBinding}.cs` |
 | **B5-4** | `MutationObserver` / `IntersectionObserver` / `ResizeObserver` | **lane F** | B5-1 | `src/Starling.Bindings/Observers/*.cs` |
 | **B5-5** | `history.pushState` / `popstate` + `localStorage` / `sessionStorage` + `document.cookie` getter/setter + `Performance.now` | **lane F** | B5-1 | `src/Starling.Bindings/{HistoryBinding,StorageBinding,CookieBinding,PerformanceBinding}.cs` |
 | **B6-1** | Flex layout (direction, wrap=nowrap, justify-content, align-items, flex shorthand, gap) | **lane G** | (none) | `src/Starling.Layout/Flex/*` (new) |
@@ -255,7 +255,7 @@ The Proxy/Reflect, B5-5 location, and Map/Weak fixup passes all routed around th
 | **gap:script-top-var-not-global** | A script-top `var` is compiled as a local, not a global. Nested functions reading or writing that name resolve to a different binding. Breaks any inline `<script>` that declares globals via `var`. Pin: `var x = 1; function read() { return x }; read() === 1`. | **lane A** | (none) | `src/Starling.Js/Bytecode/JsCompiler.cs` (top-level scope emission) |
 | **gap:opcode-fast-path-bypasses-accessors** | `Opcode.LoadGlobal` (and possibly other property fast paths) consults `JsObject.Get`'s data-only path and silently returns `Undefined` for accessor descriptors. Surfaced when bare `location` was undefined while `window.location` worked (B5-5 fixup). Likely siblings: `LoadProperty` short-circuit on missing data slot, `LoadName` on global. Audit every "fast path" Get in the VM and route through `AbstractOperations.Get` when the descriptor is an accessor. Pin: `Object.defineProperty(globalThis, 'foo', {get: () => 42}); foo === 42`. | **lane Bytecode** | (none) | `src/Starling.Js/Runtime/JsVm.cs` (Load* opcodes), `src/Starling.Js/Runtime/JsObject.cs` |
 | **B7** | End-to-end google.com search smoke test (offline fixtures + optional live gate) | **final** | everything | `tests/Starling.Engine.Tests/GoogleSearchTests.cs` (new), `testdata/sites/google-*.html` |
-| **B7-followup-a: wire JS into engine render pipeline** | THE remaining blocker. `TesseraEngine.RenderAsync` does URL → HTTP → parse → style → layout → paint with no JS step. All the binding work (B5-1/B5-2/B5-3/B5-5) is plumbed but never invoked by the engine. To make `/search?q=hello` actually render results, the engine needs: (1) construct a JsRuntime + install bindings against the parsed Document; (2) execute inline `<script>` tags and external scripts (with the script loader fetching them); (3) fire DOMContentLoaded + load events; (4) drain microtasks + give async fetch some pump time; (5) re-layout against the post-script DOM. This is wp:M3-pipeline-js-integration; might span several sub-tickets. Pin: `Search_fetches_results_via_js_fetch_and_populates_dom` should pass against `TesseraEngine.RenderAsync` directly instead of via the manual JsRuntime+WindowBinding glue. **Files:** `src/Starling.Engine/Engine.cs` (RenderAsync + LayoutPageAsync), `src/Starling.Bindings/WindowBinding.cs` (DOMContentLoaded/load firing), maybe new `Starling.Engine/ScriptLoader.cs`. | **lane Engine** | B5-1, B5-3, B7 | `src/Starling.Engine/Engine.cs` |
+| **B7-followup-a: wire JS into engine render pipeline** | THE remaining blocker. `StarlingEngine.RenderAsync` does URL → HTTP → parse → style → layout → paint with no JS step. All the binding work (B5-1/B5-2/B5-3/B5-5) is plumbed but never invoked by the engine. To make `/search?q=hello` actually render results, the engine needs: (1) construct a JsRuntime + install bindings against the parsed Document; (2) execute inline `<script>` tags and external scripts (with the script loader fetching them); (3) fire DOMContentLoaded + load events; (4) drain microtasks + give async fetch some pump time; (5) re-layout against the post-script DOM. This is wp:M3-pipeline-js-integration; might span several sub-tickets. Pin: `Search_fetches_results_via_js_fetch_and_populates_dom` should pass against `StarlingEngine.RenderAsync` directly instead of via the manual JsRuntime+WindowBinding glue. **Files:** `src/Starling.Engine/Engine.cs` (RenderAsync + LayoutPageAsync), `src/Starling.Bindings/WindowBinding.cs` (DOMContentLoaded/load firing), maybe new `Starling.Engine/ScriptLoader.cs`. | **lane Engine** | B5-1, B5-3, B7 | `src/Starling.Engine/Engine.cs` |
 | **B7-followup-b: for-statement compiler** | `JsCompiler.EmitStatement` throws `NotSupportedException` on `ForStatement` at line 516. Basic `for (var i = 0; i < n; i++)` doesn't compile. Real-world JS lives on `for` loops; the B7 test had to dodge with `Array.prototype.forEach`. Once this lands, also wire `for…in` if it isn't already (probably not — same site). Note: gap:B3-2-followup-a (break/continue) is related and should land together so loop bodies can use early exit. Pin: `var s=0; for (var i=0; i<5; i++) s+=i; s === 10`. **Files:** `src/Starling.Js/Bytecode/{Opcode,JsCompiler}.cs`, `src/Starling.Js/Runtime/JsVm.cs`. | **lane A** | (none) | `src/Starling.Js/Bytecode/JsCompiler.cs` |
 
 ### Concurrency map
@@ -316,7 +316,7 @@ Critical paths into B7:
   regressions for any task here. They're tracked under separate issues.
 - **`Snapshot_nginx_org_renders_match_golden`**: SSIM 0.39 vs. 0.99 threshold.
   Snapshot golden is stale, not a regression. Re-vendor with
-  `TESSERA_UPDATE_GOLDENS=1` when the underlying paint change is
+  `STARLING_UPDATE_GOLDENS=1` when the underlying paint change is
   intentional.
 - **Bare-name accessor globals resolve to undefined** (surfaced by B5-5).
   `Opcode.LoadGlobal` reads through `JsObject.Get` which returns `Undefined`

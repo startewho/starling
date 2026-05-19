@@ -1,6 +1,6 @@
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 /// <summary>
 /// Pixel-reader helpers for the backend-neutral <see cref="RenderedBitmap"/>.

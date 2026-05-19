@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Intrinsics;
+namespace Starling.Js.Tests.Intrinsics;
 
 /// <summary>
 /// End-to-end coverage for the Function intrinsic (B2-2). Verifies the two

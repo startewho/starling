@@ -1,5 +1,5 @@
 /* global React */
-// devtools.jsx — Tessera DevTools panels
+// devtools.jsx — Starling DevTools panels
 // Three panels users asked for:
 //   1. Performance timeline (hero flame chart, paint/layout/script/GC)
 //   2. Console + structured logs
@@ -254,7 +254,7 @@ function PerformancePanel({ height = 360 }) {
         <div>
           <div style={{ color: 'var(--muted)', marginBottom: 4 }}>SELECTED · layout flow</div>
           <div style={{ color: 'var(--text)', fontSize: 'var(--fs-md)', marginBottom: 2 }}>BlockFlow::layout(<span style={{ color: 'var(--cat-layout)' }}>root</span>)</div>
-          <div style={{ color: 'var(--muted)' }}>libtessera/layout/flow.cc:128</div>
+          <div style={{ color: 'var(--muted)' }}>libstarling/layout/flow.cc:128</div>
         </div>
         <div>
           <div style={{ color: 'var(--muted)', marginBottom: 4 }}>TIMING</div>
@@ -275,7 +275,7 @@ function PerformancePanel({ height = 360 }) {
 
 /* ─── Console / structured logs panel ────────────────────────────── */
 const LOGS = [
-  { t: '00:00.012', lvl: 'info',  src: 'tessera', cat: 'boot',   msg: 'engine ready · M3 (flow-layout, async-loader, ipc-sandbox)' },
+  { t: '00:00.012', lvl: 'info',  src: 'starling', cat: 'boot',   msg: 'engine ready · M3 (flow-layout, async-loader, ipc-sandbox)' },
   { t: '00:00.024', lvl: 'info',  src: 'loader',  cat: 'net',    msg: 'GET justinjackson.ca/words.html', tag: '200 · 4.2kB · 318ms' },
   { t: '00:00.036', lvl: 'info',  src: 'parser',  cat: 'html',   msg: 'tokens=412 nodes=87 errors=0' },
   { t: '00:00.118', lvl: 'warn',  src: 'parser',  cat: 'html',   msg: 'unmatched <em> at line 18 · auto-closed' },
@@ -545,7 +545,7 @@ function JSCard() {
               ['Hero.render', 'app.js:142', 'var(--err)'],
               ['App.render',  'app.js:88',  'var(--text-2)'],
               ['hydrate',     'react.js:1284', 'var(--text-2)'],
-              ['<rAF>',       'libtessera/event', 'var(--muted)'],
+              ['<rAF>',       'libstarling/event', 'var(--muted)'],
             ].map(([fn, src, c], i) => (
               <div key={i} style={{ display: 'flex', gap: 8, color: c }}>
                 <span style={{ width: 12 }}>{i === 0 ? '▸' : ''}</span>

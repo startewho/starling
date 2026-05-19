@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace Tessera.Common.Image;
+namespace Starling.Common.Image;
 
 /// <summary>
 /// A backend-neutral decoded raster image. Carries intrinsic dimensions plus a
@@ -10,7 +10,7 @@ namespace Tessera.Common.Image;
 /// </summary>
 /// <remarks>
 /// This type is the decode/paint contract seam: it lets the engine pass pixels
-/// between the decoder (today ImageSharp; later <c>Tessera.Codecs</c>) and the
+/// between the decoder (today ImageSharp; later <c>Starling.Codecs</c>) and the
 /// paint backend without either side naming the other's concrete bitmap type.
 /// <para>
 /// The backing buffer may be rented from <see cref="ArrayPool{T}"/>; callers

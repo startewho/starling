@@ -1,7 +1,7 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Media;
+namespace Starling.Css.Media;
 
 // MQ5 §2/§4: parse a `<media-query-list>` from a stream of CSS component values.
 public sealed class MediaQueryParser

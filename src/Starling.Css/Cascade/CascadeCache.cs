@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
-using Tessera.Css.Selectors;
-using Tessera.Dom;
+using Starling.Css.Selectors;
+using Starling.Dom;
 
-namespace Tessera.Css.Cascade;
+namespace Starling.Css.Cascade;
 
 /// <summary>
 /// Per-tree-pass memoization for <see cref="StyleEngine.Compute(Element)"/>.

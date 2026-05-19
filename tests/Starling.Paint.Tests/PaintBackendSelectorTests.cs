@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Paint.Backend;
+using Starling.Paint.Backend;
 using Xunit;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 public sealed class PaintBackendSelectorTests
 {
@@ -30,7 +30,7 @@ public sealed class PaintBackendSelectorTests
     {
         var act = () => PaintBackendSelector.Parse(value);
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*TESSERA_PAINT_BACKEND*")
+            .WithMessage("*STARLING_PAINT_BACKEND*")
             .WithMessage("*imagesharp*");
     }
 }

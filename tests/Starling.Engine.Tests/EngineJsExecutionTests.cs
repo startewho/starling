@@ -4,7 +4,7 @@ using FluentAssertions;
 using SixLabors.ImageSharp;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Engine-level coverage for the JS-execution hook landed alongside the
@@ -308,12 +308,12 @@ public sealed class EngineJsExecutionTests
 
     private static async Task<RenderOutcome> RenderHtmlAsync(string html)
     {
-        var tempHtml = Path.Combine(Path.GetTempPath(), $"tessera-js-{Guid.NewGuid():N}.html");
-        var tempPng = Path.Combine(Path.GetTempPath(), $"tessera-js-{Guid.NewGuid():N}.png");
+        var tempHtml = Path.Combine(Path.GetTempPath(), $"starling-js-{Guid.NewGuid():N}.html");
+        var tempPng = Path.Combine(Path.GetTempPath(), $"starling-js-{Guid.NewGuid():N}.png");
         await File.WriteAllTextAsync(tempHtml, html, TestContext.Current.CancellationToken);
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var url = new Uri(tempHtml).AbsoluteUri;
             var result = await engine.RenderAsync(url, DefaultOptions, tempPng,
                 TestContext.Current.CancellationToken);

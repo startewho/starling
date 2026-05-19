@@ -18,10 +18,10 @@
 
 ## TLS approach
 
-`Tessera.Net` stays P/Invoke-free under the interop seam policy (native interop
-is confined to `Tessera.Skia` and `Tessera.Codecs`). TLS uses **`SslStream`** —
+`Starling.Net` stays P/Invoke-free under the interop seam policy (native interop
+is confined to `Starling.Skia` and `Starling.Codecs`). TLS uses **`SslStream`** —
 the OS TLS stack (Schannel/OpenSSL/Network.framework) wrapped by pure-managed
-BCL. `SslStream` is BCL, so it does not count as native interop and `Tessera.Net`
+BCL. `SslStream` is BCL, so it does not count as native interop and `Starling.Net`
 keeps its clean bill on the CI grep.
 
 - TLS via `SslStream` behind the `ITlsTransport` seam (`SslStreamTlsTransport`).
@@ -47,10 +47,10 @@ What we *do* use:
 ## Project layout
 
 ```
-src/Tessera.Net/
-├── Tessera.Net.csproj
+src/Starling.Net/
+├── Starling.Net.csproj
 ├── INetworkStack.cs                 # public seam
-├── Url/                             # only struct/parsing helpers; full parser in Tessera.Url
+├── Url/                             # only struct/parsing helpers; full parser in Starling.Url
 │   └── UrlExtensions.cs
 ├── Dns/
 │   ├── DnsResolver.cs
@@ -93,12 +93,12 @@ src/Tessera.Net/
 
 ## URL parsing
 
-`Tessera.Url` implements the WHATWG URL parser ([SPEC: URL](https://url.spec.whatwg.org/)). Hand-roll. **Do not** use `System.Uri` — it predates the WHATWG spec and gets several edge cases wrong (percent-encoding, IDN, scheme parsing).
+`Starling.Url` implements the WHATWG URL parser ([SPEC: URL](https://url.spec.whatwg.org/)). Hand-roll. **Do not** use `System.Uri` — it predates the WHATWG spec and gets several edge cases wrong (percent-encoding, IDN, scheme parsing).
 
 ### Public API
 
 ```csharp
-namespace Tessera.Url;
+namespace Starling.Url;
 
 public readonly record struct Url
 {
@@ -148,7 +148,7 @@ Implement encoding/decoding manually. Names use the compression scheme (0xC0 poi
 ### Public API
 
 ```csharp
-namespace Tessera.Net.Dns;
+namespace Starling.Net.Dns;
 
 public interface IDnsResolver
 {
@@ -192,7 +192,7 @@ Pool: max 6 simultaneous H1 connections per origin (browser default), 1 H2 conne
 
 TLS is provided by `System.Net.Security.SslStream` behind the `ITlsTransport` seam.
 `SslStream` is pure-managed BCL — it does not count as native interop under the
-interop seam policy, so `Tessera.Net` stays off the CI interop-grep list.
+interop seam policy, so `Starling.Net` stays off the CI interop-grep list.
 
 **TLS 1.3 only.** By 2026, google.com, claude.ai, and every major CDN serve 1.3.
 We pin `EnabledSslProtocols = SslProtocols.Tls13` and do not enable TLS 1.2 — it
@@ -408,9 +408,9 @@ v1 features: `Cache-Control: max-age`, `Expires`, `Last-Modified` + `If-Modified
 ## Top-level façade
 
 ```csharp
-public sealed class TesseraHttpClient
+public sealed class StarlingHttpClient
 {
-    public TesseraHttpClient(NetworkOptions opts);
+    public StarlingHttpClient(NetworkOptions opts);
     public IAsyncEnumerable<ResponseChunk> SendAsync(HttpRequest req, CancellationToken ct);
 }
 
@@ -455,5 +455,5 @@ Used by [10_WEB_APIS.md#fetch](10_WEB_APIS.md#fetch).
 - [ ] Gzip and Brotli-encoded bodies decode byte-identical to non-encoded servers.
 - [ ] Connection pool reuses a TCP connection across two sequential HTTPS requests to the same origin.
 - [ ] All of the above pass on Windows, macOS, Linux in CI.
-- [ ] `grep -rn 'System.Net.Http\|HttpClient' src/Tessera.Net/` is empty (the `HttpClient` ban stands; `SslStream` is now the sanctioned TLS path).
-- [ ] `grep -rn 'DllImport\|LibraryImport' src/Tessera.Net/` is empty — `Tessera.Net` is not a designated interop project.
+- [ ] `grep -rn 'System.Net.Http\|HttpClient' src/Starling.Net/` is empty (the `HttpClient` ban stands; `SslStream` is now the sanctioned TLS path).
+- [ ] `grep -rn 'DllImport\|LibraryImport' src/Starling.Net/` is empty — `Starling.Net` is not a designated interop project.

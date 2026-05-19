@@ -11,21 +11,21 @@ depends_on: []
 blocks:
   - "wp:M3-06d-codecs"
   - "wp:M3-06i-skia-backend"
-subsystem: "Tessera.Common"
+subsystem: "Starling.Common"
 plan_refs:
   - "browser-plan/01_ARCHITECTURE.md#project-layout"
   - "browser-plan/08_FONTS_PAINT.md#display-list"
   - "browser-plan/13_MILESTONES.md#m3"
 ---
 
-# wp:M3-06c-decoded-image — `DecodedImage` seam in `Tessera.Common`
+# wp:M3-06c-decoded-image — `DecodedImage` seam in `Starling.Common`
 
 ## Goal
 
 Phase 8 (seam half): define a backend-neutral `DecodedImage` type in
-`Tessera.Common` and thread it through every place the engine currently passes
+`Starling.Common` and thread it through every place the engine currently passes
 an ImageSharp `Image<Rgba32>` or untyped `object Source`. This decouples the
-image-decode contract from any one decoder so `Tessera.Codecs` (native) can be
+image-decode contract from any one decoder so `Starling.Codecs` (native) can be
 swapped in later. **ImageSharp stays working** as the decoder + rasterizer in
 this package — this is a type seam, not a behavior change — so the package is
 independently mergeable to `main` without breaking the running engine.
@@ -39,25 +39,25 @@ independently mergeable to `main` without breaking the running engine.
 
 ## Outputs
 
-- `src/Tessera.Common/Image/DecodedImage.cs` — `{ int Width, int Height,
+- `src/Starling.Common/Image/DecodedImage.cs` — `{ int Width, int Height,
   ReadOnlyMemory<byte> Pixels }` (straight RGBA8888), `IDisposable`.
-- `src/Tessera.Layout/Tree/IImageResolver.cs` — `ResolvedImage` carries
+- `src/Starling.Layout/Tree/IImageResolver.cs` — `ResolvedImage` carries
   `DecodedImage` instead of `object Source` / `Image<Rgba32>`.
-- `src/Tessera.Paint/DisplayList/DisplayItem.cs` — `DrawImage` variant carries a
+- `src/Starling.Paint/DisplayList/DisplayItem.cs` — `DrawImage` variant carries a
   `DecodedImage` (this is the contended file — land this package **first** so
   `06i-skia-backend` builds on the final signature).
-- `src/Tessera.Paint/DisplayList/DisplayListBuilder.cs` — emits `DrawImage` with
+- `src/Starling.Paint/DisplayList/DisplayListBuilder.cs` — emits `DrawImage` with
   `DecodedImage`.
-- `src/Tessera.Engine/ImageFetcher.cs` — produces `DecodedImage` (still via
+- `src/Starling.Engine/ImageFetcher.cs` — produces `DecodedImage` (still via
   ImageSharp decode in this package).
-- `src/Tessera.Paint/Backend/ImageSharpBackend.cs` — blits from `DecodedImage`
+- `src/Starling.Paint/Backend/ImageSharpBackend.cs` — blits from `DecodedImage`
   pixels (ImageSharp still does the rasterizing).
-- `src/Tessera.Gui/BoxTreeRenderer.cs` — reads `DecodedImage`.
+- `src/Starling.Gui/BoxTreeRenderer.cs` — reads `DecodedImage`.
 - Test updates so the existing 3-case image-paint golden suite still passes.
 
 ## Acceptance
 
-- `DecodedImage` exists in `Tessera.Common` with the exact shape above and is
+- `DecodedImage` exists in `Starling.Common` with the exact shape above and is
   `IDisposable`.
 - `object Source` / `Image<Rgba32>` no longer appears in `IImageResolver`,
   `DisplayItem.DrawImage`, `DisplayListBuilder`, `ImageFetcher`, or
@@ -81,7 +81,7 @@ independently mergeable to `main` without breaking the running engine.
 
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
 - 2026-05-14T14:50:00Z — completed (agent-claude-cody-image). Added
-  `Tessera.Common/Image/DecodedImage.cs` (sealed `IDisposable`, `Width`/`Height`/
+  `Starling.Common/Image/DecodedImage.cs` (sealed `IDisposable`, `Width`/`Height`/
   `ReadOnlyMemory<byte> Pixels`, straight top-down RGBA8888, pooled backing
   buffer via `ArrayPool`). Threaded `DecodedImage` through `IImageResolver`/
   `ResolvedImage`, `ImageBox.Source` (Box.cs), `DisplayItem.DrawImage`,

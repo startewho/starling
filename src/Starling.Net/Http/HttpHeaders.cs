@@ -1,6 +1,6 @@
 using System.Collections;
 
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// Order-preserving, case-insensitive HTTP header collection. A name may appear

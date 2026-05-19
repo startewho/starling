@@ -1,7 +1,7 @@
-using Tessera.Dom;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-1 stop-gap selector engine. Accepts a single simple selector — one of

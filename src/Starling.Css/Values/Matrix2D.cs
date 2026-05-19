@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// 2D affine matrix in the CSS Transforms 1 §6.1 form

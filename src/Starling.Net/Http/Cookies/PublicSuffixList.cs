@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Tessera.Net.Http.Cookies;
+namespace Starling.Net.Http.Cookies;
 
 /// <summary>
 /// Mozilla's Public Suffix List, used to reject cookies whose <c>Domain</c>

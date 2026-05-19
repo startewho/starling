@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>
 /// ES2024 §22.2.1 regex pattern parser. Source string → AST. Throws

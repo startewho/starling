@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
-using Tessera.Js.Bytecode;
-using Tessera.Js.RegExp;
+using Starling.Js.Bytecode;
+using Starling.Js.RegExp;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// Stack-machine VM. Executes a <see cref="Chunk"/> against a
@@ -885,7 +885,7 @@ public sealed class JsVm
                 {
                     var iterable = Pop();
                     var record = AbstractOperations.GetIterator(_runtime.Realm, this, iterable);
-                    Push(JsValue.Object(new Tessera.Js.Intrinsics.JsIteratorRecordHandle(record)));
+                    Push(JsValue.Object(new Starling.Js.Intrinsics.JsIteratorRecordHandle(record)));
                     break;
                 }
 
@@ -896,7 +896,7 @@ public sealed class JsVm
                     // iterator-result object (done=false) or undefined (done=true)
                     // as the loop sentinel.
                     var top = Peek();
-                    if (!top.IsObject || top.AsObject is not Tessera.Js.Intrinsics.JsIteratorRecordHandle handle)
+                    if (!top.IsObject || top.AsObject is not Starling.Js.Intrinsics.JsIteratorRecordHandle handle)
                         throw new InvalidOperationException("IteratorStep expects an iterator-record handle on the stack");
                     var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref handle.Record);
                     Push(step ?? JsValue.Undefined);
@@ -906,7 +906,7 @@ public sealed class JsVm
                 case Opcode.IteratorClose:
                 {
                     var handleV = Pop();
-                    if (handleV.IsObject && handleV.AsObject is Tessera.Js.Intrinsics.JsIteratorRecordHandle h)
+                    if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h)
                     {
                         if (!h.Record.Done)
                             AbstractOperations.IteratorClose(this, h.Record, isThrowing: false);
@@ -1237,7 +1237,7 @@ public sealed class JsVm
                 case Opcode.BuildClass:
                 {
                     var idx = ReadU16();
-                    var template = (Tessera.Js.Bytecode.ClassTemplate)constants[idx]!;
+                    var template = (Starling.Js.Bytecode.ClassTemplate)constants[idx]!;
 
                     // Stack layout (top → bottom):
                     //   [baseClass?]
@@ -1531,7 +1531,7 @@ public sealed class JsVm
         // §13.10.2 step 2: invoke the well-known method if defined anywhere
         // on the prototype chain.
         var hasInstance = AbstractOperations.Get(this, targetObj,
-            JsPropertyKey.Symbol(Tessera.Js.Intrinsics.SymbolCtor.HasInstance));
+            JsPropertyKey.Symbol(Starling.Js.Intrinsics.SymbolCtor.HasInstance));
         if (!hasInstance.IsUndefined && !hasInstance.IsNull)
         {
             if (!AbstractOperations.IsCallable(hasInstance))
@@ -1633,7 +1633,7 @@ public sealed class JsVm
     /// members, stamps the instance field initializer table on the
     /// constructor, and runs static initializers in declaration order.</summary>
     private JsValue BuildClassRuntime(
-        Tessera.Js.Bytecode.ClassTemplate template,
+        Starling.Js.Bytecode.ClassTemplate template,
         JsValue baseClassValue,
         JsValue[] ctorUpvalues,
         JsValue[][] methodUpvalues,
@@ -1785,22 +1785,22 @@ public sealed class JsVm
         return JsValue.Object(ctorInstance);
     }
 
-    private static void InstallMethodOrAccessor(JsObject owner, string key, Tessera.Js.Bytecode.ClassMethodKind kind, JsFunction fn)
+    private static void InstallMethodOrAccessor(JsObject owner, string key, Starling.Js.Bytecode.ClassMethodKind kind, JsFunction fn)
     {
         switch (kind)
         {
-            case Tessera.Js.Bytecode.ClassMethodKind.Method:
+            case Starling.Js.Bytecode.ClassMethodKind.Method:
                 owner.DefineOwnProperty(key,
                     PropertyDescriptor.Data(JsValue.Object(fn), writable: true, enumerable: false, configurable: true));
                 break;
-            case Tessera.Js.Bytecode.ClassMethodKind.Get:
+            case Starling.Js.Bytecode.ClassMethodKind.Get:
             {
                 var existing = owner.GetOwnPropertyDescriptor(key);
                 var setter = existing is { IsAccessor: true } existingDesc ? existingDesc.Setter : null;
                 owner.DefineOwnProperty(key, PropertyDescriptor.Accessor(fn, setter, enumerable: false, configurable: true));
                 break;
             }
-            case Tessera.Js.Bytecode.ClassMethodKind.Set:
+            case Starling.Js.Bytecode.ClassMethodKind.Set:
             {
                 var existing = owner.GetOwnPropertyDescriptor(key);
                 var getter = existing is { IsAccessor: true } existingDesc ? existingDesc.Getter : null;
@@ -1810,25 +1810,25 @@ public sealed class JsVm
         }
     }
 
-    private static JsFunction MakeUndefinedFieldThunk(JsRealm realm, Tessera.Js.Bytecode.FieldEntry field)
+    private static JsFunction MakeUndefinedFieldThunk(JsRealm realm, Starling.Js.Bytecode.FieldEntry field)
     {
         // Synthesize a tiny chunk: `this.key = undefined;` (or DefinePrivateField).
-        var b = new Tessera.Js.Bytecode.ChunkBuilder();
+        var b = new Starling.Js.Bytecode.ChunkBuilder();
         if (field.MangledPrivateKey is not null)
         {
             // [this, undefined, DefinePrivateField]
-            b.Emit(Tessera.Js.Bytecode.Opcode.LoadThis);
-            b.Emit(Tessera.Js.Bytecode.Opcode.LoadUndefined);
-            b.EmitU16(Tessera.Js.Bytecode.Opcode.DefinePrivateField, b.AddConstant(field.MangledPrivateKey));
+            b.Emit(Starling.Js.Bytecode.Opcode.LoadThis);
+            b.Emit(Starling.Js.Bytecode.Opcode.LoadUndefined);
+            b.EmitU16(Starling.Js.Bytecode.Opcode.DefinePrivateField, b.AddConstant(field.MangledPrivateKey));
         }
         else
         {
-            b.Emit(Tessera.Js.Bytecode.Opcode.LoadThis);
-            b.Emit(Tessera.Js.Bytecode.Opcode.LoadUndefined);
-            b.EmitU16(Tessera.Js.Bytecode.Opcode.StoreProperty, b.AddConstant(field.StaticKey!));
-            b.Emit(Tessera.Js.Bytecode.Opcode.Pop);
+            b.Emit(Starling.Js.Bytecode.Opcode.LoadThis);
+            b.Emit(Starling.Js.Bytecode.Opcode.LoadUndefined);
+            b.EmitU16(Starling.Js.Bytecode.Opcode.StoreProperty, b.AddConstant(field.StaticKey!));
+            b.Emit(Starling.Js.Bytecode.Opcode.Pop);
         }
-        b.Emit(Tessera.Js.Bytecode.Opcode.ReturnUndefined);
+        b.Emit(Starling.Js.Bytecode.Opcode.ReturnUndefined);
         var chunk = b.Build("#field-init-undef");
         var tmpl = new JsFunction("", chunk, 0);
         return JsFunction.CreateInstance(realm, tmpl, Array.Empty<JsValue>());
@@ -1940,7 +1940,7 @@ public sealed class JsVm
         else
         {
             inner = new JsPromise(realm.PromisePrototype);
-            Tessera.Js.Intrinsics.PromiseCtor.Resolve(realm, inner, awaited);
+            Starling.Js.Intrinsics.PromiseCtor.Resolve(realm, inner, awaited);
         }
 
         var onFulfill = new JsNativeFunction("", (thisV, args) =>
@@ -1972,9 +1972,9 @@ public sealed class JsVm
         state.Settled = true;
         var realm = _runtime.Realm;
         if (state.Frame.ThrewUncaught)
-            Tessera.Js.Intrinsics.PromiseCtor.Reject(realm, state.OuterPromise, state.Frame.ReturnValue);
+            Starling.Js.Intrinsics.PromiseCtor.Reject(realm, state.OuterPromise, state.Frame.ReturnValue);
         else
-            Tessera.Js.Intrinsics.PromiseCtor.Resolve(realm, state.OuterPromise, state.Frame.ReturnValue);
+            Starling.Js.Intrinsics.PromiseCtor.Resolve(realm, state.OuterPromise, state.Frame.ReturnValue);
     }
 
     /// <summary>Async generators: stub. Returns a plain async generator

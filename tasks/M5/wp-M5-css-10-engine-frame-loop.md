@@ -20,18 +20,18 @@ plan_refs:
 ## Goal
 
 Stitch the rAF-aware event loop and the animation compositor into
-`TesseraEngine` so a hosted page animates frame-by-frame and the headless
+`StarlingEngine` so a hosted page animates frame-by-frame and the headless
 renderer can rasterize a chosen frame.
 
 ## Inputs
 
 - `WebEventLoop.RunFrame(nowMs)` (wp:M5-css-08).
 - `StyleEngine.Compute(Element, nowMs)` (wp:M5-css-09).
-- Existing `TesseraEngine.RenderAsync` one-shot pipeline.
+- Existing `StarlingEngine.RenderAsync` one-shot pipeline.
 
 ## Outputs
 
-- `TesseraEngine.RenderFrame(LaidOutPage, long nowMs)`:
+- `StarlingEngine.RenderFrame(LaidOutPage, long nowMs)`:
   - Calls `loop.RunFrame(nowMs)`.
   - Re-runs `StyleEngine.Compute(.., nowMs)` for elements whose effective
     values may have changed (initially: re-cascade everything; optimize later).
@@ -65,7 +65,7 @@ renderer can rasterize a chosen frame.
 - 2026-05-19T22:30Z — complete. Threaded `nowMs` through `BoxTreeBuilder`,
   `LayoutEngine`, and `Painter` (added `RenderWithStyle` overload that
   reuses caller's `StyleEngine` so animation state survives between
-  paints). Added `TesseraEngine.RenderFrame(LaidOutPage, long nowMs)` that
+  paints). Added `StarlingEngine.RenderFrame(LaidOutPage, long nowMs)` that
   ticks `AnimationEngine` + `TransitionEngine` then repaints. Added
   `--frames N --frame-step Nms|Ns` flags to the headless renderer with
   `RenderFrameSequence` writing `framePadded.png` per timestamp. Tests in

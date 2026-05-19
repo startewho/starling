@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Tessera.Gui;
+namespace Starling.Gui;
 
 /// <summary>
 /// Sub-fragment selection. A caret is a (fragment, character-offset) pair —

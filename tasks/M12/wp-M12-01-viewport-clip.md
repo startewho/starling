@@ -68,7 +68,7 @@ permanent fix for the netclaw.dev / wgpu 8192 px texture crash class
 - The display list reaching the backend for that synthetic page contains
   only items intersecting the viewport (`displayList.Items.Count` is O(items
   on screen), not O(items on page)).
-- Scrolling netclaw.dev under `TESSERA_PAINT_BACKEND=imagesharp-gpu` renders
+- Scrolling netclaw.dev under `STARLING_PAINT_BACKEND=imagesharp-gpu` renders
   without falling back to CPU (counter `paint.webgpu.fallback_cpu.oversize`
   stays at zero across the session).
 - `dotnet build && dotnet test` green.

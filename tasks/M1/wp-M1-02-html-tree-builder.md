@@ -11,7 +11,7 @@ depends_on:
   - "wp:M1-03-dom-core"
 blocks:
   - "wp:M1-08-layout-block-inline"
-subsystem: "Tessera.Html"
+subsystem: "Starling.Html"
 plan_refs:
   - "browser-plan/04_HTML_PARSING.md#tree-builder"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-02-html-tree-builder"

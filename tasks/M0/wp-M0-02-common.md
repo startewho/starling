@@ -15,7 +15,7 @@ blocks:
   - "wp:M2-01-url-parser"
   - "wp:M3-01-js-lexer"
   - "wp:M4-01-event-loop"
-subsystem: "Tessera.Common"
+subsystem: "Starling.Common"
 plan_refs:
   - "browser-plan/01_ARCHITECTURE.md"
   - "browser-plan/14_AGENT_TASKS.md#wpm0-02-common"
@@ -31,12 +31,12 @@ foundational primitives consumed by every other module.
 - wp:M0-01-scaffold complete.
 
 ## Outputs
-- `src/Tessera.Common/Result.cs`
-- `src/Tessera.Common/Maybe.cs`
-- `src/Tessera.Common/Diagnostics/*.cs`
+- `src/Starling.Common/Result.cs`
+- `src/Starling.Common/Maybe.cs`
+- `src/Starling.Common/Diagnostics/*.cs`
 
 ## Acceptance
-- 7 unit tests pass in `tests/Tessera.Common.Tests`.
+- 7 unit tests pass in `tests/Starling.Common.Tests`.
 
 ## Notes
 - `Rope` and `CodePoint` are still pending — they're needed by the HTML

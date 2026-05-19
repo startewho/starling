@@ -28,7 +28,7 @@ layer to native libraries — **Skia Graphite** (Dawn/WebGPU GPU rasterizer),
 **ANGLE** (GL fallback), **OS-native image codecs** (ImageIO/WIC/libjpeg-png-webp),
 and **`SslStream`** (OS TLS) replacing BouncyCastle. "Rule 0" becomes the
 **interop seam policy**: native `LibraryImport` is confined to two vetted
-projects — `Tessera.Skia` and `Tessera.Codecs` — and every other engine project
+projects — `Starling.Skia` and `Starling.Codecs` — and every other engine project
 stays P/Invoke-free. This parent tracks the 12 children below; it is "done" when
 all 12 are `complete`, the dual-backend flag has flipped, `ImageSharpBackend.cs`
 is deleted, and `dotnet build && dotnet test` is green on win/mac/linux under
@@ -49,12 +49,12 @@ child work packages under `tasks/M3/`:
 |---|---|---|
 | `wp:M3-06a-native-scaffold` | 0 | `third_party/REVISIONS.md`, `native/`+`runtimes/` dirs, pin Skia/Dawn/ANGLE revisions |
 | `wp:M3-06b-native-build` | 1 | GN/Ninja Skia+Graphite+Dawn build osx-arm64→win→linux, `native.yml` |
-| `wp:M3-06c-decoded-image` | 8 (seam) | `DecodedImage` type in `Tessera.Common`, thread through resolver/display-list/fetcher |
-| `wp:M3-06d-codecs` | 8 (project) | `Tessera.Codecs` interop project + ImageIO/WIC/Linux decoders + tests |
+| `wp:M3-06c-decoded-image` | 8 (seam) | `DecodedImage` type in `Starling.Common`, thread through resolver/display-list/fetcher |
+| `wp:M3-06d-codecs` | 8 (project) | `Starling.Codecs` interop project + ImageIO/WIC/Linux decoders + tests |
 | `wp:M3-06e-sslstream-tls` | 9 | `SslStreamTlsTransport`, rewrite cert verification, delete BouncyCastle |
 | `wp:M3-06f-docs-policy` | 10 (docs) | Rewrite README/AGENTS/`browser-plan/*` for the interop seam policy |
-| `wp:M3-06g-skia-shim` | 2 | `native/shim/tessera_skia.{h,cpp}` + CMake, static-link, C++ smoke test |
-| `wp:M3-06h-skia-interop` | 3 + 4 | `src/Tessera.Skia` project, `LibraryImport` bindings, SafeHandles, Dawn/Graphite wiring |
+| `wp:M3-06g-skia-shim` | 2 | `native/shim/starling_skia.{h,cpp}` + CMake, static-link, C++ smoke test |
+| `wp:M3-06h-skia-interop` | 3 + 4 | `src/Starling.Skia` project, `LibraryImport` bindings, SafeHandles, Dawn/Graphite wiring |
 | `wp:M3-06i-skia-backend` | 5 | `SkiaGraphiteBackend`, `RenderedBitmap`, rewire Painter/Engine/Headless behind a flag |
 | `wp:M3-06j-skia-fonts` | 6 | `FontResolver` rewrite, `SkiaTextMeasurer`, re-vendor `testdata/golden/` |
 | `wp:M3-06k-gui-canvas` | 7 | `SkiaCanvasView` + handler, rewrite `MainPage` hit-testing, delete `BoxTreeRenderer` |
@@ -92,7 +92,7 @@ child work packages under `tasks/M3/`:
     build (2–4 weeks alone) dominates — start it on day one.
 - **File-contention hotspots:** `DisplayItem.cs` is touched by both
   `06c-decoded-image` and `06i-skia-backend` — land `06c` first.
-  `Tessera.sln`, `Directory.Packages.props`, and `tasks/INDEX.md` are
+  `Starling.sln`, `Directory.Packages.props`, and `tasks/INDEX.md` are
   merge-conflict hotspots — note in every handoff log.
 - **Big-bang delivery, staged work:** Wave 1 packages do not break the running
   engine (ImageSharp stays working; TLS swap is behind `ITlsTransport`). The
@@ -104,8 +104,8 @@ child work packages under `tasks/M3/`:
 - 2026-05-14T18:30:00Z — complete (agent-claude-cody). All 13 children
   (06a–06l + the 06g2 follow-up) are `complete`; full `dotnet build && dotnet
   test` green on osx-arm64. Skia Graphite is the default paint backend, the
-  interop seam policy is in place (native interop confined to `Tessera.Skia` +
-  `Tessera.Codecs`), BouncyCastle is gone (`SslStream`), image decode is
+  interop seam policy is in place (native interop confined to `Starling.Skia` +
+  `Starling.Codecs`), BouncyCastle is gone (`SslStream`), image decode is
   OS-native, and the GUI renders through the unified `DisplayList` path.
 
   **Deliberate deviations from the original Acceptance (re-planning, all
@@ -115,11 +115,11 @@ child work packages under `tasks/M3/`:
     don't want the fallback at all: make this CORRECT"). `ImageSharpBackend.cs`,
     `PaintBackend.cs`, and `Painter.SelectBackend()` are deleted; `NativeLoader`
     throws an actionable `DllNotFoundException` when the shim is absent, and
-    `Tessera.Skia.csproj` has a `BeforeTargets="Build"` guard that hard-fails
+    `Starling.Skia.csproj` has a `BeforeTargets="Build"` guard that hard-fails
     the build early with a build-it message. `BoxTreeRenderer.cs` and the three
     BouncyCastle TLS files were also deleted as planned.
   - Validation is **osx-arm64 only**. The native Skia + shim build
-    (`build-skia.sh`, `libtessera_skia.dylib`) has only been run for osx-arm64;
+    (`build-skia.sh`, `libstarling_skia.dylib`) has only been run for osx-arm64;
     win-x64 / linux-x64 native builds are still pending (run `native.yml` or
     the scripts on those platforms). With no fallback, RIDs without the shim
     fail the build outright — the ubuntu/windows CI legs are honestly red until

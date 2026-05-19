@@ -1,5 +1,5 @@
 /* global React */
-// chrome.jsx — Tessera browser chrome (tabs, URL bar, status, webview)
+// chrome.jsx — Starling browser chrome (tabs, URL bar, status, webview)
 // Two chrome variations share the same atoms (URL bar, build pill, page
 // content) but compose them differently.
 
@@ -301,7 +301,7 @@ function TabStripB({ tabs, activeId, pinned = [] }) {
           fontSize: 'var(--fs-md)',
           fontWeight: 600,
           letterSpacing: '-0.01em',
-        }}>tessera</span>
+        }}>starling</span>
       </div>
       <div style={{
         margin: '0 8px 8px',
@@ -395,7 +395,7 @@ function Webview({ state = 'rendered' }) {
           studio window, a place to write words that aren't filtered by a feed.
         </p>
         <p style={{ fontSize: 18, lineHeight: 1.55, margin: '0 0 28px', color: '#333' }}>
-          Tessera is the browser that rendered this page. Welcome.
+          Starling is the browser that rendered this page. Welcome.
         </p>
         <hr style={{ border: 0, borderTop: '1px solid #e5e5e5', margin: '32px 0' }} />
         <p style={{ fontSize: 13, color: '#888' }}>
@@ -407,9 +407,9 @@ function Webview({ state = 'rendered' }) {
 }
 
 /* Shimmer keyframes — injected once. */
-if (typeof document !== 'undefined' && !document.getElementById('tessera-keyframes')) {
+if (typeof document !== 'undefined' && !document.getElementById('starling-keyframes')) {
   const s = document.createElement('style');
-  s.id = 'tessera-keyframes';
+  s.id = 'starling-keyframes';
   s.textContent = `
     @keyframes shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
     @keyframes blink { 50% { opacity: 0 } }

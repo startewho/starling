@@ -3,8 +3,8 @@
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Media;
+using Starling.Css.Parser;
+using Starling.Css.Media;
 
 namespace Starling.Css.Spec.Tests.Mediaqueries;
 

@@ -1,10 +1,10 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Lex;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Lex;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // Backstops the M3 exit ("Hand-picked microbenchmarks within 10x of V8 on
 // simple loops") and the §C.5 "0 allocations per bytecode dispatch" budget.

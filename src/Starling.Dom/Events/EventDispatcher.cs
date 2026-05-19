@@ -1,4 +1,4 @@
-namespace Tessera.Dom.Events;
+namespace Starling.Dom.Events;
 
 /// <summary>
 /// Implements [DOM §2.9 Dispatching events](https://dom.spec.whatwg.org/#dispatching-events).

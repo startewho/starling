@@ -1,18 +1,18 @@
 using System.Net;
 using System.Text;
 using FluentAssertions;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
-using Tessera.Net;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
+using Starling.Net;
 using Xunit;
 
-namespace Tessera.Bindings.Tests;
+namespace Starling.Bindings.Tests;
 
 /// <summary>
 /// B5-3 fetch tests. Spins up a local <see cref="HttpListener"/> per test so
-/// the live <see cref="TesseraHttpClient"/> path is exercised end-to-end.
+/// the live <see cref="StarlingHttpClient"/> path is exercised end-to-end.
 /// </summary>
 public sealed class FetchTests
 {
@@ -237,12 +237,12 @@ public sealed class FetchTests
     // Helpers
     // -------------------------------------------------------------------
 
-    internal static (JsRuntime Runtime, Document Document, TesseraHttpClient Client) NewEnv(string url)
+    internal static (JsRuntime Runtime, Document Document, StarlingHttpClient Client) NewEnv(string url)
     {
         var doc = new Document();
         doc.AppendChild(doc.CreateElement("html"));
         var runtime = new JsRuntime();
-        var client = new TesseraHttpClient();
+        var client = new StarlingHttpClient();
         WindowBinding.Install(runtime, doc, new WindowInstallOptions(
             DocumentUrl: url, HttpClient: client));
         return (runtime, doc, client);

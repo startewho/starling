@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Inputs needed to resolve relative units (em/rem/lh/rlh/vh/vw/sv*/lv*/dv*/cq*)

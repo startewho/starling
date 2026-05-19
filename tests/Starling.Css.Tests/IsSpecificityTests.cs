@@ -1,9 +1,9 @@
 using FluentAssertions;
-using Tessera.Css.Selectors;
+using Starling.Css.Selectors;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("selectors-4", "https://www.w3.org/TR/selectors-4/")]
 

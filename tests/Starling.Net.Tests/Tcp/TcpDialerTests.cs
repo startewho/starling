@@ -3,11 +3,11 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading.Channels;
 using FluentAssertions;
-using Tessera.Net.Dns;
-using Tessera.Net.Tcp;
+using Starling.Net.Dns;
+using Starling.Net.Tcp;
 using Xunit;
 
-namespace Tessera.Net.Tests.Tcp;
+namespace Starling.Net.Tests.Tcp;
 
 public class TcpDialerTests
 {
@@ -45,7 +45,7 @@ public class TcpDialerTests
         conn.IsOpen.Should().BeTrue();
         conn.Endpoint.Hostname.Should().Be("localhost");
 
-        var payload = Encoding.UTF8.GetBytes("hello, tessera tcp\n");
+        var payload = Encoding.UTF8.GetBytes("hello, starling tcp\n");
         await conn.WriteAsync(payload, ct);
 
         var buf = new byte[payload.Length];
@@ -57,7 +57,7 @@ public class TcpDialerTests
             total += n;
         }
         total.Should().Be(payload.Length);
-        Encoding.UTF8.GetString(buf, 0, total).Should().Be("hello, tessera tcp\n");
+        Encoding.UTF8.GetString(buf, 0, total).Should().Be("hello, starling tcp\n");
     }
 
     [Fact]

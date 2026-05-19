@@ -1,4 +1,4 @@
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// (scheme, host, port) tuple identifying an HTTP origin for connection-pooling

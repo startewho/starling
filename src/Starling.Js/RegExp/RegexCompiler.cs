@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>AST → flat Pike-VM instruction array via Thompson NFA construction.</summary>
 public sealed class RegexCompiler

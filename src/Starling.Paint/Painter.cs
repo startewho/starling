@@ -1,18 +1,18 @@
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Image;
-using Tessera.Css;
-using Tessera.Css.Cascade;
-using Tessera.Css.Media;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Layout.Tree;
-using Tessera.Paint.Backend;
-using Tessera.Paint.DisplayList;
-using LayoutEngineImpl = Tessera.Layout.LayoutEngine;
-using LayoutSize = Tessera.Layout.Size;
-using PaintList = Tessera.Paint.DisplayList.DisplayList;
+using Starling.Common.Diagnostics;
+using Starling.Common.Image;
+using Starling.Css;
+using Starling.Css.Cascade;
+using Starling.Css.Media;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Layout.Tree;
+using Starling.Paint.Backend;
+using Starling.Paint.DisplayList;
+using LayoutEngineImpl = Starling.Layout.LayoutEngine;
+using LayoutSize = Starling.Layout.Size;
+using PaintList = Starling.Paint.DisplayList.DisplayList;
 
-namespace Tessera.Paint;
+namespace Starling.Paint;
 
 /// <summary>
 /// Paint façade for the full pipeline: parse → style → layout → display list →
@@ -108,7 +108,7 @@ public sealed class Painter
     /// browser frame) consume this so taps, selection, and Cmd-F can resolve
     /// against structure instead of pixels.
     /// </summary>
-    public Tessera.Layout.Box.BlockBox LayoutDocument(
+    public Starling.Layout.Box.BlockBox LayoutDocument(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize = null,
@@ -120,7 +120,7 @@ public sealed class Painter
 
     /// <summary>Layout at a frame timestamp — see the matching RenderDocument
     /// overload for semantics.</summary>
-    public Tessera.Layout.Box.BlockBox LayoutDocument(
+    public Starling.Layout.Box.BlockBox LayoutDocument(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize,
@@ -140,7 +140,7 @@ public sealed class Painter
     /// can recompute styles for individual elements when state changes
     /// (<c>:hover</c>, <c>:focus</c>, <c>:active</c>) without re-running layout.
     /// </summary>
-    public (Tessera.Layout.Box.BlockBox Root, StyleEngine Style) LayoutDocumentWithStyle(
+    public (Starling.Layout.Box.BlockBox Root, StyleEngine Style) LayoutDocumentWithStyle(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize = null,
@@ -152,7 +152,7 @@ public sealed class Painter
 
     /// <summary>Layout overload that threads a frame timestamp through the
     /// cascade. See the matching RenderDocument overload for semantics.</summary>
-    public (Tessera.Layout.Box.BlockBox Root, StyleEngine Style) LayoutDocumentWithStyle(
+    public (Starling.Layout.Box.BlockBox Root, StyleEngine Style) LayoutDocumentWithStyle(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize,
@@ -164,7 +164,7 @@ public sealed class Painter
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        Tessera.Common.Diagnostics.NativeCallTrace.Mark("layout.begin");
+        Starling.Common.Diagnostics.NativeCallTrace.Mark("layout.begin");
 
         StyleEngine style;
         using (_diag.Span("paint", "style_cascade"))
@@ -174,10 +174,10 @@ public sealed class Painter
         try
         {
             var layoutEngine = new LayoutEngineImpl(style, measurer, images, _diag);
-            Tessera.Layout.Box.BlockBox root;
+            Starling.Layout.Box.BlockBox root;
             using (_diag.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
-            Tessera.Common.Diagnostics.NativeCallTrace.Mark("layout.end");
+            Starling.Common.Diagnostics.NativeCallTrace.Mark("layout.end");
             return (root, style);
         }
         finally
@@ -211,7 +211,7 @@ public sealed class Painter
         try
         {
             var layoutEngine = new LayoutEngineImpl(style, measurer, images, _diag);
-            Tessera.Layout.Box.BlockBox root;
+            Starling.Layout.Box.BlockBox root;
             using (_diag.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
 

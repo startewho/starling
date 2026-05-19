@@ -1,9 +1,9 @@
 using System.Text.Json;
 using FluentAssertions;
-using Tessera.Html.Tokenizer;
+using Starling.Html.Tokenizer;
 using Xunit;
 
-namespace Tessera.Html.Tests.Tokenizer;
+namespace Starling.Html.Tests.Tokenizer;
 
 public class Html5LibTokenizerTests
 {

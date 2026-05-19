@@ -1,10 +1,10 @@
-using Tessera.Common;
-using Tessera.Net.Tcp;
+using Starling.Common;
+using Starling.Net.Tcp;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto.Impl.BC;
 
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
 /// <summary>
 /// Pure-managed TLS transport built on BouncyCastle's TLS 1.3 implementation.
@@ -36,7 +36,7 @@ public sealed class BcTlsTransport : ITlsTransport
             return Result<BcTlsTransport, TlsError>.Err(TlsError.InvalidOptions);
 
         var tcpStream = new TcpConnectionStream(tcpConnection);
-        var client = new TesseraTlsClient(
+        var client = new StarlingTlsClient(
             new BcTlsCrypto(new SecureRandom()),
             options,
             RootCertificates.Default);

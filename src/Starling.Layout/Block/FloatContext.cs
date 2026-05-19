@@ -1,4 +1,4 @@
-namespace Tessera.Layout.Block;
+namespace Starling.Layout.Block;
 
 /// <summary>
 /// CSS 2.1 §9.5 float bookkeeping for a single block formatting context.

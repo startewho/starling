@@ -1,4 +1,4 @@
-namespace Tessera.Net.Http.Cookies;
+namespace Starling.Net.Http.Cookies;
 
 public enum SameSiteMode
 {

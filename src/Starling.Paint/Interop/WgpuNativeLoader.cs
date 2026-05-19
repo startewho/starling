@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Tessera.Paint.Interop;
+namespace Starling.Paint.Interop;
 
 /// <summary>
 /// Resolves <c>wgpu_native</c> P/Invokes from <c>Silk.NET.WebGPU</c> by

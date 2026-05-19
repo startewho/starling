@@ -1,7 +1,7 @@
-using Tessera.Css.Media;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Media;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Parser;
+namespace Starling.Css.Parser;
 
 // CSS Cascade 5 §4: `@import <url> [layer(<name>)?] [supports(<condition>)?] <media-query-list>?;`
 public sealed record ImportRule(

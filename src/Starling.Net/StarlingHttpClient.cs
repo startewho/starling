@@ -1,15 +1,15 @@
 using System.Diagnostics;
-using Tessera.Common;
-using Tessera.Common.Diagnostics;
-using Tessera.Net.Dns;
-using Tessera.Net.Http;
-using Tessera.Net.Http.Cookies;
-using Tessera.Net.Http.H1;
-using Tessera.Net.Tcp;
-using Tessera.Net.Tls;
-using TesseraUrl = global::Tessera.Url.Url;
+using Starling.Common;
+using Starling.Common.Diagnostics;
+using Starling.Net.Dns;
+using Starling.Net.Http;
+using Starling.Net.Http.Cookies;
+using Starling.Net.Http.H1;
+using Starling.Net.Tcp;
+using Starling.Net.Tls;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Net;
+namespace Starling.Net;
 
 /// <summary>
 /// Top-level HTTP client. Resolves a URL to a TCP endpoint, opens a transport
@@ -32,18 +32,18 @@ namespace Tessera.Net;
 /// keep-alive headers return the transport to the pool. HTTP/2 multiplexing
 /// is M6 work; pooling here only covers HTTP/1.1.
 /// </remarks>
-public sealed class TesseraHttpClient : IDisposable
+public sealed class StarlingHttpClient : IDisposable
 {
-    private readonly TesseraHttpClientOptions _options;
+    private readonly StarlingHttpClientOptions _options;
     private readonly DnsResolver _dns;
     private readonly TcpDialer _dialer;
     private readonly ConnectionPool _pool;
     private readonly IDiagnostics _diag;
     private bool _disposed;
 
-    public TesseraHttpClient() : this(new TesseraHttpClientOptions()) { }
+    public StarlingHttpClient() : this(new StarlingHttpClientOptions()) { }
 
-    public TesseraHttpClient(TesseraHttpClientOptions options)
+    public StarlingHttpClient(StarlingHttpClientOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _diag = options.Diagnostics ?? NoopDiagnostics.Instance;
@@ -58,13 +58,13 @@ public sealed class TesseraHttpClient : IDisposable
 
     public Task<Result<HttpResponse, NetworkError>> GetAsync(string url, CancellationToken ct = default)
     {
-        var parsed = global::Tessera.Url.UrlParser.Parse(url);
+        var parsed = global::Starling.Url.UrlParser.Parse(url);
         if (parsed.IsErr)
             return Task.FromResult(Result<HttpResponse, NetworkError>.Err(NetworkError.BadUrl));
         return SendAsync(HttpRequest.Get(parsed.Value), ct);
     }
 
-    public Task<Result<HttpResponse, NetworkError>> GetAsync(TesseraUrl url, CancellationToken ct = default)
+    public Task<Result<HttpResponse, NetworkError>> GetAsync(StarlingUrl url, CancellationToken ct = default)
         => SendAsync(HttpRequest.Get(url), ct);
 
     public async Task<Result<HttpResponse, NetworkError>> SendAsync(
@@ -185,7 +185,7 @@ public sealed class TesseraHttpClient : IDisposable
     }
 
     private async Task<Result<IHttpTransport, NetworkError>> DialAsync(
-        TesseraUrl url, OriginKey origin, CancellationToken ct)
+        StarlingUrl url, OriginKey origin, CancellationToken ct)
     {
         // DNS resolution span. The TcpDialer drives DNS internally; we mirror
         // the work with our own resolve call so the span/counter scope is
@@ -260,7 +260,7 @@ public sealed class TesseraHttpClient : IDisposable
                 Activity.Current?.SetStatus(ActivityStatusCode.Error, err.ToString());
                 return Result<IHttpTransport, NetworkError>.Err(err);
             }
-            // TesseraTlsClient pins TLS 1.3; tag it post-handshake.
+            // StarlingTlsClient pins TLS 1.3; tag it post-handshake.
             Activity.Current?.SetTag("tls.protocol", "TLSv1.3");
             if (tlsResult.Value.NegotiatedApplicationProtocol is { } alpn)
             {
@@ -297,7 +297,7 @@ public sealed class TesseraHttpClient : IDisposable
     private async Task<TransportSendOutcome> TrySendOnTransportAsync(
         IHttpTransport transport,
         HttpRequest request,
-        TesseraUrl url,
+        StarlingUrl url,
         bool fromPool,
         CancellationToken ct)
     {
@@ -434,7 +434,7 @@ public sealed class TesseraHttpClient : IDisposable
     }
 }
 
-public sealed class TesseraHttpClientOptions
+public sealed class StarlingHttpClientOptions
 {
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);

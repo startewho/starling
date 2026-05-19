@@ -1,9 +1,9 @@
 using FluentAssertions;
-using Tessera.Js.Ast;
-using Tessera.Js.Parse;
+using Starling.Js.Ast;
+using Starling.Js.Parse;
 using Xunit;
 
-namespace Tessera.Js.Tests.Parse;
+namespace Starling.Js.Tests.Parse;
 
 public class JsParserStatementTests
 {

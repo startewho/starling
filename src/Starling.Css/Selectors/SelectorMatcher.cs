@@ -1,6 +1,6 @@
-using Tessera.Dom;
+using Starling.Dom;
 
-namespace Tessera.Css.Selectors;
+namespace Starling.Css.Selectors;
 
 public sealed class SelectorMatchContext
 {

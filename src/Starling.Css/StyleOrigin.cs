@@ -1,4 +1,4 @@
-namespace Tessera.Css;
+namespace Starling.Css;
 
 public enum StyleOrigin
 {

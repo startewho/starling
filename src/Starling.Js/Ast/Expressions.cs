@@ -1,6 +1,6 @@
-using Tessera.Js.Lex;
+using Starling.Js.Lex;
 
-namespace Tessera.Js.Ast;
+namespace Starling.Js.Ast;
 
 /// <summary>
 /// Base for every JS expression node. ES2024 §13.
@@ -284,8 +284,8 @@ public sealed record ClassExpression(
 
 /// <summary>
 /// <c>super.prop</c> / <c>super[expr]</c> property access. The compiler
-/// lowers this to <see cref="Tessera.Js.Bytecode.Opcode.LoadSuperProperty"/>
-/// or <see cref="Tessera.Js.Bytecode.Opcode.StoreSuperProperty"/>.
+/// lowers this to <see cref="Starling.Js.Bytecode.Opcode.LoadSuperProperty"/>
+/// or <see cref="Starling.Js.Bytecode.Opcode.StoreSuperProperty"/>.
 /// </summary>
 public sealed record SuperPropertyExpression(
     Expression Property,

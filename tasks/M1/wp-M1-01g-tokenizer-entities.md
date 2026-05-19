@@ -11,7 +11,7 @@ depends_on:
   - "wp:M1-01b-tokenizer-tag-states"
 blocks:
   - "wp:M1-01h-tokenizer-html5lib"
-subsystem: "Tessera.Html"
+subsystem: "Starling.Html"
 plan_refs:
   - "browser-plan/04_HTML_PARSING.md#named-character-references"
 ---

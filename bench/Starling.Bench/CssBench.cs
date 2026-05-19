@@ -1,8 +1,8 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // Pairs with the M1 exit (`css/css-syntax/` ≥ 80%, selectors ≥ 50%). The
 // tokenizer + parser are the cost on every page load and on every dynamic

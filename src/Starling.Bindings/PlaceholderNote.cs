@@ -1,7 +1,7 @@
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
-/// Placeholder for M0. The real `Tessera.Bindings` lives in a later milestone —
+/// Placeholder for M0. The real `Starling.Bindings` lives in a later milestone —
 /// see the per-subsystem doc in browser-plan/.
 /// </summary>
 public static class PlaceholderNote

@@ -1,9 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using System.Runtime.Versioning;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs.Windows;
+namespace Starling.Codecs.Windows;
 
 /// <summary>
 /// Windows image decoder built on the Windows Imaging Component (WIC,
@@ -17,7 +17,7 @@ namespace Tessera.Codecs.Windows;
 /// COM interop uses the <c>[GeneratedComInterface]</c> source generator
 /// (<c>System.Runtime.InteropServices.Marshalling</c>) rather than the legacy
 /// <c>ComImport</c> runtime marshaller — no IL emit, AOT-friendly, and the
-/// allowed pattern for the Tessera.Codecs interop seam. This backend is
+/// allowed pattern for the Starling.Codecs interop seam. This backend is
 /// compile-checked everywhere but only runtime-exercised on the Windows CI leg.
 /// </remarks>
 [SupportedOSPlatform("windows")]

@@ -1,4 +1,4 @@
-namespace Tessera.Layout;
+namespace Starling.Layout;
 
 /// <summary>
 /// Module status note. wp:M1-08 has landed: <see cref="LayoutEngine"/> performs

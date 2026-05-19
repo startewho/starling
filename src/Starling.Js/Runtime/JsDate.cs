@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §21.4 Date instance — wraps a millisecond timestamp (UTC, since the Unix

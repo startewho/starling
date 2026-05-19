@@ -15,7 +15,7 @@ blocks:
   - "wp:M2-07b-live-https-fixture"
   - "wp:M2-07c-http-keepalive-pool"
   - "wp:M2-07d-encoding-hardening"
-subsystem: "Tessera.Engine"
+subsystem: "Starling.Engine"
 plan_refs:
   - "browser-plan/01_ARCHITECTURE.md#data-flow-url--pixels"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-07-network-end-to-end"
@@ -26,19 +26,19 @@ plan_refs:
 ## Goal
 
 Wire the completed static rendering pipeline to real HTTP(S) inputs so
-`tessera render https://example.com -o out.png` produces a recognizable page,
+`starling render https://example.com -o out.png` produces a recognizable page,
 with deterministic local/snapshot fixtures protecting the network-to-pixels
 path.
 
 ## Outputs
 
-- `src/Tessera.Engine/*` integration updates as needed.
+- `src/Starling.Engine/*` integration updates as needed.
 - Snapshot-vendored HTTP fixtures for stable golden tests.
 - Headless CLI coverage for `http://` and `https://` inputs.
 
 ## Acceptance
 
-- `tessera render https://example.com` renders a recognizable example.com page.
+- `starling render https://example.com` renders a recognizable example.com page.
 - At least 5 golden tests use local or snapshot-vendored HTTP responses.
 - Encoding sniffing covers HTTP `Content-Type` charset, BOM, and common HTML
   meta charset forms.
@@ -63,7 +63,7 @@ path.
   available for live/snapshot HTTPS, images, broader encoding, and reuse work.
 - 2026-05-12T22:30Z — agent-claude-cody, session reviewed state and applied
   the smallest sensible slice toward the "broader encoding" item: expanded
-  `TesseraEngine.TryResolveEncoding` with WHATWG-spec label aliases that map
+  `StarlingEngine.TryResolveEncoding` with WHATWG-spec label aliases that map
   onto BCL `Encoding` singletons (ASCII / Latin-1 / UTF-8 / UTF-16 family) and
   added four theory cases to `ResolveEncoding_handles_common_inputs`
   exercising the new arms. **No build/test verification was possible this
@@ -90,4 +90,4 @@ path.
     WPT `encoding/` subset.
   Together these four close the M2 exit checklist
   (browser-plan/13_MILESTONES.md#m2--networking-and-live-html) and unblock
-  the MVP demo `tessera render https://example.com -o out.png`.
+  the MVP demo `starling render https://example.com -o out.png`.

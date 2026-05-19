@@ -1,4 +1,4 @@
-namespace Tessera.Css.Media;
+namespace Starling.Css.Media;
 
 // MQ5 §3 viewport/device characteristics. Pure data — engine fills it.
 public sealed record MediaContext(

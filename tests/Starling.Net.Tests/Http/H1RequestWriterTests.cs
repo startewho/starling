@@ -1,18 +1,18 @@
 using System.Text;
 using FluentAssertions;
-using Tessera.Net.Http;
-using Tessera.Net.Http.H1;
+using Starling.Net.Http;
+using Starling.Net.Http.H1;
 using Xunit;
-using TesseraUrl = global::Tessera.Url.Url;
-using TesseraUrlParser = global::Tessera.Url.UrlParser;
+using StarlingUrl = global::Starling.Url.Url;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 public class H1RequestWriterTests
 {
-    private static TesseraUrl ParseUrl(string s)
+    private static StarlingUrl ParseUrl(string s)
     {
-        var r = TesseraUrlParser.Parse(s);
+        var r = StarlingUrlParser.Parse(s);
         r.IsOk.Should().BeTrue($"failed to parse {s}");
         return r.Value;
     }

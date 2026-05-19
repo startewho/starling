@@ -1,14 +1,14 @@
 using FluentAssertions;
-using Tessera.Common.Image;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout;
-using Tessera.Layout.Text;
-using Tessera.Layout.Tree;
-using Tessera.Paint.DisplayList;
+using Starling.Common.Image;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout;
+using Starling.Layout.Text;
+using Starling.Layout.Tree;
+using Starling.Paint.DisplayList;
 using Xunit;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 /// <summary>
 /// CSS Backgrounds 3 §3 — paint-side wiring of <c>background-image</c>,
@@ -42,7 +42,7 @@ public sealed class BackgroundImagePaintTests
         public string? Url { get; init; }
         public DecodedImage? Image { get; init; }
 
-        public bool TryResolve(Tessera.Dom.Element element, out ResolvedImage image)
+        public bool TryResolve(Starling.Dom.Element element, out ResolvedImage image)
         {
             image = default;
             return false;
@@ -60,7 +60,7 @@ public sealed class BackgroundImagePaintTests
         }
     }
 
-    private static (Tessera.Layout.Box.BlockBox Root, Tessera.Paint.DisplayList.DisplayList List, DecodedImage Sprite) Build(string html, IImageResolver resolver, Size viewport)
+    private static (Starling.Layout.Box.BlockBox Root, Starling.Paint.DisplayList.DisplayList List, DecodedImage Sprite) Build(string html, IImageResolver resolver, Size viewport)
     {
         var document = HtmlParser.Parse(html);
         var style = new StyleEngine();

@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 /// <summary>
 /// CSS Backgrounds and Borders 3 §3 — background-image, -position, -size,

@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Character-reference states from WHATWG HTML §13.2.5.72–.80. Owned by

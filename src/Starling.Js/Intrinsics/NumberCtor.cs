@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>§21.1 Number Objects. Installs Number as callable/constructible,
 /// its constants/statics, and Number.prototype formatting/value methods.</summary>

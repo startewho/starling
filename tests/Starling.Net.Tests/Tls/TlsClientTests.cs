@@ -5,13 +5,13 @@ using FluentAssertions;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto.Impl.BC;
-using Tessera.Net.Tcp;
-using Tessera.Net.Tls;
+using Starling.Net.Tcp;
+using Starling.Net.Tls;
 using Xunit;
 using BcCertificate = Org.BouncyCastle.Tls.Certificate;
 using DotNetX509Certificate = System.Security.Cryptography.X509Certificates.X509Certificate2;
 
-namespace Tessera.Net.Tests.Tls;
+namespace Starling.Net.Tests.Tls;
 
 public class TlsClientTests
 {
@@ -25,7 +25,7 @@ public class TlsClientTests
     public void Client_extensions_advertise_sni_and_alpn()
     {
         var options = TlsClientOptions.ForHttps("example.com");
-        var client = new TesseraTlsClient(
+        var client = new StarlingTlsClient(
             new BcTlsCrypto(new SecureRandom()),
             options,
             RootCertificates.Default);
@@ -97,13 +97,13 @@ public class TlsClientTests
     [InlineData("tls13.akamai.io")]
     public async Task Live_tls13_handshake_when_enabled(string host)
     {
-        if (Environment.GetEnvironmentVariable("TESSERA_LIVE_TLS_TESTS") != "1")
+        if (Environment.GetEnvironmentVariable("STARLING_LIVE_TLS_TESTS") != "1")
             return;
 
         var ct = TestContext.Current.CancellationToken;
         var addresses = await System.Net.Dns.GetHostAddressesAsync(host, ct);
         var endpoint = new IPEndPoint(addresses.First(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork), 443);
-        var dialer = new TcpDialer(new Tessera.Net.Dns.DnsResolver(new NoopDnsTransport()))
+        var dialer = new TcpDialer(new Starling.Net.Dns.DnsResolver(new NoopDnsTransport()))
         {
             ConnectTimeout = TimeSpan.FromSeconds(10),
         };
@@ -132,7 +132,7 @@ public class TlsClientTests
             throw new InvalidOperationException("closed");
     }
 
-    private sealed class NoopDnsTransport : Tessera.Net.Dns.IDnsTransport
+    private sealed class NoopDnsTransport : Starling.Net.Dns.IDnsTransport
     {
         public Task<byte[]> SendAsync(byte[] queryPacket, CancellationToken ct) =>
             throw new InvalidOperationException("DNS is not exercised by this test");

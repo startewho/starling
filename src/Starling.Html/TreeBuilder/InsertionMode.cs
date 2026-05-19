@@ -1,4 +1,4 @@
-namespace Tessera.Html.TreeBuilder;
+namespace Starling.Html.TreeBuilder;
 
 /// <summary>
 /// WHATWG HTML §13.2.4.1 insertion modes that this tree builder implements.

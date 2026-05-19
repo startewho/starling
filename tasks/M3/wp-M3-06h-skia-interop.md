@@ -12,7 +12,7 @@ depends_on:
 blocks:
   - "wp:M3-06i-skia-backend"
   - "wp:M3-06l-ci-policy"
-subsystem: "Tessera.Skia"
+subsystem: "Starling.Skia"
 plan_refs:
   - "browser-plan/01_ARCHITECTURE.md#project-layout"
   - "browser-plan/08_FONTS_PAINT.md#raster-backend"
@@ -20,13 +20,13 @@ plan_refs:
   - "browser-plan/13_MILESTONES.md#m3"
 ---
 
-# wp:M3-06h-skia-interop — `src/Tessera.Skia` interop project + Dawn/Graphite wiring
+# wp:M3-06h-skia-interop — `src/Starling.Skia` interop project + Dawn/Graphite wiring
 
 ## Goal
 
-Phases 3 + 4: create `src/Tessera.Skia` — the primary vetted interop project,
+Phases 3 + 4: create `src/Starling.Skia` — the primary vetted interop project,
 the only engine project allowed `LibraryImport` — with source-generated bindings
-to the `tessera_skia` shim, `SafeHandle` wrappers for deterministic native
+to the `starling_skia` shim, `SafeHandle` wrappers for deterministic native
 cleanup, RID-specific native packaging, and the Dawn/Graphite device wiring
 inside `ts_context_create` (Dawn `Instance → Adapter → Device` →
 `skgpu::graphite::ContextFactory::MakeDawn`). ANGLE is the GL fallback only — do
@@ -34,17 +34,17 @@ not over-invest in v1.
 
 ## Inputs
 
-- `wp:M3-06g-skia-shim` complete: `libtessera_skia.{dylib,dll,so}` per RID with
-  the minimal C ABI; the `tessera_skia.h` header is the binding contract.
+- `wp:M3-06g-skia-shim` complete: `libstarling_skia.{dylib,dll,so}` per RID with
+  the minimal C ABI; the `starling_skia.h` header is the binding contract.
 - .NET source-generated interop (`LibraryImport`) + `SafeHandle` knowledge.
 
 ## Outputs
 
-- `src/Tessera.Skia/Tessera.Skia.csproj` — new project; references
-  `Tessera.Common` only; added to `Tessera.sln`. The only engine project allowed
+- `src/Starling.Skia/Starling.Skia.csproj` — new project; references
+  `Starling.Common` only; added to `Starling.sln`. The only engine project allowed
   `LibraryImport`.
-- `src/Tessera.Skia/Interop/NativeMethods.cs` — source-generated
-  `[LibraryImport("tessera_skia")]` partial methods mirroring `tessera_skia.h`.
+- `src/Starling.Skia/Interop/NativeMethods.cs` — source-generated
+  `[LibraryImport("starling_skia")]` partial methods mirroring `starling_skia.h`.
 - `SkContext` / `SkSurface` / `SkCanvas` / `SkFont` / `SkTypeface` / `SkImage` —
   `SafeHandle` wrappers for deterministic native cleanup.
 - Native packaging: RID-specific `runtimes/<rid>/native/` copy via the csproj;
@@ -54,12 +54,12 @@ not over-invest in v1.
   Dawn `Instance → Adapter → Device`, handed to
   `skgpu::graphite::ContextFactory::MakeDawn(...)`; store `Context` + `Recorder`;
   `TsBackendHint` override for debugging.
-- `tests/Tessera.Skia.Tests/` — interop smoke test: create a context/surface,
+- `tests/Starling.Skia.Tests/` — interop smoke test: create a context/surface,
   draw each `DisplayItem` kind, read pixels back.
 
 ## Acceptance
 
-- `Tessera.Skia` builds, references only `Tessera.Common`, is in `Tessera.sln`.
+- `Starling.Skia` builds, references only `Starling.Common`, is in `Starling.sln`.
 - The interop smoke test creates a context + surface, draws every `DisplayItem`
   kind (`fill_rect`, `stroke_rect`, `draw_text`, `draw_image`), and reads back
   correct pixels.
@@ -70,7 +70,7 @@ not over-invest in v1.
 - The native package restores before `dotnet build` (CI restore step is `06l`);
   the Mac Catalyst `.app` layout resolves the native lib via the
   `SetDllImportResolver` fallback.
-- The interop-policy lint job tolerates `LibraryImport` in `Tessera.Skia`.
+- The interop-policy lint job tolerates `LibraryImport` in `Starling.Skia`.
 
 ## Notes
 
@@ -79,18 +79,18 @@ not over-invest in v1.
 - ANGLE is the **fallback** GL provider only — minimal v1 investment.
 - `06i-skia-backend` builds the `SkiaGraphiteBackend` on top of these handles;
   `06l-ci-policy` adds the native-package restore to `ci.yml`.
-- `Tessera.sln` is a merge-conflict hotspot — note the touch in the handoff log.
+- `Starling.sln` is a merge-conflict hotspot — note the touch in the handoff log.
 
 ## Handoff log
 
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
 - 2026-05-14T16:55:00Z — completed (agent-claude-cody-skia-net).
-  - Created `src/Tessera.Skia` (`Interop/NativeMethods.cs`, `Interop/NativeLoader.cs`,
+  - Created `src/Starling.Skia` (`Interop/NativeMethods.cs`, `Interop/NativeLoader.cs`,
     `Handles/Sk{Context,Surface,Canvas,Typeface,Font,Image}.cs`,
-    `SkiaInteropException.cs`) and `tests/Tessera.Skia.Tests`. Both added to
-    `Tessera.sln` (nested under the `src` / `tests` solution folders like Codecs).
+    `SkiaInteropException.cs`) and `tests/Starling.Skia.Tests`. Both added to
+    `Starling.sln` (nested under the `src` / `tests` solution folders like Codecs).
   - All 20 `ts_` functions bound via source-generated `[LibraryImport]`. Signatures
-    mirror `native/shim/tessera_skia.h` exactly, including the documented ABI change:
+    mirror `native/shim/starling_skia.h` exactly, including the documented ABI change:
     `ts_read_pixels(TsContext*, TsSurface*, ...)` — surfaced as `SkSurface.ReadPixels(SkContext, w, h)`.
     `ts_flush_and_submit` likewise takes the context. Opaque handles bound as `nint`;
     POD structs (`TsColor/TsRect/TsGlyph/TsFontMetrics`) as `[StructLayout(Sequential)]`;
@@ -102,7 +102,7 @@ not over-invest in v1.
     file), NOT a `SafeHandle` — there is no native handle to own. The other five
     wrappers are `SafeHandleZeroOrMinusOneIsInvalid`; `SkCanvas` is non-owning
     (borrowed from the surface, `ReleaseHandle` is a no-op) per the header comment.
-  - Native packaging: csproj copies `runtimes/<rid>/native/libtessera_skia.*` to the
+  - Native packaging: csproj copies `runtimes/<rid>/native/libstarling_skia.*` to the
     output `runtimes/<rid>/native/` layout (per-RID `Exists`-guarded `None` items —
     `%(Identity)` is not allowed in item `Condition`s, hence the explicit per-RID
     blocks). `NativeLoader` module initializer installs a `SetDllImportResolver`
@@ -114,7 +114,7 @@ not over-invest in v1.
     native skip — repo has no `SkippableFact` package). On this macOS box the test
     **actually ran and passed** against the real Dawn/Graphite dylib.
   - `dotnet build` + `dotnet test` from repo root: both green. Test count +2
-    (`Tessera.Skia.Tests`, both passed, 0 skipped here).
-  - `Tessera.sln` touched (merge-conflict hotspot — note for rebasing agents):
+    (`Starling.Skia.Tests`, both passed, 0 skipped here).
+  - `Starling.sln` touched (merge-conflict hotspot — note for rebasing agents):
     2 `Project` blocks, 2 `ProjectConfigurationPlatforms` blocks, 2 `NestedProjects` lines.
 - 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

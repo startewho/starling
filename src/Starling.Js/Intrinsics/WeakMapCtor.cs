@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>§24.3 The WeakMap constructor + prototype. Keys must be objects;
 /// no iteration / no <c>size</c>.</summary>

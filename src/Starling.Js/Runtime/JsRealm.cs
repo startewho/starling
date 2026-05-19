@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §9.3 Realm Record. Owns the global object plus every intrinsic prototype /
@@ -296,7 +296,7 @@ public sealed class JsRealm
     {
         var box = BoxPrimitive(StringPrototype, v);
         if (v.IsString)
-            Tessera.Js.Intrinsics.StringCtor.DefineStringData(box, v.AsString);
+            Starling.Js.Intrinsics.StringCtor.DefineStringData(box, v.AsString);
         return box;
     }
     internal JsObject BoxBigInt(JsValue v) => BoxPrimitive(BigIntPrototype, v);

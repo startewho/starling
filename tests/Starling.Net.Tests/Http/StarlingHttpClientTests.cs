@@ -4,16 +4,16 @@ using System.Net.Sockets;
 using System.Text;
 using FluentAssertions;
 using Xunit;
-using TesseraUrlParser = global::Tessera.Url.UrlParser;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
-public class TesseraHttpClientTests
+public class StarlingHttpClientTests
 {
     [Fact]
     public async Task End_to_end_GET_against_a_local_HTTP_server_returns_200()
     {
-        var body = Encoding.UTF8.GetBytes("<!doctype html><html><body>hello tessera</body></html>");
+        var body = Encoding.UTF8.GetBytes("<!doctype html><html><body>hello starling</body></html>");
         using var server = await StubHttpServer.StartAsync(req =>
         {
             req.Should().StartWith("GET /test?x=1 HTTP/1.1\r\n");
@@ -22,8 +22,8 @@ public class TesseraHttpClientTests
             return BuildResponse(body, "text/html; charset=utf-8");
         });
 
-        using var client = new TesseraHttpClient();
-        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/test?x=1").Value;
+        using var client = new StarlingHttpClient();
+        var url = StarlingUrlParser.Parse($"http://localhost:{server.Port}/test?x=1").Value;
         var result = await client.GetAsync(url, TestContext.Current.CancellationToken);
 
         result.IsOk.Should().BeTrue($"got {(result.IsOk ? "Ok" : result.Error.ToString())}");
@@ -56,7 +56,7 @@ public class TesseraHttpClientTests
             return combined;
         });
 
-        using var client = new TesseraHttpClient();
+        using var client = new StarlingHttpClient();
         var result = await client.GetAsync(
             $"http://localhost:{server.Port}/", TestContext.Current.CancellationToken);
 
@@ -81,7 +81,7 @@ public class TesseraHttpClientTests
             return Encoding.ASCII.GetBytes(raw);
         });
 
-        using var client = new TesseraHttpClient();
+        using var client = new StarlingHttpClient();
         var result = await client.GetAsync(
             $"http://localhost:{server.Port}/", TestContext.Current.CancellationToken);
         result.IsOk.Should().BeTrue();
@@ -91,8 +91,8 @@ public class TesseraHttpClientTests
     [Fact]
     public async Task Returns_UnsupportedScheme_for_file_url()
     {
-        using var client = new TesseraHttpClient();
-        var url = TesseraUrlParser.Parse("file:///tmp/foo.html").Value;
+        using var client = new StarlingHttpClient();
+        var url = StarlingUrlParser.Parse("file:///tmp/foo.html").Value;
         var result = await client.GetAsync(url, TestContext.Current.CancellationToken);
         result.IsErr.Should().BeTrue();
         result.Error.Should().Be(NetworkError.UnsupportedScheme);

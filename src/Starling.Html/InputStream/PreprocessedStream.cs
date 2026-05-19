@@ -1,4 +1,4 @@
-namespace Tessera.Html.InputStream;
+namespace Starling.Html.InputStream;
 
 /// <summary>
 /// Implements the input-stream preprocessor from

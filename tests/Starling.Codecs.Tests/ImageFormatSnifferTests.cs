@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Codecs.Tests;
+namespace Starling.Codecs.Tests;
 
 /// <summary>
 /// Magic-byte sniffer tests. These are pure logic — no native codec — so they

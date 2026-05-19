@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>ECMA-262 §25.3 DataView Objects.</summary>
 public static class DataViewCtor

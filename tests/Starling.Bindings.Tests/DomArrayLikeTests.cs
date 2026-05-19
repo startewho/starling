@@ -1,12 +1,12 @@
 using FluentAssertions;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
-using Tessera.Net;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
+using Starling.Net;
 using Xunit;
 
-namespace Tessera.Bindings.Tests;
+namespace Starling.Bindings.Tests;
 
 /// <summary>
 /// B5-1-followup: the DOM result lists (<c>children</c>, <c>childNodes</c>,
@@ -173,7 +173,7 @@ public sealed class DomArrayLikeTests
         var doc = new Document();
         doc.AppendChild(doc.CreateElement("html"));
         var runtime = new JsRuntime();
-        var client = new TesseraHttpClient();
+        var client = new StarlingHttpClient();
         WindowBinding.Install(runtime, doc, new WindowInstallOptions(
             DocumentUrl: "http://localhost/", HttpClient: client));
         return runtime;

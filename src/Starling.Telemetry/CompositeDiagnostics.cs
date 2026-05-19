@@ -1,6 +1,6 @@
-using Tessera.Common.Diagnostics;
+using Starling.Common.Diagnostics;
 
-namespace Tessera.Telemetry;
+namespace Starling.Telemetry;
 
 /// <summary>
 /// Fans <see cref="IDiagnostics"/> calls to multiple inner sinks. Used by the

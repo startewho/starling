@@ -1,9 +1,9 @@
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Layout.Block;
-using Tessera.Layout.Box;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Layout.Block;
+using Starling.Layout.Box;
 
-namespace Tessera.Layout.Flex;
+namespace Starling.Layout.Flex;
 
 /// <summary>
 /// Single-line flex layout (CSS Flex Box Layout Module Level 1, simplified).

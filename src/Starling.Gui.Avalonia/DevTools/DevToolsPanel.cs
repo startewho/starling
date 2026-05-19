@@ -5,7 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Starling.Gui.Avalonia.Chrome;
 using Starling.Gui.Avalonia.Theme;
-using Tessera.Telemetry;
+using Starling.Telemetry;
 
 namespace Starling.Gui.Avalonia.DevTools;
 

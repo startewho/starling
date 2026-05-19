@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs.Linux;
+namespace Starling.Codecs.Linux;
 
 /// <summary>
 /// PNG decode via <c>libpng16.so.16</c> using the libpng 1.6+ "simplified API"

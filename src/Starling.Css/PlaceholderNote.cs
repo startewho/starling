@@ -1,4 +1,4 @@
-namespace Tessera.Css;
+namespace Starling.Css;
 
 /// <summary>
 /// Module status note. Tokenizer/parser, selectors, and cascade/property/value

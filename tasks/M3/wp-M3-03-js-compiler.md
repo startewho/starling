@@ -10,7 +10,7 @@ depends_on:
   - "wp:M3-02b-js-parser-statements"
 blocks:
   - "wp:M3-04-js-vm"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#bytecode-ir"
   - "browser-plan/14_AGENT_TASKS.md#wpm3-03-js-compiler"
@@ -24,10 +24,10 @@ M3-04 VM will execute. This slice covers the bytecode IR, the
 compiler, and a disassembler used by tests.
 
 ## Outputs
-- `src/Tessera.Js/Bytecode/Opcode.cs` — enum of opcodes.
-- `src/Tessera.Js/Bytecode/Chunk.cs` — bytecode + constants + line table.
-- `src/Tessera.Js/Bytecode/Disassembler.cs` — text dump for tests.
-- `src/Tessera.Js/Bytecode/JsCompiler.cs` — walker emitting Chunk.
+- `src/Starling.Js/Bytecode/Opcode.cs` — enum of opcodes.
+- `src/Starling.Js/Bytecode/Chunk.cs` — bytecode + constants + line table.
+- `src/Starling.Js/Bytecode/Disassembler.cs` — text dump for tests.
+- `src/Starling.Js/Bytecode/JsCompiler.cs` — walker emitting Chunk.
 
 ## Acceptance
 - Plan §M3-03 calls for "snapshot tests on 30 hand-picked source files

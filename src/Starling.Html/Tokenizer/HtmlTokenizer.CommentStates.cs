@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Comment + CDATA + BogusComment + MarkupDeclarationOpen states from

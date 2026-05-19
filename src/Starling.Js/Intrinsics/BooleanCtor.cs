@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>§21.2 Boolean Objects. Installs Boolean and Boolean.prototype.</summary>
 public static class BooleanCtor

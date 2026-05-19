@@ -1,13 +1,13 @@
 using FluentAssertions;
-using Tessera.Css.Values;
-using Tessera.Html;
-using Tessera.Paint.Backend;
-using Tessera.Paint.DisplayList;
+using Starling.Css.Values;
+using Starling.Html;
+using Starling.Paint.Backend;
+using Starling.Paint.DisplayList;
 using Xunit;
-using LayoutRect = Tessera.Layout.Rect;
-using LayoutSize = Tessera.Layout.Size;
+using LayoutRect = Starling.Layout.Rect;
+using LayoutSize = Starling.Layout.Size;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 public sealed class EndToEndRenderTests
 {
@@ -78,9 +78,9 @@ public sealed class EndToEndRenderTests
         second.GetPixel(16, 16).Should().Be(((byte)0, (byte)128, (byte)0, (byte)255));
     }
 
-    private static Tessera.Paint.DisplayList.DisplayList SolidFillList(CssColor color)
+    private static Starling.Paint.DisplayList.DisplayList SolidFillList(CssColor color)
     {
-        var list = new Tessera.Paint.DisplayList.DisplayList();
+        var list = new Starling.Paint.DisplayList.DisplayList();
         list.Add(new FillRect(new LayoutRect(0, 0, 32, 32), color));
         return list;
     }

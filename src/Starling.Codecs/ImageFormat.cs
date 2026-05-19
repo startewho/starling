@@ -1,4 +1,4 @@
-namespace Tessera.Codecs;
+namespace Starling.Codecs;
 
 /// <summary>The container formats <see cref="NativeImageDecoder"/> recognises.</summary>
 internal enum ImageFormat

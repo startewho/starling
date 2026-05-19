@@ -1,6 +1,6 @@
-using Tessera.Css.Values;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Animations;
+namespace Starling.Css.Animations;
 
 /// <summary>
 /// CSS Easing 1 timing functions. <see cref="Evaluate"/> maps a linear

@@ -1,4 +1,4 @@
-namespace Tessera.Loop;
+namespace Starling.Loop;
 
 /// <summary>
 /// Deterministic event loop core for tests/headless hosts. Microtasks drain

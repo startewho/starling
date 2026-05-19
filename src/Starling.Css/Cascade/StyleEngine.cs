@@ -1,16 +1,16 @@
 using System.Diagnostics;
-using Tessera.Common.Diagnostics;
-using Tessera.Css.Animations;
-using Tessera.Css.Media;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Selectors;
-using Tessera.Css.Tokenizer;
-using Tessera.Css.UserAgent;
-using Tessera.Css.Values;
-using Tessera.Dom;
+using Starling.Common.Diagnostics;
+using Starling.Css.Animations;
+using Starling.Css.Media;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Selectors;
+using Starling.Css.Tokenizer;
+using Starling.Css.UserAgent;
+using Starling.Css.Values;
+using Starling.Dom;
 
-namespace Tessera.Css.Cascade;
+namespace Starling.Css.Cascade;
 
 public sealed class StyleEngine
 {

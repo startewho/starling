@@ -1,16 +1,16 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout;
-using Tessera.Layout.Text;
-using Tessera.Paint.DisplayList;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout;
+using Starling.Layout.Text;
+using Starling.Paint.DisplayList;
 using Xunit;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 public sealed class DisplayListBuilderTests
 {
-    private static Tessera.Paint.DisplayList.DisplayList BuildList(string html, Size viewport)
+    private static Starling.Paint.DisplayList.DisplayList BuildList(string html, Size viewport)
     {
         var document = HtmlParser.Parse(html);
         var style = new StyleEngine();

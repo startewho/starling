@@ -1,4 +1,4 @@
-namespace Tessera.Css.FontFace;
+namespace Starling.Css.FontFace;
 
 /// <summary>
 /// A set of Unicode codepoint ranges declared by a <c>@font-face</c>'s

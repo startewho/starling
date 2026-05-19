@@ -1,4 +1,4 @@
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 public enum HttpError
 {

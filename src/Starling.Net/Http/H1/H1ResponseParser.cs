@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text;
-using Tessera.Common;
-using Tessera.Net.Http.Decoding;
+using Starling.Common;
+using Starling.Net.Http.Decoding;
 
-namespace Tessera.Net.Http.H1;
+namespace Starling.Net.Http.H1;
 
 /// <summary>
 /// Parser for an HTTP/1.1 response message off a byte-oriented

@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Intrinsics;
+namespace Starling.Js.Tests.Intrinsics;
 
 /// <summary>JS-surface tests for the Date intrinsic (B4-2). Uses the invariant
 /// UTC locale; getTimezoneOffset always returns 0 here, so local + UTC getters

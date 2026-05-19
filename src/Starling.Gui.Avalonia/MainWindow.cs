@@ -11,14 +11,14 @@ using Starling.Gui.Avalonia.Controls;
 using Starling.Gui.Avalonia.DevTools;
 using Starling.Gui.Avalonia.Mcp;
 using Starling.Gui.Avalonia.Theme;
-using Tessera.Common;
-using Tessera.Common.Diagnostics;
-using Tessera.Css.Media;
-using Tessera.Engine;
-using Tessera.Gui;
-using Tessera.Telemetry;
+using Starling.Common;
+using Starling.Common.Diagnostics;
+using Starling.Css.Media;
+using Starling.Engine;
+using Starling.Gui;
+using Starling.Telemetry;
 using EngineSize = SixLabors.ImageSharp.Size;
-using RenderOptions = Tessera.Engine.RenderOptions;
+using RenderOptions = Starling.Engine.RenderOptions;
 
 namespace Starling.Gui.Avalonia;
 

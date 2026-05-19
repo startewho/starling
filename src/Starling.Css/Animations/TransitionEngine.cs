@@ -1,8 +1,8 @@
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
 
-namespace Tessera.Css.Animations;
+namespace Starling.Css.Animations;
 
 /// <summary>
 /// Runtime side of CSS Transitions 1. Owns the active transition table

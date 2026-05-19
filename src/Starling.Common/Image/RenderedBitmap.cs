@@ -1,4 +1,4 @@
-namespace Tessera.Common.Image;
+namespace Starling.Common.Image;
 
 /// <summary>
 /// A backend-neutral raster result: the final pixels a paint backend produced

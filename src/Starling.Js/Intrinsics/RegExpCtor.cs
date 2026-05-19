@@ -1,8 +1,8 @@
 using System.Text;
-using Tessera.Js.RegExp;
-using Tessera.Js.Runtime;
+using Starling.Js.RegExp;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §22.2 The RegExp constructor and §22.2.6 RegExp.prototype. Wires the parser

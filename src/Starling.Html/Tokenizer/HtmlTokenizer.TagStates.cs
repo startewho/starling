@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Tag + attribute states from WHATWG HTML §13.2.5.6 through §13.2.5.40

@@ -1,13 +1,13 @@
 using FluentAssertions;
-using Tessera.Net.Http.Cookies;
+using Starling.Net.Http.Cookies;
 using Xunit;
-using TesseraUrlParser = global::Tessera.Url.UrlParser;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 public class CookieJarTests
 {
-    private static global::Tessera.Url.Url Url(string s) => TesseraUrlParser.Parse(s).Value;
+    private static global::Starling.Url.Url Url(string s) => StarlingUrlParser.Parse(s).Value;
 
     private static CookieJar NewJar(DateTimeOffset? now = null)
     {

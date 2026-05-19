@@ -1,7 +1,7 @@
 using System.Globalization;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §27.1 The %IteratorPrototype% intrinsic and the per-kind iterator

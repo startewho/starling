@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>ECMA-262 §25.1 ArrayBuffer object with a managed byte[] [[ArrayBufferData]].</summary>
 public sealed class JsArrayBuffer : JsObject

@@ -4,12 +4,12 @@ using System.Text;
 using FluentAssertions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
-using Tessera.Net;
-using Tessera.Net.Http;
-using TesseraUrlParser = global::Tessera.Url.UrlParser;
+using Starling.Net;
+using Starling.Net.Http;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 public class EngineHttpTests
 {
@@ -38,10 +38,10 @@ public class EngineHttpTests
             "Connection: close\r\n\r\n" +
             bodyText));
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://localhost:{server.Port}/",
                 new RenderOptions(new Size(400, 200), 28f),
@@ -80,10 +80,10 @@ public class EngineHttpTests
             return BuildResponse(body, "text/html; charset=utf-8");
         });
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://localhost:{server.Port}/start",
                 new RenderOptions(new Size(300, 160), 16f),
@@ -110,8 +110,8 @@ public class EngineHttpTests
             "Content-Length: 0\r\n" +
             "Connection: close\r\n\r\n"));
 
-        var engine = new TesseraEngine();
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var engine = new StarlingEngine();
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         var result = await engine.RenderAsync(
             $"http://localhost:{server.Port}/loop",
             RenderOptions.Default,
@@ -130,10 +130,10 @@ public class EngineHttpTests
         var body = Encoding.UTF8.GetBytes("<!doctype html>" + snapshot.Html);
         using var server = await StubHttpServer.StartAsync(_ => BuildResponse(body, "text/html; charset=utf-8"));
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://localhost:{server.Port}/{snapshot.Name}",
                 new RenderOptions(new Size(320, 180), 16f),
@@ -166,10 +166,10 @@ public class EngineHttpTests
             """);
         using var server = await StubHttpServer.StartAsync(_ => BuildResponse(body, "text/html"));
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://localhost:{server.Port}/latin1",
                 new RenderOptions(new Size(320, 180), 16f),
@@ -210,8 +210,8 @@ public class EngineHttpTests
             return BuildResponse(Encoding.UTF8.GetBytes("<body><p>account</p></body>"), "text/html; charset=utf-8");
         });
 
-        var first = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
-        var second = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var first = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
+        var second = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         try
         {
             using var session = new BrowserSession();
@@ -241,7 +241,7 @@ public class EngineHttpTests
     }
 
     [Fact]
-    public async Task TesseraHttpClient_reuses_a_single_TCP_connection_across_two_sequential_GETs()
+    public async Task StarlingHttpClient_reuses_a_single_TCP_connection_across_two_sequential_GETs()
     {
         // wp:M2-07c — when the server keeps the connection alive after each
         // response, the client must pool the transport and reuse it for the
@@ -257,8 +257,8 @@ public class EngineHttpTests
                 "ok"),
             keepAlive: true);
 
-        using var client = new TesseraHttpClient();
-        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/").Value;
+        using var client = new StarlingHttpClient();
+        var url = StarlingUrlParser.Parse($"http://localhost:{server.Port}/").Value;
 
         var first = await client.GetAsync(url, TestContext.Current.CancellationToken);
         first.IsOk.Should().BeTrue(first.IsErr ? first.Error.ToString() : "");
@@ -276,7 +276,7 @@ public class EngineHttpTests
     }
 
     [Fact]
-    public async Task TesseraHttpClient_redials_when_pooled_connection_was_closed_by_peer()
+    public async Task StarlingHttpClient_redials_when_pooled_connection_was_closed_by_peer()
     {
         // The server keeps the first connection alive (so we pool it) but
         // closes it immediately after returning the response. When the next
@@ -299,8 +299,8 @@ public class EngineHttpTests
             },
             keepAlive: false);
 
-        using var client = new TesseraHttpClient();
-        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/").Value;
+        using var client = new StarlingHttpClient();
+        var url = StarlingUrlParser.Parse($"http://localhost:{server.Port}/").Value;
 
         var first = await client.GetAsync(url, TestContext.Current.CancellationToken);
         first.IsOk.Should().BeTrue();
@@ -318,7 +318,7 @@ public class EngineHttpTests
     }
 
     [Fact]
-    public async Task TesseraHttpClient_does_not_reuse_when_server_closes_the_connection()
+    public async Task StarlingHttpClient_does_not_reuse_when_server_closes_the_connection()
     {
         // Belt-and-braces: an explicit Connection: close response should drop
         // the socket and force a second dial on the next request.
@@ -331,8 +331,8 @@ public class EngineHttpTests
                 "Connection: close\r\n\r\n" +
                 "ok"));
 
-        using var client = new TesseraHttpClient();
-        var url = TesseraUrlParser.Parse($"http://localhost:{server.Port}/").Value;
+        using var client = new StarlingHttpClient();
+        var url = StarlingUrlParser.Parse($"http://localhost:{server.Port}/").Value;
 
         (await client.GetAsync(url, TestContext.Current.CancellationToken)).IsOk.Should().BeTrue();
         (await client.GetAsync(url, TestContext.Current.CancellationToken)).IsOk.Should().BeTrue();
@@ -349,8 +349,8 @@ public class EngineHttpTests
             "Content-Length: 0\r\n" +
             "Connection: close\r\n\r\n"));
 
-        var engine = new TesseraEngine();
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var engine = new StarlingEngine();
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         var result = await engine.RenderAsync(
             $"http://localhost:{server.Port}/missing",
             RenderOptions.Default,
@@ -426,14 +426,14 @@ public class EngineHttpTests
     [InlineData("text/html; charset=iso-2022-jp", new byte[] { 0x1B, 0x24, 0x42, 0x24, 0x22, 0x1B, 0x28, 0x42 }, "あ")]
     public void ResolveEncoding_handles_common_inputs(string? contentType, byte[] body, string expectedDecoded)
     {
-        var enc = TesseraEngine.ResolveEncoding(contentType, body);
+        var enc = StarlingEngine.ResolveEncoding(contentType, body);
         enc.GetString(body).TrimStart((char)0xFEFF).Should().Be(expectedDecoded);
     }
 
     [Fact]
     public void ResolveEncoding_falls_back_to_utf8_for_unknown_charset()
     {
-        var enc = TesseraEngine.ResolveEncoding("text/html; charset=totally-fake", new byte[] { 0x61 });
+        var enc = StarlingEngine.ResolveEncoding("text/html; charset=totally-fake", new byte[] { 0x61 });
         enc.WebName.Should().Be("utf-8");
     }
 

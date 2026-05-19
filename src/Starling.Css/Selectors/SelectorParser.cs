@@ -1,8 +1,8 @@
 using System.Globalization;
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Selectors;
+namespace Starling.Css.Selectors;
 
 public sealed class SelectorParser
 {

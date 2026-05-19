@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>
 /// Pike-VM regex matcher per Russ Cox's "Regular Expression Matching: the

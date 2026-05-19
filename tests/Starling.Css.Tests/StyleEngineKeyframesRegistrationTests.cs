@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Css.Parser;
+using Starling.Css.Cascade;
+using Starling.Css.Parser;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-animations-1", "https://www.w3.org/TR/css-animations-1/")]
 

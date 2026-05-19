@@ -1,4 +1,4 @@
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 /// <summary>
 /// Generic element. HTML-specific subclasses are deferred; this core element

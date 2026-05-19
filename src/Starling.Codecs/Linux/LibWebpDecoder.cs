@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs.Linux;
+namespace Starling.Codecs.Linux;
 
 /// <summary>
 /// WebP decode via <c>libwebp.so.7</c>. libwebp's simple decode API

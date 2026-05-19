@@ -1,6 +1,6 @@
 using Org.BouncyCastle.X509;
 
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
 public sealed class RootCertificates
 {

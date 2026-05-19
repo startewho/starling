@@ -1,9 +1,9 @@
 using System.Runtime.CompilerServices;
-using Tessera.Dom;
-using Tessera.Dom.Events;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Dom.Events;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-1 — Lazy DOM-node ↔ JS-wrapper map. Each host node gets at most one JS

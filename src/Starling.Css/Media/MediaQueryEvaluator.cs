@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Css.Media;
+namespace Starling.Css.Media;
 
 // MQ5 §3-§17 evaluator. Pure function over (query, context).
 public static class MediaQueryEvaluator

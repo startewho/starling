@@ -1,7 +1,7 @@
-using Tessera.Js.Runtime;
-using Tessera.Loop;
+using Starling.Js.Runtime;
+using Starling.Loop;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// HTML §8.7 timer surface — installs <c>setTimeout</c>, <c>setInterval</c>,

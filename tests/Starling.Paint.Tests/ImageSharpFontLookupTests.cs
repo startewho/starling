@@ -1,9 +1,9 @@
 using FluentAssertions;
 using SixLabors.Fonts;
-using Tessera.Layout.Text;
+using Starling.Layout.Text;
 using Xunit;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 /// <summary>
 /// Locks down the regression where the ImageSharp backend held only the

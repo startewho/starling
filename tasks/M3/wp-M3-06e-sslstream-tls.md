@@ -10,7 +10,7 @@ branch: "main"
 depends_on: []
 blocks:
   - "wp:M3-06l-ci-policy"
-subsystem: "Tessera.Net"
+subsystem: "Starling.Net"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#tls-approach"
   - "browser-plan/12_TESTING.md#interop-seam-policy-test"
@@ -23,37 +23,37 @@ plan_refs:
 
 Phase 9: swap the pure-managed BouncyCastle TLS engine for `SslStream` (OS TLS)
 behind the **unchanged** `ITlsTransport` seam. `SslStream` is pure-managed BCL,
-so `Tessera.Net` keeps its P/Invoke-free bill of health — no interop seam needed
+so `Starling.Net` keeps its P/Invoke-free bill of health — no interop seam needed
 here. Keep the bundled CCADB root store for cross-platform determinism, but
 rebuild certificate verification on `System.Security.Cryptography.X509Certificates`.
-Delete BouncyCastle entirely. Fully isolated to `Tessera.Net`; independently
+Delete BouncyCastle entirely. Fully isolated to `Starling.Net`; independently
 mergeable to `main`.
 
 ## Inputs
 
-- No code dependencies — fully isolated to `Tessera.Net`.
+- No code dependencies — fully isolated to `Starling.Net`.
 - Existing seam: `ITlsTransport.cs`, `TlsClientOptions.cs`, `TlsError.cs`,
   `TcpConnectionStream.cs`, embedded `ccadb.pem`.
 
 ## Outputs
 
-- `src/Tessera.Net/Tls/SslStreamTlsTransport.cs` — implements `ITlsTransport`
+- `src/Starling.Net/Tls/SslStreamTlsTransport.cs` — implements `ITlsTransport`
   with `SslClientAuthenticationOptions`: ALPN (`Http2`, `Http11`), SNI
   (`TargetHost`), `EnabledSslProtocols = Tls13`.
-- `src/Tessera.Net/Tls/CertificateVerifier.cs` — rewritten against
+- `src/Starling.Net/Tls/CertificateVerifier.cs` — rewritten against
   `X509ChainPolicy.CustomTrustStore` + `TrustMode = CustomRootTrust` for chain
   building / expiry.
-- `src/Tessera.Net/Tls/RootCertificates.cs` — rewritten to load the bundled
+- `src/Starling.Net/Tls/RootCertificates.cs` — rewritten to load the bundled
   CCADB roots as `X509Certificate2` for the custom trust store.
 - Kept custom code: `CertificateHostNameMatcher` (SAN/wildcard matching only).
-- **Deleted:** `src/Tessera.Net/Tls/BcTlsTransport.cs`,
-  `TesseraTlsClient.cs`, `TesseraTlsAuthentication.cs`.
+- **Deleted:** `src/Starling.Net/Tls/BcTlsTransport.cs`,
+  `StarlingTlsClient.cs`, `StarlingTlsAuthentication.cs`.
 - **Kept:** `ITlsTransport.cs`, `TlsClientOptions.cs`, `TlsError.cs`,
   `TcpConnectionStream.cs`, embedded `ccadb.pem`.
-- `src/Tessera.Net/TesseraHttpClient.cs` (~line 150) and
-  `src/Tessera.Net/Http/PooledHttpTransport.cs` (type `_tls` as
+- `src/Starling.Net/StarlingHttpClient.cs` (~line 150) and
+  `src/Starling.Net/Http/PooledHttpTransport.cs` (type `_tls` as
   `ITlsTransport?`) — caller updates.
-- `Directory.Packages.props` + `src/Tessera.Net/Tessera.Net.csproj` — remove
+- `Directory.Packages.props` + `src/Starling.Net/Starling.Net.csproj` — remove
   `BouncyCastle.Cryptography`; regenerate affected `packages.lock.json`.
 
 ## Acceptance
@@ -63,11 +63,11 @@ mergeable to `main`.
   `example.com` / `nginx.org`.
 - A bad certificate chain fails closed (custom trust store rejects it).
 - `grep -rn BouncyCastle src/` is empty; `BouncyCastle.Cryptography` is gone
-  from `Directory.Packages.props` and `Tessera.Net.csproj`; `packages.lock.json`
+  from `Directory.Packages.props` and `Starling.Net.csproj`; `packages.lock.json`
   regenerated.
-- `BcTlsTransport.cs`, `TesseraTlsClient.cs`, `TesseraTlsAuthentication.cs` are
+- `BcTlsTransport.cs`, `StarlingTlsClient.cs`, `StarlingTlsAuthentication.cs` are
   deleted; the kept files remain.
-- `Tessera.Net` stays P/Invoke-free (`SslStream` is BCL) — the interop-policy
+- `Starling.Net` stays P/Invoke-free (`SslStream` is BCL) — the interop-policy
   lint job still passes for this project with no allowlist entry.
 - Full repo `dotnet test` green.
 
@@ -94,17 +94,17 @@ mergeable to `main`.
     `CertificateHostNameMatcher` kept (SAN DNS + RFC 6125 wildcard).
   - `Tls/RootCertificates.cs` — embedded `ccadb.pem` →
     `X509Certificate2Collection` via `ImportFromPem`.
-  - Deleted `BcTlsTransport.cs`, `TesseraTlsClient.cs`,
-    `TesseraTlsAuthentication.cs`.
-  - Callers: `TesseraHttpClient.cs` dials `SslStreamTlsTransport`;
+  - Deleted `BcTlsTransport.cs`, `StarlingTlsClient.cs`,
+    `StarlingTlsAuthentication.cs`.
+  - Callers: `StarlingHttpClient.cs` dials `SslStreamTlsTransport`;
     `PooledHttpTransport._tls` typed `ITlsTransport?`.
-  - `Directory.Packages.props` + `Tessera.Net.csproj` — `BouncyCastle.Cryptography`
+  - `Directory.Packages.props` + `Starling.Net.csproj` — `BouncyCastle.Cryptography`
     removed (note: `Directory.Packages.props` touched — merge hotspot).
-  - `tests/Tessera.Net.Tests/Tls/TlsClientTests.cs` rewritten against
+  - `tests/Starling.Net.Tests/Tls/TlsClientTests.cs` rewritten against
     `X509Certificate2` / `SslStreamTlsTransport` (drive-by — required to keep
     the build green once BC types were deleted). Added a custom-trust-anchor
     acceptance test and a hostname-mismatch rejection test. Live test now
-    targets `example.com` / `nginx.org`, gated on `TESSERA_ALLOW_NETWORK=1`.
+    targets `example.com` / `nginx.org`, gated on `STARLING_ALLOW_NETWORK=1`.
   - No `packages.lock.json` files exist in the repo — nothing to regenerate.
   - No `NoSslStream_InNetProject` test exists in the tree — nothing to delete.
   - **Caveat — live TLS could not be verified locally.** On this macOS dev box,
@@ -114,7 +114,7 @@ mergeable to `main`.
     and the cert callback received a full 3-element chain — so the transport
     wiring is sound. The `Tls13` pin is kept per the WP contract; the Linux CI
     `network-tests` runner (OpenSSL) is where live TLS 1.3 + `h2` is exercised.
-  - `dotnet test tests/Tessera.Net.Tests` → 157/157 green.
+  - `dotnet test tests/Starling.Net.Tests` → 157/157 green.
   - `grep -rn BouncyCastle src/ --include='*.cs'` is empty (only stale
     `bin/obj` build artifacts in unrelated projects still mention it).
 - 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

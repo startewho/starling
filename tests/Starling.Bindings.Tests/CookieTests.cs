@@ -1,12 +1,12 @@
 using FluentAssertions;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
-using Tessera.Net.Http.Cookies;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
+using Starling.Net.Http.Cookies;
 using Xunit;
 
-namespace Tessera.Bindings.Tests;
+namespace Starling.Bindings.Tests;
 
 public sealed class CookieTests
 {
@@ -43,7 +43,7 @@ public sealed class CookieTests
     public void Cookies_set_via_http_are_visible_to_script()
     {
         var (runtime, _, jar) = BuildEnv("https://example.com/");
-        jar.StoreFromHeaders(Tessera.Url.UrlParser.Parse("https://example.com/").Value,
+        jar.StoreFromHeaders(Starling.Url.UrlParser.Parse("https://example.com/").Value,
             new[] { "from_http=yes; Path=/" });
         Eval(runtime, "result = document.cookie;").AsString.Should().Be("from_http=yes");
     }
@@ -53,7 +53,7 @@ public sealed class CookieTests
     {
         var (runtime, _, jar) = BuildEnv("https://example.com/");
         Eval(runtime, "document.cookie = 'k=v; Path=/';");
-        jar.BuildCookieHeader(Tessera.Url.UrlParser.Parse("https://example.com/").Value)
+        jar.BuildCookieHeader(Starling.Url.UrlParser.Parse("https://example.com/").Value)
             .Should().Be("k=v");
     }
 

@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// One emitted by the HTML tokenizer (WHATWG HTML §13.2.5). The discriminated

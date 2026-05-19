@@ -1,14 +1,14 @@
 using System.Diagnostics;
-using Tessera.Codecs;
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Image;
-using Tessera.Dom;
-using Tessera.Layout.Tree;
-using Tessera.Net;
-using Tessera.Url;
-using TesseraUrl = global::Tessera.Url.Url;
+using Starling.Codecs;
+using Starling.Common.Diagnostics;
+using Starling.Common.Image;
+using Starling.Dom;
+using Starling.Layout.Tree;
+using Starling.Net;
+using Starling.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Resolves every <c>&lt;img src&gt;</c> in a <see cref="Document"/> to a
@@ -33,10 +33,10 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
     private readonly Dictionary<Element, ResolvedImage> _byElement = [];
     private readonly Dictionary<string, DecodedImage> _byUrl = new(StringComparer.Ordinal);
     private readonly IDiagnostics _diag;
-    private readonly Func<TesseraHttpClient> _httpFactory;
-    private TesseraHttpClient? _sharedHttp;
+    private readonly Func<StarlingHttpClient> _httpFactory;
+    private StarlingHttpClient? _sharedHttp;
 
-    public ImageFetcher(IDiagnostics diag, Func<TesseraHttpClient> httpFactory)
+    public ImageFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
@@ -59,7 +59,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         return false;
     }
 
-    public async Task FetchAllAsync(Document document, TesseraUrl? baseUrl, CancellationToken ct)
+    public async Task FetchAllAsync(Document document, StarlingUrl? baseUrl, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -91,14 +91,14 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
     /// is also indexed verbatim so the paint pipeline's lookup matches without
     /// the caller needing to re-resolve URLs.
     /// </summary>
-    public async Task FetchBackgroundsAsync(IEnumerable<(Tessera.Css.Parser.StyleSheet Sheet, TesseraUrl? BaseUrl)> stylesheets, TesseraUrl? documentBaseUrl, CancellationToken ct)
+    public async Task FetchBackgroundsAsync(IEnumerable<(Starling.Css.Parser.StyleSheet Sheet, StarlingUrl? BaseUrl)> stylesheets, StarlingUrl? documentBaseUrl, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(stylesheets);
 
         // (raw url, base url used to resolve relative references). External
         // stylesheets carry their own base URL so relative paths inside them
         // resolve against the sheet, not the document.
-        var rawByBase = new Dictionary<string, TesseraUrl?>(StringComparer.Ordinal);
+        var rawByBase = new Dictionary<string, StarlingUrl?>(StringComparer.Ordinal);
         foreach (var (sheet, sheetBase) in stylesheets)
         {
             var perSheet = new HashSet<string>(StringComparer.Ordinal);
@@ -122,25 +122,25 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         }
     }
 
-    private static void CollectBackgroundUrls(Tessera.Css.Parser.StyleSheet sheet, HashSet<string> urls)
+    private static void CollectBackgroundUrls(Starling.Css.Parser.StyleSheet sheet, HashSet<string> urls)
     {
         foreach (var rule in sheet.Rules)
             CollectFromRule(rule, urls);
     }
 
-    private static void CollectFromRule(Tessera.Css.Parser.CssRule rule, HashSet<string> urls)
+    private static void CollectFromRule(Starling.Css.Parser.CssRule rule, HashSet<string> urls)
     {
-        if (rule is Tessera.Css.Parser.StyleRule sr)
+        if (rule is Starling.Css.Parser.StyleRule sr)
         {
             foreach (var decl in sr.Declarations)
             {
                 if (!decl.Name.Contains("background", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var v in Tessera.Css.Values.CssValueParser.ParseList(decl.Value))
-                    if (v is Tessera.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
+                foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
+                    if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
                         urls.Add(u.Value);
             }
         }
-        else if (rule is Tessera.Css.Parser.AtRule at)
+        else if (rule is Starling.Css.Parser.AtRule at)
         {
             // Walk inner rules (e.g. @media wraps StyleRule children) and any
             // declarations carried directly on the at-rule (rare, but harmless).
@@ -149,14 +149,14 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
             foreach (var decl in at.Declarations)
             {
                 if (!decl.Name.Contains("background", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var v in Tessera.Css.Values.CssValueParser.ParseList(decl.Value))
-                    if (v is Tessera.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
+                foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
+                    if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
                         urls.Add(u.Value);
             }
         }
     }
 
-    private async Task<DecodedImage?> FetchAndDecodeAsync(TesseraUrl url, CancellationToken ct)
+    private async Task<DecodedImage?> FetchAndDecodeAsync(StarlingUrl url, CancellationToken ct)
     {
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
@@ -239,7 +239,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         }
     }
 
-    private static TesseraUrl? ResolveAbsolute(string src, TesseraUrl? baseUrl)
+    private static StarlingUrl? ResolveAbsolute(string src, StarlingUrl? baseUrl)
     {
         var parsed = baseUrl is null
             ? UrlParser.Parse(src)

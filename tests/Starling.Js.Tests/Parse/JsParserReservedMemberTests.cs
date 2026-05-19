@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Js.Ast;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Ast;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Parse;
+namespace Starling.Js.Tests.Parse;
 
 /// <summary>
 /// ES §13.3.2: <c>MemberExpression . IdentifierName</c> — every reserved

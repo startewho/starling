@@ -1,6 +1,6 @@
-using Tessera.Js.Intrinsics;
+using Starling.Js.Intrinsics;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>§24.2.5 Set Iterator kind tag.</summary>
 public enum SetIteratorKind { Value, KeyAndValue }

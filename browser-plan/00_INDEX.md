@@ -1,6 +1,6 @@
-# Tessera Browser — Master Plan Index
+# Starling Browser — Master Plan Index
 
-> **Codename:** Tessera. Pure-managed .NET 10 web browser, modeled after Ladybird in ambition (own engine, no Chromium/Gecko/WebKit reuse) but written entirely in C# 14 with no native dependencies and no P/Invoke beyond what the .NET BCL ships.
+> **Codename:** Starling. Pure-managed .NET 10 web browser, modeled after Ladybird in ambition (own engine, no Chromium/Gecko/WebKit reuse) but written entirely in C# 14 with no native dependencies and no P/Invoke beyond what the .NET BCL ships.
 >
 > **End-state goal:** Load `https://www.google.com` (basic search) and `https://claude.ai` (full SPA) on Windows, macOS, and Linux.
 >
@@ -58,8 +58,8 @@
 
 ## Glossary anchors (grep-friendly)
 
-`#tessera-net` `#tessera-url` `#tessera-html` `#tessera-dom` `#tessera-css` `#tessera-layout`
-`#tessera-paint` `#tessera-js` `#tessera-bindings` `#tessera-loop` `#tessera-engine` `#tessera-shell`
+`#starling-net` `#starling-url` `#starling-html` `#starling-dom` `#starling-css` `#starling-layout`
+`#starling-paint` `#starling-js` `#starling-bindings` `#starling-loop` `#starling-engine` `#starling-shell`
 
 `#milestone-m0` `#milestone-m1` `#milestone-m2` `#milestone-m3` `#milestone-m4` `#milestone-m5`
 `#milestone-m6` `#milestone-m7` `#milestone-m8` `#milestone-m9` `#milestone-m10` `#milestone-final`
@@ -73,6 +73,6 @@
 | 2026-05-11 | Claude (planning pass) | Initial handoff plan. |
 | 2026-05-11 | Claude (update pass) | Bumped UI shell from Avalonia 11.12 to Avalonia 12 (stable). See `11_AVALONIA_SHELL.md` and the `Migration notes (vs Avalonia 11)` section. |
 | 2026-05-11 | Claude (scope cut) | Dropped obsolescent surfaces from v1: TLS 1.2 fallback (`03_NETWORKING.md`), `document.write` (`04_HTML_PARSING.md`), `keypress` event (`05_DOM.md`), `XMLHttpRequest` (`10_WEB_APIS.md`). Each remains as a loud-failure stub so feature-detection paths still work. |
-| 2026-05-11 | Claude (wp:M2-05) | Landed HTTP/1.1 client: `H1RequestWriter`, `H1ResponseParser` (status line + headers + chunked / Content-Length / EOF body framing), `BodyDecoder` (gzip / br / deflate stacked in reverse list order), and the `TesseraHttpClient` facade wired onto TCP + BouncyCastle TLS. Live `GET https://example.com` returns 200 + HTML body (test gated by `TESSERA_LIVE_HTTP_TESTS=1`). 60 new unit tests; full suite green. |
-| 2026-05-11 | Claude (wp:M2-06) | Landed cookies: RFC 6265bis-shaped `CookieParser`, `CookieJar` (host-only / domain matching, path matching with slash boundary, Secure / HttpOnly / SameSite, `__Host-` / `__Secure-` prefix rules, Max-Age beats Expires), and bundled Mozilla Public Suffix List (~16k rules). `TesseraHttpClient` injects `Cookie` from the jar and stores `Set-Cookie` from responses. 45 new unit + integration tests; full suite green. |
-| 2026-05-11 | Claude (wp:M2-07 partial) | Wired `TesseraHttpClient` into `TesseraEngine` so `tessera render https://example.com -o out.png` now runs the full DNS → TCP → TLS → HTTP/1.1 → HTML parse → paint pipeline end-to-end. Added charset sniffing (Content-Type → BOM → UTF-8). **Blocked on M1 layout/paint** for the SSIM-against-golden acceptance criterion: rendering still uses the M0 text-on-white painter; will upgrade automatically once the in-flight box-tree / layout / display-list work lands. 4 new engine integration tests; full suite green. |
+| 2026-05-11 | Claude (wp:M2-05) | Landed HTTP/1.1 client: `H1RequestWriter`, `H1ResponseParser` (status line + headers + chunked / Content-Length / EOF body framing), `BodyDecoder` (gzip / br / deflate stacked in reverse list order), and the `StarlingHttpClient` facade wired onto TCP + BouncyCastle TLS. Live `GET https://example.com` returns 200 + HTML body (test gated by `STARLING_LIVE_HTTP_TESTS=1`). 60 new unit tests; full suite green. |
+| 2026-05-11 | Claude (wp:M2-06) | Landed cookies: RFC 6265bis-shaped `CookieParser`, `CookieJar` (host-only / domain matching, path matching with slash boundary, Secure / HttpOnly / SameSite, `__Host-` / `__Secure-` prefix rules, Max-Age beats Expires), and bundled Mozilla Public Suffix List (~16k rules). `StarlingHttpClient` injects `Cookie` from the jar and stores `Set-Cookie` from responses. 45 new unit + integration tests; full suite green. |
+| 2026-05-11 | Claude (wp:M2-07 partial) | Wired `StarlingHttpClient` into `StarlingEngine` so `starling render https://example.com -o out.png` now runs the full DNS → TCP → TLS → HTTP/1.1 → HTML parse → paint pipeline end-to-end. Added charset sniffing (Content-Type → BOM → UTF-8). **Blocked on M1 layout/paint** for the SSIM-against-golden acceptance criterion: rendering still uses the M0 text-on-white painter; will upgrade automatically once the in-flight box-tree / layout / display-list work lands. 4 new engine integration tests; full suite green. |

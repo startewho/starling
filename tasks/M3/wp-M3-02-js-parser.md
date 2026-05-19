@@ -9,7 +9,7 @@ depends_on:
   - "wp:M3-01-js-lexer"
 blocks:
   - "wp:M3-03-js-compiler"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#parser"
   - "browser-plan/14_AGENT_TASKS.md#wpm3-02-js-parser"

@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout.Box;
 using Xunit;
 
-namespace Tessera.Layout.Tests;
+namespace Starling.Layout.Tests;
 
 /// <summary>
 /// Verifies that legacy form controls (&lt;input&gt;, &lt;button&gt;) render as

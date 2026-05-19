@@ -1,8 +1,8 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Animations;
+namespace Starling.Css.Animations;
 
 /// <summary>
 /// Extracts <see cref="KeyframesRule"/> values from parsed stylesheets. The

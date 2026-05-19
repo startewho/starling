@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// CSS Values 4 §11.2 — <c>attr()</c> type coercion. Given an attribute lookup,

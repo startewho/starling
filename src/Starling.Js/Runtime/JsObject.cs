@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// Ordinary JS object per §10.1. Property-bag with descriptors and a prototype

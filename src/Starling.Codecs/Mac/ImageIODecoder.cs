@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Image;
+using Starling.Common.Diagnostics;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs.Mac;
+namespace Starling.Codecs.Mac;
 
 /// <summary>
 /// macOS / Mac Catalyst image decoder built on the ImageIO + Core Graphics

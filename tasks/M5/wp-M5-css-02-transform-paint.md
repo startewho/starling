@@ -41,7 +41,7 @@ every primitive call.
 
 ## Inputs
 
-- `Tessera.Css.Values.CssTransform` + `Matrix2D` (from `wp:M5-css-01`).
+- `Starling.Css.Values.CssTransform` + `Matrix2D` (from `wp:M5-css-01`).
 - `Starling.Paint.DisplayList.{DisplayList, DisplayItem, DisplayListBuilder}`.
 - `Starling.Paint.Backend.ImageSharpBackend` (the only backend).
 - ImageSharp.Drawing 3 surface:

@@ -1,14 +1,14 @@
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Image;
-using Tessera.Css.Cascade;
-using Tessera.Layout.Box;
-using Tessera.Layout.Text;
-using Tessera.Layout.Tree;
-using Tessera.Paint;
-using Tessera.Paint.Backend;
-using Tessera.Paint.DisplayList;
-using LayoutSize = Tessera.Layout.Size;
-using PaintList = Tessera.Paint.DisplayList.DisplayList;
+using Starling.Common.Diagnostics;
+using Starling.Common.Image;
+using Starling.Css.Cascade;
+using Starling.Layout.Box;
+using Starling.Layout.Text;
+using Starling.Layout.Tree;
+using Starling.Paint;
+using Starling.Paint.Backend;
+using Starling.Paint.DisplayList;
+using LayoutSize = Starling.Layout.Size;
+using PaintList = Starling.Paint.DisplayList.DisplayList;
 
 namespace Starling.Gui.Avalonia;
 
@@ -17,7 +17,7 @@ namespace Starling.Gui.Avalonia;
 /// src/Starling.Gui/PageRenderer.cs uses on the MAUI side, returning a raw
 /// <see cref="RenderedBitmap"/> that <c>BitmapBridge</c> can hand to Avalonia.
 /// The backend (Skia Graphite / ImageSharp CPU / ImageSharp WebGPU) is picked
-/// by <see cref="PaintBackendSelector"/> from the <c>TESSERA_PAINT_BACKEND</c>
+/// by <see cref="PaintBackendSelector"/> from the <c>STARLING_PAINT_BACKEND</c>
 /// env var. Avalonia takes the RGBA buffer directly — the MAUI-specific
 /// <c>ToImageSource</c> tail isn't needed.
 /// </summary>

@@ -1,7 +1,7 @@
-using Tessera.Js.Ast;
-using Tessera.Js.Lex;
+using Starling.Js.Ast;
+using Starling.Js.Lex;
 
-namespace Tessera.Js.Parse;
+namespace Starling.Js.Parse;
 
 /// <summary>
 /// Class declaration + expression parsing — B1b-2a. Class bodies are

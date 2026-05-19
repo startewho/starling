@@ -1,7 +1,7 @@
 using System.Text;
-using Tessera.Common;
+using Starling.Common;
 
-namespace Tessera.Url;
+namespace Starling.Url;
 
 /// <summary>
 /// WHATWG URL "basic URL parser" per

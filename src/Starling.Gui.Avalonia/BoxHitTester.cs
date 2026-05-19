@@ -1,11 +1,11 @@
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Layout.Box;
-using Tessera.Layout.Text;
-using DomElement = Tessera.Dom.Element;
-using DomNode = Tessera.Dom.Node;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Layout.Box;
+using Starling.Layout.Text;
+using DomElement = Starling.Dom.Element;
+using DomNode = Starling.Dom.Node;
 
-namespace Tessera.Gui;
+namespace Starling.Gui;
 
 /// <summary>
 /// Re-derives interaction from the laid-out box tree now that the GUI paints a

@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Css.Media;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Html;
+using Starling.Css.Media;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Html;
 using Xunit;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 /// <summary>
 /// The Painter accepts a <see cref="ColorScheme"/> and threads it into the
@@ -26,7 +26,7 @@ public sealed class PrefersColorSchemeTests
     {
         var doc = HtmlParser.Parse(Html);
         var (_, style) = new Painter().LayoutDocumentWithStyle(
-            doc, new Tessera.Layout.Size(200, 100),
+            doc, new Starling.Layout.Size(200, 100),
             defaultFontSize: 16f, colorScheme: ColorScheme.Light);
 
         style.Compute(Body(doc)).GetColor(PropertyId.Color)
@@ -38,14 +38,14 @@ public sealed class PrefersColorSchemeTests
     {
         var doc = HtmlParser.Parse(Html);
         var (_, style) = new Painter().LayoutDocumentWithStyle(
-            doc, new Tessera.Layout.Size(200, 100),
+            doc, new Starling.Layout.Size(200, 100),
             defaultFontSize: 16f, colorScheme: ColorScheme.Dark);
 
         style.Compute(Body(doc)).GetColor(PropertyId.Color)
             .Should().Be(new CssColor(255, 255, 255));
     }
 
-    private static Tessera.Dom.Element Body(Tessera.Dom.Document doc)
+    private static Starling.Dom.Element Body(Starling.Dom.Document doc)
     {
         foreach (var b in doc.GetElementsByTagName("body"))
             return b;

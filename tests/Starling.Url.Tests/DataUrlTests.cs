@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Url.Tests;
+namespace Starling.Url.Tests;
 
 /// <summary>
 /// <see cref="DataUrl.TryDecode"/> coverage. Data URLs are the inline-bytes

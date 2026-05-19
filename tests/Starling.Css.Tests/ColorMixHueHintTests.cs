@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Values;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-color-5", "https://www.w3.org/TR/css-color-5/")]
 

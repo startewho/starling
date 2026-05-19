@@ -1,4 +1,4 @@
-namespace Tessera.Layout.Position;
+namespace Starling.Layout.Position;
 
 /// <summary>
 /// CSS <c>position</c> keyword values. <see cref="Sticky"/> is implemented

@@ -22,8 +22,8 @@ The HTML spec is the single source of truth. **Do not invent**. Cite section num
 ## Project layout
 
 ```
-src/Tessera.Html/
-├── Tessera.Html.csproj
+src/Starling.Html/
+├── Starling.Html.csproj
 ├── IHtmlParser.cs
 ├── HtmlParser.cs                # façade
 ├── InputStream/
@@ -50,7 +50,7 @@ src/Tessera.Html/
 ## Public API
 
 ```csharp
-namespace Tessera.Html;
+namespace Starling.Html;
 
 public interface IHtmlParser
 {
@@ -258,7 +258,7 @@ On end-tag </script>:
   3. set insertion point to current position
   4. parser.PauseTokenizing()
   5. raise ScriptBlocked(script)
-  6. consumer evaluates script via Tessera.Js
+  6. consumer evaluates script via Starling.Js
   7. consumer calls parser.ResumeAsync()
   8. parser resumes from saved insertion point
 ```

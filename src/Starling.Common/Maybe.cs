@@ -1,4 +1,4 @@
-namespace Tessera.Common;
+namespace Starling.Common;
 
 /// <summary>
 /// Optional value type. Prefer over <c>T?</c> for value types in public APIs where

@@ -11,7 +11,7 @@ depends_on:
   - "wp:M3-04d-js-new-and-this"
 blocks:
   - "wp:M3-05-js-intrinsics"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#vm"
 ---

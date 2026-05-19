@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Js.Lex;
+using Starling.Js.Lex;
 using Xunit;
 
-namespace Tessera.Js.Tests.Lex;
+namespace Starling.Js.Tests.Lex;
 
 /// <summary>
 /// Lexer hardening (B1a): template literals, regex literals, private

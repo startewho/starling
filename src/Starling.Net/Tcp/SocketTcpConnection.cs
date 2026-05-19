@@ -1,6 +1,6 @@
 using System.Net.Sockets;
 
-namespace Tessera.Net.Tcp;
+namespace Starling.Net.Tcp;
 
 /// <summary>
 /// <see cref="ITcpConnection"/> implementation backed by a real

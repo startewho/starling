@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Dom.Events;
+using Starling.Dom.Events;
 using Xunit;
 
-namespace Tessera.Dom.Tests;
+namespace Starling.Dom.Tests;
 
 public sealed class DomEventTests
 {

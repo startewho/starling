@@ -2,13 +2,13 @@ using FluentAssertions;
 using SixLabors.ImageSharp;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Live-network acceptance for the M2 exit demo:
 /// <c>starling render https://example.com -o out.png</c>. Skipped by
 /// default; the dedicated <c>network-tests</c> CI job exports
-/// <c>TESSERA_ALLOW_NETWORK=1</c> to opt in.
+/// <c>STARLING_ALLOW_NETWORK=1</c> to opt in.
 ///
 /// The test renders <c>https://example.com</c> through the full engine
 /// (DNS, TLS 1.3, HTTP/1.1, parse, layout, paint, PNG encode) and
@@ -29,16 +29,16 @@ public class EngineLiveHttpsTests
     [Fact]
     public async Task Render_example_com_matches_golden_via_ssim()
     {
-        if (Environment.GetEnvironmentVariable("TESSERA_ALLOW_NETWORK") != "1")
+        if (Environment.GetEnvironmentVariable("STARLING_ALLOW_NETWORK") != "1")
             return;
 
         var repoRoot = LocateRepoRoot();
         var goldenPath = Path.Combine(repoRoot, "testdata", "golden", "live", "example.com.png");
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-live-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-live-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 LiveUrl,
                 new RenderOptions(new Size(ViewportWidth, ViewportHeight), DefaultFontSize),
@@ -49,7 +49,7 @@ public class EngineLiveHttpsTests
             File.Exists(output).Should().BeTrue();
             result.Value.DisplayText.Should().Contain("Example Domain");
 
-            if (Environment.GetEnvironmentVariable("TESSERA_UPDATE_GOLDENS") == "1")
+            if (Environment.GetEnvironmentVariable("STARLING_UPDATE_GOLDENS") == "1")
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(goldenPath)!);
                 File.Copy(output, goldenPath, overwrite: true);
@@ -57,12 +57,12 @@ public class EngineLiveHttpsTests
             }
 
             File.Exists(goldenPath).Should().BeTrue(
-                $"golden missing: {goldenPath}. Run with TESSERA_UPDATE_GOLDENS=1 to regenerate.");
+                $"golden missing: {goldenPath}. Run with STARLING_UPDATE_GOLDENS=1 to regenerate.");
 
             var ssim = PngComparison.Ssim(output, goldenPath);
             ssim.Should().BeGreaterThanOrEqualTo(SsimFloor,
                 $"live render drifted from golden; SSIM={ssim:F4}. If the upstream " +
-                "page changed, re-render with TESSERA_UPDATE_GOLDENS=1 after " +
+                "page changed, re-render with STARLING_UPDATE_GOLDENS=1 after " +
                 "confirming the new render is correct.");
         }
         finally

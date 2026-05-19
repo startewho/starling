@@ -22,8 +22,8 @@
 ## Project layout
 
 ```
-src/Tessera.Dom/
-├── Tessera.Dom.csproj
+src/Starling.Dom/
+├── Starling.Dom.csproj
 ├── Node.cs
 ├── NodeKind.cs
 ├── Document.cs
@@ -94,7 +94,7 @@ Node (abstract)
 ## Core types
 
 ```csharp
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 public abstract class Node : EventTarget
 {
@@ -146,7 +146,7 @@ public sealed class Document : Node
     public DocumentFragment CreateDocumentFragment();
     public Event CreateEvent(string type);
 
-    // Selectors (calls into Tessera.Css):
+    // Selectors (calls into Starling.Css):
     public Element? QuerySelector(string selectors);
     public IReadOnlyList<Element> QuerySelectorAll(string selectors);
     public Element? GetElementById(string id);
@@ -170,7 +170,7 @@ public class Element : Node
     public void RemoveAttribute(string name);
 
     // Layout-affecting properties (compute lazily, invalidate on style/mutation):
-    public ComputedStyle ComputedStyle { get; }   // populated by Tessera.Css
+    public ComputedStyle ComputedStyle { get; }   // populated by Starling.Css
 
     public string InnerHtml { get; set; }
     public string OuterHtml { get; set; }
@@ -396,7 +396,7 @@ public string InnerHtml
 
 `HtmlSerializer` per [SPEC: HTML §13.3](https://html.spec.whatwg.org/multipage/parsing.html#serializing-html-fragments).
 
-`FragmentParser` is in `Tessera.Html` ([04_HTML_PARSING.md#fragment-parser](04_HTML_PARSING.md#fragment-parser)).
+`FragmentParser` is in `Starling.Html` ([04_HTML_PARSING.md#fragment-parser](04_HTML_PARSING.md#fragment-parser)).
 
 ## Performance budget
 

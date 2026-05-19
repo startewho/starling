@@ -1,4 +1,4 @@
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 /// <summary>
 /// Attribute is no longer a Node since DOM4 (2013); it is modeled as a value

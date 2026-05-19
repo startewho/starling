@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Css.Animations;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
+using Starling.Css.Animations;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
 using Xunit;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 /// <summary>
 /// Additional CSS Transitions Level 1 conformance tests.

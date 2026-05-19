@@ -1,6 +1,6 @@
-using Tessera.Css.Tokenizer;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Parser;
+namespace Starling.Css.Parser;
 
 public sealed record StyleSheet(
     string Source,

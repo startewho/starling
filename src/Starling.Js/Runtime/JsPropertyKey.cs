@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>ECMA-262 property keys are strings or Symbols (§6.1.7).</summary>
 public readonly struct JsPropertyKey : IEquatable<JsPropertyKey>

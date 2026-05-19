@@ -1,10 +1,10 @@
 using System.Diagnostics;
-using Tessera.Common;
-using Tessera.Common.Diagnostics;
-using Tessera.Net;
-using Tessera.Net.Http.Cookies;
+using Starling.Common;
+using Starling.Common.Diagnostics;
+using Starling.Net;
+using Starling.Net.Http.Cookies;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Small stateful browsing session for headless and shell hosts. It keeps
@@ -12,16 +12,16 @@ namespace Tessera.Engine;
 /// </summary>
 public sealed class BrowserSession : IDisposable
 {
-    private readonly TesseraEngine _engine;
+    private readonly StarlingEngine _engine;
     private readonly IDiagnostics _diag;
 
     public BrowserSession(IDiagnostics? diagnostics = null, CookieJar? cookieJar = null)
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         Cookies = cookieJar ?? new CookieJar();
-        _engine = new TesseraEngine(
+        _engine = new StarlingEngine(
             diagnostics,
-            httpFactory: () => new TesseraHttpClient(new TesseraHttpClientOptions
+            httpFactory: () => new StarlingHttpClient(new StarlingHttpClientOptions
             {
                 CookieJar = Cookies,
                 Diagnostics = diagnostics,

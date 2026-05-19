@@ -1,4 +1,4 @@
-namespace Tessera.Net.Dns;
+namespace Starling.Net.Dns;
 
 /// <summary>
 /// TTL-aware LRU cache for DNS lookup results. Thread-safe via a single

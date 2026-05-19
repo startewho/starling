@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 
-namespace Tessera.Net.Dns;
+namespace Starling.Net.Dns;
 
 /// <summary>
 /// Real UDP transport for DNS queries. Sends to a configured resolver IP:port

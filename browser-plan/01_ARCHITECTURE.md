@@ -11,41 +11,41 @@
 
 ```
                        ┌──────────────────┐
-                       │  Tessera.Shell   │   Avalonia UI host
+                       │  Starling.Shell   │   Avalonia UI host
                        └────────┬─────────┘
                                 ▼
                        ┌──────────────────┐
-                       │  Tessera.Engine  │   Browser / Page / Frame composition
+                       │  Starling.Engine  │   Browser / Page / Frame composition
                        └────────┬─────────┘
         ┌───────────────────────┼──────────────────────┐
         ▼                       ▼                      ▼
 ┌──────────────┐        ┌──────────────┐       ┌─────────────────┐
-│ Tessera.Loop │        │Tessera.Layout│       │ Tessera.Bindings │
+│ Starling.Loop │        │Starling.Layout│       │ Starling.Bindings │
 │ event loop   │        │ box tree     │       │ Web IDL ↔ JS     │
 └────┬─────────┘        └────┬─────────┘       └────┬─────────────┘
      │                       ▼                      ▼
      │                ┌──────────────┐       ┌─────────────────┐
-     │                │Tessera.Paint │       │   Tessera.Js    │
+     │                │Starling.Paint │       │   Starling.Js    │
      │                │display lists │       │  parser + VM    │
      │                └────┬─────────┘       └─────────────────┘
      │                     │
      ▼                     ▼
 ┌──────────────┐    ┌──────────────┐
-│Tessera.Css   │◄───│ Tessera.Dom  │
+│Starling.Css   │◄───│ Starling.Dom  │
 │cascade       │    │ DOM tree     │
 └──────────────┘    └────┬─────────┘
                          ▼
                    ┌──────────────┐
-                   │Tessera.Html  │
+                   │Starling.Html  │
                    │ tokenizer    │
                    └────┬─────────┘
                         ▼
                    ┌──────────────┐
-                   │ Tessera.Url  │
+                   │ Starling.Url  │
                    └────┬─────────┘
                         ▼
                    ┌──────────────┐
-                   │ Tessera.Net  │
+                   │ Starling.Net  │
                    │DNS/TLS/HTTP  │
                    └──────────────┘
 ```
@@ -53,9 +53,9 @@
 **Dependency rules:**
 
 1. Arrows point **down**. A module may only `using` modules strictly below it.
-2. `Tessera.Engine` is the only module that may compose all others.
-3. `Tessera.Shell` is a leaf — it may only depend on `Tessera.Engine`. No direct calls into DOM/CSS/etc.
-4. `Tessera.Js` does **not** know about the DOM. `Tessera.Bindings` is the bridge.
+2. `Starling.Engine` is the only module that may compose all others.
+3. `Starling.Shell` is a leaf — it may only depend on `Starling.Engine`. No direct calls into DOM/CSS/etc.
+4. `Starling.Js` does **not** know about the DOM. `Starling.Bindings` is the bridge.
 5. Cyclical references are prohibited. Enforced via `Roslyn analyzer` rule defined in `02_PROJECT_SETUP.md`.
 
 ---
@@ -64,20 +64,20 @@
 
 | Project | Purpose | Key public types |
 |---|---|---|
-| `Tessera.Net` (#tessera-net) | DNS, TCP, TLS 1.3, HTTP/1.1, HTTP/2, cookies, content-encoding | `HttpFetcher`, `Connection`, `CookieJar`, `Resolver` |
-| `Tessera.Url` (#tessera-url) | WHATWG URL parser | `Url`, `UrlParser` |
-| `Tessera.Html` (#tessera-html) | Tokenizer + tree builder | `Tokenizer`, `TreeBuilder` |
-| `Tessera.Dom` (#tessera-dom) | DOM tree, events, mutation observers | `Document`, `Element`, `Node`, `Event` |
-| `Tessera.Css` (#tessera-css) | Syntax, selectors, cascade, computed values | `Stylesheet`, `Selector`, `Cascade`, `ComputedStyle` |
-| `Tessera.Layout` (#tessera-layout) | Formatting contexts, box tree | `LayoutTree`, `Box`, `LayoutEngine` |
-| `Tessera.Paint` (#tessera-paint) | Display list IR, ImageSharp paint backend | `DisplayList`, `Painter`, `PaintContext` |
-| `Tessera.Js` (#tessera-js) | Lexer, parser, bytecode, VM | `JsEngine`, `Realm`, `JsValue` |
-| `Tessera.Bindings` (#tessera-bindings) | Generated Web IDL bindings | `*Interface` partial classes per IDL fragment |
-| `Tessera.Loop` (#tessera-loop) | Event loop + microtask queue + scheduler | `EventLoop`, `Task`, `Microtask` |
-| `Tessera.Engine` (#tessera-engine) | Browser, BrowsingContext, Page, Frame | `Browser`, `Page`, `Frame`, `Navigation` |
-| `Tessera.Shell` (#tessera-shell) | Avalonia UI | `MainWindow`, `TabView`, `AddressBar` |
+| `Starling.Net` (#starling-net) | DNS, TCP, TLS 1.3, HTTP/1.1, HTTP/2, cookies, content-encoding | `HttpFetcher`, `Connection`, `CookieJar`, `Resolver` |
+| `Starling.Url` (#starling-url) | WHATWG URL parser | `Url`, `UrlParser` |
+| `Starling.Html` (#starling-html) | Tokenizer + tree builder | `Tokenizer`, `TreeBuilder` |
+| `Starling.Dom` (#starling-dom) | DOM tree, events, mutation observers | `Document`, `Element`, `Node`, `Event` |
+| `Starling.Css` (#starling-css) | Syntax, selectors, cascade, computed values | `Stylesheet`, `Selector`, `Cascade`, `ComputedStyle` |
+| `Starling.Layout` (#starling-layout) | Formatting contexts, box tree | `LayoutTree`, `Box`, `LayoutEngine` |
+| `Starling.Paint` (#starling-paint) | Display list IR, ImageSharp paint backend | `DisplayList`, `Painter`, `PaintContext` |
+| `Starling.Js` (#starling-js) | Lexer, parser, bytecode, VM | `JsEngine`, `Realm`, `JsValue` |
+| `Starling.Bindings` (#starling-bindings) | Generated Web IDL bindings | `*Interface` partial classes per IDL fragment |
+| `Starling.Loop` (#starling-loop) | Event loop + microtask queue + scheduler | `EventLoop`, `Task`, `Microtask` |
+| `Starling.Engine` (#starling-engine) | Browser, BrowsingContext, Page, Frame | `Browser`, `Page`, `Frame`, `Navigation` |
+| `Starling.Shell` (#starling-shell) | Avalonia UI | `MainWindow`, `TabView`, `AddressBar` |
 
-Test projects mirror each: `Tessera.Net.Tests`, etc. Plus `Tessera.IntegrationTests` and `Tessera.GoldenTests`.
+Test projects mirror each: `Starling.Net.Tests`, etc. Plus `Starling.IntegrationTests` and `Starling.GoldenTests`.
 
 ---
 
@@ -92,7 +92,7 @@ Test projects mirror each: `Tessera.Net.Tests`, etc. Plus `Tessera.IntegrationTe
 
 ### C.2 Async/sync boundary
 
-- **Networking is async-only**: every public method on `Tessera.Net` returns `ValueTask<>` or `Task<>`.
+- **Networking is async-only**: every public method on `Starling.Net` returns `ValueTask<>` or `Task<>`.
 - **Parsing is sync** (HTML, CSS, JS): pure CPU, kept synchronous to simplify reasoning. Run on background `Task.Run` if needed.
 - **DOM mutations are sync** and always run on the event-loop thread.
 - **Layout and paint are sync** and run on the event-loop thread.
@@ -150,7 +150,7 @@ Rules:
 
 1. **One event-loop thread per Page.** Multiple Pages = multiple threads. The shell aggregates them.
 2. **DOM access is single-threaded.** No locks. Other threads communicate via posted callbacks onto the event loop.
-3. **Networking lives on the ThreadPool.** `Tessera.Net` exposes `ValueTask<HttpResponse>`; results are awaited from the event loop. Body streams deliver chunks back via a callback that's marshalled to the loop.
+3. **Networking lives on the ThreadPool.** `Starling.Net` exposes `ValueTask<HttpResponse>`; results are awaited from the event loop. Body streams deliver chunks back via a callback that's marshalled to the loop.
 4. **No shared mutable state across threads** except through immutable snapshots (e.g. parsed `Stylesheet` after parsing completes) or thread-safe channels (`System.Threading.Channels`).
 5. **No `lock()` in hot paths.** If you reach for `lock`, redesign with a channel or per-thread state.
 
@@ -159,7 +159,7 @@ Rules:
 ## E. Page / Frame / BrowsingContext model
 
 ```csharp
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 public sealed class Browser
 {
@@ -182,8 +182,8 @@ public sealed class Page
 
 public sealed class Frame
 {
-    public Document Document { get; }         // Tessera.Dom
-    public Realm Realm { get; }               // Tessera.Js
+    public Document Document { get; }         // Starling.Dom
+    public Realm Realm { get; }               // Starling.Js
     public IReadOnlyList<Frame> Children { get; }
 }
 
@@ -201,16 +201,16 @@ A `Page` corresponds to a tab. A `Frame` corresponds to an HTML `<iframe>` or th
 
 ## F. Data flow: a request from address-bar to pixels
 
-1. User types URL → `Tessera.Shell.AddressBar` posts `Page.NavigateAsync(url)` onto the page's event loop.
-2. Event loop calls `Tessera.Net.HttpFetcher.GetAsync(url, ct)` (off-thread).
+1. User types URL → `Starling.Shell.AddressBar` posts `Page.NavigateAsync(url)` onto the page's event loop.
+2. Event loop calls `Starling.Net.HttpFetcher.GetAsync(url, ct)` (off-thread).
 3. Network worker resolves DNS → opens TCP → completes TLS → sends HTTP request → reads response headers → returns response object + body stream.
-4. Headers come back to event loop. Body bytes stream into `Tessera.Html.Tokenizer` (which buffers incrementally and yields tokens to `TreeBuilder`).
-5. `TreeBuilder` mutates `Tessera.Dom.Document`.
-6. On `</head>` and again on `DOMContentLoaded`-equivalent points, `Tessera.Css.Cascade` runs and updates `ComputedStyle` for newly-styled elements.
-7. After DOM stable (a tick on the loop), `Tessera.Layout.LayoutEngine` builds/updates the box tree.
-8. `Tessera.Paint.Painter` walks the box tree, emits a `DisplayList`, executes it against an `Image<Bgra32>` via `ImageSharp.Drawing`.
+4. Headers come back to event loop. Body bytes stream into `Starling.Html.Tokenizer` (which buffers incrementally and yields tokens to `TreeBuilder`).
+5. `TreeBuilder` mutates `Starling.Dom.Document`.
+6. On `</head>` and again on `DOMContentLoaded`-equivalent points, `Starling.Css.Cascade` runs and updates `ComputedStyle` for newly-styled elements.
+7. After DOM stable (a tick on the loop), `Starling.Layout.LayoutEngine` builds/updates the box tree.
+8. `Starling.Paint.Painter` walks the box tree, emits a `DisplayList`, executes it against an `Image<Bgra32>` via `ImageSharp.Drawing`.
 9. `Surface.Invalidated` fires → Avalonia's render loop blits the bitmap.
-10. Meanwhile, `<script>` elements encountered by the parser are routed to `Tessera.Js` for execution, which can mutate the DOM, causing style/layout/paint invalidation.
+10. Meanwhile, `<script>` elements encountered by the parser are routed to `Starling.Js` for execution, which can mutate the DOM, causing style/layout/paint invalidation.
 
 See `13_MILESTONES.md` for which of these stages are implemented when.
 
@@ -224,14 +224,14 @@ See `13_MILESTONES.md` for which of these stages are implemented when.
 | Network errors | Surface to `Page` as `NavigationFailure`. Display error page. |
 | TLS failures | Same. Cert-error subtype. |
 | JS uncaught exception | Logged to console, dispatched as `error` event. Does not crash. |
-| Assertion violation in engine (invariant broken) | `Debug.Assert` in debug; `Tessera.Engine.PanicException` in release. Logged via `IDiagnostics`. |
+| Assertion violation in engine (invariant broken) | `Debug.Assert` in debug; `Starling.Engine.PanicException` in release. Logged via `IDiagnostics`. |
 | OOM, stack overflow | Let .NET kill the process; restart the page. |
 
 ---
 
 ## H. Diagnostics
 
-A single `IDiagnostics` interface, registered in `Tessera.Engine`:
+A single `IDiagnostics` interface, registered in `Starling.Engine`:
 
 ```csharp
 public interface IDiagnostics
@@ -262,9 +262,9 @@ Implemented by `ConsoleDiagnostics` (dev) and `NoopDiagnostics` (perf builds). D
 
 | Flavor | Defines | Use |
 |---|---|---|
-| Debug | `DEBUG;TESSERA_TRACE` | Local dev. Asserts on, verbose logging. |
+| Debug | `DEBUG;STARLING_TRACE` | Local dev. Asserts on, verbose logging. |
 | Release | `RELEASE` | Distribution. Asserts off. |
-| Profiling | `RELEASE;TESSERA_PROFILE` | BenchmarkDotNet runs. |
+| Profiling | `RELEASE;STARLING_PROFILE` | BenchmarkDotNet runs. |
 
 AOT compatibility is a **stretch goal** — code should be reflection-light to keep this open, but we do not enable `<PublishAot>true</PublishAot>` in v1.
 
@@ -274,9 +274,9 @@ AOT compatibility is a **stretch goal** — code should be reflection-light to k
 
 An implementation agent has correctly read this doc when they can answer:
 
-1. Where does `Tessera.Layout` live in the dependency graph and what may it `using`? **(Below Engine; may using Css, Dom, Url. Not Paint, not Js, not Net.)**
+1. Where does `Starling.Layout` live in the dependency graph and what may it `using`? **(Below Engine; may using Css, Dom, Url. Not Paint, not Js, not Net.)**
 2. Which thread runs JavaScript? **(The per-Page event-loop thread. Same thread as DOM mutation.)**
-3. Where do TLS bytes come from? **(`Tessera.Net.Connection`, on a ThreadPool task, never on the event-loop thread.)**
-4. If `Tessera.Bindings` needs to call into the DOM, which thread does it run on? **(Event loop. Always.)**
+3. Where do TLS bytes come from? **(`Starling.Net.Connection`, on a ThreadPool task, never on the event-loop thread.)**
+4. If `Starling.Bindings` needs to call into the DOM, which thread does it run on? **(Event loop. Always.)**
 5. What is the surface between Engine and Shell? **(`Page` and `Surface`. Shell never touches DOM/CSS/Layout/Paint directly.)**
-6. May the JS engine import a type from `Tessera.Dom`? **(No. Only `Tessera.Bindings` straddles that boundary.)**
+6. May the JS engine import a type from `Starling.Dom`? **(No. Only `Starling.Bindings` straddles that boundary.)**

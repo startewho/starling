@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout.Box;
 using Xunit;
 
-namespace Tessera.Layout.Tests.Position;
+namespace Starling.Layout.Tests.Position;
 
 /// <summary>
 /// Tests for <c>position: relative / absolute / fixed</c>. Frames are read
@@ -212,9 +212,9 @@ public sealed class PositionLayoutTests
             """, new Size(800, 600));
 
         var a = ById(root, "a")!;
-        var props = Tessera.Layout.Position.PositionParser.Parse(a.Style);
+        var props = Starling.Layout.Position.PositionParser.Parse(a.Style);
         props.ZIndex.Should().Be(5);
-        props.Kind.Should().Be(Tessera.Layout.Position.PositionKind.Absolute);
+        props.Kind.Should().Be(Starling.Layout.Position.PositionKind.Absolute);
     }
 
     [Fact]

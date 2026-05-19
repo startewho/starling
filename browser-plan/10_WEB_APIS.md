@@ -19,8 +19,8 @@
 ## Project layout
 
 ```
-src/Tessera.Bindings/
-├── Tessera.Bindings.csproj
+src/Starling.Bindings/
+├── Starling.Bindings.csproj
 ├── DomBindings.cs                # static entry: install all DOM globals on a Realm
 ├── BindingHelpers.cs             # to/from JsValue conversions
 ├── Idl/
@@ -47,8 +47,8 @@ src/Tessera.Bindings/
 │   └── WebSocketBinding.cs       # M6+ stub
 └── WindowProxy.cs
 
-src/Tessera.Loop/
-├── Tessera.Loop.csproj
+src/Starling.Loop/
+├── Starling.Loop.csproj
 ├── IEventLoop.cs
 ├── EventLoop.cs
 ├── TaskQueue.cs / MicrotaskQueue.cs
@@ -111,7 +111,7 @@ The event loop runs on its dedicated thread. Network bytes arriving on `ThreadPo
 
 ## DOM bindings — the bridge
 
-The bridge sits between `Tessera.Dom` (plain .NET objects) and `Tessera.Js` (JsObjects). Implemented manually as `BindingObject` subclasses of `JsObject`:
+The bridge sits between `Starling.Dom` (plain .NET objects) and `Starling.Js` (JsObjects). Implemented manually as `BindingObject` subclasses of `JsObject`:
 
 ```csharp
 public sealed class DocumentBinding : JsObject
@@ -228,7 +228,7 @@ const json = await r.json();
 
 Bind `Response.prototype.{text, json, arrayBuffer, blob, formData, clone}` accordingly.
 
-`AbortSignal` integrates with `Tessera.Net` via `CancellationToken` chains.
+`AbortSignal` integrates with `Starling.Net` via `CancellationToken` chains.
 
 ## XMLHttpRequest
 
@@ -273,7 +273,7 @@ public sealed class StorageBinding : JsObject
 
 Persistence:
 - `sessionStorage`: per-tab in-memory only.
-- `localStorage`: per-origin on-disk persistent. v1 location: `%LOCALAPPDATA%/Tessera/Storage/<origin-hash>.json` (or platform equivalent via `Environment.GetFolderPath`). Pure-managed JSON file.
+- `localStorage`: per-origin on-disk persistent. v1 location: `%LOCALAPPDATA%/Starling/Storage/<origin-hash>.json` (or platform equivalent via `Environment.GetFolderPath`). Pure-managed JSON file.
 
 `storage` event fires across windows of the same origin (cross-tab in M5+).
 
@@ -351,7 +351,7 @@ Minimum delay: 4ms after the 5th nested timer, per HTML spec.
 
 ## URL and URLSearchParams
 
-Wrap `Tessera.Url.Url`. Surface per [WHATWG URL](https://url.spec.whatwg.org/#url-class).
+Wrap `Starling.Url.Url`. Surface per [WHATWG URL](https://url.spec.whatwg.org/#url-class).
 
 ```js
 const u = new URL('/x?q=1', 'https://example.com');
@@ -373,7 +373,7 @@ crypto.randomUUID();
 Use `System.Security.Cryptography.RandomNumberGenerator`. `RandomNumberGenerator.Fill`
 is backed by the OS RNG, but the surface area is pure-managed BCL — no P/Invoke in
 our code. Under the interop seam policy ("managed-first, native at vetted seams"),
-native interop is confined to `Tessera.Skia` and `Tessera.Codecs`; `Tessera.Bindings`
+native interop is confined to `Starling.Skia` and `Starling.Codecs`; `Starling.Bindings`
 calling a BCL crypto API is not native interop and stays on the clean side of the
 CI grep.
 
@@ -384,7 +384,7 @@ BCL, no native interop project required).
 
 ## WebSocket (M6+)
 
-Sketched here for binding shape. Real impl in `Tessera.Net/Ws/` (RFC 6455 framing).
+Sketched here for binding shape. Real impl in `Starling.Net/Ws/` (RFC 6455 framing).
 
 ```js
 const ws = new WebSocket('wss://example.com');

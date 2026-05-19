@@ -1,4 +1,4 @@
-namespace Tessera.Dom.Events;
+namespace Starling.Dom.Events;
 
 /// <summary>
 /// Base type for any object that can receive DOM events. The DOM spec marks

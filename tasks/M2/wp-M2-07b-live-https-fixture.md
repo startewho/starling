@@ -9,7 +9,7 @@ branch: "main"
 depends_on:
   - "wp:M2-07a-img-fetch-decode-paint"
 blocks: []
-subsystem: "Tessera.Engine"
+subsystem: "Starling.Engine"
 plan_refs:
   - "browser-plan/13_MILESTONES.md#m2--networking-and-live-html"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-07-network-end-to-end"
@@ -21,7 +21,7 @@ completed_at: "2026-05-13T14:51:47Z"
 
 ## Goal
 
-Lock the M2 exit demo (`tessera render https://example.com -o out.png`)
+Lock the M2 exit demo (`starling render https://example.com -o out.png`)
 behind a CI signal, plus capture one snapshot-vendored fixture of a richer
 real-world page so we can keep regressing it offline.
 
@@ -33,8 +33,8 @@ real-world page so we can keep regressing it offline.
 
 ## Outputs
 
-- `tests/Tessera.Engine.Tests/EngineLiveHttpsTests.cs` — one xUnit test
-  attribute-gated on a `TESSERA_ALLOW_NETWORK` env var (skipped by default
+- `tests/Starling.Engine.Tests/EngineLiveHttpsTests.cs` — one xUnit test
+  attribute-gated on a `STARLING_ALLOW_NETWORK` env var (skipped by default
   locally, enabled in a dedicated CI job). It calls
   `engine.RenderAsync("https://example.com")`, writes a PNG, and asserts
   SSIM ≥ 0.99 against `testdata/golden/live/example.com.png`.
@@ -44,17 +44,17 @@ real-world page so we can keep regressing it offline.
   the local fixture server pattern already used in
   `EngineHttpTests`. Include a `manifest.json` capturing each URL,
   timestamp, content-type, and SHA-256 so re-vendoring is auditable.
-- `tests/Tessera.Engine.Tests/EngineSnapshotRenderTests.cs` — renders the
+- `tests/Starling.Engine.Tests/EngineSnapshotRenderTests.cs` — renders the
   vendored anthropic.com snapshot through a local stub server and asserts
   byte-exact PNG against
   `testdata/golden/snapshots/anthropic.com.png` (or SSIM ≥ 0.99 if AA noise
   is unavoidable across platforms).
-- `src/Tessera.Common/Image/Ssim.cs` (or similar) — small pure-managed SSIM
+- `src/Starling.Common/Image/Ssim.cs` (or similar) — small pure-managed SSIM
   implementation (window-based; ImageSharp gives us pixel access). If
   byte-exact comparison suffices for the snapshot variant, keep SSIM scoped
   to the live test.
 - `.github/workflows/ci.yml` — opt-in `network-tests` job that exports
-  `TESSERA_ALLOW_NETWORK=1` so the live test runs there but not on the
+  `STARLING_ALLOW_NETWORK=1` so the live test runs there but not on the
   default matrix.
 
 ## Acceptance
@@ -94,5 +94,5 @@ real-world page so we can keep regressing it offline.
   https://example.com was captured by this session — Linux-only in CI to
   avoid font-rasteriser drift across the matrix. Re-vendor with
   tools/snapshot-vendor/vendor-snapshot.sh and regenerate goldens with
-  TESSERA_UPDATE_GOLDENS=1 (the live test additionally needs
-  TESSERA_ALLOW_NETWORK=1).
+  STARLING_UPDATE_GOLDENS=1 (the live test additionally needs
+  STARLING_ALLOW_NETWORK=1).

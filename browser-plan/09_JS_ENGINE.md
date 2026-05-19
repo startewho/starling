@@ -24,8 +24,8 @@ These are read for **structure** and **algorithm**, not copied. Our shape is clo
 ## Project layout
 
 ```
-src/Tessera.Js/
-├── Tessera.Js.csproj
+src/Starling.Js/
+├── Starling.Js.csproj
 ├── Realm.cs                      # public entry
 ├── JsValue.cs                    # discriminated value type
 ├── Lex/
@@ -520,7 +520,7 @@ Unicode `\p{Script=Greek}` etc. requires bundling UCD tables. Generate at build 
 
 ES Module loader per [SPEC: §16.2](https://tc39.es/ecma262/#sec-modules).
 - `import` statement parsed to `ImportDecl`.
-- Module loader fetches source via `Tessera.Net`, parses, links, evaluates.
+- Module loader fetches source via `Starling.Net`, parses, links, evaluates.
 - `import()` (dynamic) returns a Promise.
 - `import.meta` provides `url`.
 - Module records cached by `(realm, url)`.
@@ -562,4 +562,4 @@ Use [Test262](https://github.com/tc39/test262). Subset selection: language featu
 - [ ] `for-of` over a generator yields the expected sequence.
 - [ ] `Proxy` traps for `get`/`set`/`has`/`deleteProperty`/`ownKeys` fire correctly.
 - [ ] Stack overflow surfaces as a `RangeError` with a meaningful trace, not as a C# `StackOverflowException`.
-- [ ] No `DllImport`, no `Jint` import, no `Microsoft.JScript`. `grep -rn 'DllImport\|Jint\|JScript' src/Tessera.Js/` is empty.
+- [ ] No `DllImport`, no `Jint` import, no `Microsoft.JScript`. `grep -rn 'DllImport\|Jint\|JScript' src/Starling.Js/` is empty.

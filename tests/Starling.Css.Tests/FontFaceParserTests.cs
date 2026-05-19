@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.FontFace;
-using Tessera.Css.Parser;
+using Starling.Css.FontFace;
+using Starling.Css.Parser;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/")]
 

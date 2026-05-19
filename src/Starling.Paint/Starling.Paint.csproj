@@ -5,7 +5,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Starling.Paint.Tests" />
     <!-- GUI's PageRendererHost routes through PaintBackendSelector so
-         TESSERA_PAINT_BACKEND=imagesharp-webgpu flips both layout (measurer)
+         STARLING_PAINT_BACKEND=imagesharp-webgpu flips both layout (measurer)
          and raster backend together. -->
     <InternalsVisibleTo Include="Starling.Gui.Avalonia" />
   </ItemGroup>

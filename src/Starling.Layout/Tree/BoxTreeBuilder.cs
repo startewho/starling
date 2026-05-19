@@ -1,10 +1,10 @@
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
+using Starling.Layout.Box;
 
-namespace Tessera.Layout.Tree;
+namespace Starling.Layout.Tree;
 
 /// <summary>
 /// Builds the layout box tree from a DOM tree + a <see cref="StyleEngine"/>.
@@ -97,7 +97,7 @@ internal sealed class BoxTreeBuilder
                     if (string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
                         AppendInputLabel(element, elementStyle, box);
                     break;
-                case Tessera.Dom.Text text:
+                case Starling.Dom.Text text:
                     var data = text.Data;
                     if (data.Length == 0) continue;
                     var textBox = new TextBox(data, parentStyle);

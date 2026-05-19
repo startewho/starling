@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Html.Tokenizer;
+using Starling.Html.Tokenizer;
 using Xunit;
 
-namespace Tessera.Html.Tests.Tokenizer;
+namespace Starling.Html.Tests.Tokenizer;
 
 /// <summary>
 /// Comment + CDATA + BogusComment + MarkupDeclarationOpen — wp:M1-01e.

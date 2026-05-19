@@ -23,8 +23,8 @@ spec requires.
 
 ## Inputs
 
-- `Tessera.Loop.WebEventLoop` (microtasks + timers today).
-- `Tessera.Bindings.WindowBinding`.
+- `Starling.Loop.WebEventLoop` (microtasks + timers today).
+- `Starling.Bindings.WindowBinding`.
 - HTML spec §"event loop processing model" step 11 (run-animation-frame-callbacks).
 
 ## Outputs
@@ -53,7 +53,7 @@ spec requires.
 
 ## Notes
 
-- No engine wiring here — `TesseraEngine.RenderFrame` is wp:M5-css-10.
+- No engine wiring here — `StarlingEngine.RenderFrame` is wp:M5-css-10.
 - Keep `AdvanceBy` for back-compat; have it call `RunFrame(_nowMs + n)` for
   the rAF phase to fire.
 

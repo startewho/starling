@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Resolved per-font glyph metrics that <see cref="CssResolutionContext"/>
@@ -14,7 +14,7 @@ public sealed record FontMetrics(
 /// <summary>
 /// Provides glyph metrics for the cascaded font specification. The interface is
 /// intentionally string-based so this module stays free of font/shape engine
-/// dependencies (which live above Tessera.Css in the module graph).
+/// dependencies (which live above Starling.Css in the module graph).
 /// </summary>
 public interface IFontMetricsProvider
 {

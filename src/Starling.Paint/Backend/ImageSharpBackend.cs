@@ -9,16 +9,16 @@ using SixLabors.ImageSharp.Drawing.Processing.Backends;
 using SixLabors.ImageSharp.Drawing.Text;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
-using Tessera.Common.Diagnostics;
-using Tessera.Paint.Interop;
-using Tessera.Common.Image;
-using Tessera.Css.Values;
-using Tessera.Layout.Text;
-using LayoutRect = Tessera.Layout.Rect;
-using LayoutSize = Tessera.Layout.Size;
-using PaintList = Tessera.Paint.DisplayList.DisplayList;
+using Starling.Common.Diagnostics;
+using Starling.Paint.Interop;
+using Starling.Common.Image;
+using Starling.Css.Values;
+using Starling.Layout.Text;
+using LayoutRect = Starling.Layout.Rect;
+using LayoutSize = Starling.Layout.Size;
+using PaintList = Starling.Paint.DisplayList.DisplayList;
 
-namespace Tessera.Paint.Backend;
+namespace Starling.Paint.Backend;
 
 /// <summary>
 /// Cross-platform paint backend that replays a <see cref="DisplayList"/> through
@@ -27,7 +27,7 @@ namespace Tessera.Paint.Backend;
 /// end-to-end. Supports two destinations: the default parallel-SIMD CPU
 /// rasterizer (<c>Image&lt;Rgba32&gt;</c>) and the GPU compute-shader
 /// Vello-style pipeline in <see cref="WebGPURenderTarget"/>, selected via
-/// <c>TESSERA_PAINT_BACKEND=imagesharp-webgpu</c>. The per-item dispatch is
+/// <c>STARLING_PAINT_BACKEND=imagesharp-webgpu</c>. The per-item dispatch is
 /// identical because both paths drive the same <see cref="DrawingCanvas"/> API.
 /// </summary>
 /// <remarks>
@@ -181,7 +181,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         var probe = WebGPUEnvironment.ProbeAvailability();
         if (probe != WebGPUEnvironmentError.Success)
             throw new InvalidOperationException(
-                $"WebGPU paint backend requested via TESSERA_PAINT_BACKEND=imagesharp-webgpu, " +
+                $"WebGPU paint backend requested via STARLING_PAINT_BACKEND=imagesharp-webgpu, " +
                 $"but WebGPUEnvironment.ProbeAvailability returned {probe}. " +
                 Environment.NewLine + Environment.NewLine +
                 "Native loader trail (Starling.Paint.Interop.WgpuNativeLoader):" + Environment.NewLine +
@@ -190,7 +190,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 "Common causes: the wgpu-native dylib was not copied into the runtime layout " +
                 "(check runtimes/<rid>/native/libwgpu_native.{dylib,so} in the app bundle), " +
                 "no compatible GPU adapter is visible to the process, or a sandbox blocks " +
-                "Metal/Vulkan/D3D12 access. Fall back to TESSERA_PAINT_BACKEND=imagesharp " +
+                "Metal/Vulkan/D3D12 access. Fall back to STARLING_PAINT_BACKEND=imagesharp " +
                 "(CPU) or =skia.");
 
         WebGPURenderTarget target;

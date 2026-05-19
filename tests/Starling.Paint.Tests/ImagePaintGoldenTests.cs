@@ -1,14 +1,14 @@
 using FluentAssertions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
-using Tessera.Common.Image;
-using Tessera.Dom;
-using Tessera.Html;
-using Tessera.Layout.Tree;
+using Starling.Common.Image;
+using Starling.Dom;
+using Starling.Html;
+using Starling.Layout.Tree;
 using Xunit;
-using LayoutSize = Tessera.Layout.Size;
+using LayoutSize = Starling.Layout.Size;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 [Trait("Category", "GoldenImage")]
 public sealed class ImagePaintGoldenTests

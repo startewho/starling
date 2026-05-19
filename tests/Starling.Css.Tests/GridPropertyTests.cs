@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-grid-2", "https://www.w3.org/TR/css-grid-2/")]
 

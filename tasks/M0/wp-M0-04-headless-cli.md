@@ -10,7 +10,7 @@ depends_on:
   - "wp:M0-03-paint-stub"
 blocks:
   - "wp:M2-07-network-end-to-end"
-subsystem: "Tessera.Headless"
+subsystem: "Starling.Headless"
 plan_refs:
   - "browser-plan/02_PROJECT_SETUP.md#headless-cli-shape"
   - "browser-plan/14_AGENT_TASKS.md#wpm0-04-headless-cli"
@@ -19,7 +19,7 @@ plan_refs:
 # wp:M0-04 — Headless CLI
 
 ## Goal
-`tessera render <url> -o out.png` writes a PNG. Bare filesystem paths are
+`starling render <url> -o out.png` writes a PNG. Bare filesystem paths are
 auto-normalized to `file://`. Subcommands beyond `render` are stubbed with
 a "not yet implemented" message.
 
@@ -27,10 +27,10 @@ a "not yet implemented" message.
 - wp:M0-03-paint-stub complete.
 
 ## Outputs
-- `src/Tessera.Headless/Program.cs`
+- `src/Starling.Headless/Program.cs`
 
 ## Acceptance
-- `dotnet run --project src/Tessera.Headless -- render testdata/hello.html -o out.png` succeeds.
+- `dotnet run --project src/Starling.Headless -- render testdata/hello.html -o out.png` succeeds.
 - E2E test `RenderE2ETests.Render_hello_html_fixture` passes.
 
 ## Handoff log

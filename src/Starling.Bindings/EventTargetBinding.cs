@@ -1,8 +1,8 @@
 using System.Runtime.CompilerServices;
-using Tessera.Dom.Events;
-using Tessera.Js.Runtime;
+using Starling.Dom.Events;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-1 — Installs the JS-side <c>EventTarget</c> + <c>Event</c> bridge into a

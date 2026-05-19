@@ -3,8 +3,8 @@
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
 using FluentAssertions;
-using Tessera.Css.Selectors;
-using Tessera.Dom;
+using Starling.Css.Selectors;
+using Starling.Dom;
 
 namespace Starling.Css.Spec.Tests.Selectors;
 

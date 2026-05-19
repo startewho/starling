@@ -1,4 +1,4 @@
-namespace Tessera.Net.Tcp;
+namespace Starling.Net.Tcp;
 
 /// <summary>
 /// Identifies a TCP destination by its DNS-level <see cref="Hostname"/> and
