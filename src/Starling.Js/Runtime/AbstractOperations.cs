@@ -228,6 +228,128 @@ public static class AbstractOperations
         return JsValue.StrictEquals(a, b);
     }
 
+    // ==========================================================
+    //               §7.4 Iterator abstract operations (B3-2)
+    // ==========================================================
+
+    /// <summary>§7.4.1 GetIterator(obj, hint). Resolves
+    /// <c>obj[@@iterator]</c>, invokes it with <paramref name="value"/> as
+    /// <c>this</c>, and validates the result is an Object. The companion
+    /// <c>NextMethod</c> is pre-resolved once so <see cref="IteratorNext"/>
+    /// does not re-walk the prototype chain on every step.</summary>
+    public static IteratorRecord GetIterator(JsRealm realm, JsVm? vm, JsValue value, string hint = "sync")
+    {
+        ArgumentNullException.ThrowIfNull(realm);
+        if (hint != "sync")
+            throw new NotSupportedException("async iterator hint not supported yet");
+        // §7.3.11: for primitive receivers we need to walk the wrapper
+        // prototype (e.g. String.prototype[@@iterator]). Box via ToObject;
+        // the iterator method is called with the original primitive as `this`
+        // (wrapper methods unbox as needed).
+        JsValue method;
+        if (value.IsObject)
+        {
+            method = GetMethod(vm, value, Tessera.Js.Intrinsics.SymbolCtor.Iterator);
+        }
+        else if (value.IsNullish)
+        {
+            throw new JsThrow(realm.NewTypeError("value is not iterable"));
+        }
+        else
+        {
+            var boxed = ToObject(realm, value);
+            method = GetMethod(vm, JsValue.Object(boxed), Tessera.Js.Intrinsics.SymbolCtor.Iterator);
+        }
+        if (method.IsUndefined || method.IsNull)
+            throw new JsThrow(realm.NewTypeError("value is not iterable"));
+        var iter = Call(vm, method, value, Array.Empty<JsValue>());
+        if (!iter.IsObject)
+            throw new JsThrow(realm.NewTypeError("iterator method did not return an object"));
+        var nextMethod = Get(vm, iter.AsObject, "next");
+        return new IteratorRecord(iter, nextMethod, Done: false);
+    }
+
+    /// <summary>§7.4.4 IteratorNext.</summary>
+    public static JsValue IteratorNext(JsRealm realm, JsVm? vm, IteratorRecord record, JsValue? value = null)
+    {
+        var args = value is null ? Array.Empty<JsValue>() : new[] { value.Value };
+        var result = Call(vm, record.NextMethod, record.Iterator, args);
+        if (!result.IsObject)
+            throw new JsThrow(realm.NewTypeError("iterator.next() did not return an object"));
+        return result;
+    }
+
+    /// <summary>§7.4.5 IteratorComplete.</summary>
+    public static bool IteratorComplete(JsVm? vm, JsValue iteratorResult)
+    {
+        if (!iteratorResult.IsObject) return true;
+        return JsValue.ToBoolean(Get(vm, iteratorResult.AsObject, "done"));
+    }
+
+    /// <summary>§7.4.6 IteratorValue.</summary>
+    public static JsValue IteratorValue(JsVm? vm, JsValue iteratorResult)
+    {
+        if (!iteratorResult.IsObject) return JsValue.Undefined;
+        return Get(vm, iteratorResult.AsObject, "value");
+    }
+
+    /// <summary>§7.4.7 IteratorStep. Returns the iterator-result object, or
+    /// <c>null</c> when the iterator has signalled completion.</summary>
+    public static JsValue? IteratorStep(JsRealm realm, JsVm? vm, ref IteratorRecord record)
+    {
+        var result = IteratorNext(realm, vm, record);
+        var done = IteratorComplete(vm, result);
+        if (done)
+        {
+            record = record with { Done = true };
+            return null;
+        }
+        return result;
+    }
+
+    /// <summary>§7.4.10 IteratorClose. Invokes the iterator's <c>return</c>
+    /// method if present. Used by <c>for…of</c> on abrupt completion.</summary>
+    public static void IteratorClose(JsVm? vm, IteratorRecord record, bool isThrowing = false)
+    {
+        if (!record.Iterator.IsObject) return;
+        var ret = GetMethod(vm, record.Iterator, "return");
+        if (ret.IsUndefined || ret.IsNull) return;
+        try
+        {
+            Call(vm, ret, record.Iterator, Array.Empty<JsValue>());
+        }
+        catch
+        {
+            // §7.4.10 step 7: if the inner completion is throwing already, the
+            // original error wins; we never propagate close errors.
+            if (!isThrowing) throw;
+        }
+    }
+
+    /// <summary>§7.3.11 GetMethod — returns <see cref="JsValue.Undefined"/>
+    /// when the resolved value is null/undefined; throws TypeError when the
+    /// slot exists but isn't callable.</summary>
+    public static JsValue GetMethod(JsVm? vm, JsValue value, JsPropertyKey key)
+    {
+        if (!value.IsObject)
+        {
+            // Primitives need to box to reach prototype methods (e.g. String[Symbol.iterator]).
+            if (value.IsNullish) return JsValue.Undefined;
+            // Caller is expected to ToObject before calling for primitives;
+            // we don't have a realm reference, so just return undefined for
+            // non-object primitives here.
+            return JsValue.Undefined;
+        }
+        var v = Get(vm, value.AsObject, key);
+        if (v.IsUndefined || v.IsNull) return JsValue.Undefined;
+        if (!IsCallable(v))
+            throw new JsThrow(JsValue.String("property is not callable"));
+        return v;
+    }
+
+    public static JsValue GetMethod(JsVm? vm, JsValue value, JsSymbol symbol)
+        => GetMethod(vm, value, JsPropertyKey.Symbol(symbol));
+
     private static bool IsCanonicalArrayIndex(string key)
     {
         if (key.Length == 0 || key[0] == '-' || key.Contains('.', StringComparison.Ordinal)) return false;
@@ -244,3 +366,10 @@ public static class AbstractOperations
         return combined;
     }
 }
+
+/// <summary>§7.4.1 IteratorRecord — bundles the iterator object, the
+/// pre-resolved <c>next</c> method, and the <c>done</c> flag. The
+/// <c>NextMethod</c> is cached at <c>GetIterator</c> time per spec so the
+/// per-step <c>iterator.next</c> property walk doesn't happen on every loop
+/// iteration.</summary>
+public readonly record struct IteratorRecord(JsValue Iterator, JsValue NextMethod, bool Done);

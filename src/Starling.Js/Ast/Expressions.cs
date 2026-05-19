@@ -26,6 +26,14 @@ public sealed record BooleanLiteral(bool Value, JsPosition Start, JsPosition End
 public sealed record NullLiteral(JsPosition Start, JsPosition End)
     : Expression(Start, End);
 
+/// <summary>
+/// ES2024 §13.2.7 regex literal — <c>/pattern/flags</c>. Each evaluation
+/// produces a fresh <c>RegExp</c> instance (per-instance <c>lastIndex</c>),
+/// so the compiler emits a runtime construction op rather than a constant.
+/// </summary>
+public sealed record RegExpLiteral(string Source, string Flags, JsPosition Start, JsPosition End)
+    : Expression(Start, End);
+
 public sealed record Identifier(string Name, JsPosition Start, JsPosition End)
     : Expression(Start, End);
 

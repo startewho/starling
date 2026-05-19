@@ -121,14 +121,14 @@ public class JsObject
     public bool Has(JsPropertyKey key) => key.IsSymbol ? Has(key.AsSymbol) : Has(key.AsString);
 
     /// <summary>§10.1.5 [[GetOwnProperty]] — own slot only, no chain walk.</summary>
-    public bool HasOwn(string name) => _properties.ContainsKey(name);
-    public bool HasOwn(JsSymbol symbol) => _symbolProperties.ContainsKey(symbol);
+    public virtual bool HasOwn(string name) => _properties.ContainsKey(name);
+    public virtual bool HasOwn(JsSymbol symbol) => _symbolProperties.ContainsKey(symbol);
     public bool HasOwn(JsPropertyKey key) => key.IsSymbol ? HasOwn(key.AsSymbol) : HasOwn(key.AsString);
 
     /// <summary>Returns the own descriptor, or <c>null</c> if no own property.</summary>
-    public PropertyDescriptor? GetOwnPropertyDescriptor(string name)
+    public virtual PropertyDescriptor? GetOwnPropertyDescriptor(string name)
         => _properties.TryGetValue(name, out var d) ? d : null;
-    public PropertyDescriptor? GetOwnPropertyDescriptor(JsSymbol symbol)
+    public virtual PropertyDescriptor? GetOwnPropertyDescriptor(JsSymbol symbol)
         => _symbolProperties.TryGetValue(symbol, out var d) ? d : null;
     public PropertyDescriptor? GetOwnPropertyDescriptor(JsPropertyKey key)
         => key.IsSymbol ? GetOwnPropertyDescriptor(key.AsSymbol) : GetOwnPropertyDescriptor(key.AsString);
@@ -170,14 +170,14 @@ public class JsObject
 
     /// <summary>§10.1.10 [[Delete]] — returns true on success, false if the
     /// property exists and is non-configurable.</summary>
-    public bool Delete(string name)
+    public virtual bool Delete(string name)
     {
         if (!_properties.TryGetValue(name, out var desc)) return true;
         if (!desc.Configurable) return false;
         return _properties.Remove(name);
     }
 
-    public bool Delete(JsSymbol symbol)
+    public virtual bool Delete(JsSymbol symbol)
     {
         if (!_symbolProperties.TryGetValue(symbol, out var desc)) return true;
         if (!desc.Configurable) return false;
@@ -188,9 +188,9 @@ public class JsObject
 
     /// <summary>All own keys, in insertion order (Dictionary preserves it
     /// since .NET 6).</summary>
-    public IEnumerable<string> Keys => _properties.Keys;
+    public virtual IEnumerable<string> Keys => _properties.Keys;
     public IEnumerable<JsSymbol> SymbolKeys => _symbolProperties.Keys;
-    public IEnumerable<JsPropertyKey> OwnPropertyKeys
+    public virtual IEnumerable<JsPropertyKey> OwnPropertyKeys
     {
         get
         {
@@ -201,7 +201,7 @@ public class JsObject
 
     /// <summary>Own keys filtered to enumerable data properties — used by
     /// <c>Object.keys</c> and friends.</summary>
-    public IEnumerable<string> EnumerableKeys()
+    public virtual IEnumerable<string> EnumerableKeys()
     {
         foreach (var pair in _properties)
             if (pair.Value.Enumerable) yield return pair.Key;

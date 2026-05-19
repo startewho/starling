@@ -1,0 +1,214 @@
+using System.Globalization;
+
+namespace Tessera.Js.Runtime;
+
+/// <summary>
+/// ES2024 §10.4.2 Array exotic object. Dense backing storage with a magic
+/// <c>length</c> property that stays in lockstep with the indexed slots, plus
+/// a fallback to the ordinary property bag for non-index/non-length keys.
+/// </summary>
+/// <remarks>
+/// <para>The exotic dispatch lives in our overridden
+/// GetOwnPropertyDescriptor / DefineOwnProperty / HasOwn / Delete / Keys /
+/// OwnPropertyKeys / EnumerableKeys. We also override the virtual
+/// <see cref="JsObject.Get(string)"/> / <see cref="JsObject.Set(string, JsValue)"/>
+/// pair so intrinsic helpers reading <c>arr.length</c> or <c>arr[3]</c>
+/// don't allocate a descriptor struct.</para>
+/// </remarks>
+public sealed class JsArray : JsObject
+{
+    private readonly List<JsValue> _items = new();
+
+    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { }
+    public JsArray(JsRealm realm, IReadOnlyList<JsValue> items) : base(realm.ArrayPrototype)
+    {
+        _items.AddRange(items);
+    }
+
+    /// <summary>Live element count. Driven by <see cref="_items"/>.Count; the
+    /// "length" data slot is synthesized on the fly so we never store it twice.</summary>
+    public int Length => _items.Count;
+
+    /// <summary>Direct access to the dense slot (for native-side fast paths).
+    /// Out-of-range reads return <see cref="JsValue.Undefined"/>.</summary>
+    public JsValue this[int index]
+    {
+        get => (uint)index < (uint)_items.Count ? _items[index] : JsValue.Undefined;
+        set => SetIndex(index, value);
+    }
+
+    /// <summary>Append without going through descriptor machinery.</summary>
+    public void Push(JsValue value) => _items.Add(value);
+
+    /// <summary>§7.1.21 IsArray — for now only host-side <see cref="JsArray"/>
+    /// counts. Proxies handled when B4-4 lands.</summary>
+    public static bool IsArray(JsValue v) => v.IsObject && v.AsObject is JsArray;
+
+    /// <summary>Canonical array index per §6.1.7: a String <c>P</c> such that
+    /// <c>ToString(ToUint32(P)) === P</c> and value &lt; 2^32 - 1.</summary>
+    public static bool IsArrayIndex(string key, out uint index)
+    {
+        index = 0;
+        if (key.Length == 0) return false;
+        // No leading zeros (except literal "0").
+        if (key[0] == '0' && key.Length > 1) return false;
+        // Digits-only check.
+        for (var i = 0; i < key.Length; i++)
+        {
+            if (key[i] < '0' || key[i] > '9') return false;
+        }
+        if (!uint.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out index)) return false;
+        return index < uint.MaxValue;
+    }
+
+    public static string IndexToString(uint i) => i.ToString(CultureInfo.InvariantCulture);
+
+    // ---------------- Overridden hot-path accessors ----------------
+
+    public override JsValue Get(string name)
+    {
+        if (name == "length") return JsValue.Number(_items.Count);
+        if (IsArrayIndex(name, out var idx) && idx < _items.Count) return _items[(int)idx];
+        return base.Get(name);
+    }
+
+    public override void Set(string name, JsValue value)
+    {
+        if (name == "length")
+        {
+            SetLength(value);
+            return;
+        }
+        if (IsArrayIndex(name, out var idx))
+        {
+            SetIndex((int)idx, value);
+            return;
+        }
+        base.Set(name, value);
+    }
+
+    public override bool HasOwn(string name)
+    {
+        if (name == "length") return true;
+        if (IsArrayIndex(name, out var idx) && idx < _items.Count) return true;
+        return base.HasOwn(name);
+    }
+
+    public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
+    {
+        if (name == "length")
+            return PropertyDescriptor.Data(JsValue.Number(_items.Count), writable: true, enumerable: false, configurable: false);
+        if (IsArrayIndex(name, out var idx) && idx < _items.Count)
+            return PropertyDescriptor.Data(_items[(int)idx], writable: true, enumerable: true, configurable: true);
+        return base.GetOwnPropertyDescriptor(name);
+    }
+
+    public override bool DefineOwnProperty(string name, PropertyDescriptor desc)
+    {
+        if (name == "length")
+        {
+            if (desc.IsAccessor) return false;
+            SetLength(desc.Value);
+            return true;
+        }
+        if (IsArrayIndex(name, out var idx))
+        {
+            if (desc.IsAccessor)
+            {
+                // Accessor descriptors on indexed slots aren't supported by the dense backing.
+                // Fall back to the property-bag path (spec actually allows mixing; we don't
+                // for now). Document the simplification in tests if needed.
+                return base.DefineOwnProperty(name, desc);
+            }
+            SetIndex((int)idx, desc.Value);
+            return true;
+        }
+        return base.DefineOwnProperty(name, desc);
+    }
+
+    public override bool Delete(string name)
+    {
+        if (name == "length") return false; // non-configurable
+        if (IsArrayIndex(name, out var idx) && idx < _items.Count)
+        {
+            // Make the slot a hole (spec: delete leaves the slot absent but
+            // doesn't shrink length). We model with Undefined since we don't
+            // track sparse holes separately.
+            _items[(int)idx] = JsValue.Undefined;
+            return true;
+        }
+        return base.Delete(name);
+    }
+
+    public override IEnumerable<string> Keys
+    {
+        get
+        {
+            for (var i = 0; i < _items.Count; i++)
+                yield return IndexToString((uint)i);
+            foreach (var key in base.Keys) yield return key;
+        }
+    }
+
+    public override IEnumerable<JsPropertyKey> OwnPropertyKeys
+    {
+        get
+        {
+            for (var i = 0; i < _items.Count; i++)
+                yield return JsPropertyKey.String(IndexToString((uint)i));
+            foreach (var key in base.OwnPropertyKeys) yield return key;
+        }
+    }
+
+    public override IEnumerable<string> EnumerableKeys()
+    {
+        for (var i = 0; i < _items.Count; i++)
+            yield return IndexToString((uint)i);
+        foreach (var key in base.EnumerableKeys()) yield return key;
+    }
+
+    // ---------------- Internals ----------------
+
+    private void SetIndex(int index, JsValue value)
+    {
+        if (index < 0) return;
+        if (index >= _items.Count)
+        {
+            // Grow with explicit Undefined holes (we don't track sparseness).
+            while (_items.Count < index) _items.Add(JsValue.Undefined);
+            _items.Add(value);
+        }
+        else
+        {
+            _items[index] = value;
+        }
+    }
+
+    private void SetLength(JsValue value)
+    {
+        var n = JsValue.ToNumber(value);
+        var nu = (uint)n;
+        if (n != nu || double.IsNaN(n) || double.IsInfinity(n))
+            throw new JsThrow(JsValue.String("Invalid array length"));
+        var newLen = (int)nu;
+        if (newLen < _items.Count)
+        {
+            // Shrink: remove indexed slots ≥ newLen. Also remove any own
+            // string keys whose key is an integer-string ≥ newLen.
+            _items.RemoveRange(newLen, _items.Count - newLen);
+            // Walk base own keys for stragglers (paranoia for indices stored
+            // there via mixed-mode DefineOwnProperty fallbacks).
+            var stragglers = new List<string>();
+            foreach (var k in base.Keys)
+                if (IsArrayIndex(k, out var i) && i >= newLen)
+                    stragglers.Add(k);
+            foreach (var k in stragglers) base.Delete(k);
+        }
+        else
+        {
+            while (_items.Count < newLen) _items.Add(JsValue.Undefined);
+        }
+    }
+
+    public override string ToString() => "[object Array]";
+}

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Tessera.Js.Bytecode;
+using Tessera.Js.RegExp;
 
 namespace Tessera.Js.Runtime;
 
@@ -390,6 +391,32 @@ public sealed class JsVm
                     Push(JsValue.Object(_runtime.Realm.NewOrdinaryObject()));
                     break;
 
+                case Opcode.NewArray:
+                    Push(JsValue.Object(new JsArray(_runtime.Realm)));
+                    break;
+
+                case Opcode.LoadRegExp:
+                {
+                    var srcIdx = ReadU16();
+                    var flagsIdx = ReadU16();
+                    var source = (string)constants[srcIdx]!;
+                    var flagsStr = (string)constants[flagsIdx]!;
+                    if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
+                    CompiledRegex compiled;
+                    try
+                    {
+                        compiled = CompiledRegex.Compile(source, flags);
+                    }
+                    catch (RegexSyntaxException ex)
+                    {
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                            $"Invalid regular expression: /{source}/: {ex.Message}"));
+                    }
+                    Push(JsValue.Object(new JsRegExp(_runtime.Realm, compiled)));
+                    break;
+                }
+
                 case Opcode.New:
                 {
                     var argc = ReadU8();
@@ -448,19 +475,97 @@ public sealed class JsVm
                 {
                     var start = ReadU16();
                     var src = Pop();
-                    var result = _runtime.Realm.NewOrdinaryObject();
+                    // B2-4: rest-array binding now produces a real JsArray.
+                    var result = new JsArray(_runtime.Realm);
                     var srcObj = src.IsObject ? src.AsObject : (!src.IsNullish ? AbstractOperations.ToObject(_runtime.Realm, src) : null);
                     var len = 0;
                     if (srcObj is not null)
                         len = Math.Max(0, (int)Math.Truncate(JsValue.ToNumber(srcObj.Get("length"))));
-                    var outIndex = 0;
                     if (srcObj is not null)
                     {
                         for (var i = start; i < len; i++)
-                            result.Set((outIndex++).ToString(System.Globalization.CultureInfo.InvariantCulture), srcObj.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                            result.Push(srcObj.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                     }
-                    result.Set("length", JsValue.Number(outIndex));
                     Push(JsValue.Object(result));
+                    break;
+                }
+
+                case Opcode.GetIterator:
+                {
+                    var iterable = Pop();
+                    var record = AbstractOperations.GetIterator(_runtime.Realm, this, iterable);
+                    Push(JsValue.Object(new Tessera.Js.Intrinsics.JsIteratorRecordHandle(record)));
+                    break;
+                }
+
+                case Opcode.IteratorStep:
+                {
+                    // Peek (don't pop) so the surrounding loop keeps the handle
+                    // across iterations. The dispatch arm pushes either the
+                    // iterator-result object (done=false) or undefined (done=true)
+                    // as the loop sentinel.
+                    var top = Peek();
+                    if (!top.IsObject || top.AsObject is not Tessera.Js.Intrinsics.JsIteratorRecordHandle handle)
+                        throw new InvalidOperationException("IteratorStep expects an iterator-record handle on the stack");
+                    var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref handle.Record);
+                    Push(step ?? JsValue.Undefined);
+                    break;
+                }
+
+                case Opcode.IteratorClose:
+                {
+                    var handleV = Pop();
+                    if (handleV.IsObject && handleV.AsObject is Tessera.Js.Intrinsics.JsIteratorRecordHandle h)
+                    {
+                        if (!h.Record.Done)
+                            AbstractOperations.IteratorClose(this, h.Record, isThrowing: false);
+                    }
+                    break;
+                }
+
+                case Opcode.CallApply:
+                {
+                    var argsArrV = Pop();
+                    var callee = Pop();
+                    var applyArgs = ExtractApplyArgs(argsArrV);
+                    Push(AbstractOperations.Call(this, callee, JsValue.Undefined, applyArgs));
+                    break;
+                }
+
+                case Opcode.CallApplyMethod:
+                {
+                    var argsArrV = Pop();
+                    var callee = Pop();
+                    var receiver = Pop();
+                    var applyArgs = ExtractApplyArgs(argsArrV);
+                    Push(AbstractOperations.Call(this, callee, receiver, applyArgs));
+                    break;
+                }
+
+                case Opcode.NewApply:
+                {
+                    var argsArrV = Pop();
+                    var ctor = Pop();
+                    var applyArgs = ExtractApplyArgs(argsArrV);
+                    Push(AbstractOperations.Construct(this, ctor, applyArgs));
+                    break;
+                }
+
+                case Opcode.SpreadIterable:
+                {
+                    // Stack: [target, iterable] -> [target] with target's
+                    // dense backing extended by iterable's values.
+                    var iterable = Pop();
+                    var targetV = Peek();
+                    if (!targetV.IsObject || targetV.AsObject is not JsArray targetArr)
+                        throw new InvalidOperationException("SpreadIterable target must be a JsArray");
+                    var record = AbstractOperations.GetIterator(_runtime.Realm, this, iterable);
+                    while (true)
+                    {
+                        var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref record);
+                        if (step is null) break;
+                        targetArr.Push(AbstractOperations.IteratorValue(this, step.Value));
+                    }
                     break;
                 }
 
@@ -500,6 +605,19 @@ public sealed class JsVm
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /// <summary>Drain a JsArray (built by spread-into-array machinery) into
+    /// the JsValue[] expected by <see cref="AbstractOperations.Call"/> and
+    /// <see cref="AbstractOperations.Construct"/>.</summary>
+    private static JsValue[] ExtractApplyArgs(JsValue argsArrV)
+    {
+        if (!argsArrV.IsObject || argsArrV.AsObject is not JsArray arr)
+            throw new InvalidOperationException("CallApply expects an Array of args on the stack");
+        var n = arr.Length;
+        var dst = new JsValue[n];
+        for (var i = 0; i < n; i++) dst[i] = arr[i];
+        return dst;
+    }
 
     /// <summary>JS '+': run ToPrimitive first; Symbols reject implicit string
     /// conversion per ECMA-262 §20.4, while explicit String(sym) is allowed by

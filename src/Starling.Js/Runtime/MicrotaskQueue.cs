@@ -38,6 +38,11 @@ namespace Tessera.Js.Runtime;
 /// </remarks>
 public sealed class MicrotaskQueue
 {
+    // B5-3: thread-safe so off-thread completions (fetch / XHR) can enqueue
+    // resolve jobs from a thread-pool callback. Enqueue takes the lock; drain
+    // takes the lock only around TryDequeue, releasing it while the job runs
+    // so jobs can recursively enqueue without deadlocking.
+    private readonly object _lock = new();
     private readonly Queue<Action> _queue = new();
     private Action<Action>? _hostScheduler;
 
@@ -48,7 +53,10 @@ public sealed class MicrotaskQueue
 
     /// <summary>Count of jobs queued in the internal buffer. Host-scheduled
     /// jobs aren't reflected here — they live on the host loop.</summary>
-    public int PendingCount => _queue.Count;
+    public int PendingCount
+    {
+        get { lock (_lock) return _queue.Count; }
+    }
 
     /// <summary>Enqueue a job. Delegates to the host scheduler if one was
     /// installed; otherwise pushes to the internal queue. Per §9.4.1 the
@@ -56,12 +64,17 @@ public sealed class MicrotaskQueue
     public void Enqueue(Action job)
     {
         ArgumentNullException.ThrowIfNull(job);
-        if (_hostScheduler is { } scheduler)
+        Action<Action>? scheduler;
+        lock (_lock)
         {
-            scheduler(job);
-            return;
+            scheduler = _hostScheduler;
+            if (scheduler is null)
+            {
+                _queue.Enqueue(job);
+                return;
+            }
         }
-        _queue.Enqueue(job);
+        scheduler(job);
     }
 
     /// <summary>Drain the internal queue until empty. Jobs that enqueue more
@@ -69,9 +82,14 @@ public sealed class MicrotaskQueue
     /// installed (the host pumps its own queue).</summary>
     public void DrainAll()
     {
-        if (_hostScheduler is not null) return;
-        while (_queue.TryDequeue(out var job))
+        while (true)
         {
+            Action? job;
+            lock (_lock)
+            {
+                if (_hostScheduler is not null) return;
+                if (!_queue.TryDequeue(out job)) return;
+            }
             try { job(); }
             catch (Exception ex) { UncaughtHandler(ex); }
         }
@@ -87,8 +105,14 @@ public sealed class MicrotaskQueue
     /// responsible for capturing and surfacing exceptions — the engine has
     /// no opportunity to inspect what happens after the handoff.
     /// </remarks>
-    public void SetHostScheduler(Action<Action>? scheduler) => _hostScheduler = scheduler;
+    public void SetHostScheduler(Action<Action>? scheduler)
+    {
+        lock (_lock) _hostScheduler = scheduler;
+    }
 
     /// <summary>True when a host scheduler is currently installed.</summary>
-    public bool HasHostScheduler => _hostScheduler is not null;
+    public bool HasHostScheduler
+    {
+        get { lock (_lock) return _hostScheduler is not null; }
+    }
 }

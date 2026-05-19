@@ -18,7 +18,7 @@ public static class StringCtor
         ArgumentNullException.ThrowIfNull(realm);
         var stringProto = realm.StringPrototype;
 
-        var ctor = new JsNativeFunction("String", (thisV, args) =>
+        var ctor = new JsNativeFunction(realm, "String", length: 1, (thisV, args) =>
         {
             // §22.1.1.1 String(value): no argument returns the empty string;
             // otherwise route through §7.1.17 ToString.
@@ -27,49 +27,58 @@ public static class StringCtor
                 return JsValue.Object(CreateStringObject(realm, text));
             return JsValue.String(text);
         }, isConstructor: true);
-        ctor.SetPrototypeOf(realm.FunctionPrototype);
         ctor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(stringProto), writable: false, enumerable: false, configurable: false));
-        ctor.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String("String"), writable: false, enumerable: false, configurable: true));
-        ctor.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
 
-        DefineMethod(ctor, "fromCharCode", FromCharCode, length: 1);
-        DefineMethod(ctor, "fromCodePoint", args => FromCodePoint(realm, args), length: 1);
-        DefineMethod(ctor, "raw", args => Raw(realm, args), length: 1);
+        IntrinsicHelpers.DefineMethod(realm, ctor, "fromCharCode", 1, (_, args) => FromCharCode(args));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "fromCodePoint", 1, (_, args) => FromCodePoint(realm, args));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "raw", 1, (_, args) => Raw(realm, args));
 
         stringProto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-        DefineProtoMethod(stringProto, "at", (thisV, args) => At(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "charAt", (thisV, args) => CharAt(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "charCodeAt", (thisV, args) => CharCodeAt(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "codePointAt", (thisV, args) => CodePointAt(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "concat", (thisV, args) => Concat(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "endsWith", (thisV, args) => EndsWith(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "includes", (thisV, args) => Includes(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "indexOf", (thisV, args) => IndexOf(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "lastIndexOf", (thisV, args) => LastIndexOf(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "localeCompare", (thisV, args) => LocaleCompare(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "normalize", (thisV, args) => Normalize(realm, thisV, args), 0);
-        DefineProtoMethod(stringProto, "padEnd", (thisV, args) => Pad(realm, thisV, args, atStart: false), 1);
-        DefineProtoMethod(stringProto, "padStart", (thisV, args) => Pad(realm, thisV, args, atStart: true), 1);
-        DefineProtoMethod(stringProto, "repeat", (thisV, args) => Repeat(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "replace", (thisV, args) => Replace(realm, thisV, args, replaceAll: false), 2);
-        DefineProtoMethod(stringProto, "replaceAll", (thisV, args) => Replace(realm, thisV, args, replaceAll: true), 2);
-        DefineProtoMethod(stringProto, "slice", (thisV, args) => Slice(realm, thisV, args), 2);
-        DefineProtoMethod(stringProto, "split", (thisV, args) => Split(realm, thisV, args), 2);
-        DefineProtoMethod(stringProto, "startsWith", (thisV, args) => StartsWith(realm, thisV, args), 1);
-        DefineProtoMethod(stringProto, "substring", (thisV, args) => Substring(realm, thisV, args), 2);
-        DefineProtoMethod(stringProto, "toLowerCase", (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLowerInvariant()), 0);
-        DefineProtoMethod(stringProto, "toUpperCase", (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpperInvariant()), 0);
-        DefineProtoMethod(stringProto, "toLocaleLowerCase", (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture)), 0);
-        DefineProtoMethod(stringProto, "toLocaleUpperCase", (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpper(CultureInfo.InvariantCulture)), 0);
-        DefineProtoMethod(stringProto, "trim", (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: true)), 0);
-        DefineProtoMethod(stringProto, "trimStart", (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false)), 0);
-        DefineProtoMethod(stringProto, "trimEnd", (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true)), 0);
-        DefineProtoMethod(stringProto, "toString", (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)), 0);
-        DefineProtoMethod(stringProto, "valueOf", (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)), 0);
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "at", 1, (thisV, args) => At(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "charAt", 1, (thisV, args) => CharAt(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "charCodeAt", 1, (thisV, args) => CharCodeAt(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "codePointAt", 1, (thisV, args) => CodePointAt(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "concat", 1, (thisV, args) => Concat(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "endsWith", 1, (thisV, args) => EndsWith(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "includes", 1, (thisV, args) => Includes(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "indexOf", 1, (thisV, args) => IndexOf(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "lastIndexOf", 1, (thisV, args) => LastIndexOf(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "localeCompare", 1, (thisV, args) => LocaleCompare(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "normalize", 0, (thisV, args) => Normalize(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "padEnd", 1, (thisV, args) => Pad(realm, thisV, args, atStart: false));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "padStart", 1, (thisV, args) => Pad(realm, thisV, args, atStart: true));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "repeat", 1, (thisV, args) => Repeat(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "match", 1, (thisV, args) => Match(realm, thisV, args, all: false));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "matchAll", 1, (thisV, args) => Match(realm, thisV, args, all: true));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "search", 1, (thisV, args) => Search(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "replace", 2, (thisV, args) => Replace(realm, thisV, args, replaceAll: false));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "replaceAll", 2, (thisV, args) => Replace(realm, thisV, args, replaceAll: true));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "slice", 2, (thisV, args) => Slice(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "split", 2, (thisV, args) => Split(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "startsWith", 1, (thisV, args) => StartsWith(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "substring", 2, (thisV, args) => Substring(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "toLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLowerInvariant()));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "toUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpperInvariant()));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture)));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpper(CultureInfo.InvariantCulture)));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "trim", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: true)));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "trimStart", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false)));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true)));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)));
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)));
+
+        // §22.1.3.34 String.prototype[@@iterator] — walks the string by
+        // Unicode code points (not UTF-16 code units), e.g.
+        // [..."😀ab"].length === 3.
+        var stringIterator = new JsNativeFunction(realm, "[Symbol.iterator]", 0, (thisV, _) =>
+        {
+            var s = ThisStringValue(realm, thisV);
+            return IteratorIntrinsics.CreateStringIterator(realm, s);
+        }, isConstructor: false);
+        stringProto.DefineOwnProperty(SymbolCtor.Iterator,
+            PropertyDescriptor.BuiltinMethod(JsValue.Object(stringIterator)));
 
         realm.StringConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("String",
@@ -94,19 +103,6 @@ public static class StringCtor
             obj.DefineOwnProperty(i.ToString(CultureInfo.InvariantCulture),
                 PropertyDescriptor.Data(JsValue.String(text[i].ToString()), writable: false, enumerable: true, configurable: false));
         }
-    }
-
-    private static void DefineMethod(JsObject target, string name, Func<JsValue[], JsValue> body, int length)
-        => DefineProtoMethod(target, name, (_, args) => body(args), length);
-
-    private static void DefineProtoMethod(JsObject target, string name, Func<JsValue, JsValue[], JsValue> body, int length)
-    {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        fn.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
-        fn.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(length), writable: false, enumerable: false, configurable: true));
-        target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 
     private static string ThisStringValue(JsRealm realm, JsValue thisV)
@@ -288,6 +284,17 @@ public static class StringCtor
     private static JsValue Replace(JsRealm realm, JsValue thisV, JsValue[] args, bool replaceAll)
     {
         var s = ThisStringValue(realm, thisV);
+        // RegExp path: route through the regex's @@replace protocol. B4-1.
+        if (args.Length > 0 && RegExpCtor.IsRegExp(args[0]))
+        {
+            var re = (JsRegExp)args[0].AsObject;
+            if (replaceAll && (re.Flags & Tessera.Js.RegExp.RegexFlags.Global) == 0)
+                throw new JsThrow(realm.NewTypeError("String.prototype.replaceAll called with a non-global RegExp"));
+            var replaceFn = re.Get(SymbolCtor.Replace);
+            if (replaceFn.IsObject)
+                return AbstractOperations.Call(realm.ActiveVm, replaceFn, args[0],
+                    new[] { JsValue.String(s), args.Length > 1 ? args[1] : JsValue.Undefined });
+        }
         var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
         var replacement = args.Length > 1 ? args[1] : JsValue.Undefined;
         if (!replaceAll)
@@ -369,9 +376,42 @@ public static class StringCtor
         return JsValue.String(from >= to ? string.Empty : s.Substring((int)from, (int)(to - from)));
     }
 
+    private static JsValue Match(JsRealm realm, JsValue thisV, JsValue[] args, bool all)
+    {
+        var s = ThisStringValue(realm, thisV);
+        var re = args.Length > 0 && RegExpCtor.IsRegExp(args[0])
+            ? (JsRegExp)args[0].AsObject
+            : RegExpCtor.Create(realm, args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : "",
+                all ? "g" : "");
+        var symbol = all ? SymbolCtor.MatchAll : SymbolCtor.Match;
+        var fn = re.Get(symbol);
+        if (!fn.IsObject) return JsValue.Null;
+        return AbstractOperations.Call(realm.ActiveVm, fn, JsValue.Object(re), new[] { JsValue.String(s) });
+    }
+
+    private static JsValue Search(JsRealm realm, JsValue thisV, JsValue[] args)
+    {
+        var s = ThisStringValue(realm, thisV);
+        var re = args.Length > 0 && RegExpCtor.IsRegExp(args[0])
+            ? (JsRegExp)args[0].AsObject
+            : RegExpCtor.Create(realm, args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : "", "");
+        var fn = re.Get(SymbolCtor.Search);
+        if (!fn.IsObject) return JsValue.Number(-1);
+        return AbstractOperations.Call(realm.ActiveVm, fn, JsValue.Object(re), new[] { JsValue.String(s) });
+    }
+
     private static JsValue Split(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var s = ThisStringValue(realm, thisV);
+        // RegExp path
+        if (args.Length > 0 && RegExpCtor.IsRegExp(args[0]))
+        {
+            var re = (JsRegExp)args[0].AsObject;
+            var fn = re.Get(SymbolCtor.Split);
+            if (fn.IsObject)
+                return AbstractOperations.Call(realm.ActiveVm, fn, args[0],
+                    new[] { JsValue.String(s), args.Length > 1 ? args[1] : JsValue.Undefined });
+        }
         var limit = args.Length > 1 && !args[1].IsUndefined ? ToUint32(args[1]) : uint.MaxValue;
         var result = new List<JsValue>();
         if (limit == 0) return MakeArrayLike(realm, result);

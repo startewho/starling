@@ -403,7 +403,7 @@ public sealed partial class JsParser
         {
             if (Match(JsTokenKind.Dot))
             {
-                var prop = Expect(JsTokenKind.Identifier, "expected property name after '.'");
+                var prop = ExpectIdentifierName("expected property name after '.'");
                 node = new MemberExpression(node,
                     new Identifier(prop.Lexeme, prop.Start, prop.End),
                     Computed: false, Optional: false, node.Start, prop.End);
@@ -427,7 +427,7 @@ public sealed partial class JsParser
         {
             if (Match(JsTokenKind.Dot))
             {
-                var prop = Expect(JsTokenKind.Identifier, "expected property name after '.'");
+                var prop = ExpectIdentifierName("expected property name after '.'");
                 node = new MemberExpression(node,
                     new Identifier(prop.Lexeme, prop.Start, prop.End),
                     Computed: false, Optional: false, node.Start, prop.End);
@@ -461,7 +461,7 @@ public sealed partial class JsParser
                 }
                 else
                 {
-                    var prop = Expect(JsTokenKind.Identifier, "expected property name after '?.'");
+                    var prop = ExpectIdentifierName("expected property name after '?.'");
                     node = new MemberExpression(node,
                         new Identifier(prop.Lexeme, prop.Start, prop.End),
                         Computed: false, Optional: true, node.Start, prop.End);
@@ -506,6 +506,16 @@ public sealed partial class JsParser
     // -----------------------------------------------------------------------
     private Expression ParsePrimary()
     {
+        // A `/` or `/=` token at the start of a primary expression must be the
+        // opening of a regex literal — the lexer is intentionally
+        // context-free for these punctuators (§11.6 division-vs-regex
+        // ambiguity). Stuff the slash back into the lexer's lookahead slot
+        // and ask it to rescan the position as a RegExp.
+        if (_current.Kind == JsTokenKind.Slash || _current.Kind == JsTokenKind.SlashEq)
+        {
+            _lex.PushBack(_current);
+            _current = _lex.ScanRegExp();
+        }
         var t = _current;
         switch (t.Kind)
         {
@@ -518,6 +528,12 @@ public sealed partial class JsParser
             case JsTokenKind.StringLiteral:
                 Advance();
                 return new StringLiteral((string)t.Value!, t.Start, t.End);
+            case JsTokenKind.RegExpLiteral:
+            {
+                Advance();
+                var (pattern, flags) = ((string, string))t.Value!;
+                return new RegExpLiteral(pattern, flags, t.Start, t.End);
+            }
             case JsTokenKind.BooleanLiteral:
                 Advance();
                 return new BooleanLiteral((bool)t.Value!, t.Start, t.End);
@@ -755,6 +771,24 @@ public sealed partial class JsParser
         Expect(JsTokenKind.RParen, "expected ')' after method parameters");
         var body = ParseBlock();
         return (parameters, body, body.End);
+    }
+
+    /// <summary>
+    /// Consume any token that is a valid <c>IdentifierName</c> per ES §12.6 —
+    /// i.e. a plain identifier or any reserved word/boolean/null literal.
+    /// Used after <c>.</c> and <c>?.</c> in MemberExpression, where the
+    /// grammar production is <c>MemberExpression . IdentifierName</c> (not
+    /// <c>Identifier</c>), so reserved words like <c>catch</c>, <c>finally</c>,
+    /// <c>default</c>, <c>class</c>, <c>with</c> are valid property names.
+    /// </summary>
+    private JsToken ExpectIdentifierName(string message)
+    {
+        if (_current.Kind == JsTokenKind.Identifier
+            || IsReservedNameAllowedAsPropertyName(_current.Kind))
+        {
+            return Advance();
+        }
+        throw new JsParseException($"{message} (got {_current.Kind})", _current.Start);
     }
 
     private static bool IsReservedNameAllowedAsPropertyName(JsTokenKind k)

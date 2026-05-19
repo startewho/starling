@@ -82,9 +82,10 @@ public static class Globals
 
     private static void DefineGlobal(JsRealm realm, string name, Func<JsValue, JsValue[], JsValue> body, int length)
     {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        fn.DefineOwnProperty("name", PropertyDescriptor.Data(JsValue.String(name), false, false, true));
-        fn.DefineOwnProperty("length", PropertyDescriptor.Data(JsValue.Number(length), false, false, true));
+        // Realm-aware ctor wires [[Prototype]] = realm.FunctionPrototype and
+        // stamps name + length so globals like parseInt/parseFloat inherit
+        // call/apply/bind from Function.prototype.
+        var fn = new JsNativeFunction(realm, name, length, body, isConstructor: false);
         realm.GlobalObject.DefineOwnProperty(name, PropertyDescriptor.Data(JsValue.Object(fn), true, false, true));
     }
 }

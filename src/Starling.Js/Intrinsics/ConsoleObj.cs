@@ -15,36 +15,28 @@ public static class ConsoleObj
         ArgumentNullException.ThrowIfNull(realm);
         var console = new JsObject(realm.ObjectPrototype);
 
-        DefineMethod(console, "log", (thisV, args) => { Write(realm, ConsoleLevel.Log, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "info", (thisV, args) => { Write(realm, ConsoleLevel.Info, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "warn", (thisV, args) => { Write(realm, ConsoleLevel.Warn, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "error", (thisV, args) => { Write(realm, ConsoleLevel.Error, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "debug", (thisV, args) => { Write(realm, ConsoleLevel.Debug, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "dir", (thisV, args) => { Dir(realm, args); return JsValue.Undefined; }, 1);
-        DefineMethod(console, "table", (thisV, args) => { Table(realm, args); return JsValue.Undefined; }, 1);
-        DefineMethod(console, "time", (thisV, args) => { Time(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "timeEnd", (thisV, args) => { TimeEnd(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "count", (thisV, args) => { Count(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "countReset", (thisV, args) => { CountReset(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "group", (thisV, args) => { Group(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "groupCollapsed", (thisV, args) => { Group(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "groupEnd", (thisV, args) => { GroupEnd(realm); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "trace", (thisV, args) => { Trace(realm, args); return JsValue.Undefined; }, 0);
-        DefineMethod(console, "assert", (thisV, args) => { Assert(realm, args); return JsValue.Undefined; }, 1);
-        DefineMethod(console, "clear", (thisV, args) => { realm.ConsoleClear?.Invoke(); return JsValue.Undefined; }, 0);
+        // WHATWG Console Standard: log/info/warn/error/debug all take rest args
+        // only, so spec length === 0.
+        IntrinsicHelpers.DefineMethod(realm, console, "log", 0, (thisV, args) => { Write(realm, ConsoleLevel.Log, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "info", 0, (thisV, args) => { Write(realm, ConsoleLevel.Info, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "warn", 0, (thisV, args) => { Write(realm, ConsoleLevel.Warn, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "error", 0, (thisV, args) => { Write(realm, ConsoleLevel.Error, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "debug", 0, (thisV, args) => { Write(realm, ConsoleLevel.Debug, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "dir", 1, (thisV, args) => { Dir(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "table", 1, (thisV, args) => { Table(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "time", 0, (thisV, args) => { Time(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "timeEnd", 0, (thisV, args) => { TimeEnd(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "count", 0, (thisV, args) => { Count(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "countReset", 0, (thisV, args) => { CountReset(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "group", 0, (thisV, args) => { Group(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "groupCollapsed", 0, (thisV, args) => { Group(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "groupEnd", 0, (thisV, args) => { GroupEnd(realm); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "trace", 0, (thisV, args) => { Trace(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "assert", 1, (thisV, args) => { Assert(realm, args); return JsValue.Undefined; });
+        IntrinsicHelpers.DefineMethod(realm, console, "clear", 0, (thisV, args) => { realm.ConsoleClear?.Invoke(); return JsValue.Undefined; });
 
         realm.GlobalObject.DefineOwnProperty("console",
             PropertyDescriptor.Data(JsValue.Object(console), writable: true, enumerable: false, configurable: true));
-    }
-
-    private static void DefineMethod(JsObject target, string name, Func<JsValue, JsValue[], JsValue> body, int length)
-    {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        fn.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
-        fn.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(length), writable: false, enumerable: false, configurable: true));
-        target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 
     // Console Standard §2.1 logging: shared formatting + host sink dispatch.

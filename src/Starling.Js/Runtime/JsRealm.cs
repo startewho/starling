@@ -35,6 +35,7 @@ public sealed class JsRealm
     // install order their dependencies.
     public JsObject? ObjectConstructor { get; internal set; }
     public JsObject? FunctionConstructor { get; internal set; }
+    public JsObject? ArrayConstructor { get; internal set; }
     public JsObject? StringConstructor { get; internal set; }
     public JsObject? NumberConstructor { get; internal set; }
     public JsObject? BooleanConstructor { get; internal set; }
@@ -45,6 +46,9 @@ public sealed class JsRealm
     // Promise install can schedule reactions even before a host scheduler
     // hooks in.
     public JsObject? PromiseConstructor { get; internal set; }
+
+    // B4-1: RegExp constructor — populated by RegExpCtor.Install.
+    public JsObject? RegExpConstructor { get; internal set; }
 
     /// <summary>HTML §8.1.5.1 microtask queue. Owns the in-process FIFO used
     /// by Promise reactions; the host may swap in a real loop scheduler via
@@ -86,6 +90,38 @@ public sealed class JsRealm
     public JsObject AsyncFunctionPrototype { get; internal set; }
     public JsObject AsyncGeneratorPrototype { get; internal set; }
     public JsObject AsyncIteratorPrototype { get; internal set; }
+
+    // B5-1 — DOM/Web bindings. Populated by Starling.Bindings.WindowBinding.Install.
+    // Chain: EventTargetPrototype → Object.prototype; NodePrototype → EventTargetPrototype;
+    // ElementPrototype → NodePrototype; DocumentPrototype → NodePrototype;
+    // WindowPrototype → EventTargetPrototype. Nullable because the bindings live
+    // outside Starling.Js and may not be installed in every embedding.
+    public JsObject? EventTargetPrototype { get; set; }
+    public JsObject? NodePrototype { get; set; }
+    public JsObject? ElementPrototype { get; set; }
+    public JsObject? DocumentPrototype { get; set; }
+    public JsObject? EventPrototype { get; set; }
+    public JsObject? WindowPrototype { get; set; }
+    public JsObject? EventTargetConstructor { get; set; }
+    public JsObject? EventConstructor { get; set; }
+    public JsObject? NodeConstructor { get; set; }
+    public JsObject? ElementConstructor { get; set; }
+    public JsObject? DocumentConstructor { get; set; }
+
+    // B5-3 — Fetch / XHR web APIs. Populated by Starling.Bindings.FetchBinding +
+    // XhrBinding. Constructor + prototype slots live together for the suite.
+    public JsObject? HeadersPrototype { get; set; }
+    public JsObject? HeadersConstructor { get; set; }
+    public JsObject? RequestPrototype { get; set; }
+    public JsObject? RequestConstructor { get; set; }
+    public JsObject? ResponsePrototype { get; set; }
+    public JsObject? ResponseConstructor { get; set; }
+    public JsObject? AbortControllerPrototype { get; set; }
+    public JsObject? AbortControllerConstructor { get; set; }
+    public JsObject? AbortSignalPrototype { get; set; }
+    public JsObject? AbortSignalConstructor { get; set; }
+    public JsObject? XmlHttpRequestPrototype { get; set; }
+    public JsObject? XmlHttpRequestConstructor { get; set; }
 
     /// <summary>The VM currently executing against this realm, if any. Set
     /// by <see cref="JsVm"/> on entry to <c>Run</c>. Native intrinsics that

@@ -36,60 +36,60 @@ public static class MathObj
         DefineConst(math, "SQRT2", SysMath.Sqrt(2));
 
         // ---------- Single-argument methods ----------------------------------
-        DefineUnary(math, "abs", SysMath.Abs);
-        DefineUnary(math, "acos", SysMath.Acos);
-        DefineUnary(math, "acosh", SysMath.Acosh);
-        DefineUnary(math, "asin", SysMath.Asin);
-        DefineUnary(math, "asinh", SysMath.Asinh);
-        DefineUnary(math, "atan", SysMath.Atan);
-        DefineUnary(math, "atanh", SysMath.Atanh);
-        DefineUnary(math, "cbrt", SysMath.Cbrt);
-        DefineUnary(math, "ceil", SysMath.Ceiling);
-        DefineUnary(math, "cos", SysMath.Cos);
-        DefineUnary(math, "cosh", SysMath.Cosh);
-        DefineUnary(math, "exp", SysMath.Exp);
-        DefineUnary(math, "expm1", x => SysMath.Exp(x) - 1.0); // .NET has no Expm1
-        DefineUnary(math, "floor", SysMath.Floor);
-        DefineUnary(math, "fround", x => (double)(float)x);
-        DefineUnary(math, "log", SysMath.Log);
-        DefineUnary(math, "log10", SysMath.Log10);
-        DefineUnary(math, "log1p", x => SysMath.Log(1.0 + x)); // .NET has no Log1p
-        DefineUnary(math, "log2", SysMath.Log2);
-        DefineUnary(math, "sin", SysMath.Sin);
-        DefineUnary(math, "sinh", SysMath.Sinh);
-        DefineUnary(math, "sqrt", SysMath.Sqrt);
-        DefineUnary(math, "tan", SysMath.Tan);
-        DefineUnary(math, "tanh", SysMath.Tanh);
-        DefineUnary(math, "trunc", SysMath.Truncate);
+        DefineUnary(realm, math, "abs", SysMath.Abs);
+        DefineUnary(realm, math, "acos", SysMath.Acos);
+        DefineUnary(realm, math, "acosh", SysMath.Acosh);
+        DefineUnary(realm, math, "asin", SysMath.Asin);
+        DefineUnary(realm, math, "asinh", SysMath.Asinh);
+        DefineUnary(realm, math, "atan", SysMath.Atan);
+        DefineUnary(realm, math, "atanh", SysMath.Atanh);
+        DefineUnary(realm, math, "cbrt", SysMath.Cbrt);
+        DefineUnary(realm, math, "ceil", SysMath.Ceiling);
+        DefineUnary(realm, math, "cos", SysMath.Cos);
+        DefineUnary(realm, math, "cosh", SysMath.Cosh);
+        DefineUnary(realm, math, "exp", SysMath.Exp);
+        DefineUnary(realm, math, "expm1", x => SysMath.Exp(x) - 1.0); // .NET has no Expm1
+        DefineUnary(realm, math, "floor", SysMath.Floor);
+        DefineUnary(realm, math, "fround", x => (double)(float)x);
+        DefineUnary(realm, math, "log", SysMath.Log);
+        DefineUnary(realm, math, "log10", SysMath.Log10);
+        DefineUnary(realm, math, "log1p", x => SysMath.Log(1.0 + x)); // .NET has no Log1p
+        DefineUnary(realm, math, "log2", SysMath.Log2);
+        DefineUnary(realm, math, "sin", SysMath.Sin);
+        DefineUnary(realm, math, "sinh", SysMath.Sinh);
+        DefineUnary(realm, math, "sqrt", SysMath.Sqrt);
+        DefineUnary(realm, math, "tan", SysMath.Tan);
+        DefineUnary(realm, math, "tanh", SysMath.Tanh);
+        DefineUnary(realm, math, "trunc", SysMath.Truncate);
 
         // Math.round — JS rounds half toward +∞ (NOT to even, NOT away from zero).
         // .NET's Math.Round uses banker's rounding by default, so we hand-roll.
-        DefineUnary(math, "round", JsRound);
+        DefineUnary(realm, math, "round", JsRound);
 
         // Math.sign — preserves signed zero (Math.sign(-0) === -0).
-        DefineUnary(math, "sign", JsSign);
+        DefineUnary(realm, math, "sign", JsSign);
 
         // Math.clz32 — count leading zeroes of ToUint32(x). 32 when x is 0.
-        DefineUnary(math, "clz32", x => Clz32(x));
+        DefineUnary(realm, math, "clz32", x => Clz32(x));
 
         // ---------- Two-argument methods -------------------------------------
-        math.DefineOwnProperty("atan2", MethodDesc("atan2", (_, args) =>
+        IntrinsicHelpers.DefineMethod(realm, math, "atan2", 2, (_, args) =>
         {
             var y = args.Length > 0 ? JsValue.ToNumber(args[0]) : double.NaN;
             var x = args.Length > 1 ? JsValue.ToNumber(args[1]) : double.NaN;
             return JsValue.Number(SysMath.Atan2(y, x));
-        }));
+        });
 
-        math.DefineOwnProperty("pow", MethodDesc("pow", (_, args) =>
+        IntrinsicHelpers.DefineMethod(realm, math, "pow", 2, (_, args) =>
         {
             var b = args.Length > 0 ? JsValue.ToNumber(args[0]) : double.NaN;
             var e = args.Length > 1 ? JsValue.ToNumber(args[1]) : double.NaN;
             // Math.pow(NaN, 0) === 1 per ES spec (overrides usual NaN-poisoning).
             if (e == 0) return JsValue.Number(1);
             return JsValue.Number(SysMath.Pow(b, e));
-        }));
+        });
 
-        math.DefineOwnProperty("imul", MethodDesc("imul", (_, args) =>
+        IntrinsicHelpers.DefineMethod(realm, math, "imul", 2, (_, args) =>
         {
             var a = ToUint32(args.Length > 0 ? args[0] : JsValue.Undefined);
             var b = ToUint32(args.Length > 1 ? args[1] : JsValue.Undefined);
@@ -99,10 +99,11 @@ public static class MathObj
                 uint product = a * b;
                 return JsValue.Number((int)product);
             }
-        }));
+        });
 
         // ---------- Variadic methods -----------------------------------------
-        math.DefineOwnProperty("max", MethodDesc("max", (_, args) =>
+        // Math.max / Math.min: spec length === 2 (declared as (value1, value2, ...values)).
+        IntrinsicHelpers.DefineMethod(realm, math, "max", 2, (_, args) =>
         {
             // Math.max() === -Infinity per spec.
             double best = double.NegativeInfinity;
@@ -115,9 +116,9 @@ public static class MathObj
                     best = n;
             }
             return JsValue.Number(best);
-        }));
+        });
 
-        math.DefineOwnProperty("min", MethodDesc("min", (_, args) =>
+        IntrinsicHelpers.DefineMethod(realm, math, "min", 2, (_, args) =>
         {
             // Math.min() === +Infinity per spec.
             double best = double.PositiveInfinity;
@@ -129,9 +130,10 @@ public static class MathObj
                     best = n;
             }
             return JsValue.Number(best);
-        }));
+        });
 
-        math.DefineOwnProperty("hypot", MethodDesc("hypot", (_, args) =>
+        // Math.hypot: spec length === 2 (declared as (value1, value2, ...values)).
+        IntrinsicHelpers.DefineMethod(realm, math, "hypot", 2, (_, args) =>
         {
             if (args.Length == 0) return JsValue.Number(0);
             // General variadic case: sum-of-squares with infinity/NaN guards.
@@ -147,7 +149,7 @@ public static class MathObj
             if (anyInf) return JsValue.Number(double.PositiveInfinity);
             if (anyNan) return JsValue.NaN;
             return JsValue.Number(SysMath.Sqrt(sum));
-        }));
+        });
 
         // Stamp Math on the global object as writable + configurable + non-enumerable.
         realm.GlobalObject.DefineOwnProperty("Math",
@@ -164,19 +166,15 @@ public static class MathObj
                 writable: false, enumerable: false, configurable: false));
     }
 
-    private static void DefineUnary(JsObject math, string name, Func<double, double> fn)
+    private static void DefineUnary(JsRealm realm, JsObject math, string name, Func<double, double> fn)
     {
-        math.DefineOwnProperty(name, MethodDesc(name, (_, args) =>
+        // All single-argument Math.* statics declare a spec length of 1.
+        IntrinsicHelpers.DefineMethod(realm, math, name, 1, (_, args) =>
         {
             var x = args.Length > 0 ? JsValue.ToNumber(args[0]) : double.NaN;
             return JsValue.Number(fn(x));
-        }));
+        });
     }
-
-    private static PropertyDescriptor MethodDesc(string name, Func<JsValue, JsValue[], JsValue> body)
-        => PropertyDescriptor.Data(
-            JsValue.Object(new JsNativeFunction(name, body, isConstructor: false)),
-            writable: true, enumerable: false, configurable: true);
 
     /// <summary>JS-style Math.round: rounds half toward +∞, with NaN / ±Infinity
     /// / signed-zero passthrough. Implemented as <c>floor(x + 0.5)</c> with the
