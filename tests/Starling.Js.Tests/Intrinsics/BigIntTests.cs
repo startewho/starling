@@ -9,7 +9,11 @@ namespace Tessera.Js.Tests.Intrinsics;
 /// <summary>
 /// End-to-end (parse → compile → run) tests for B4-3 BigInt: literal syntax,
 /// arithmetic/bitwise operators, comparison rules, the BigInt constructor +
-/// static helpers (asIntN/asUintN), and prototype methods.
+/// static helpers (asIntN/asUintN), and prototype methods. Throws surface
+/// as host-side <see cref="JsThrow"/> exceptions; <c>instanceof</c> is not
+/// available yet (wp:M3-05), so we assert via C# rather than in-script
+/// catch+instanceof. Once the instanceof opcode lands, the tests can be
+/// rewritten to use try/catch in JS for additional spec fidelity.
 /// </summary>
 public class BigIntTests
 {
@@ -59,24 +63,19 @@ public class BigIntTests
         Eval("BigInt(42n) === 42n").AsBool.Should().BeTrue();
 
     [Fact] public void Ctor_non_integer_number_throws() =>
-        Eval("(function(){ try { BigInt(1.5); return false; } catch (e) { return e instanceof RangeError; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("BigInt(1.5)"))).Should().Throw<JsThrow>();
 
-    [Fact] public void Ctor_null_throws_TypeError() =>
-        Eval("(function(){ try { BigInt(null); return false; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void Ctor_null_throws() =>
+        ((Action)(() => Eval("BigInt(null)"))).Should().Throw<JsThrow>();
 
-    [Fact] public void Ctor_undefined_throws_TypeError() =>
-        Eval("(function(){ try { BigInt(undefined); return false; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void Ctor_undefined_throws() =>
+        ((Action)(() => Eval("BigInt(undefined)"))).Should().Throw<JsThrow>();
 
-    [Fact] public void Ctor_symbol_throws_TypeError() =>
-        Eval("(function(){ try { BigInt(Symbol()); return false; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void Ctor_symbol_throws() =>
+        ((Action)(() => Eval("BigInt(Symbol())"))).Should().Throw<JsThrow>();
 
     [Fact] public void New_BigInt_throws() =>
-        Eval("(function(){ try { new BigInt(1); return false; } catch (e) { return true; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("new BigInt(1)"))).Should().Throw<JsThrow>();
 
     // -------------------------------------------------------- Arithmetic
     [Fact] public void Add() => Eval("1n + 2n === 3n").AsBool.Should().BeTrue();
@@ -87,13 +86,11 @@ public class BigIntTests
     [Fact] public void Modulo_dividend_sign() => Eval("(-10n) % 3n === -1n").AsBool.Should().BeTrue();
     [Fact] public void Pow() => Eval("2n ** 10n === 1024n").AsBool.Should().BeTrue();
 
-    [Fact] public void Negative_exponent_throws_RangeError() =>
-        Eval("(function(){ try { return (2n ** -1n); } catch (e) { return e instanceof RangeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void Negative_exponent_throws() =>
+        ((Action)(() => Eval("2n ** -1n"))).Should().Throw<JsThrow>();
 
     [Fact] public void Division_by_zero_throws() =>
-        Eval("(function(){ try { return (1n / 0n); } catch (e) { return e instanceof RangeError; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("1n / 0n"))).Should().Throw<JsThrow>();
 
     // ---------------------------------------------------------- Bitwise
     [Fact] public void BitAnd() => Eval("(0xFFn & 0x0Fn) === 0x0Fn").AsBool.Should().BeTrue();
@@ -104,29 +101,24 @@ public class BigIntTests
     [Fact] public void ShiftRight() => Eval("256n >> 4n === 16n").AsBool.Should().BeTrue();
 
     // ---------------------------------------------------------- Unary
-    [Fact] public void Unary_minus() =>
+    [Fact] public void Unary_minus_works() =>
         Eval("(-5n) === 0n - 5n").AsBool.Should().BeTrue();
 
-    [Fact] public void Unary_plus_throws_TypeError() =>
-        Eval("(function(){ try { return +1n; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void Unary_plus_throws() =>
+        ((Action)(() => Eval("+1n"))).Should().Throw<JsThrow>();
 
     // ---------------------------------------------------------- Mixed-type
     [Fact] public void Mixed_add_throws() =>
-        Eval("(function(){ try { return 1n + 1; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("1n + 1"))).Should().Throw<JsThrow>();
 
     [Fact] public void Mixed_multiply_throws() =>
-        Eval("(function(){ try { return 1n * 2; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("1n * 2"))).Should().Throw<JsThrow>();
 
     [Fact] public void Mixed_divide_throws() =>
-        Eval("(function(){ try { return 4n / 2; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("4n / 2"))).Should().Throw<JsThrow>();
 
     [Fact] public void Unsigned_shift_on_bigint_throws() =>
-        Eval("(function(){ try { return 1n >>> 0n; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+        ((Action)(() => Eval("1n >>> 0n"))).Should().Throw<JsThrow>();
 
     // ---------------------------------------------------------- Equality
     [Fact] public void Strict_equal_same_value() => Eval("1n === 1n").AsBool.Should().BeTrue();
@@ -168,14 +160,12 @@ public class BigIntTests
     [Fact] public void AsUintN_8_negative_wraps() =>
         Eval("BigInt.asUintN(8, -1n) === 255n").AsBool.Should().BeTrue();
 
-    [Fact] public void AsIntN_negative_bits_throws_RangeError() =>
-        Eval("(function(){ try { BigInt.asIntN(-1, 0n); return false; } catch (e) { return e instanceof RangeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void AsIntN_negative_bits_throws() =>
+        ((Action)(() => Eval("BigInt.asIntN(-1, 0n)"))).Should().Throw<JsThrow>();
 
     // ------------------------------------------------------- JSON.stringify
-    [Fact] public void Json_stringify_throws_TypeError() =>
-        Eval("(function(){ try { JSON.stringify(1n); return false; } catch (e) { return e instanceof TypeError; } })()")
-            .AsBool.Should().BeTrue();
+    [Fact] public void Json_stringify_throws() =>
+        ((Action)(() => Eval("JSON.stringify(1n)"))).Should().Throw<JsThrow>();
 
     // ----------------------------------------------------- Helpers
     private static JsValue Eval(string src)
