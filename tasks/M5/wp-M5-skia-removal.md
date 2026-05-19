@@ -96,21 +96,34 @@ non-.NET prerequisites.
 
 ## Follow-ups (not blockers for this WP)
 
-- `tasks/M5/wp-M5-css-02-transform-paint.md` assumes Skia Save/Restore/Concat
-  extensions on the shim. Needs a rewrite to target ImageSharp.Drawing's
-  transform surface (or be marked blocked — ImageSharp.Drawing 3 dropped
-  canvas-level Scale/Translate, so transforms need a different approach).
-- `FontFaceRegistry.TryGet(... out byte[] sfntBytes)` is dead code today.
-  Wire it back into the ImageSharp paint path for `@font-face` support.
-- Doc-comment-only Skia mentions remain in
+All four follow-ups are now resolved (commit-pair `7b7ebd0` + the followup
+commit recorded in the handoff log below). See each linked file for detail:
+
+- ✅ `tasks/M5/wp-M5-css-02-transform-paint.md` rewritten to target
+  ImageSharp.Drawing 3's per-primitive `DrawingOptions.Transform`
+  (Matrix4x4) with the backend owning its own transform stack — the Skia
+  Save/Restore/Concat plan is gone.
+- ✅ `FontFaceRegistry` wired into `ImageSharpFontLookup.LoadCollection`
+  via the new public `EnumerateRegisteredSfnt()`; `ImageSharpBackend` and
+  `ImageSharpTextMeasurer` thread the per-document registry through.
+  Locked down by `ImageSharpFontLookupTests.Registered_web_font_bytes_appear_in_loaded_collection`.
+- ✅ Doc-comment-only Skia mentions cleaned up in
   `src/Starling.Css/FontFace/FontFaceRule.cs`,
   `src/Starling.Paint/WebFonts/WoffDecoder.cs`,
-  `src/Starling.Paint/WebFonts/Woff2Decoder.cs` — low-priority cleanup.
-- `tasks/M3/wp-M3-06*.md` (native-pivot WPs) are now historical;
-  add a one-line addendum to each handoff log noting Skia was later removed.
+  `src/Starling.Paint/WebFonts/Woff2Decoder.cs`.
+- ✅ Each `tasks/M3/wp-M3-06*.md` handoff log got a one-line "superseded
+  by wp:M5-skia-removal" addendum.
 
 ## Handoff log
 
 - 2026-05-19T02:50Z — agent-copilot-claude-opus-4.7 — Skia removal complete;
   full sln builds; tests green modulo the two documented pre-existing
   failures; AGENTS.md/README.md/ci.yml updated; nginx.org golden re-vendored.
+- 2026-05-19T03:15Z — agent-copilot-claude-opus-4.7 — all four follow-ups
+  landed in a second commit: FontFaceRegistry → ImageSharpFontLookup wiring
+  with a new round-trip test, wp:M5-css-02 WP rewritten for ImageSharp.Drawing 3,
+  M3-06 addenda, doc-comment cleanup. Also dropped the now-redundant
+  `TESSERA_IMAGESHARP_DRAWING` `#if` guard in the three paint tests (the
+  define was only set by the removed `EnableImageSharpDrawing3` switch).
+  Full `dotnet test` green except the same pre-existing
+  `Underlined_link_emits_text_and_underline_fill` baseline failure.

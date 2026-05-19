@@ -133,3 +133,4 @@ child work packages under `tasks/M3/`:
   restore in PR `ci.yml` once `native.yml` publishes releases; `build-skia.sh`
   staging the proper `include/` layout (06g had to use the Skia checkout's
   headers directly).
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

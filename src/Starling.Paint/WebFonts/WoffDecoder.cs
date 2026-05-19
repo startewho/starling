@@ -5,17 +5,17 @@ namespace Tessera.Paint.WebFonts;
 
 /// <summary>
 /// Decompresses a WOFF (Web Open Font Format, v1) container back to its
-/// underlying SFNT (TrueType/OpenType) bytes. Skia's <c>SkTypeface::makeFromData</c>
-/// accepts SFNT directly; WOFF is just an SFNT wrapped with per-table zlib
-/// compression and a small header, so the decoder is a header read and a
-/// per-table inflate.
+/// underlying SFNT (TrueType/OpenType) bytes. SixLabors.Fonts (the ImageSharp
+/// paint backend's font loader) accepts SFNT directly; WOFF is just an SFNT
+/// wrapped with per-table zlib compression and a small header, so the decoder
+/// is a header read and a per-table inflate.
 /// </summary>
 /// <remarks>
 /// Spec: <see href="https://www.w3.org/TR/WOFF/"/>. We honour the SFNT-layout
 /// rules: a 12-byte sfnt header, 16 bytes per table directory entry in tag
 /// order, table data aligned to 4 bytes. Metadata and private blocks
 /// (sections after the table data) are dropped — they aren't part of the
-/// font and Skia ignores them.
+/// font and downstream font loaders ignore them.
 /// </remarks>
 internal static class WoffDecoder
 {

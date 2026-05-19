@@ -130,3 +130,4 @@ This is correctness, not regression.
     (`DrawImage_BlitsPixels_IntoSurface`, skipped). `dotnet run --project
     src/Tessera.Headless -- render testdata/hello.html` eyeballed — clean,
     legible "Hello, world." in real OpenSans metrics.
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

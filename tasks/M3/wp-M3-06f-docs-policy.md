@@ -93,3 +93,4 @@ written.
   (not in the per-doc edit list; that file is the package catalog). Both left
   intentionally for `06l` / a catalog-maintenance pass.
   No code, csproj, sln, CI workflow, or `tasks/INDEX.md` changes.
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

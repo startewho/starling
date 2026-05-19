@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using FluentAssertions;
 using SixLabors.Fonts;
 using Tessera.Layout.Text;
@@ -121,4 +120,4 @@ public sealed class ImageSharpTextMeasurerTests
         return false;
     }
 }
-#endif
+

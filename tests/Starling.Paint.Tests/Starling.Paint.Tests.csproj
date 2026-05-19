@@ -3,13 +3,9 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
-  <!-- Mirror Starling.Paint.csproj: when EnableImageSharpDrawing3=true the
-       Paint assembly compiles in the ImageSharp.Drawing 3 backend and defines
-       TESSERA_IMAGESHARP_DRAWING. The test project needs the same constant so
-       #if-gated tests for the ImageSharp path compile in lockstep. -->
-  <PropertyGroup Condition=" '$(EnableImageSharpDrawing3)' == 'true' ">
-    <DefineConstants>$(DefineConstants);TESSERA_IMAGESHARP_DRAWING</DefineConstants>
-  </PropertyGroup>
+  <!-- ImageSharp.Drawing 3 is now the engine's sole paint backend
+       (wp:M5-skia-removal). No conditional compilation symbols are needed —
+       the test source includes the ImageSharp tests unconditionally. -->
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />

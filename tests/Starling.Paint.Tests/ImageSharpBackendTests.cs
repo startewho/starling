@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using FluentAssertions;
 using Tessera.Common.Image;
 using Tessera.Paint.Backend;
@@ -121,4 +120,4 @@ public sealed class ImageSharpBackendTests
         }
     }
 }
-#endif
+

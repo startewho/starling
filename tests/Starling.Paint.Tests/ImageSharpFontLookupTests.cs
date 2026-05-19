@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using FluentAssertions;
 using SixLabors.Fonts;
 using Tessera.Layout.Text;
@@ -175,5 +174,51 @@ public sealed class ImageSharpFontLookupTests
         }
         return false;
     }
+    /// <summary>
+    /// Locks down the <c>FontFaceRegistry</c> → <c>FontCollection</c> wiring:
+    /// SFNT bytes registered through the per-document registry must appear in
+    /// the collection returned by <see cref="ImageSharpFontLookup.LoadCollection(FontFaceRegistry?)"/>.
+    /// Re-uses the bundled OpenSans bytes as a known-good SFNT — the
+    /// assertion is on the registry round-trip, not on which family ends up
+    /// in the collection (that depends on what the SFNT's own name table
+    /// reports, which SixLabors.Fonts uses verbatim during
+    /// <c>FontCollection.Add</c>).
+    /// </summary>
+    [Fact]
+    public void Registered_web_font_bytes_appear_in_loaded_collection()
+    {
+        var asm = typeof(ImageSharpFontLookup).Assembly;
+        var fontResource = asm.GetManifestResourceNames()
+            .First(n => n.EndsWith("OpenSans-Regular.ttf", StringComparison.OrdinalIgnoreCase));
+        using var stream = asm.GetManifestResourceStream(fontResource)!;
+        var sfnt = new byte[stream.Length];
+        stream.ReadExactly(sfnt);
+
+        using var registry = new FontFaceRegistry();
+        registry.TryAdd("WebProbe", bold: false, italic: false, sfnt).Should().BeTrue(
+            "the bundled OpenSans is valid SFNT and should register cleanly");
+        registry.EnumerateRegisteredSfnt().Should().ContainSingle(
+            "one face was registered; enumerator surfaces every registered SFNT");
+
+        var collection = ImageSharpFontLookup.LoadCollection(registry);
+        collection.TryGet("Open Sans", out _).Should().BeTrue(
+            "the registry-fed SFNT identifies itself as 'Open Sans' via its name table, so LoadCollection must surface it");
+    }
+
+    /// <summary>
+    /// A null registry must behave identically to the legacy parameterless
+    /// loader — important because tests, the standalone text measurer, and
+    /// any caller without document context all pass <c>null</c>.
+    /// </summary>
+    [Fact]
+    public void Null_registry_matches_no_registry_overload()
+    {
+        var withNull = ImageSharpFontLookup.LoadCollection(webFonts: null);
+        var bare = ImageSharpFontLookup.LoadCollection();
+
+        withNull.Families.Select(f => f.Name).OrderBy(n => n)
+            .Should().Equal(bare.Families.Select(f => f.Name).OrderBy(n => n),
+                "passing a null registry must not change which families load");
+    }
 }
-#endif
+

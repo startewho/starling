@@ -5,9 +5,9 @@ namespace Tessera.Paint.WebFonts;
 
 /// <summary>
 /// Decompresses a WOFF2 (Web Open Font Format, v2) container back to its
-/// underlying SFNT bytes. Skia's <c>SkTypeface::makeFromData</c> accepts SFNT
-/// directly, so once we unwrap WOFF2 the rest of the @font-face pipeline is
-/// unchanged.
+/// underlying SFNT bytes. SixLabors.Fonts (the ImageSharp paint backend's
+/// font loader) accepts SFNT directly, so once we unwrap WOFF2 the rest of
+/// the @font-face pipeline is unchanged.
 /// </summary>
 /// <remarks>
 /// Spec: <see href="https://www.w3.org/TR/WOFF2/"/>. WOFF2 is tighter than

@@ -29,7 +29,7 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
     {
         _fonts = fonts ?? FontResolver.Default;
         _webFonts = webFonts;
-        _collection = ImageSharpFontLookup.LoadCollection();
+        _collection = ImageSharpFontLookup.LoadCollection(webFonts);
     }
 
     public double MeasureWidth(string text, double fontSize, FontSpec spec)

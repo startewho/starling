@@ -111,3 +111,4 @@ that all return the `Tessera.Common.Image.DecodedImage` defined in `06c`. Wire
   - Full `dotnet build` + `dotnet test` green from repo root.
   - Downstream: `wp:M3-06l-ci-policy` is unblocked (interop allowlist must now
     include `Tessera.Codecs`).
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

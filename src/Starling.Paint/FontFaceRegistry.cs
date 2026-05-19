@@ -9,11 +9,11 @@ namespace Tessera.Paint;
 /// stylesheets have landed and their <c>url()</c> sources are fetched and
 /// loaded.
 /// <para>
-/// After the Skia/Graphite native shim was removed the engine paints through
-/// ImageSharp.Drawing 3, which owns its own font collection. The registry
-/// retains the raw SFNT bytes per family so an ImageSharp-side integration
-/// can pick them up; wiring web fonts into the ImageSharp paint path is a
-/// follow-up (the previous Skia-typed lookup hook is gone).
+/// The engine paints through ImageSharp.Drawing 3, which owns its own
+/// font collection. <see cref="ImageSharpFontLookup.LoadCollection(FontFaceRegistry?)"/>
+/// snapshots this registry at backend construction time, so any face
+/// registered before <c>Painter.RenderDocument</c> participates in
+/// font-family resolution alongside the bundled and system fonts.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -76,11 +76,35 @@ public sealed class FontFaceRegistry : IDisposable
     }
 
     /// <summary>
+    /// Enumerates every registered face as raw SFNT bytes. Used by the paint
+    /// backend (<see cref="ImageSharpFontLookup.LoadCollection(FontFaceRegistry?)"/>)
+    /// to fold web fonts into the per-render <c>FontCollection</c> snapshot.
+    /// <para>
+    /// The CSS family name from the <c>@font-face</c> rule is intentionally
+    /// not returned alongside the bytes — SixLabors.Fonts identifies families
+    /// from each SFNT's own <c>name</c> table on <c>FontCollection.Add</c>,
+    /// not from an externally-supplied alias. In practice this works because
+    /// authors keep the <c>@font-face</c> <c>font-family</c> descriptor in
+    /// sync with the font's internal family name; a stylesheet that uses a
+    /// renamed family will still register the bytes but only resolve by the
+    /// SFNT's own name.
+    /// </para>
+    /// </summary>
+    public IEnumerable<ReadOnlyMemory<byte>> EnumerateRegisteredSfnt()
+    {
+        if (_disposed) yield break;
+        foreach (var faces in _byFamily.Values)
+            foreach (var face in faces)
+                yield return face.SfntBytes;
+    }
+
+    /// <summary>
     /// Returns the registered SFNT bytes for the given family / weight / style,
     /// honouring <c>unicode-range</c> when <paramref name="probeCodepoint"/>
     /// is provided. Exact bold/italic match wins; otherwise the first
-    /// covering face wins. Currently unused by the ImageSharp paint backend
-    /// — kept so a future integration can wire web fonts back in.
+    /// covering face wins. Used by tests that exercise the registry directly;
+    /// the paint backend consumes the registry via
+    /// <see cref="EnumerateRegisteredSfnt"/>.
     /// </summary>
     internal bool TryGet(string family, bool bold, bool italic, int? probeCodepoint, out byte[] sfntBytes)
     {
