@@ -1,9 +1,14 @@
 namespace Tessera.Layout.Position;
 
 /// <summary>
-/// CSS <c>position</c> keyword values. <see cref="Sticky"/> is parsed but
-/// currently behaves like <see cref="Relative"/> — full sticky behaviour
-/// (scroll-based clamping inside the nearest scroll container) lands in B6-3.
+/// CSS <c>position</c> keyword values. <see cref="Sticky"/> is implemented
+/// as <em>clamped-relative</em>: the element shifts only when its in-flow
+/// frame would violate a <c>top</c> / <c>right</c> / <c>bottom</c> /
+/// <c>left</c> threshold relative to its containing block's content rect,
+/// and the result is clamped to stay inside that rect. The scroll-driven
+/// shift (sticky's defining behaviour in browsers) requires a "nearest
+/// scrolling ancestor" concept which the layout engine doesn't expose yet
+/// — that part is future work.
 /// </summary>
 internal enum PositionKind : byte
 {
@@ -11,8 +16,6 @@ internal enum PositionKind : byte
     Relative,
     Absolute,
     Fixed,
-    // TODO(B6-3): sticky is treated as relative here. Sticky needs a scroll-
-    // container hookup which the layout engine doesn't expose yet.
     Sticky,
 }
 

@@ -79,7 +79,7 @@ internal sealed class PositionLayout
     private void ApplyRelativeOffsets(Box.Box box, double parentOriginX, double parentOriginY)
     {
         var props = PositionParser.Parse(box.Style);
-        if (props.Kind is PositionKind.Relative or PositionKind.Sticky)
+        if (props.Kind is PositionKind.Relative)
         {
             // Percentage basis for top/bottom is the containing block's
             // *height*, and for left/right is its *width*. The containing
@@ -103,6 +103,17 @@ internal sealed class PositionLayout
             else if (bottomPx is { } by) dy = -by;
 
             box.Frame = box.Frame.Translate(dx, dy);
+        }
+        else if (props.Kind is PositionKind.Sticky)
+        {
+            // Sticky degrades to clamped-relative without scroll: the
+            // natural frame only shifts if an inset is violated relative
+            // to the containing block's content rect. The CB-local space
+            // is `(0, 0, cbWidth, cbHeight)` because `box.Frame` is in
+            // parent-content-box coordinates already.
+            var (cbWidth, cbHeight) = ContainingBlockContentSizeOf(box.Parent);
+            var cbLocal = new Rect(0, 0, cbWidth, cbHeight);
+            box.Frame = StickyLayout.ResolveOffset(box.Frame, cbLocal, props);
         }
 
         // Recurse into children with the (possibly shifted) origin baked in.
