@@ -23,19 +23,9 @@
 
     <!-- Point Six Labors license validation at the repo-root sixlabors.lic so
          every consumer project finds it; the targets glob is rooted at each
-         project dir and won't walk up. No-op when EnableImageSharpDrawing3 is
-         unset (the licensing targets aren't imported). -->
+         project dir and won't walk up. ImageSharp.Drawing 3 + Fonts 3 + image
+         codec licensing require this. -->
     <SixLaborsLicenseFile Condition="'$(SixLaborsLicenseFile)' == '' And Exists('$(MSBuildThisFileDirectory)sixlabors.lic')">$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
-
-    <!-- When a Six Labors license is present, compile the ImageSharp.Drawing 3
-         backend in by default so `aspire run` (and any local `dotnet build`)
-         can pick TESSERA_PAINT_BACKEND=imagesharp without an extra
-         /p:EnableImageSharpDrawing3=true flag. Without a license, the
-         property stays unset and the default license-key-free build path
-         (SixLabors.ImageSharp 3.1.12, no Drawing 3) is preserved. Set
-         EnableImageSharpDrawing3=false explicitly on the command line to
-         opt back out when the license is present. -->
-    <EnableImageSharpDrawing3 Condition="'$(EnableImageSharpDrawing3)' == '' And '$(SixLaborsLicenseFile)' != ''">true</EnableImageSharpDrawing3>
 
     <!--
       Strict-on-purpose, but a handful of CA / RCS rules are noisy on
@@ -54,17 +44,5 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" PrivateAssets="all" />
     <PackageReference Include="Roslynator.Analyzers" PrivateAssets="all" />
-  </ItemGroup>
-
-  <!--
-    Starling.Skia keeps its Sk* handle wrappers `internal` (only the interop
-    seam should name native shapes). wp:M3-06i's SkiaGraphiteBackend lives in
-    Starling.Paint and drives those handles, so it needs internals access.
-    Declared here rather than in Starling.Skia.csproj because wp:M3-06i may not
-    edit src/Starling.Skia/* — 06h owns that project. Scoped by project name so
-    only the Starling.Skia assembly emits the attribute.
-  -->
-  <ItemGroup Condition="'$(MSBuildProjectName)' == 'Starling.Skia'">
-    <InternalsVisibleTo Include="Starling.Paint" />
   </ItemGroup>
 </Project>

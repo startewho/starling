@@ -14,7 +14,7 @@ Legend: ✅ shipped · 🟡 partial / actively iterating · ⚫ not started
 | **DOM** | ✅ | Nodes, mutations, live collections, events. |
 | **CSS** | 🟡 | Tokenizer, parser, selectors (incl. `:has`, pseudo-elements, modern pseudo-classes), cascade + layers, Values 4 math (`calc`/`min`/`max`/`clamp`), Color 4 spaces + gamut mapping, Media 5 + `@supports`, CSS Nesting, `revert`/`unset`, `@font-face` + WOFF/WOFF2, 183 PropertyIds. Further property/feature coverage ongoing. |
 | **Layout** | 🟡 | Block + inline + inline-block (with BFC for block children and two-pass max-content shrink-to-fit), margin collapse, `margin: auto` centering, text-align, minimal table layout via UA-stylesheet inline-block cells, form controls visible by default. Flex/grid not yet. |
-| **Paint** | ✅ | Skia Graphite via native shim (`libtessera_skia`) is the **sole rasterizer** — no managed fallback. DisplayList drives both headless and GUI. osx-arm64 only today. |
+| **Paint** | ✅ | ImageSharp.Drawing 3 (pure-managed, SixLabors licensed via repo-root `sixlabors.lic`). DisplayList drives both headless and GUI. Experimental WebGPU compute target available via `TESSERA_PAINT_BACKEND=imagesharp-webgpu`. |
 | **Networking** | ✅ | URL (WPT 100%), DNS, TCP, **TLS 1.3 via BouncyCastle** (an `SslStream` migration was reverted in `939f3a5` after a macOS TLS 1.3 issue — see [AGENTS.md](AGENTS.md)), HTTP/1.1 with keep-alive connection pool, gzip/brotli/deflate, redirects, RFC 6265bis cookies + PSL, WHATWG encoding labels (43/43 curated WPT subset), CCADB root store. `tessera render https://example.com` is gated in CI. |
 | **Image pipeline** | ✅ | OS-native codecs (`Starling.Codecs`: ImageIO on macOS, WIC on Windows, libjpeg/png/webp on Linux), `data:` URI support, accessible names for unrenderable `<img>`/`<svg>`. |
 | **JS engine** | 🟡 | Lex + parse + bytecode compiler + register VM; functions, recursion, snapshot closures, `new`/`this`, method binding. Still ahead: intrinsics (Object/Array/String/Number/Math/JSON/Date/RegExp), Promise + microtasks, ES modules, async/await, destructuring, classes, Test262 ≥ 80%. **The single largest gating piece for interactive demos.** |
@@ -41,13 +41,9 @@ dotnet run --project src/Starling.Headless -- render testdata/hello.html -o out.
 # The built CLI binary is named `starling`.
 ```
 
-> **Native shim required.** Skia Graphite is the engine's sole rasterizer —
-> there is no managed fallback. The native `libtessera_skia` shim is gitignored
-> and not committed, so on a fresh checkout `dotnet build` fails fast with an
-> actionable error until you build it. See
-> [`native/README.md`](native/README.md) for the two-step build
-> (`./native/build-skia.sh` then the shim CMake build). Currently produced for
-> osx-arm64 only.
+> **Pure-managed paint.** The engine paints via ImageSharp.Drawing 3 — no
+> native graphics shim to build. The SixLabors stack requires a license key,
+> picked up from the repo-root `sixlabors.lic` automatically.
 
 The CLI accepts bare filesystem paths as well as well-formed `file://` URLs.
 `file:///absolute/path` works; `file://relative` does not (per the WHATWG URL
@@ -67,7 +63,6 @@ starling/
 ├── Starling.ServiceDefaults/ # Shared OTel + health-check bootstrap for future services
 ├── tests/                    # One xUnit project per src/ module + an E2E project
 ├── bench/                    # BenchmarkDotNet harness
-├── native/                   # libtessera_skia shim (gitignored output) + build scripts
 ├── testdata/                 # Fixtures (HTML, golden PNGs, WPT subsets)
 └── .github/workflows/        # CI: build+test on win/mac/linux, plus an interop-seam grep
 ```
@@ -75,11 +70,10 @@ starling/
 ## Interop policy
 
 **Managed-first, native at vetted seams.** Native interop (`LibraryImport`) is
-confined to two designated projects — `Starling.Skia` (graphics) and
-`Starling.Codecs` (image decode). Every other engine project stays P/Invoke-free and
-takes no native dependency beyond what the .NET BCL ships. The CI `lint` job greps
-the engine-project allowlist (all engine projects *except* the two interop projects)
-to enforce this — see
+confined to one designated project — `Starling.Codecs` (image decode). Every
+other engine project stays P/Invoke-free and takes no native dependency beyond
+what the .NET BCL ships. The CI `lint` job greps the engine-project allowlist
+(all engine projects *except* the Codecs interop project) to enforce this — see
 [`02_PROJECT_SETUP.md`](browser-plan/02_PROJECT_SETUP.md#ci-matrix-githubworkflowsciyml).
 
 ## Working on Starling

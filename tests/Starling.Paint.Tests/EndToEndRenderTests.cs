@@ -65,9 +65,9 @@ public sealed class EndToEndRenderTests
     }
 
     [Fact]
-    public void Skia_backend_reuses_context_for_two_sequential_renders()
+    public void Backend_reuses_context_for_two_sequential_renders()
     {
-        using var backend = new SkiaGraphiteBackend();
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
 
         using var first = backend.Render(
             SolidFillList(new CssColor(255, 0, 0)), new LayoutSize(32, 32));

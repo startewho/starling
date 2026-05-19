@@ -6,18 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Rendering. ImageSharp 3.1.12 (no license key) is the default for PNG
-         encode. Builds with EnableImageSharpDrawing3=true bump the whole
-         SixLabors stack to the 3.0/4.0 wave (Drawing 3, Fonts 3, ImageSharp 4),
-         which collectively require a Six Labors license key. The version is
-         conditional centrally so every consumer resolves the same number — a
-         per-project VersionOverride doesn't propagate transitively, so it
-         leaves consumer projects (Engine/Headless/Gui/...) pinned to 3.1.12
-         and NuGet rejects the downgrade. -->
-    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12"
-                    Condition=" '$(EnableImageSharpDrawing3)' != 'true' " />
-    <PackageVersion Include="SixLabors.ImageSharp" Version="4.0.*"
-                    Condition=" '$(EnableImageSharpDrawing3)' == 'true' " />
+    <!-- Rendering. After the Skia/Graphite shim removal the engine paints via
+         ImageSharp.Drawing 3 / Fonts 3 / ImageSharp 4 only. The whole SixLabors
+         stack requires a Six Labors license key (repo-root sixlabors.lic,
+         picked up via Directory.Build.props' SixLaborsLicenseFile property). -->
+    <PackageVersion Include="SixLabors.ImageSharp" Version="4.0.*" />
     <PackageVersion Include="SixLabors.ImageSharp.Drawing" Version="3.0.*" />
     <PackageVersion Include="SixLabors.ImageSharp.Drawing.WebGPU" Version="1.0.*" />
     <PackageVersion Include="SixLabors.Fonts"              Version="3.*" />

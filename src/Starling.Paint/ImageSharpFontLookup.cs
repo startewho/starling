@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using SixLabors.Fonts;
 using Tessera.Layout.Text;
 
@@ -138,4 +137,3 @@ internal static class ImageSharpFontLookup
         }
     }
 }
-#endif

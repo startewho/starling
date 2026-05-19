@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using SixLabors.Fonts;
@@ -21,19 +20,18 @@ namespace Tessera.Paint.Backend;
 
 /// <summary>
 /// Cross-platform paint backend that replays a <see cref="DisplayList"/> through
-/// ImageSharp.Drawing 3.0's canvas API. Compiled in only when the
-/// <c>EnableImageSharpDrawing3</c> MSBuild flag is set (which also defines
-/// <c>TESSERA_IMAGESHARP_DRAWING</c>); the default build path remains Skia.
-/// Supports two destinations: the default parallel-SIMD CPU rasterizer
-/// (<c>Image&lt;Rgba32&gt;</c>) and the GPU compute-shader Vello-style pipeline
-/// in <see cref="WebGPURenderTarget"/>. The per-item dispatch is identical
-/// because both paths drive the same <see cref="DrawingCanvas"/> API.
+/// ImageSharp.Drawing 3.0's canvas API. This is the sole paint backend after the
+/// Skia/Graphite native shim was removed — the engine is once again pure-managed
+/// end-to-end. Supports two destinations: the default parallel-SIMD CPU
+/// rasterizer (<c>Image&lt;Rgba32&gt;</c>) and the GPU compute-shader
+/// Vello-style pipeline in <see cref="WebGPURenderTarget"/>, selected via
+/// <c>TESSERA_PAINT_BACKEND=imagesharp-webgpu</c>. The per-item dispatch is
+/// identical because both paths drive the same <see cref="DrawingCanvas"/> API.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The starting canvas is filled opaque white to match
-/// <see cref="SkiaGraphiteBackend"/>, so a per-pixel diff between the two
-/// backends stays tight on background regions.
+/// The starting canvas is filled opaque white so a fresh render lands on a
+/// predictable background regardless of viewport size.
 /// </para>
 /// <para>
 /// Text path: ImageSharp.Drawing 3.0 does not expose a public way to paint a
@@ -99,8 +97,8 @@ internal sealed class ImageSharpBackend : IPaintBackend
     {
         using (_diag.Span("paint", "raster.context_init"))
         {
-            // ImageSharp has no persistent CPU context; the span keeps the
-            // trace shape identical to SkiaGraphiteBackend for diffability.
+            // ImageSharp has no persistent CPU context; the span is kept so
+            // the diagnostics trace shape stays stable for tooling.
         }
 
         Image<Rgba32> image;
@@ -316,8 +314,8 @@ internal sealed class ImageSharpBackend : IPaintBackend
 
     // ImageSharp.Drawing 3.0 dropped canvas-level transforms (no Scale/Translate),
     // so layout-space coordinates are pre-multiplied by `scale` at the call site.
-    // SnapRect rounds in the post-scale (device-pixel) space — same algorithm as
-    // SkiaGraphiteBackend.SnapRect — and returns the device-pixel rect directly.
+    // SnapRect rounds in the post-scale (device-pixel) space and returns the
+    // device-pixel rect directly.
     private static SixLabors.ImageSharp.RectangleF ToDeviceRectF(LayoutRect r, float scale)
     {
         var s = scale > 0 ? scale : 1f;
@@ -356,4 +354,3 @@ internal sealed class ImageSharpBackend : IPaintBackend
         _ = _webFonts;
     }
 }
-#endif

@@ -1,4 +1,3 @@
-#if TESSERA_IMAGESHARP_DRAWING
 using System.Collections.Concurrent;
 using SixLabors.Fonts;
 using Tessera.Layout.Text;
@@ -7,9 +6,9 @@ namespace Tessera.Paint;
 
 /// <summary>
 /// <see cref="ITextMeasurer"/> backed by SixLabors.Fonts 3.x: real shaped glyph
-/// advances and sized font metrics via <see cref="TextMeasurer"/>, parallel to
-/// <see cref="SkiaTextMeasurer"/> but on the managed ImageSharp.Drawing path.
-/// Selected at runtime when <c>TESSERA_PAINT_BACKEND=imagesharp</c>.
+/// advances and sized font metrics via <see cref="TextMeasurer"/>. Used by the
+/// ImageSharp paint backend, which is now the only backend after the Skia shim
+/// was removed.
 /// <para>
 /// Typefaces are loaded from the same embedded TTF/OTF resources
 /// <see cref="FontResolver"/> uses (bundled OpenSans plus anything else
@@ -111,4 +110,3 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
         _fontCache.Clear();
     }
 }
-#endif

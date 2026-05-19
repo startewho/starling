@@ -1,6 +1,5 @@
 using Tessera.Css.FontFace;
 using Tessera.Paint.WebFonts;
-using Tessera.Skia.Handles;
 
 namespace Tessera.Paint;
 
@@ -8,33 +7,34 @@ namespace Tessera.Paint;
 /// Per-document registry of <c>@font-face</c>-declared typefaces. The
 /// <c>FontFaceFetcher</c> in <c>Tessera.Engine</c> populates this once
 /// stylesheets have landed and their <c>url()</c> sources are fetched and
-/// loaded. <see cref="FontResolver"/> consults it ahead of <c>SkFontMgr</c>,
-/// so a site's web fonts take precedence over a system family of the same
-/// name (CSS Fonts 3 §5).
+/// loaded.
+/// <para>
+/// After the Skia/Graphite native shim was removed the engine paints through
+/// ImageSharp.Drawing 3, which owns its own font collection. The registry
+/// retains the raw SFNT bytes per family so an ImageSharp-side integration
+/// can pick them up; wiring web fonts into the ImageSharp paint path is a
+/// follow-up (the previous Skia-typed lookup hook is gone).
+/// </para>
 /// </summary>
 /// <remarks>
 /// Lookup is case-insensitive on the family name to match CSS family matching
-/// (family names compare ASCII case-insensitively per CSS Fonts 3 §5.1). The
-/// registry owns the typefaces it holds and disposes them on
-/// <see cref="Dispose"/> at end-of-document.
+/// (family names compare ASCII case-insensitively per CSS Fonts 3 §5.1).
 /// </remarks>
 public sealed class FontFaceRegistry : IDisposable
 {
     private readonly Dictionary<string, List<RegisteredFace>> _byFamily =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<SkTypeface> _owned = [];
     private bool _disposed;
 
     /// <summary>
-    /// Loads <paramref name="fontBytes"/> as a typeface and registers it for
-    /// <paramref name="family"/>. Sniffs WOFF / WOFF2 magic bytes and
-    /// unwraps them in-process before handing SFNT bytes to Skia, so a
-    /// font fetched from any of the common web-font formats lands here.
-    /// <paramref name="unicodeRange"/> (optional) restricts which codepoints
-    /// the face applies to; when null the face covers everything.
-    /// Returns <c>false</c> if the bytes are unrecognisable or the WOFF2
-    /// container uses transforms we don't yet support; fail-soft to match
-    /// the stylesheet/image fetchers.
+    /// Loads <paramref name="fontBytes"/> as a face and registers it for
+    /// <paramref name="family"/>. Sniffs WOFF / WOFF2 magic bytes and unwraps
+    /// them in-process so a font fetched from any of the common web-font
+    /// formats lands here as raw SFNT bytes. <paramref name="unicodeRange"/>
+    /// (optional) restricts which codepoints the face applies to; when null
+    /// the face covers everything. Returns <c>false</c> if the bytes are
+    /// unrecognisable or the WOFF2 container uses transforms we don't yet
+    /// support; fail-soft to match the stylesheet/image fetchers.
     /// </summary>
     public bool TryAdd(
         string family,
@@ -47,44 +47,21 @@ public sealed class FontFaceRegistry : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(family);
         if (fontBytes.Length == 0) return false;
 
-        ReadOnlySpan<byte> sfntBytes;
-        byte[]? unwrapped = null;
+        byte[] sfnt;
         try
         {
             if (Woff2Decoder.IsWoff2(fontBytes))
-            {
-                unwrapped = Woff2Decoder.Decode(fontBytes);
-                sfntBytes = unwrapped;
-            }
+                sfnt = Woff2Decoder.Decode(fontBytes);
             else if (WoffDecoder.IsWoff(fontBytes))
-            {
-                unwrapped = WoffDecoder.Decode(fontBytes);
-                sfntBytes = unwrapped;
-            }
+                sfnt = WoffDecoder.Decode(fontBytes);
             else
-            {
-                sfntBytes = fontBytes;
-            }
+                sfnt = fontBytes.ToArray();
         }
         catch (InvalidDataException)
         {
-            // Malformed WOFF/WOFF2 container.
             return false;
         }
         catch (Woff2UnsupportedTransformException)
-        {
-            // WOFF2 file uses the glyf/loca transform we don't unwrap. The
-            // fetcher's caller falls through to the next src entry — sites
-            // that want a fallback should list a TTF/OTF after the WOFF2.
-            return false;
-        }
-
-        SkTypeface typeface;
-        try
-        {
-            typeface = SkTypeface.FromData(sfntBytes);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
         }
@@ -94,26 +71,22 @@ public sealed class FontFaceRegistry : IDisposable
             faces = [];
             _byFamily[family] = faces;
         }
-        faces.Add(new RegisteredFace(bold, italic, unicodeRange, typeface));
-        _owned.Add(typeface);
-        _ = unwrapped; // keep the array alive past SkTypeface.FromData (it copies internally).
+        faces.Add(new RegisteredFace(bold, italic, unicodeRange, sfnt));
         return true;
     }
 
     /// <summary>
-    /// Looks up a face for <paramref name="family"/> matching the requested
-    /// bold/italic flags. When <paramref name="probeCodepoint"/> is provided,
-    /// faces whose <c>unicode-range</c> does not cover it are skipped — that
-    /// way a Google-Fonts-style stylesheet with separate Latin and Cyrillic
-    /// faces for the same family doesn't return the Latin subset for a
-    /// Cyrillic run. Exact bold/italic match wins; otherwise the first
-    /// covering face wins (paint stack synthesises any missing style).
+    /// Returns the registered SFNT bytes for the given family / weight / style,
+    /// honouring <c>unicode-range</c> when <paramref name="probeCodepoint"/>
+    /// is provided. Exact bold/italic match wins; otherwise the first
+    /// covering face wins. Currently unused by the ImageSharp paint backend
+    /// — kept so a future integration can wire web fonts back in.
     /// </summary>
-    internal bool TryGet(string family, bool bold, bool italic, int? probeCodepoint, out SkTypeface typeface)
+    internal bool TryGet(string family, bool bold, bool italic, int? probeCodepoint, out byte[] sfntBytes)
     {
         if (_disposed || !_byFamily.TryGetValue(family, out var faces) || faces.Count == 0)
         {
-            typeface = null!;
+            sfntBytes = [];
             return false;
         }
 
@@ -125,18 +98,18 @@ public sealed class FontFaceRegistry : IDisposable
             firstCovering ??= f;
             if (f.Bold == bold && f.Italic == italic)
             {
-                typeface = f.Typeface;
+                sfntBytes = f.SfntBytes;
                 return true;
             }
         }
 
         if (firstCovering is { } any)
         {
-            typeface = any.Typeface;
+            sfntBytes = any.SfntBytes;
             return true;
         }
 
-        typeface = null!;
+        sfntBytes = [];
         return false;
     }
 
@@ -144,8 +117,6 @@ public sealed class FontFaceRegistry : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        foreach (var t in _owned) t.Dispose();
-        _owned.Clear();
         _byFamily.Clear();
     }
 
@@ -153,5 +124,5 @@ public sealed class FontFaceRegistry : IDisposable
         bool Bold,
         bool Italic,
         UnicodeRangeSet? UnicodeRange,
-        SkTypeface Typeface);
+        byte[] SfntBytes);
 }
