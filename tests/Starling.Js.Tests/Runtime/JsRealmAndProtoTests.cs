@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Js.Runtime;
 namespace Starling.Js.Tests.Runtime;
 

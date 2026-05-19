@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Http.Cookies;
 namespace Starling.Net.Tests.Http;
 

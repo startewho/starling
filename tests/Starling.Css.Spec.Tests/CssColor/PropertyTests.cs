@@ -2,7 +2,7 @@
 // Promoted tests below are hand-implemented; the generator is idempotent
 // and will not overwrite this file.
 
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Parser;
 using Starling.Css.Values;
 

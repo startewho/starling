@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Animations;
 using Starling.Css.Cascade;
 using Starling.Css.Parser;

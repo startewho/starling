@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Http.Decoding;
 namespace Starling.Net.Tests.Http;
 

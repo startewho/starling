@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Paint.Backend;
 namespace Starling.Paint.Tests;
 

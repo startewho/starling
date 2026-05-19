@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Js.Lex;
 namespace Starling.Js.Tests.Lex;
 

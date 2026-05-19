@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Channels;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Dns;
 using Starling.Net.Tcp;
 namespace Starling.Net.Tests.Tcp;

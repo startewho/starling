@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Common.Image;
 namespace Starling.Common.Tests;
 

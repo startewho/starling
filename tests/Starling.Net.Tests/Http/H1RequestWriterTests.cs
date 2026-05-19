@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Http;
 using Starling.Net.Http.H1;
 using StarlingUrl = global::Starling.Url.Url;

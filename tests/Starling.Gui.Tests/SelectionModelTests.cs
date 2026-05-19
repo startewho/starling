@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Cascade;
 using Starling.Html;
 using Starling.Layout;
@@ -251,7 +251,7 @@ public sealed class SelectionModelTests
         var placed = Place("<body><p>hello world</p></body>", new Size(40, 600));
         var helloIdx = placed.FindIndex(f => f.Text == "hello");
         var worldIdx = placed.FindIndex(f => f.Text == "world");
-        helloIdx.Should().BeGreaterOrEqualTo(0);
+        helloIdx.Should().BeGreaterThanOrEqualTo(0);
         worldIdx.Should().BeGreaterThan(helloIdx);
         placed[helloIdx].Y.Should().NotBe(placed[worldIdx].Y,
             "the test only exercises the wrap case if the two words ended up on different lines");

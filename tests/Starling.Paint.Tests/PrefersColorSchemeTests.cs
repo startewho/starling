@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Media;
 using Starling.Css.Properties;
 using Starling.Css.Values;

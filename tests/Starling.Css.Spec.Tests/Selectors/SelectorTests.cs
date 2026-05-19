@@ -2,7 +2,7 @@
 // Source: testdata/webref/css/selectors.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Selectors;
 using Starling.Dom;
 

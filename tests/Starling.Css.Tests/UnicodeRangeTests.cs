@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.FontFace;
 using Starling.Css.Parser;
 namespace Starling.Css.Tests;

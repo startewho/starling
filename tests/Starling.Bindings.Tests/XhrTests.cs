@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Js.Runtime;
 namespace Starling.Bindings.Tests;
 

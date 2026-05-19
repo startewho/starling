@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Http.Cookies;
 using StarlingUrlParser = global::Starling.Url.UrlParser;
 

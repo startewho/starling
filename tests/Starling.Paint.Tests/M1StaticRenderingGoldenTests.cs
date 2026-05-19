@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Html;
 using LayoutSize = Starling.Layout.Size;
 

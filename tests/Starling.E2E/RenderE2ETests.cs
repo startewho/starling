@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using SixLabors.ImageSharp;
 using Starling.Common.Diagnostics;
 using Starling.Engine;

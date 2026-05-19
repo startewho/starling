@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using SixLabors.Fonts;
 using Starling.Layout.Text;
 namespace Starling.Paint.Tests;

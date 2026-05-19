@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Selectors;
 using Starling.Css.Values;
 using Starling.Dom;

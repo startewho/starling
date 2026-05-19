@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 namespace Starling.Net.Tests.Http;
 
 /// <summary>

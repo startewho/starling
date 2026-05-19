@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Http;
 namespace Starling.Net.Tests.Http;
 

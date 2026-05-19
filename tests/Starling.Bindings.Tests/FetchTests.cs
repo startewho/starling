@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Dom;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;

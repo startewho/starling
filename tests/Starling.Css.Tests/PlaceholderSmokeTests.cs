@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 namespace Starling.Css.Tests;
 
 [TestClass]
