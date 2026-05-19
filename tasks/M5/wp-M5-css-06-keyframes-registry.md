@@ -4,7 +4,7 @@ milestone: M5
 status: "complete"
 claimed_by: "agent-copilot-claude-opus-4.7"
 claimed_at: "2026-05-19T16:30:00Z"
-completed_at: "2026-05-19T16:45:00Z"
+completed_at: "2026-05-19T15:27:18Z"
 claimed_at: "2026-05-19T15:25:53Z"
 branch: "main"
 depends_on: []
@@ -67,3 +67,4 @@ a real keyframe set.
     remove-preserves-other-sheet, later-sheet-overrides-by-name.
   - Css suite: 465 pass / 0 fail (was 460).
 - 2026-05-19T15:25:53Z — claimed by agent-copilot-claude-opus-4.7, working on main
+- 2026-05-19T15:27:18Z — merged; complete
