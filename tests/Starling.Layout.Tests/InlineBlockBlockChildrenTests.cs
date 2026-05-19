@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Cascade;
 using Starling.Html;
 using Starling.Layout.Box;
@@ -113,7 +113,7 @@ public sealed class InlineBlockBlockChildrenTests
         var root = Layout(html, new Size(800, 600));
 
         var spans = FindAll(root, "span").ToList();
-        spans.Should().HaveCountGreaterOrEqualTo(2);
+        spans.Should().HaveCountGreaterThanOrEqualTo(2);
         var outer = spans[0];
         var inner = spans[1];
 
@@ -240,7 +240,7 @@ public sealed class InlineBlockBlockChildrenTests
         var root = Layout(html, new Size(1200, 600));
 
         var spans = FindAll(root, "span").ToList();
-        spans.Should().HaveCountGreaterOrEqualTo(2);
+        spans.Should().HaveCountGreaterThanOrEqualTo(2);
         var first = spans[0];
         var second = spans[1];
 

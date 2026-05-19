@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Paint.WebFonts;
 namespace Starling.Paint.Tests;
 

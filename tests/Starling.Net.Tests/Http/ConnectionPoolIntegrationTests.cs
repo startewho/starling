@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Http;
 namespace Starling.Net.Tests.Http;
 

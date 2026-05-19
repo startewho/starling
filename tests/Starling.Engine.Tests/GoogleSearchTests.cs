@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using SixLabors.ImageSharp;
 using Starling.Bindings;
 using Starling.Dom;

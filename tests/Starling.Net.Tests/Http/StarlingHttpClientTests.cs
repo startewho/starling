@@ -2,7 +2,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using StarlingUrlParser = global::Starling.Url.UrlParser;
 
 namespace Starling.Net.Tests.Http;

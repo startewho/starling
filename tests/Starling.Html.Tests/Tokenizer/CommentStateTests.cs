@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Html.Tokenizer;
 namespace Starling.Html.Tests.Tokenizer;
 

@@ -1,5 +1,5 @@
 using System.Text.Json;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Html.Tokenizer;
 namespace Starling.Html.Tests.Tokenizer;
 

@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Html;

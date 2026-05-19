@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Values;
 using Starling.Html;
 using Starling.Paint.Backend;

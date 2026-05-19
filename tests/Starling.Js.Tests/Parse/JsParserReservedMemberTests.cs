@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Js.Ast;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;

@@ -140,7 +140,7 @@ Drop at repo root. Applied to every csproj. Sets the common shape.
     <PackageVersion Include="xunit.v3"                      Version="1.0.0" />
     <PackageVersion Include="xunit.runner.visualstudio"     Version="3.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk"        Version="17.13.0" />
-    <PackageVersion Include="FluentAssertions"              Version="6.12.2" />
+    <PackageVersion Include="AwesomeAssertions"              Version="9.4.0" />
     <PackageVersion Include="BenchmarkDotNet"               Version="0.14.0" />
 
     <!-- Analyzers -->

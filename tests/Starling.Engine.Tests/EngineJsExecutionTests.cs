@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using SixLabors.ImageSharp;
 namespace Starling.Engine.Tests;
 

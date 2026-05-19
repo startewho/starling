@@ -2,7 +2,7 @@
 // Source: testdata/webref/css/css-animations.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Parser;
 using Starling.Css.Properties;
 using Starling.Css.Values;

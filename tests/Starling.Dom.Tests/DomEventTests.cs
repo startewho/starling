@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Dom.Events;
 namespace Starling.Dom.Tests;
 

@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Js.RegExp;
 namespace Starling.Js.Tests.RegExp;
 

@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Dom;
 namespace Starling.Html.Tests;
 

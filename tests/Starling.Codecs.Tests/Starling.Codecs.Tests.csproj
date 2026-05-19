@@ -5,7 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="MSTest" />
-    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="AwesomeAssertions" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Starling.Codecs\Starling.Codecs.csproj" />

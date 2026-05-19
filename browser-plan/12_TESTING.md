@@ -10,7 +10,7 @@
 | Concern | Tool | Version | Notes |
 |---|---|---|---|
 | Unit/integration | xUnit v3 | 1.0.x | Faster + better isolation than v2 |
-| Assertions | FluentAssertions | 6.12.x | Optional; raw xUnit also fine |
+| Assertions | AwesomeAssertions | 9.4.x | Optional; raw xUnit also fine |
 | Coverage | `coverlet.collector` | 6.x | XPlat |
 | Benchmarks | BenchmarkDotNet | 0.14.x | RyuJIT + Tiered |
 | Fuzzing | SharpFuzz | 2.x | LibFuzzer-based via .NET Native |

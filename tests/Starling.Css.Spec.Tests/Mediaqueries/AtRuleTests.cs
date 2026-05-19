@@ -2,7 +2,7 @@
 // Source: testdata/webref/css/mediaqueries.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Parser;
 using Starling.Css.Media;
 

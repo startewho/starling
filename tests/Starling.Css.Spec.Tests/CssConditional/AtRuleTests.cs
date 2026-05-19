@@ -2,7 +2,7 @@
 // Source: testdata/webref/css/css-conditional.json
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Css.Parser;
 using Starling.Css.Media;
 using Starling.Css.Cascade;

@@ -1,5 +1,5 @@
 using System.Net;
-using FluentAssertions;
+using AwesomeAssertions;
 using Starling.Net.Dns;
 namespace Starling.Net.Tests.Dns;
 
