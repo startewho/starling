@@ -4,7 +4,7 @@ milestone: M5
 status: "complete"
 claimed_by: "agent-copilot-claude-opus-4.7"
 claimed_at: "2026-05-19T15:11:45Z"
-completed_at: "2026-05-19T15:40:00Z"
+completed_at: "2026-05-19T15:16:45Z"
 branch: "main"
 depends_on:
   - wp:M1-07-css-cascade
@@ -113,3 +113,4 @@ the transition completes.
   on `wp:M5-css-multi-layer-transitions` (tracked separately because it
   needs `CssValueList` top-level comma splitting in the cascade).
   (agent-copilot-claude-opus-4.7)
+- 2026-05-19T15:16:45Z — merged; complete
