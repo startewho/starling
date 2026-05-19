@@ -1,10 +1,10 @@
 ---
 id: wp:M5-css-04-transitions-engine
 milestone: M5
-status: available
-claimed_by: ""
-claimed_at: ""
-branch: main
+status: "claimed"
+claimed_by: "agent-copilot-claude-opus-4.7"
+claimed_at: "2026-05-19T15:11:45Z"
+branch: "main"
 depends_on:
   - wp:M1-07-css-cascade
 subsystem: Starling.Css
@@ -66,3 +66,4 @@ the transition completes.
 ## Handoff log
 
 - 2026-05-19T02:23Z — created (agent-copilot-claude-opus-4.7)
+- 2026-05-19T15:11:45Z — claimed by agent-copilot-claude-opus-4.7, working on main
