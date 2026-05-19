@@ -10,6 +10,7 @@ subsystem: Starling.Loop
 plan_refs:
   - browser-plan/10_WEB_APIS.md
   - browser-plan/13_MILESTONES.md#m5-avalonia-shell-interactivity-polish
+completed_at: "2026-05-19T15:44:54Z"
 ---
 
 # wp:M5-css-08-rAF-event-loop — requestAnimationFrame in the event loop
@@ -83,3 +84,4 @@ spec requires.
     `DisplayListBuilderTests.Underlined_link_emits_text_and_underline_fill`)
     — no regressions.
   * Engine wiring deferred to wp:M5-css-10 (now unblocked).
+- 2026-05-19T15:44:54Z — merged; complete
