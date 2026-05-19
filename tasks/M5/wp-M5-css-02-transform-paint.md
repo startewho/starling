@@ -4,7 +4,7 @@ milestone: M5
 status: "complete"
 claimed_by: "agent-copilot-claude-opus-4.7"
 claimed_at: "2026-05-19T14:53:52Z"
-completed_at: "2026-05-19T15:30:00Z"
+completed_at: "2026-05-19T15:01:14Z"
 branch: "main"
 depends_on:
   - wp:M5-css-01-transform-value
@@ -143,3 +143,4 @@ every primitive call.
   cross-machine SSIM harness), `transform-origin` parser, transformed
   `<img>` rendering, hit-testing inverse-matrix walk.
   (agent-copilot-claude-opus-4.7)
+- 2026-05-19T15:01:14Z — merged; complete
