@@ -2,7 +2,7 @@
 id: "wp:M3-02c-js-parser-classes-modules"
 parent: "wp:M3-02-js-parser"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-copilot-claude-opus-4.7-modules"
 claimed_at: "2026-05-19T21:14:48Z"
 branch: "main"
@@ -14,6 +14,7 @@ subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#parser"
   - "browser-plan/14_AGENT_TASKS.md#wpm3-02-js-parser"
+completed_at: "2026-05-19T21:21:59Z"
 ---
 
 # wp:M3-02c — JS parser: ES modules (import / export)
@@ -64,3 +65,4 @@ this sub-task is purely modules.
   that 02c was unfiled in `wp:M3-02-js-parser`. Reduced scope to
   modules only because classes/async/yield are already in the parser.
 - 2026-05-19T21:14:48Z — claimed by agent-copilot-claude-opus-4.7-modules, working on main
+- 2026-05-19T21:21:59Z — merged; complete
