@@ -50,6 +50,8 @@ public sealed class JsRuntime
         SetCtor.Install(Realm);
         WeakMapCtor.Install(Realm);
         WeakSetCtor.Install(Realm);
+        WeakRefCtor.Install(Realm);                          // B4-6
+        FinalizationRegistryCtor.Install(Realm, this);       // B4-6
         Globals.Install(Realm);
         MathObj.Install(Realm);
         JsonObj.Install(Realm);
@@ -80,7 +82,43 @@ public sealed class JsRuntime
     /// <see cref="JsVm.Run(Tessera.Js.Bytecode.Chunk)"/>; embedders running
     /// scripts via a custom path can invoke this explicitly. No-op when a
     /// host scheduler is installed — the host pumps its own loop.</summary>
-    public void DrainMicrotasks() => Realm.Microtasks.DrainAll();
+    /// <remarks>
+    /// B4-6: after the drain loop empties, we run a FinalizationRegistry
+    /// cleanup pass against every live registry — collected targets schedule
+    /// their cleanup callbacks via the microtask queue. We loop on the drain
+    /// so callbacks enqueued by the cleanup pass also fire. Finally, the
+    /// realm's WeakRef "kept alive" set is cleared so subsequent turns can
+    /// observe target reclamation.
+    /// </remarks>
+    public void DrainMicrotasks()
+    {
+        Realm.Microtasks.DrainAll();
+        // B4-6: cleanup pass + secondary drain to flush callbacks the pass
+        // enqueued. Bounded — only run a cleanup pass once per outer drain
+        // because per-turn cadence is sufficient for any observable contract.
+        RunFinalizationCleanupPass();
+        Realm.Microtasks.DrainAll();
+        Realm.KeptAlive.Clear();
+    }
+
+    /// <summary>Walk every live <see cref="JsFinalizationRegistry"/> attached
+    /// to the realm and schedule cleanup callbacks for collected targets.
+    /// Prunes dead weak handles from <see cref="JsRealm.FinalizationRegistries"/>
+    /// in the same pass so the list doesn't grow without bound.</summary>
+    private void RunFinalizationCleanupPass()
+    {
+        var registries = Realm.FinalizationRegistries;
+        if (registries.Count == 0) return;
+        for (var i = registries.Count - 1; i >= 0; i--)
+        {
+            if (!registries[i].TryGetTarget(out var fr))
+            {
+                registries.RemoveAt(i);
+                continue;
+            }
+            fr.RunCleanupPass();
+        }
+    }
 
     /// <summary>Lazily-allocated primary VM used by <see cref="WithActiveVm"/>
     /// when there's no script-driven VM on the stack. Held privately so it

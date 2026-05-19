@@ -82,14 +82,21 @@ public static class WindowBinding
             PropertyDescriptor.Data(JsValue.Object(global), writable: true, enumerable: true, configurable: true));
         global.DefineOwnProperty("document",
             PropertyDescriptor.Data(JsValue.Object(docWrapper), writable: true, enumerable: true, configurable: true));
-        // Force a stable Location object. Stored as a data property so bare
-        // `location` (Opcode.LoadGlobal, which goes through the data-only
-        // JsObject.Get fast path) sees the object — accessor descriptors on
-        // the global return undefined under that opcode. Cross-document
-        // navigation via assignment is wired in B5-3+.
-        global.DefineOwnProperty("location",
-            PropertyDescriptor.Data(JsValue.Object(LocationObjectFor(realm, document)),
-                writable: true, enumerable: true, configurable: true));
+        // `location` is exposed as an accessor on the global so reads always
+        // resolve through LocationObjectFor (which caches per document). The
+        // VM's LoadGlobal now routes through AbstractOperations.Get so the
+        // getter is invoked correctly (was previously a data-property
+        // workaround for the gap:opcode-fast-path-bypasses-accessors bug).
+        // Cross-document navigation via assignment is wired in B5-3+.
+        EventTargetBinding.DefineAccessor(realm, global, "location",
+            (_, _) => JsValue.Object(LocationObjectFor(realm, document)),
+            (_, args) =>
+            {
+                var target = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                realm.ConsoleSink(ConsoleLevel.Warn,
+                    $"location assignment ignored (navigation not yet wired): {target}");
+                return JsValue.Undefined;
+            });
         global.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(""), writable: true, enumerable: true, configurable: true));
         global.DefineOwnProperty("navigator",

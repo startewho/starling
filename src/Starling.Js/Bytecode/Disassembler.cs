@@ -57,6 +57,12 @@ public static class Disassembler
                 case Opcode.LoadLocal:
                 case Opcode.StoreLocal:
                 case Opcode.DeclareLocal:
+                case Opcode.InitCellLocal:
+                case Opcode.LoadCellLocal:
+                case Opcode.StoreCellLocal:
+                case Opcode.PromoteParamCell:
+                case Opcode.StoreUpvalue:
+                case Opcode.LoadUpvalueCell:
                 case Opcode.Call:
                 case Opcode.CallMethod:
                 case Opcode.New:

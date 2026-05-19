@@ -34,6 +34,35 @@ public enum Opcode : byte
     StoreLocal,     // [u8 slot] → pop value, store to local slot
     DeclareLocal,   // [u8 slot] → make slot live (initialized to undefined)
 
+    // ----- Captured locals (gap:closure-write-back / wp:M3-04c2) -----
+    /// <summary>[u8 slot] — allocate a fresh <c>Cell { Value = Undefined }</c>
+    /// and store it as the slot's value. Emitted in place of
+    /// <see cref="DeclareLocal"/> for any local whose binding is referenced
+    /// by a nested function.</summary>
+    InitCellLocal,
+    /// <summary>[u8 slot] — read the cell stored in the slot, push
+    /// <c>cell.Value</c>. Replaces <see cref="LoadLocal"/> for captured
+    /// reads in the function that owns the binding.</summary>
+    LoadCellLocal,
+    /// <summary>[u8 slot] — pop value, read the cell stored in the slot,
+    /// set <c>cell.Value = value</c>. Replaces <see cref="StoreLocal"/> for
+    /// captured writes in the function that owns the binding.</summary>
+    StoreCellLocal,
+    /// <summary>[u8 slot] — read the current slot value, wrap it in a fresh
+    /// <see cref="Tessera.Js.Runtime.Cell"/>, and store the cell back in
+    /// the slot. Emitted at function entry for captured parameters whose
+    /// values land in the slot by the VM's argument-copy step.</summary>
+    PromoteParamCell,
+    /// <summary>[u8 idx] — pop value, set <c>cell.Value = value</c> on the
+    /// upvalue at <c>idx</c>. Used by inner functions to
+    /// write back to a captured outer binding.</summary>
+    StoreUpvalue,
+    /// <summary>[u8 idx] — push the upvalue cell itself (as a JsValue) so
+    /// it can be re-captured by a further-nested closure or class. The
+    /// regular <see cref="LoadUpvalue"/> dereferences through the cell;
+    /// this opcode hands the cell off intact.</summary>
+    LoadUpvalueCell,
+
     // ----- Globals (for free identifiers / Test262 host bindings) -----
     LoadGlobal,     // [u16 nameIdx] → push global by name
     StoreGlobal,    // [u16 nameIdx] → pop value, store global
