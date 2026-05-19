@@ -94,3 +94,4 @@ independently mergeable to `main` without breaking the running engine.
   updated to build a `DecodedImage`. `dotnet build` + `dotnet test` green;
   7768 tests pass, no count delta; image-paint goldens byte-exact (no pixel
   change). `06d-codecs` and `06i-skia-backend` now unblocked.
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

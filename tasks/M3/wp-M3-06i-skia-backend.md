@@ -106,3 +106,4 @@ in `06j`).
     valid 800x600 RGBA PNG. Skia output is plausible (0.37% non-white text vs
     ImageSharp's 0.33%); 0.51% of pixels differ — expected GPU/AA divergence,
     goldens re-baselined in 06j.
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

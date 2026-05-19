@@ -67,7 +67,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
         _webFonts = webFonts;
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _useWebGpu = useWebGpu;
-        _fontCollection = ImageSharpFontLookup.LoadCollection();
+        _fontCollection = ImageSharpFontLookup.LoadCollection(webFonts);
     }
 
     public string Name => _useWebGpu ? "imagesharp-webgpu" : "imagesharp";

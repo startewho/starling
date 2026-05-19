@@ -100,3 +100,4 @@ removes that workaround.
   build` + `dotnet test` green (Skia.Tests 3/3, Paint.Tests 33/33,
   Engine.Tests 79/79, 0 skipped). Link line in `native/shim/CMakeLists.txt`
   unchanged.
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

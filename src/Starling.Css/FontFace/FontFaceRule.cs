@@ -32,7 +32,7 @@ public sealed record LocalFontSource(string Name) : FontFaceSource;
 /// <summary>
 /// <c>src: url("file.woff2") format("woff2")</c> — refer to a font fetched
 /// from a URL. <see cref="Format"/> is the optional <c>format()</c> hint;
-/// the fetcher uses it to skip formats Skia can't parse (e.g. WOFF2 today)
-/// before paying for the request.
+/// the fetcher uses it to skip formats the paint stack can't parse (e.g. a
+/// `format("svg")` source) before paying for the request.
 /// </summary>
 public sealed record UrlFontSource(string Url, string? Format) : FontFaceSource;

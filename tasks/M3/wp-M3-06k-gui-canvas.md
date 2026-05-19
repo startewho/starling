@@ -155,3 +155,4 @@ laid-out box tree instead of the native MAUI view tree. Delete
   packaged `Tessera.app` was smoke-launched — it starts and stays running, so
   the native dylib resolves under the bundle layout. GUI interaction itself was
   not exercised headlessly (no harness for it).
+- 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

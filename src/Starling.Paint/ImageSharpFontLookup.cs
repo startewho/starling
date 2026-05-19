@@ -14,18 +14,22 @@ namespace Tessera.Paint;
 internal static class ImageSharpFontLookup
 {
     /// <summary>
-    /// Loads every embedded TTF/OTF resource from <c>Starling.Paint.dll</c> and
-    /// every system-installed family into a single <see cref="FontCollection"/>.
-    /// Both are needed: the embedded OpenSans is the deterministic fallback,
-    /// and the system collection supplies real Helvetica/Times/Arial faces
-    /// (with their bold/italic variants) so author CSS like
-    /// <c>font-family: "Helvetica Neue", Helvetica, Arial, sans-serif</c>
-    /// resolves to the same face Skia's CoreText path returns.
+    /// Loads every embedded TTF/OTF resource from <c>Starling.Paint.dll</c>,
+    /// every system-installed family, and every <c>@font-face</c>-registered
+    /// SFNT from <paramref name="webFonts"/> into a single
+    /// <see cref="FontCollection"/>. Registration order is bundled →
+    /// web-fonts → system, so an author's <c>@font-face</c> stylesheet wins
+    /// over a same-named system face but cannot override the bundled
+    /// deterministic-fallback OpenSans (which is loaded first under its own
+    /// "Open Sans" family). <paramref name="webFonts"/> may be <c>null</c>
+    /// when the caller has no document context (e.g. the standalone text
+    /// measurer unit tests).
     /// </summary>
-    public static FontCollection LoadCollection()
+    public static FontCollection LoadCollection(FontFaceRegistry? webFonts = null)
     {
         var collection = new FontCollection();
         AddEmbeddedFonts(collection);
+        AddRegisteredWebFonts(collection, webFonts);
         TryAddSystemFonts(collection);
         return collection;
     }
@@ -134,6 +138,31 @@ internal static class ImageSharpFontLookup
         {
             // System fonts unavailable (sandbox, unsupported platform, etc.).
             // Bundled fonts still serve as the fallback.
+        }
+    }
+
+    /// <summary>
+    /// Folds every SFNT registered via <c>@font-face</c> into
+    /// <paramref name="collection"/>. Each face is wrapped in a fresh
+    /// <see cref="MemoryStream"/> because SixLabors.Fonts reads the stream
+    /// during <c>Add</c> and we cannot share a single rewind. Malformed
+    /// entries are logged-and-skipped to match the rest of the loader's
+    /// fail-soft policy.
+    /// </summary>
+    private static void AddRegisteredWebFonts(FontCollection collection, FontFaceRegistry? webFonts)
+    {
+        if (webFonts is null) return;
+        foreach (var sfnt in webFonts.EnumerateRegisteredSfnt())
+        {
+            try
+            {
+                using var stream = new MemoryStream(sfnt.ToArray(), writable: false);
+                collection.Add(stream);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // Malformed face; bundled + system fonts still cover the fallback.
+            }
         }
     }
 }
