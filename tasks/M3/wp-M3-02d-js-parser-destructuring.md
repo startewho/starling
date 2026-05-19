@@ -69,3 +69,4 @@ out of scope; this WP delivers AST + parsing only.
   unfiled 02d sub-task in `wp:M3-02-js-parser`.
 - 2026-05-19T21:14:48Z — claimed by agent-copilot-claude-opus-4.7-destruct, working on main
 - 2026-05-19T21:20:50Z — merged; complete
+- 2026-05-19T21:20:50Z — implementation notes: added new `Patterns.cs` AST and `JsParser.Patterns.cs` parser partial; wired only small hooks in existing parser files for declarations, params, for-in/of, catch, and assignment cover re-interpretation. Assumption: `AssignmentPattern.Target` is typed as `Expression` rather than only `BindingPattern` so identifier defaults and assignment targets can share the same AST; compiler lowering support was updated only enough to preserve existing destructuring runtime tests.
