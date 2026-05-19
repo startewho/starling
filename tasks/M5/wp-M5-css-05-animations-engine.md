@@ -1,10 +1,10 @@
 ---
 id: wp:M5-css-05-animations-engine
 milestone: M5
-status: available
-claimed_by: ""
-claimed_at: ""
-branch: main
+status: "claimed"
+claimed_by: "agent-copilot-claude-opus-4.7"
+claimed_at: "2026-05-19T15:17:03Z"
+branch: "main"
 depends_on:
   - wp:M5-css-03-keyframes-rule
   - wp:M5-css-04-transitions-engine
@@ -63,3 +63,4 @@ Reuses the timing-function and interpolator infrastructure built in
 ## Handoff log
 
 - 2026-05-19T02:23Z — created (agent-copilot-claude-opus-4.7)
+- 2026-05-19T15:17:03Z — claimed by agent-copilot-claude-opus-4.7, working on main
