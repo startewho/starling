@@ -229,6 +229,16 @@ public enum Opcode : byte
     /// receiver/key live across the read.</summary>
     Dup2,
 
+    // ----- for…in (B7-followup-b) -----
+    /// <summary>Pop a value; if it's null or undefined, push an empty
+    /// <see cref="Tessera.Js.Runtime.JsArray"/>. Otherwise coerce to object
+    /// and push a JsArray snapshot of enumerable string keys (own + inherited,
+    /// dedup'd so shadowed names appear once with the most-derived shadowing
+    /// rule, in insertion order per §14.7.5.10 ForIn/OfHeadEvaluation). The
+    /// for…in loop iterates this snapshot, ignoring any later mutation per
+    /// spec.</summary>
+    EnumerateKeys,
+
     // ----- Generators / async (B1b-2c) -----
     /// <summary>[u8 kind] — Suspend the current frame. <c>kind</c>:
     /// 0 = yield (sync generator), 1 = await (async). Pops the yielded /

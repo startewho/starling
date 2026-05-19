@@ -901,6 +901,39 @@ public sealed class JsVm
                     break;
                 }
 
+                case Opcode.EnumerateKeys:
+                {
+                    // §14.7.5.10 ForIn/OfHeadEvaluation step 6: for-in
+                    // snapshots own + inherited enumerable string keys at
+                    // loop entry. Null/undefined silently skip the body
+                    // (spec: return an empty iterator).
+                    var src = Pop();
+                    var snapshot = new JsArray(_runtime.Realm);
+                    if (!src.IsNullish)
+                    {
+                        var obj = AbstractOperations.ToObject(_runtime.Realm, src);
+                        var emitted = new HashSet<string>(StringComparer.Ordinal);
+                        var shadowed = new HashSet<string>(StringComparer.Ordinal);
+                        var current = obj;
+                        while (current is not null)
+                        {
+                            foreach (var k in current.EnumerableKeys())
+                            {
+                                if (shadowed.Contains(k)) continue;
+                                if (emitted.Add(k)) snapshot.Push(JsValue.String(k));
+                            }
+                            // Any own key (enumerable or not) on this level
+                            // shadows same-named keys further up the proto
+                            // chain — per OrdinaryOwnPropertyKeys, all own
+                            // names appear regardless of enumerability.
+                            foreach (var k in current.Keys) shadowed.Add(k);
+                            current = current.Prototype;
+                        }
+                    }
+                    Push(JsValue.Object(snapshot));
+                    break;
+                }
+
                 case Opcode.CallApply:
                 {
                     var argsArrV = Pop();

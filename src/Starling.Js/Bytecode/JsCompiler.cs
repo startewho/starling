@@ -78,6 +78,32 @@ public sealed partial class JsCompiler
     /// storage.</summary>
     private HashSet<string> _capturedNames = new(StringComparer.Ordinal);
 
+    /// <summary>B7-followup-b — open-loop tracking for <c>break</c> /
+    /// <c>continue</c>. Each entry holds the patch lists for jumps targeting
+    /// the loop's continue / break sites; the loop body emits forward
+    /// <see cref="Opcode.Jump"/> instructions and records the operand
+    /// position so the loop's lowering pass can patch them once the
+    /// continue/break PCs are known. <see cref="TryDepthAtEntry"/> records
+    /// the try-frame depth at the loop's entry; a <c>break</c> /
+    /// <c>continue</c> whose enclosing try-depth is greater than this would
+    /// need to run intervening <c>finally</c> blocks (currently
+    /// unsupported — the compiler throws).</summary>
+    private sealed class LoopFrame
+    {
+        public List<int> BreakPatches { get; } = [];
+        public List<int> ContinuePatches { get; } = [];
+        public int TryDepthAtEntry { get; init; }
+    }
+
+    private readonly Stack<LoopFrame> _loops = new();
+
+    /// <summary>B7-followup-b — depth of currently open try-frames in the
+    /// emitted bytecode. Incremented on <see cref="Opcode.EnterTry"/>,
+    /// decremented after the matching cleanup. Used by <c>break</c> /
+    /// <c>continue</c> to detect the (currently-unsupported) cross-finally
+    /// case.</summary>
+    private int _tryDepth;
+
     public JsCompiler() : this(parent: null) { }
 
     private JsCompiler(JsCompiler? parent)
@@ -475,17 +501,25 @@ public sealed partial class JsCompiler
                 }
                 return;
             case WhileStatement w:
-                var loopStart = _b.Position;
-                EmitExpression(w.Test);
-                var jzWhile = _b.EmitJump(Opcode.JumpIfFalse);
-                EmitStatement(w.Body);
-                var jBack = _b.EmitJump(Opcode.Jump);
-                // Patch loop back-edge: jump from end of jBack's operand to loopStart.
-                PatchBackwardJump(jBack, loopStart);
-                _b.PatchJump(jzWhile);
+                EmitWhile(w);
+                return;
+            case DoWhileStatement dw:
+                EmitDoWhile(dw);
+                return;
+            case ForStatement f:
+                EmitFor(f);
                 return;
             case ForOfStatement fo:
                 EmitForOf(fo);
+                return;
+            case ForInStatement fi:
+                EmitForIn(fi);
+                return;
+            case BreakStatement bs:
+                EmitBreakOrContinue(bs.Start, isBreak: true, label: bs.Label);
+                return;
+            case ContinueStatement cs:
+                EmitBreakOrContinue(cs.Start, isBreak: false, label: cs.Label);
                 return;
             case ReturnStatement r:
                 if (r.Argument is null) _b.Emit(Opcode.ReturnUndefined);
@@ -541,6 +575,21 @@ public sealed partial class JsCompiler
         var finallyOperandPos = _b.Position;
         _b.EmitU16Raw(0xFFFF);
 
+        _tryDepth++;
+        try
+        {
+            EmitTryBody(ts, catchOperandPos, finallyOperandPos);
+        }
+        finally
+        {
+            _tryDepth--;
+        }
+    }
+
+    private void EmitTryBody(TryStatement ts, int catchOperandPos, int finallyOperandPos)
+    {
+        var hasHandler = ts.Handler is not null;
+        var hasFinalizer = ts.Finalizer is not null;
         EmitStatement(ts.Block);
         _b.Emit(Opcode.LeaveTry);
         int jumpPastHandler = -1;
@@ -642,6 +691,108 @@ public sealed partial class JsCompiler
         }
     }
 
+    /// <summary>§14.7.3 WhileStatement — emits a label-top / test / body /
+    /// jump-back pattern, routing <c>break</c> and <c>continue</c> through
+    /// the loop frame so nested jumps land at the right targets.</summary>
+    private void EmitWhile(WhileStatement w)
+    {
+        var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
+        _loops.Push(loop);
+        var loopStart = _b.Position;
+        EmitExpression(w.Test);
+        var jzWhile = _b.EmitJump(Opcode.JumpIfFalse);
+        EmitStatement(w.Body);
+        // continue → loopStart.
+        foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, loopStart);
+        var jBack = _b.EmitJump(Opcode.Jump);
+        PatchBackwardJump(jBack, loopStart);
+        _b.PatchJump(jzWhile);
+        // break-target lands here.
+        foreach (var p in loop.BreakPatches) _b.PatchJump(p);
+        _loops.Pop();
+    }
+
+    /// <summary>§14.7.2 DoWhileStatement — body runs once before the test.
+    /// <c>continue</c> jumps to the test; <c>break</c> jumps past the loop.</summary>
+    private void EmitDoWhile(DoWhileStatement dw)
+    {
+        var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
+        _loops.Push(loop);
+        var loopStart = _b.Position;
+        EmitStatement(dw.Body);
+        // continue → test.
+        var testPos = _b.Position;
+        foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, testPos);
+        EmitExpression(dw.Test);
+        var jBack = _b.EmitJump(Opcode.JumpIfTrue);
+        PatchBackwardJump(jBack, loopStart);
+        // break-target.
+        foreach (var p in loop.BreakPatches) _b.PatchJump(p);
+        _loops.Pop();
+    }
+
+    /// <summary>§14.7.4 ForStatement — C-style <c>for (init; test; update) body</c>.
+    /// <c>continue</c> jumps to the update; <c>break</c> jumps past the loop.
+    /// Init may be a VariableDeclaration (var/let/const), an Expression
+    /// (evaluated for side effects), or null. Test and update are both
+    /// optional; an absent test is treated as truthy.</summary>
+    /// <remarks>
+    /// Per spec, <c>for (let i = …; …; …)</c> should create a fresh binding
+    /// per iteration. The current compiler lowers <c>let</c> the same as
+    /// <c>var</c> (per gap:closure-write-back's notes), so this distinction
+    /// doesn't bite yet; closures capturing the loop variable will see the
+    /// final value rather than a per-iteration snapshot. Tracked as a
+    /// follow-up.
+    /// </remarks>
+    private void EmitFor(ForStatement f)
+    {
+        _scopes.Add(new());
+        // 1. Init.
+        switch (f.Init)
+        {
+            case null: break;
+            case VariableDeclaration vd: EmitVarDecl(vd); break;
+            case ExpressionStatement es:
+                EmitExpression(es.Expression);
+                _b.Emit(Opcode.Pop);
+                break;
+            case Expression ie:
+                EmitExpression(ie);
+                _b.Emit(Opcode.Pop);
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"for-loop init '{f.Init.GetType().Name}' not supported");
+        }
+
+        var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
+        _loops.Push(loop);
+
+        var loopStart = _b.Position;
+        int jExit = -1;
+        if (f.Test is not null)
+        {
+            EmitExpression(f.Test);
+            jExit = _b.EmitJump(Opcode.JumpIfFalse);
+        }
+        EmitStatement(f.Body);
+        // continue → update site.
+        var updatePos = _b.Position;
+        foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, updatePos);
+        if (f.Update is not null)
+        {
+            EmitExpression(f.Update);
+            _b.Emit(Opcode.Pop);
+        }
+        var jBack = _b.EmitJump(Opcode.Jump);
+        PatchBackwardJump(jBack, loopStart);
+        if (jExit >= 0) _b.PatchJump(jExit);
+        // break-target.
+        foreach (var p in loop.BreakPatches) _b.PatchJump(p);
+        _loops.Pop();
+        _scopes.RemoveAt(_scopes.Count - 1);
+    }
+
     /// <summary>
     /// §14.7.5 ForIn/OfBodyEvaluation — desugared to the spec iterator loop:
     /// <code>
@@ -657,9 +808,9 @@ public sealed partial class JsCompiler
     ///     pop handle
     ///     IteratorClose(handle)         // no-op when record.Done is true
     /// </code>
-    /// <c>break</c>/<c>continue</c> targeting the for…of land in a follow-up
-    /// when the compiler grows label/break tracking (no other loop in the
-    /// compiler currently supports break/continue either).
+    /// <c>break</c> jumps to the cleanup path so <c>IteratorClose</c> still
+    /// fires (invoking the iterator's <c>return()</c> if defined, per
+    /// §7.4.10). <c>continue</c> jumps to the next IteratorStep.
     /// </summary>
     private void EmitForOf(ForOfStatement fo)
     {
@@ -681,6 +832,9 @@ public sealed partial class JsCompiler
             foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
         }
 
+        var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
+        _loops.Push(loop);
+
         var loopStart = _b.Position;
         _b.Emit(Opcode.LoadLocal, (byte)handleSlot);
         _b.Emit(Opcode.IteratorStep);
@@ -696,18 +850,120 @@ public sealed partial class JsCompiler
         EmitForOfBinding(fo.Left);
         // Body.
         EmitStatement(fo.Body);
+        // continue → loopStart (re-fetch via IteratorStep).
+        foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, loopStart);
         var jBack = _b.EmitJump(Opcode.Jump);
         PatchBackwardJump(jBack, loopStart);
+
+        // break-target: enters the cleanup path WITHOUT the stale sentinel
+        // (break jumps from inside the body where the stack is balanced).
+        // Cleanup is duplicated from the normal-exit path below but with no
+        // initial Pop.
+        foreach (var p in loop.BreakPatches) _b.PatchJump(p);
+        _b.Emit(Opcode.LoadLocal, (byte)handleSlot);
+        _b.Emit(Opcode.IteratorClose);
+        var jPastNormal = _b.EmitJump(Opcode.Jump);
+
         _b.PatchJump(jExit);
         // Stack on exit: [undefined-sentinel]. Pop it.
         _b.Emit(Opcode.Pop);
         // IteratorClose on normal completion is a no-op (record.Done=true)
-        // but we emit the opcode so abrupt completions in M3-05 just stack
-        // it into the cleanup path uniformly.
+        // but we emit the opcode so abrupt completions stack into the
+        // cleanup path uniformly.
         _b.Emit(Opcode.LoadLocal, (byte)handleSlot);
         _b.Emit(Opcode.IteratorClose);
 
+        _b.PatchJump(jPastNormal);
+        _loops.Pop();
         _scopes.RemoveAt(_scopes.Count - 1);
+    }
+
+    /// <summary>§14.7.5 ForIn — iterate enumerable string keys of the
+    /// right-hand side (own + inherited, dedup'd). The key set is snapshotted
+    /// at loop entry per spec, so mutations during iteration don't appear.</summary>
+    private void EmitForIn(ForInStatement fi)
+    {
+        _scopes.Add(new());
+
+        // Materialize the key snapshot. EnumerateKeys handles null/undefined
+        // by yielding an empty array (spec: silently skip the loop body).
+        EmitExpression(fi.Right);
+        _b.Emit(Opcode.EnumerateKeys);
+        var keysSlot = _b.ReserveLocal();
+        _b.Emit(Opcode.StoreLocal, (byte)keysSlot);
+
+        // Iteration counter.
+        var iSlot = _b.ReserveLocal();
+        _b.Emit(Opcode.LoadZero);
+        _b.Emit(Opcode.StoreLocal, (byte)iSlot);
+
+        // Pre-declare LHS bindings.
+        if (fi.Left is VariableDeclaration vd0)
+        {
+            foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+        }
+
+        var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
+        _loops.Push(loop);
+
+        var loopStart = _b.Position;
+        // if (i >= keys.length) break.
+        _b.Emit(Opcode.LoadLocal, (byte)iSlot);
+        _b.Emit(Opcode.LoadLocal, (byte)keysSlot);
+        _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length"));
+        _b.Emit(Opcode.GtEq);
+        var jExit = _b.EmitJump(Opcode.JumpIfTrue);
+
+        // key = keys[i].
+        _b.Emit(Opcode.LoadLocal, (byte)keysSlot);
+        _b.Emit(Opcode.LoadLocal, (byte)iSlot);
+        _b.Emit(Opcode.LoadComputed);
+        // Bind to LHS.
+        EmitForOfBinding(fi.Left);
+        // Body.
+        EmitStatement(fi.Body);
+        // continue → increment.
+        var incPos = _b.Position;
+        foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, incPos);
+        // i++ (use load/add/store; the Inc-update path is not exposed here).
+        _b.Emit(Opcode.LoadLocal, (byte)iSlot);
+        _b.EmitU16(Opcode.LoadConst, _b.AddConstant((double)1));
+        _b.Emit(Opcode.Add);
+        _b.Emit(Opcode.StoreLocal, (byte)iSlot);
+        var jBack = _b.EmitJump(Opcode.Jump);
+        PatchBackwardJump(jBack, loopStart);
+
+        _b.PatchJump(jExit);
+        foreach (var p in loop.BreakPatches) _b.PatchJump(p);
+        _loops.Pop();
+        _scopes.RemoveAt(_scopes.Count - 1);
+    }
+
+    /// <summary>B7-followup-b — emit a forward <see cref="Opcode.Jump"/> for
+    /// <c>break</c> or <c>continue</c> and record the patch position on the
+    /// innermost open loop frame. Labeled break/continue is a follow-up
+    /// (queued under the M3-03 labeled-statement work).</summary>
+    /// <remarks>
+    /// The cross-finally case (a break/continue whose target loop sits
+    /// outside an enclosing try/finally) is NOT yet supported — spec wants
+    /// the intervening finally blocks to run first, mirroring the
+    /// DivertReturnThroughFinally path. For now the compiler throws so
+    /// callers see a clear error instead of silently skipping a finally.
+    /// </remarks>
+    private void EmitBreakOrContinue(Tessera.Js.Lex.JsPosition where, bool isBreak, string? label)
+    {
+        if (label is not null)
+            throw new NotSupportedException(
+                $"labeled '{(isBreak ? "break" : "continue")} {label}' is not yet supported (compiler at {where.Line}:{where.Column}).");
+        if (_loops.Count == 0)
+            throw new InvalidOperationException(
+                $"SyntaxError: Illegal {(isBreak ? "break" : "continue")} statement at {where.Line}:{where.Column} (must be inside a loop).");
+        var loop = _loops.Peek();
+        if (_tryDepth > loop.TryDepthAtEntry)
+            throw new NotSupportedException(
+                $"'{(isBreak ? "break" : "continue")}' across an enclosing try/finally is not yet supported (compiler at {where.Line}:{where.Column}).");
+        var patch = _b.EmitJump(Opcode.Jump);
+        (isBreak ? loop.BreakPatches : loop.ContinuePatches).Add(patch);
     }
 
     private void EmitForOfBinding(AstNode left)
