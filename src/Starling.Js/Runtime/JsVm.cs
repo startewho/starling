@@ -282,6 +282,19 @@ public sealed class JsVm
                     Push(upvalues[idx]);
                     break;
                 }
+                // §14.7.4.4 CreatePerIterationEnvironment — read the cell in
+                // `slot`, allocate a fresh Cell with the same value, write
+                // it back. Closures formed in the upcoming iteration body
+                // capture the new cell; previous iterations' closures retain
+                // theirs, giving each iteration its own binding for `let` /
+                // `const` declared in a for-loop init.
+                case Opcode.RefreshLetBinding:
+                {
+                    var slot = ReadU8();
+                    var oldCell = (Cell)locals[slot].AsObject;
+                    locals[slot] = JsValue.Object(new Cell(oldCell.Value));
+                    break;
+                }
 
                 // ----- Globals -----
                 // gap:opcode-fast-path-bypasses-accessors — route global
@@ -1196,7 +1209,29 @@ public sealed class JsVm
                         suspension.ResumeWithThrow = false;
                         throw new JsThrow(resumed);
                     }
+                    if (suspension.ResumeWithReturn)
+                    {
+                        // Caller invoked Generator.return(v) — walk any
+                        // enclosing try/finally frames via the standard
+                        // exception path (see the catch (JsReturnSentinel)
+                        // arm below). At the top of the body the sentinel
+                        // becomes a normal completion with the value as
+                        // the return value.
+                        suspension.ResumeWithReturn = false;
+                        throw new JsReturnSentinel(resumed);
+                    }
                     Push(resumed);
+                    break;
+                }
+                case Opcode.YieldDelegate:
+                {
+                    var iterable = Pop();
+                    if (suspension is null)
+                    {
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                            "yield is only valid in generator functions"));
+                    }
+                    Push(ExecuteYieldDelegate(suspension, iterable));
                     break;
                 }
                 case Opcode.BuildClass:
@@ -1284,7 +1319,144 @@ public sealed class JsVm
                 }
                 if (!handled) rethrow = ex;
             }
+            catch (JsReturnSentinel rs)
+            {
+                // Generator.return(v) injected at a suspension point —
+                // walk enclosing try/finally frames as a Return completion
+                // (mirrors DivertReturnThroughFinally for the synchronous
+                // Return opcode). If nothing diverts it, exit the body
+                // with rs.Value as the return value.
+                if (!DivertReturnThroughFinally(tryStack, rs.Value, ref ip))
+                    return rs.Value;
+            }
             if (rethrow is not null) throw rethrow;
+        }
+    }
+
+    /// <summary>§27.5.3.2 YieldDelegate body — runs the full <c>yield*</c>
+    /// protocol inside a single opcode handler. Forwards the outer
+    /// generator's resume kind (next / return / throw) into the inner
+    /// iterator's matching method on each round-trip with the outer
+    /// caller. Returns the value to push as the result of the yield*
+    /// expression (the inner iterator's final <c>value</c> on done, or
+    /// the value of an inner .return that completes early).</summary>
+    private JsValue ExecuteYieldDelegate(SuspendedFrame suspension, JsValue iterable)
+    {
+        var realm = _runtime.Realm;
+        var record = AbstractOperations.GetIterator(realm, this, iterable);
+        var innerIter = record.Iterator;
+        var nextMethod = record.NextMethod;
+        // Bootstrap: caller's first .next() value (the one already on the
+        // suspension's resume slot, or whatever they sent on the call that
+        // brought us to yield*). The first round we always invoke
+        // inner.next(undefined) — the outer caller's send-value is what
+        // they pass on the .next() that *resumes* yield*, which we have
+        // not yet observed (we're called from inside Suspend's frame).
+        // Per spec §27.5.3.2 step 1, the initial received completion is
+        // NormalCompletion(undefined).
+        JsValue received = JsValue.Undefined;
+        int receivedKind = 0; // 0 = normal, 1 = throw, 2 = return
+
+        while (true)
+        {
+            JsValue innerResult;
+            if (receivedKind == 0)
+            {
+                // Normal completion → inner.next(received)
+                innerResult = AbstractOperations.Call(this, nextMethod, innerIter,
+                    new[] { received });
+            }
+            else if (receivedKind == 1)
+            {
+                // Throw completion → inner.throw(received) if present.
+                var throwM = AbstractOperations.GetMethod(this, innerIter, "throw");
+                if (throwM.IsUndefined || throwM.IsNull)
+                {
+                    // No throw method: close the iterator and re-throw.
+                    AbstractOperations.IteratorClose(this, record, isThrowing: true);
+                    throw new JsThrow(realm.NewTypeError(
+                        "Inner iterator does not have a 'throw' method"));
+                }
+                innerResult = AbstractOperations.Call(this, throwM, innerIter,
+                    new[] { received });
+            }
+            else
+            {
+                // Return completion → inner.return(received) if present.
+                var retM = AbstractOperations.GetMethod(this, innerIter, "return");
+                if (retM.IsUndefined || retM.IsNull)
+                {
+                    // No return method: §27.5.3.2 — close inner with
+                    // Return, then propagate Return(received) out of the
+                    // outer generator body via the sentinel path.
+                    throw new JsReturnSentinel(received);
+                }
+                innerResult = AbstractOperations.Call(this, retM, innerIter,
+                    new[] { received });
+                if (!innerResult.IsObject)
+                    throw new JsThrow(realm.NewTypeError(
+                        "iterator.return() did not return an object"));
+                var doneR = JsValue.ToBoolean(AbstractOperations.Get(this, innerResult.AsObject, "done"));
+                var valR = AbstractOperations.Get(this, innerResult.AsObject, "value");
+                if (doneR)
+                {
+                    // Inner iterator honored the return — propagate
+                    // Return(valR) out of the outer body so its finally
+                    // blocks (if any) still run.
+                    throw new JsReturnSentinel(valR);
+                }
+                // Inner refused to close — yield its value, continue.
+                var resumedR = suspension.WorkerYield(valR);
+                if (suspension.ResumeWithThrow)
+                {
+                    suspension.ResumeWithThrow = false;
+                    received = resumedR;
+                    receivedKind = 1;
+                    continue;
+                }
+                if (suspension.ResumeWithReturn)
+                {
+                    suspension.ResumeWithReturn = false;
+                    received = resumedR;
+                    receivedKind = 2;
+                    continue;
+                }
+                received = resumedR;
+                receivedKind = 0;
+                continue;
+            }
+
+            if (!innerResult.IsObject)
+                throw new JsThrow(realm.NewTypeError(
+                    "iterator.next() did not return an object"));
+            var done = JsValue.ToBoolean(AbstractOperations.Get(this, innerResult.AsObject, "done"));
+            var value = AbstractOperations.Get(this, innerResult.AsObject, "value");
+            if (done)
+            {
+                // Inner finished — yield* evaluates to the inner's final
+                // value. Push and exit the opcode.
+                return value;
+            }
+
+            // Suspend the outer generator with the inner's yielded value.
+            var resumed = suspension.WorkerYield(value);
+            if (suspension.ResumeWithThrow)
+            {
+                suspension.ResumeWithThrow = false;
+                received = resumed;
+                receivedKind = 1;
+            }
+            else if (suspension.ResumeWithReturn)
+            {
+                suspension.ResumeWithReturn = false;
+                received = resumed;
+                receivedKind = 2;
+            }
+            else
+            {
+                received = resumed;
+                receivedKind = 0;
+            }
         }
     }
 
@@ -1829,6 +2001,18 @@ public sealed class JsVm
 /// <summary>Thrown by the VM when a script-level <c>throw</c> is uncaught.</summary>
 #pragma warning disable RCS1194
 public sealed class JsThrow(JsValue value) : Exception($"uncaught: {value}")
+{
+    public JsValue Value { get; } = value;
+}
+
+/// <summary>Internal sentinel raised inside a generator worker thread when
+/// the caller invokes <c>.return(v)</c> at a suspension point. Walks any
+/// enclosing try/finally frames via the standard exception-handling path
+/// (treated as a Return completion), and at the top of the generator body
+/// produces a normal completion with <see cref="Value"/> as the return
+/// value. Mirrors the synchronous-return path that
+/// <c>DivertReturnThroughFinally</c> uses for the <c>Return</c> opcode.</summary>
+internal sealed class JsReturnSentinel(JsValue value) : Exception("generator return sentinel")
 {
     public JsValue Value { get; } = value;
 }

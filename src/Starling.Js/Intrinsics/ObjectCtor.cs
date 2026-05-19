@@ -591,10 +591,12 @@ public static class ObjectCtor
         var o = AbstractOperations.ToObject(realm, thisV);
         var defaultTag = DefaultToStringTag(realm, o);
 
-        // Consult @@toStringTag on the receiver's prototype chain (spec uses
-        // Get which walks the chain). Only string values override.
+        // Consult @@toStringTag on the receiver's prototype chain. Use the
+        // AO-level Get so accessor descriptors (e.g. %TypedArray%.prototype's
+        // toStringTag getter — §23.2.3.34) fire with the correct receiver.
+        // Only string values override.
         var tag = defaultTag;
-        var tagVal = o.Get(SymbolCtor.ToStringTag);
+        var tagVal = AbstractOperations.Get(realm.ActiveVm, o, JsPropertyKey.Symbol(SymbolCtor.ToStringTag));
         if (tagVal.Kind == JsValueKind.String) tag = tagVal.AsString;
 
         return JsValue.String("[object " + tag + "]");

@@ -43,12 +43,9 @@ public static class TypedArrayCtors
         ArrayBufferCtor.DefineData(ctor, "BYTES_PER_ELEMENT", JsValue.Number(JsTypedArray.BytesPerElementOf(kind)), false, false, false);
         ArrayBufferCtor.DefineData(proto, "constructor", JsValue.Object(ctor), true, false, true);
         ArrayBufferCtor.DefineData(proto, "BYTES_PER_ELEMENT", JsValue.Number(JsTypedArray.BytesPerElementOf(kind)), false, false, false);
-        // Spec deviation: §23.2.3.34 defines @@toStringTag on %TypedArray%.prototype
-        // as an accessor that reads the receiver's [[TypedArrayName]] internal slot.
-        // We install a per-prototype data property of the concrete name — observable
-        // result is identical for Object.prototype.toString.call(new Uint8Array()).
-        proto.DefineOwnProperty(SymbolCtor.ToStringTag,
-            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
+        // §23.2.3.34: @@toStringTag lives on %TypedArray%.prototype as an
+        // accessor, not on each concrete prototype — installed once in
+        // InstallSharedPrototype below.
         ArrayBufferCtor.DefineMethod(ctor, "from", (thisV, args) => From(realm, proto, kind, args), 1);
         ArrayBufferCtor.DefineMethod(ctor, "of", (thisV, args) => Of(realm, proto, kind, args), 0);
 
@@ -164,6 +161,18 @@ public static class TypedArrayCtors
         ArrayBufferCtor.DefineMethod(proto, "toString", (thisV, args) => Join(realm, thisV, args), 0);
         ArrayBufferCtor.DefineMethod(proto, "values", (thisV, args) => Values(realm, thisV), 0);
         ArrayBufferCtor.DefineMethod(proto, "with", (thisV, args) => With(realm, thisV, args), 2);
+
+        // §23.2.3.34 get %TypedArray%.prototype[@@toStringTag] — accessor
+        // returning the receiver's [[TypedArrayName]] (Kind-derived name) or
+        // undefined when the receiver isn't a TypedArray.
+        var tagGetter = new JsNativeFunction(realm, "get [Symbol.toStringTag]", 0, (thisV, _) =>
+        {
+            if (thisV.IsObject && thisV.AsObject is JsTypedArray ta)
+                return JsValue.String(ta.ConstructorName);
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        proto.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Accessor(tagGetter, setter: null, enumerable: false, configurable: true));
     }
 
     private static JsTypedArray ThisTA(JsRealm realm, JsValue thisV)
