@@ -89,6 +89,9 @@ blocker; defer to M6 wp:M3-09.
 | gap:closure-write-back — live closure bindings | ✅ | `src/Starling.Js/Runtime/{Cell,JsFunction,JsVm,JsRuntime,JsRealm}.cs`, `src/Starling.Js/Bytecode/{Opcode,Chunk,Disassembler,JsCompiler,JsCompiler.CaptureAnalysis}.cs`, `tests/Starling.Js.Tests/Runtime/{JsClosureWriteBackTests,JsClosureTests}.cs` (16 tests; cells only for captured slots) |
 | gap:opcode-fast-path accessors | ✅ | `src/Starling.Js/Runtime/JsVm.cs` (LoadGlobal/StoreGlobal/SpreadInto/RestObject/RestArray now route through AO), `src/Starling.Bindings/WindowBinding.cs` (location accessor revert), `tests/Starling.Js.Tests/Runtime/AccessorOpcodeTests.cs` (11 tests) |
 | B4-6 — WeakRef + FinalizationRegistry | ✅ | `src/Starling.Js/Runtime/{JsWeakRef,JsFinalizationRegistry,JsRealm,JsRuntime}.cs`, `src/Starling.Js/Intrinsics/{WeakRefCtor,FinalizationRegistryCtor}.cs`, `tests/Starling.Js.Tests/Intrinsics/{WeakRefTests,FinalizationRegistryTests}.cs` (18 tests; KeptAlive + cleanup at drain-end; GC-timing tests skipped) |
+| gap:operator-bundle — instanceof/in/delete/compound-assign | ✅ | `src/Starling.Js/Bytecode/{Opcode,JsCompiler}.cs` (4 new opcodes + EmitDelete + Dup2 on compound-assign), `src/Starling.Js/Runtime/{JsVm,JsObject,AbstractOperations}.cs` (HasProperty + Has chain-walk via HasOwn), `tests/Starling.Js.Tests/Runtime/JsOperatorsGapTests.cs` (44 tests) |
+| gap:script-top-var-not-global | ✅ | `src/Starling.Js/Bytecode/{Opcode,JsCompiler,Disassembler}.cs` (DeclareGlobalVar opcode, idempotent CreateGlobalVarBinding), `src/Starling.Js/Runtime/JsVm.cs`, `tests/Starling.Js.Tests/Runtime/JsScriptTopVarTests.cs` (13 tests) |
+| @@toStringTag — Object.prototype.toString | ✅ | `src/Starling.Js/Intrinsics/{ObjectCtor,SymbolCtor,PromiseCtor,ArrayBufferCtor,DataViewCtor,MathObj,JsonObj,TypedArrayCtors}.cs` (spec-faithful Object.prototype.toString + 8 new tags), `tests/Starling.Js.Tests/Intrinsics/ToStringTagTests.cs` (27 tests) |
 
 ### B0 surface delivered
 
@@ -179,9 +182,11 @@ session. Other rows in the queue are free for other agents/sessions.
 | **gap:closure-write-back** | claude-cody (agent) | complete (2026-05-19) |
 | **gap:opcode-fast-path accessors** | claude-cody (agent) | complete (2026-05-19) |
 | **B4-6** WeakRef + FinalizationRegistry | claude-cody (agent) | complete (2026-05-19) |
-| **gap:operator-bundle** instanceof/in/delete/compound-assign | claude-cody (agent) | in progress (2026-05-19) |
-| **gap:script-top-var-not-global** | claude-cody (agent) | in progress (2026-05-19) |
-| **@@toStringTag** Object.prototype.toString | claude-cody (agent) | in progress (2026-05-19) |
+| **gap:operator-bundle** instanceof/in/delete/compound-assign | claude-cody (agent) | complete (2026-05-19) |
+| **gap:script-top-var-not-global** | claude-cody (agent) | complete (2026-05-19) |
+| **@@toStringTag** Object.prototype.toString | claude-cody (agent) | complete (2026-05-19) |
+| **B1b-2c** async/await + generators | claude-cody (agent) | in progress (2026-05-19) |
+| **cleanup:un-rewrite** dodge tests | claude-cody (agent) | in progress (2026-05-19) |
 
 ## Work queue
 
