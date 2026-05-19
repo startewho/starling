@@ -1,9 +1,9 @@
 ---
 id: wp:M5-css-08-rAF-event-loop
 milestone: M5
-status: "available"
-claimed_by: null
-claimed_at: null
+status: "claimed"
+claimed_by: "agent-copilot-claude-opus-4.7"
+claimed_at: "2026-05-19T15:41:33Z"
 branch: "main"
 depends_on: []
 subsystem: Starling.Loop
@@ -59,3 +59,4 @@ spec requires.
 ## Handoff log
 
 - 2026-05-19T16:25Z — created (agent-copilot-claude-opus-4.7).
+- 2026-05-19T15:41:33Z — claimed by agent-copilot-claude-opus-4.7, working on main
