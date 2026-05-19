@@ -2,10 +2,10 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using SixLabors.ImageSharp;
-using Tessera.Common.Encoding;
+using Starling.Common.Encoding;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Drives a curated subset of <see href="https://github.com/web-platform-tests/wpt/tree/master/encoding"/>
@@ -32,7 +32,7 @@ public class EngineEncodingTests
         // Ensure the engine static ctor has run so CodePages is
         // registered before we call WhatwgEncodingLabels.TryGetEncoding
         // (xunit may execute test classes in any order).
-        _ = new TesseraEngine();
+        _ = new StarlingEngine();
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class EngineEncodingTests
             // Content-Type header so we exercise ExtractCharset → label
             // normalisation → TryResolveEncoding.
             var contentType = $"text/html; charset={fixture.Label}";
-            var encoding = TesseraEngine.ResolveEncoding(contentType, bytes);
+            var encoding = StarlingEngine.ResolveEncoding(contentType, bytes);
             var actual = encoding.GetString(bytes);
             if (!string.Equals(actual, fixture.Expected, StringComparison.Ordinal))
             {
@@ -114,7 +114,7 @@ public class EngineEncodingTests
         var bytes = System.Text.Encoding.Latin1.GetBytes(html);
 
         // No HTTP charset → falls through to meta sniff.
-        var encoding = TesseraEngine.ResolveEncoding(contentType: null, bytes);
+        var encoding = StarlingEngine.ResolveEncoding(contentType: null, bytes);
         var decoded = encoding.GetString(bytes);
 
         decoded.Should().Contain("It’s working");
@@ -144,10 +144,10 @@ public class EngineEncodingTests
             return combined;
         });
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://localhost:{server.Port}/win1252",
                 new RenderOptions(new Size(320, 180), 16f),

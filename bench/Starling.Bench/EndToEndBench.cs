@@ -1,12 +1,12 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Css.Cascade;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Html;
-using Tessera.Layout;
-using Tessera.Paint.DisplayList;
+using Starling.Css.Cascade;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Html;
+using Starling.Layout;
+using Starling.Paint.DisplayList;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // Full HTML+CSS → DOM → cascade → layout → display list pipeline on the
 // vendored `nginx.org` snapshot (the same fixture the M2 golden gate uses).

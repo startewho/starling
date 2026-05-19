@@ -1,9 +1,9 @@
 using System.Buffers;
 using System.Globalization;
 using System.Text;
-using TesseraUrl = global::Tessera.Url.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Net.Http.H1;
+namespace Starling.Net.Http.H1;
 
 /// <summary>
 /// Serializes a <see cref="HttpRequest"/> into a wire-format HTTP/1.1 message
@@ -18,7 +18,7 @@ namespace Tessera.Net.Http.H1;
 /// </remarks>
 public sealed class H1RequestWriter
 {
-    public string UserAgent { get; init; } = "Starling/0.1 (https://github.com/anthropic-tessera)";
+    public string UserAgent { get; init; } = "Starling/0.1 (https://github.com/anthropic-starling)";
 
     public string AcceptHeader { get; init; } =
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
@@ -112,7 +112,7 @@ public sealed class H1RequestWriter
     /// form we emit for direct connections, not proxies) that is the path
     /// plus the query, with the path defaulting to "/" if empty.
     /// </summary>
-    internal static string BuildRequestTarget(TesseraUrl url)
+    internal static string BuildRequestTarget(StarlingUrl url)
     {
         var path = string.IsNullOrEmpty(url.Path) ? "/" : url.Path;
         if (!path.StartsWith('/')) path = "/" + path;
@@ -123,7 +123,7 @@ public sealed class H1RequestWriter
     /// Build the Host header per RFC 9112 §3.2 / §7.2. Includes the explicit
     /// port if the URL specifies one that differs from the scheme default.
     /// </summary>
-    internal static string BuildHostHeader(TesseraUrl url)
+    internal static string BuildHostHeader(StarlingUrl url)
     {
         if (string.IsNullOrEmpty(url.Host))
             throw new ArgumentException("URL has no host — cannot build Host header.", nameof(url));

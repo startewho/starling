@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Bindings.Tests;
+namespace Starling.Bindings.Tests;
 
 public sealed class PerformanceTests
 {

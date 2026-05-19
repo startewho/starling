@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>ECMA-262 §20.4 Symbol Objects: Symbol factory, registry, prototype, and well-known symbols.</summary>
 public static class SymbolCtor

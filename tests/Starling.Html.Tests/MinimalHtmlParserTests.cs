@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Dom;
+using Starling.Dom;
 using Xunit;
 
-namespace Tessera.Html.Tests;
+namespace Starling.Html.Tests;
 
 public class MinimalHtmlParserTests
 {

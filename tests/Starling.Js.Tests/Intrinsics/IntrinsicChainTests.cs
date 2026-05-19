@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Intrinsics;
+namespace Starling.Js.Tests.Intrinsics;
 
 /// <summary>
 /// Regression tests for the B2-2 follow-up sweep that migrated every intrinsic

@@ -10,7 +10,7 @@ branch: "main"
 depends_on:
   - "wp:M3-06j-skia-fonts"
 blocks: []
-subsystem: "Tessera.Gui"
+subsystem: "Starling.Gui"
 plan_refs:
   - "browser-plan/01_ARCHITECTURE.md#project-layout"
   - "browser-plan/08_FONTS_PAINT.md#display-list"
@@ -38,18 +38,18 @@ laid-out box tree instead of the native MAUI view tree. Delete
 
 ## Outputs
 
-- `src/Tessera.Gui/Platforms/MacCatalyst/SkiaCanvasView.cs` — a `UIView` backed
+- `src/Starling.Gui/Platforms/MacCatalyst/SkiaCanvasView.cs` — a `UIView` backed
   by a `CAMetalLayer`; Graphite renders straight into it.
 - A MAUI `SkiaCanvasViewHandler` registering the canvas view.
 - Shim addition: `ts_surface_create_from_metal_layer(...)` (in
-  `native/shim/tessera_skia.{h,cpp}` + its `Tessera.Skia` binding).
-- `src/Tessera.Gui/MainPage.cs` — heavily edited: render flow becomes
+  `native/shim/starling_skia.{h,cpp}` + its `Starling.Skia` binding).
+- `src/Starling.Gui/MainPage.cs` — heavily edited: render flow becomes
   `Engine.LayoutPageAsync → BlockBox → DisplayListBuilder.Build →
   SkiaGraphiteBackend` into the layer-backed surface; hover / link-activation /
   drag-select / Cmd-F re-derived from the box tree; `:hover` re-cascade moves
   from per-`Label` `PointerGestureRecognizer` to a single canvas-level pointer
   handler that hit-tests the box tree and repaints.
-- **Deleted:** `src/Tessera.Gui/BoxTreeRenderer.cs`.
+- **Deleted:** `src/Starling.Gui/BoxTreeRenderer.cs`.
 
 ## Acceptance
 
@@ -83,13 +83,13 @@ laid-out box tree instead of the native MAUI view tree. Delete
 
   **Presentation approach — offscreen render + bitmap surface (v1, not CAMetalLayer).**
   Took the lower-risk self-contained path the WP recommended over Phase 7's
-  `CAMetalLayer` shim. `src/Tessera.Gui/PageRenderer.cs` builds a `DisplayList`
+  `CAMetalLayer` shim. `src/Starling.Gui/PageRenderer.cs` builds a `DisplayList`
   from the laid-out box tree with `DisplayListBuilder` and rasterizes it with
   `SkiaGraphiteBackend` — the *exact* pipeline `Painter.RenderDocument` runs
   headless, so headless + GUI now share one paint path. The `RenderedBitmap`
   (straight RGBA8888) is PNG-encoded via ImageSharp and shown in a single MAUI
-  `Image`. **No native, `Tessera.Skia`, or `Tessera.Paint` changes** — entirely
-  within `src/Tessera.Gui/*`. One `SkiaGraphiteBackend` is held for the page's
+  `Image`. **No native, `Starling.Skia`, or `Starling.Paint` changes** — entirely
+  within `src/Starling.Gui/*`. One `SkiaGraphiteBackend` is held for the page's
   lifetime so the expensive Dawn/Graphite context is reused across repaints.
 
   **`BoxTreeRenderer` replaced with** `PageRenderer` (paint) + `BoxHitTester`
@@ -121,20 +121,20 @@ laid-out box tree instead of the native MAUI view tree. Delete
     not reflowed. A faithful re-cascade+re-layout needs a `LayoutEngine` that
     threads the hover `SelectorMatchContext` into its internal `Style.Compute`
     calls — `LayoutEngine`/`Painter` currently do not, and that change is
-    outside this WP's `src/Tessera.Gui/*`-only scope. **Follow-up candidate:**
+    outside this WP's `src/Starling.Gui/*`-only scope. **Follow-up candidate:**
     add a hover-aware re-layout entry point to `Painter`/`LayoutEngine`.
 
   **`DropTransitiveSkiaNative` resolution.** The GUI now legitimately depends on
-  `libtessera_skia.dylib` at runtime, so it must ship inside the `.app`. The old
+  `libstarling_skia.dylib` at runtime, so it must ship inside the `.app`. The old
   target dropped the dylib from *both* the copy set (`_FileNativeReference`) and
   the reidentify set. Root cause of the original failure: MAUI's
   `_InstallNameTool` step fails running `install_name_tool` over the dylib's
   nested `runtimes/<rid>/native/` path. New target `KeepSkiaNativeUnreidentified`
   removes the dylib *only* from `@(_DynamicLibraryToReidentify)` (so
   `install_name_tool` skips it), leaving it in `@(_FileNativeReference)` so it is
-  still copied into `Tessera.app/Contents/MonoBundle/runtimes/osx-arm64/native/`.
+  still copied into `Starling.app/Contents/MonoBundle/runtimes/osx-arm64/native/`.
   Skipping reidentification is safe: the shim is statically linked and is loaded
-  by `Tessera.Skia`'s `NativeLoader` `SetDllImportResolver`, which probes that
+  by `Starling.Skia`'s `NativeLoader` `SetDllImportResolver`, which probes that
   bundle layout directly — it does not need the install-name rewrite. The Remove
   had to move to `AfterTargets="_ComputeDynamicLibrariesToReidentify"
   BeforeTargets="_InstallNameTool"` because that compute target is what
@@ -144,7 +144,7 @@ laid-out box tree instead of the native MAUI view tree. Delete
   path — a `UIView` backed by a `CAMetalLayer` with a new
   `ts_surface_create_from_metal_layer` shim entry point so Graphite→Dawn→Metal
   renders straight into the layer with no GPU→CPU readback and no PNG re-encode —
-  remains future work. It requires `native/shim` + `Tessera.Skia` changes
+  remains future work. It requires `native/shim` + `Starling.Skia` changes
   (out of scope for this GUI-only WP). The current path does a GPU render, a
   pixel readback (already in `SkiaGraphiteBackend.Render`), and a PNG encode per
   repaint; acceptable for v1 but the readback+encode is the obvious next
@@ -152,7 +152,7 @@ laid-out box tree instead of the native MAUI view tree. Delete
 
   **Verification.** Full repo `dotnet build` + `dotnet test` green (15 test
   projects, 0 failures, 0 skipped). The Mac Catalyst project builds and the
-  packaged `Tessera.app` was smoke-launched — it starts and stays running, so
+  packaged `Starling.app` was smoke-launched — it starts and stays running, so
   the native dylib resolves under the bundle layout. GUI interaction itself was
   not exercised headlessly (no harness for it).
 - 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

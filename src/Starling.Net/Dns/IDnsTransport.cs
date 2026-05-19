@@ -1,4 +1,4 @@
-namespace Tessera.Net.Dns;
+namespace Starling.Net.Dns;
 
 /// <summary>
 /// Transport seam for the DNS resolver. Sends a query packet, returns the

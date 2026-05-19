@@ -42,8 +42,8 @@ Other changes (e.g., styled property generators, new compositor APIs) don't affe
 ## Project layout
 
 ```
-src/Tessera.Shell/
-├── Tessera.Shell.csproj
+src/Starling.Shell/
+├── Starling.Shell.csproj
 ├── Program.cs
 ├── App.axaml / App.axaml.cs
 ├── Views/
@@ -174,7 +174,7 @@ public sealed class InputTranslator
 }
 ```
 
-The engine receives `InputEvent`s and dispatches to the appropriate target (element under cursor). Implementation in `Tessera.Engine`.
+The engine receives `InputEvent`s and dispatches to the appropriate target (element under cursor). Implementation in `Starling.Engine`.
 
 Hit testing: the latest `LayoutResult` is kept in the engine. Hit-test by walking the box tree top-down per stacking context order. Result: `Element` (or null).
 
@@ -192,7 +192,7 @@ Keyboard events go to the engine. IME composition (CJK) — v1 simplification: p
 
 ## URL bar
 
-`UrlBar` is a `TextBox` + buttons. On Enter: parse via `Tessera.Url.Url.Parse`. If parse fails, prepend `https://` and retry. If still fails, fall back to a search URL (configurable; default `https://duckduckgo.com/?q=<urlencoded>`).
+`UrlBar` is a `TextBox` + buttons. On Enter: parse via `Starling.Url.Url.Parse`. If parse fails, prepend `https://` and retry. If still fails, fall back to a search URL (configurable; default `https://duckduckgo.com/?q=<urlencoded>`).
 
 ### Autocomplete
 
@@ -208,7 +208,7 @@ New-tab page: a hardcoded `about:new-tab` page generated from a small markdown s
 
 ## History UI
 
-Per `BrowsingContext`, an in-memory list of entries with thumbnails (captured at navigation completion). `HistoryFlyout` displays the last N entries. Full history persisted in `~/.tessera/history.sqlite` — but we can't depend on SQLite native libs. v1: persist a JSON-lines file: `history.jsonl`. JSON serialization via `System.Text.Json` (pure managed).
+Per `BrowsingContext`, an in-memory list of entries with thumbnails (captured at navigation completion). `HistoryFlyout` displays the last N entries. Full history persisted in `~/.starling/history.sqlite` — but we can't depend on SQLite native libs. v1: persist a JSON-lines file: `history.jsonl`. JSON serialization via `System.Text.Json` (pure managed).
 
 ## Downloads
 
@@ -216,11 +216,11 @@ Per `BrowsingContext`, an in-memory list of entries with thumbnails (captured at
 - The user clicks a link whose target response has `Content-Disposition: attachment` or a `Content-Type` we don't handle inline.
 - The user uses the `Save As` action from a context menu.
 
-`DownloadManager` lives in `Tessera.Engine` and uses `Tessera.Net` directly. Writes to the OS Downloads folder (`Environment.GetFolderPath(SpecialFolder.UserProfile) + "/Downloads"`). Notify the shell via events.
+`DownloadManager` lives in `Starling.Engine` and uses `Starling.Net` directly. Writes to the OS Downloads folder (`Environment.GetFolderPath(SpecialFolder.UserProfile) + "/Downloads"`). Notify the shell via events.
 
 ## Settings
 
-`SettingsWindow` with categories: Appearance, Privacy, Network. Persists to `%LOCALAPPDATA%/Tessera/settings.json`.
+`SettingsWindow` with categories: Appearance, Privacy, Network. Persists to `%LOCALAPPDATA%/Starling/settings.json`.
 
 Minimal options for v1:
 - Homepage.
@@ -250,9 +250,9 @@ Implements **agent-discoverable** APIs out of the gate — devtools is a thin vi
 ```csharp
 using Avalonia;
 using Avalonia.ReactiveUI;
-using Tessera.Shell;
+using Starling.Shell;
 
-namespace Tessera.Shell;
+namespace Starling.Shell;
 class Program
 {
     public static int Main(string[] args)
@@ -270,7 +270,7 @@ class Program
 
 ## Headless mode reuses the engine without the shell
 
-`Tessera.Headless` (in [02_PROJECT_SETUP.md](02_PROJECT_SETUP.md#headless-cli-shape)) builds the same `Browser` but no Avalonia. Saves rendered PNGs to disk. This is what test/agent flows use.
+`Starling.Headless` (in [02_PROJECT_SETUP.md](02_PROJECT_SETUP.md#headless-cli-shape)) builds the same `Browser` but no Avalonia. Saves rendered PNGs to disk. This is what test/agent flows use.
 
 ## Cross-platform notes
 
@@ -278,7 +278,7 @@ class Program
 - **macOS**: Avalonia uses Metal. Bundle an `.app` via `dotnet publish -r osx-arm64 --self-contained false`.
 - **Linux**: X11 + Wayland both supported by Avalonia. Font cache may differ; SixLabors.Fonts uses `SystemFonts.Collection` cross-platform.
 
-We don't write any platform-specific code in `Tessera.Shell`. All differences absorbed by Avalonia.
+We don't write any platform-specific code in `Starling.Shell`. All differences absorbed by Avalonia.
 
 ## Packaging
 
@@ -301,7 +301,7 @@ Frame rate target: 60 fps on a 1080p viewport for "moderate" pages (≤2k DOM no
 
 ## Acceptance Tests
 
-- [ ] Launch `Tessera.Shell` on Windows, macOS, Linux. Window opens, shows about:new-tab.
+- [ ] Launch `Starling.Shell` on Windows, macOS, Linux. Window opens, shows about:new-tab.
 - [ ] Type `https://example.com` in URL bar, press Enter, the page renders within 1s on a wired connection.
 - [ ] Multiple tabs: open 5; each is independent; switching is instant.
 - [ ] Back/forward buttons navigate per per-tab history.
@@ -310,4 +310,4 @@ Frame rate target: 60 fps on a 1080p viewport for "moderate" pages (≤2k DOM no
 - [ ] Mouse click on a `<button>` fires `click` event in JS and runs the handler.
 - [ ] Right-click → "Save Image As" downloads the right file with the right MIME type.
 - [ ] Settings persist across restarts.
-- [ ] No process spawns native helpers: process tree shows only `Tessera.Shell` (and one `dotnet` for hosted assembly).
+- [ ] No process spawns native helpers: process tree shows only `Starling.Shell` (and one `dotnet` for hosted assembly).

@@ -1,4 +1,4 @@
-namespace Tessera.Css.Tokenizer;
+namespace Starling.Css.Tokenizer;
 
 public readonly record struct CssToken(
     CssTokenType Type,

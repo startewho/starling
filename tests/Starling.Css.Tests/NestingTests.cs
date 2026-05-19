@@ -1,14 +1,14 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Css.Media;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
+using Starling.Css.Cascade;
+using Starling.Css.Media;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-nesting-1", "https://www.w3.org/TR/css-nesting-1/")]
 
@@ -73,7 +73,7 @@ public sealed class NestingTests
             """));
 
         engine.Compute(a).GetColor(PropertyId.Color).Should().Be(new CssColor(0, 0, 255));
-        engine.Compute(a, new Tessera.Css.Selectors.SelectorMatchContext { HoveredElement = a })
+        engine.Compute(a, new Starling.Css.Selectors.SelectorMatchContext { HoveredElement = a })
             .GetColor(PropertyId.Color).Should().Be(new CssColor(255, 0, 0));
     }
 

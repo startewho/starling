@@ -1,7 +1,7 @@
 using System.Text;
-using Tessera.Html.InputStream;
+using Starling.Html.InputStream;
 
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// WHATWG HTML tokenizer. Partial class — each sub-task (wp:M1-01a…g) adds

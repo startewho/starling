@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §22.1 The String constructor and §22.1.3 String.prototype. Strings are
@@ -288,7 +288,7 @@ public static class StringCtor
         if (args.Length > 0 && RegExpCtor.IsRegExp(args[0]))
         {
             var re = (JsRegExp)args[0].AsObject;
-            if (replaceAll && (re.Flags & Tessera.Js.RegExp.RegexFlags.Global) == 0)
+            if (replaceAll && (re.Flags & Starling.Js.RegExp.RegexFlags.Global) == 0)
                 throw new JsThrow(realm.NewTypeError("String.prototype.replaceAll called with a non-global RegExp"));
             var replaceFn = re.Get(SymbolCtor.Replace);
             if (replaceFn.IsObject)
@@ -389,9 +389,9 @@ public static class StringCtor
             // an array. Spec §22.1.3.13 requires matchAll to throw TypeError if
             // the regex is not global; mirror that here for parity with the
             // Symbol.matchAll path.
-            if ((re.Flags & Tessera.Js.RegExp.RegexFlags.Global) == 0)
+            if ((re.Flags & Starling.Js.RegExp.RegexFlags.Global) == 0)
                 throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
-            var unicode = (re.Flags & Tessera.Js.RegExp.RegexFlags.Unicode) != 0;
+            var unicode = (re.Flags & Starling.Js.RegExp.RegexFlags.Unicode) != 0;
             return JsValue.Object(new JsRegExpStringIterator(realm, re, s, global: true, unicode: unicode));
         }
         var fn = re.Get(SymbolCtor.Match);

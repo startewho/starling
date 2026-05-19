@@ -1,4 +1,4 @@
-namespace Tessera.Telemetry;
+namespace Starling.Telemetry;
 
 /// <summary>
 /// First-paint snapshot returned by <see cref="TelemetryStream.Snapshot"/>.

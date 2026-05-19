@@ -1,7 +1,7 @@
-using Tessera.Common.Diagnostics;
-using Tessera.Layout.Text;
+using Starling.Common.Diagnostics;
+using Starling.Layout.Text;
 
-namespace Tessera.Paint.Backend;
+namespace Starling.Paint.Backend;
 
 internal enum PaintBackendKind
 {
@@ -10,21 +10,21 @@ internal enum PaintBackendKind
 }
 
 /// <summary>
-/// Reads <c>TESSERA_PAINT_BACKEND</c> once and dispenses the matching paint
+/// Reads <c>STARLING_PAINT_BACKEND</c> once and dispenses the matching paint
 /// backend and text measurer so layout and raster never disagree within a
 /// single render.
 /// <para>
 /// After the Skia/Graphite native shim was removed, ImageSharp.Drawing 3.0 is
 /// the only paint backend. The env var still exists so callers can opt into
 /// the experimental WebGPU compute-shader target
-/// (<c>TESSERA_PAINT_BACKEND=imagesharp-webgpu</c>). Any other non-empty
+/// (<c>STARLING_PAINT_BACKEND=imagesharp-webgpu</c>). Any other non-empty
 /// value is rejected loudly rather than silently falling back, so a typo in
 /// an Aspire manifest or CI matrix surfaces immediately.
 /// </para>
 /// </summary>
 internal static class PaintBackendSelector
 {
-    private const string EnvVar = "TESSERA_PAINT_BACKEND";
+    private const string EnvVar = "STARLING_PAINT_BACKEND";
 
     private static readonly Lazy<PaintBackendKind> _selected = new(ReadEnv);
 

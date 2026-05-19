@@ -1,6 +1,6 @@
-using Tessera.Net.Tcp;
+using Starling.Net.Tcp;
 
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// A live, in-use connection over which one HTTP/1.1 request/response cycle

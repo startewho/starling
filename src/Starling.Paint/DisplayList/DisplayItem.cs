@@ -1,9 +1,9 @@
-using Tessera.Common.Image;
-using Tessera.Css.Values;
-using Tessera.Layout;
-using Tessera.Layout.Text;
+using Starling.Common.Image;
+using Starling.Css.Values;
+using Starling.Layout;
+using Starling.Layout.Text;
 
-namespace Tessera.Paint.DisplayList;
+namespace Starling.Paint.DisplayList;
 
 /// <summary>
 /// Discriminated union of paint operations. Painters replay these in order to

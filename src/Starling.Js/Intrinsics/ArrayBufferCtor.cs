@@ -1,7 +1,7 @@
 using System.Globalization;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>ECMA-262 §25.1 ArrayBuffer Objects.</summary>
 public static class ArrayBufferCtor

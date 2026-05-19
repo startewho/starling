@@ -1,11 +1,11 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // SSIM is the gate behind the M2 "rendered PNG matches expected within
 // SSIM 0.99" exit and the snapshot/live golden tests. The pure-managed
-// implementation in `Tessera.Common.Image.Ssim` is on every CI run that
+// implementation in `Starling.Common.Image.Ssim` is on every CI run that
 // compares images, so its cost on a viewport-sized buffer matters.
 [MemoryDiagnoser]
 public class SsimBench

@@ -1,6 +1,6 @@
 using BenchmarkDotNet.Running;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 internal static class Program
 {

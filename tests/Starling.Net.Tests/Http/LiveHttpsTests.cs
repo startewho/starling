@@ -2,21 +2,21 @@ using System.Text;
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 /// <summary>
 /// Live-network acceptance test for M2-05. Skipped by default. To run:
-/// <code>TESSERA_LIVE_HTTP_TESTS=1 dotnet test</code>.
+/// <code>STARLING_LIVE_HTTP_TESTS=1 dotnet test</code>.
 /// </summary>
 public class LiveHttpsTests
 {
     [Fact]
     public async Task GET_example_com_returns_200_and_HTML_body()
     {
-        if (Environment.GetEnvironmentVariable("TESSERA_LIVE_HTTP_TESTS") != "1")
+        if (Environment.GetEnvironmentVariable("STARLING_LIVE_HTTP_TESTS") != "1")
             return;
 
-        using var client = new TesseraHttpClient(new TesseraHttpClientOptions
+        using var client = new StarlingHttpClient(new StarlingHttpClientOptions
         {
             ConnectTimeout = TimeSpan.FromSeconds(15),
             RequestTimeout = TimeSpan.FromSeconds(30),

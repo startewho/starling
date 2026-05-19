@@ -6,12 +6,12 @@ using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using Tessera.Common.Diagnostics;
+using Starling.Common.Diagnostics;
 
-namespace Tessera.Telemetry;
+namespace Starling.Telemetry;
 
 /// <summary>
-/// One-stop OpenTelemetry wiring for Tessera host processes. Both flavours
+/// One-stop OpenTelemetry wiring for Starling host processes. Both flavours
 /// export traces, metrics, and logs over OTLP when
 /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> is set (Aspire's AppHost sets it
 /// automatically for every project resource it launches); without the env
@@ -29,7 +29,7 @@ public static class OtelBootstrap
     /// <see cref="IDiagnostics"/> as a singleton so engine code can resolve
     /// it via DI.
     /// </summary>
-    public static TBuilder AddTesseraTelemetry<TBuilder>(this TBuilder builder, string serviceName)
+    public static TBuilder AddStarlingTelemetry<TBuilder>(this TBuilder builder, string serviceName)
         where TBuilder : IHostApplicationBuilder
     {
         ArgumentNullException.ThrowIfNull(builder);

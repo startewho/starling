@@ -1,6 +1,6 @@
-using Tessera.Dom.Events;
+using Starling.Dom.Events;
 
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 /// <summary>
 /// Base DOM node. v1 keeps children as a simple doubly-linked list inside the

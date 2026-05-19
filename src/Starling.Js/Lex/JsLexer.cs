@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Tessera.Js.Lex;
+namespace Starling.Js.Lex;
 
 /// <summary>
 /// ECMAScript lexer. Pull-based: <see cref="Next"/> returns the next token

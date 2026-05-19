@@ -1,12 +1,12 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Test helpers that lift ImageSharp PNGs into raw RGBA byte buffers
-/// and dispatch to <see cref="Tessera.Common.Image.Ssim"/>. Kept here
-/// because Tessera.Common deliberately has no image-library dependency
+/// and dispatch to <see cref="Starling.Common.Image.Ssim"/>. Kept here
+/// because Starling.Common deliberately has no image-library dependency
 /// (see the SSIM source for why).
 /// </summary>
 internal static class PngComparison
@@ -23,7 +23,7 @@ internal static class PngComparison
 
         var aBytes = ToRgba(actual);
         var bBytes = ToRgba(golden);
-        return Tessera.Common.Image.Ssim.ComputeRgba(aBytes, bBytes, actual.Width, actual.Height);
+        return Starling.Common.Image.Ssim.ComputeRgba(aBytes, bBytes, actual.Width, actual.Height);
     }
 
     public static bool BytesEqual(string a, string b)

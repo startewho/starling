@@ -1,4 +1,4 @@
-namespace Tessera.Css.Cascade;
+namespace Starling.Css.Cascade;
 
 // CSS Cascade 5 §6. A per-origin map of dotted layer paths in declaration order.
 // `null`/empty path means "unlayered" — represented by index `UnlayeredIndex`.

@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §26.2 FinalizationRegistry Objects — manages a list of weak target /

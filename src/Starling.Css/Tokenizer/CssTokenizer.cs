@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Tessera.Css.Tokenizer;
+namespace Starling.Css.Tokenizer;
 
 /// <summary>
 /// CSS Syntax Module Level 3 §4 tokenizer.

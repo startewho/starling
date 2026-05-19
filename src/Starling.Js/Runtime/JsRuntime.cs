@@ -1,6 +1,6 @@
-using Tessera.Js.Intrinsics;
+using Starling.Js.Intrinsics;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// Host-facing entry point for the JS engine. Owns the active <see cref="JsRealm"/>
@@ -80,7 +80,7 @@ public sealed class JsRuntime
 
     /// <summary>Drain any queued microtasks against the realm. Called
     /// automatically at the bottom of every top-level
-    /// <see cref="JsVm.Run(Tessera.Js.Bytecode.Chunk)"/>; embedders running
+    /// <see cref="JsVm.Run(Starling.Js.Bytecode.Chunk)"/>; embedders running
     /// scripts via a custom path can invoke this explicitly. No-op when a
     /// host scheduler is installed — the host pumps its own loop.</summary>
     /// <remarks>
@@ -132,7 +132,7 @@ public sealed class JsRuntime
     /// Run <paramref name="body"/> with <see cref="JsRealm.ActiveVm"/> set, then
     /// drain the microtask queue. Use when re-entering JS from host code
     /// (timers, fetch completions, event dispatch) where there's no enclosing
-    /// <see cref="JsVm.Run(Tessera.Js.Bytecode.Chunk)"/> on the stack to
+    /// <see cref="JsVm.Run(Starling.Js.Bytecode.Chunk)"/> on the stack to
     /// publish the VM and drain reactions. Restores the previous
     /// <see cref="JsRealm.ActiveVm"/> on exit, even when the body throws.
     /// </summary>

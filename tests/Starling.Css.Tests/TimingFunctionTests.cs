@@ -1,9 +1,9 @@
 using FluentAssertions;
-using Tessera.Css.Animations;
-using Tessera.Css.Values;
+using Starling.Css.Animations;
+using Starling.Css.Values;
 using Xunit;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 public sealed class TimingFunctionTests
 {

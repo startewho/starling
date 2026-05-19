@@ -9,7 +9,7 @@ if (args.Length != 2)
 var entities = JsonDocument.Parse(File.ReadAllText(args[0]));
 using var output = new StreamWriter(args[1]);
 
-output.WriteLine("namespace Tessera.Html.Tokenizer;");
+output.WriteLine("namespace Starling.Html.Tokenizer;");
 output.WriteLine();
 output.WriteLine("/// <summary>WHATWG HTML named character-reference table.</summary>");
 output.WriteLine("public static class NamedCharacterReferences");

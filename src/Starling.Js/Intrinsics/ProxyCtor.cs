@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §28.2 The Proxy constructor and the <c>Proxy.revocable</c> factory. The

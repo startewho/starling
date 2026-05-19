@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Runtime;
+namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
 /// Pins the B0 runtime foundations: prototype-chain Get, property descriptors,

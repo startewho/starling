@@ -1,11 +1,11 @@
-namespace Tessera.Layout.Position;
+namespace Starling.Layout.Position;
 
 /// <summary>
 /// Resolves <c>position: sticky</c> offsets without a scroll model.
 /// <para>
 /// True sticky positioning is "behaves like <c>relative</c> until the
 /// element would scroll past a configured threshold within its nearest
-/// scrolling ancestor, then it pins to that threshold." Tessera's layout
+/// scrolling ancestor, then it pins to that threshold." Starling's layout
 /// engine has no scroll concept yet, so this implementation degrades to
 /// <em>clamped-relative</em>: the natural in-flow frame is shifted only
 /// when an inset (<c>top</c> / <c>right</c> / <c>bottom</c> / <c>left</c>)

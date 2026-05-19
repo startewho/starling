@@ -1,7 +1,7 @@
 using System.Globalization;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §21.4 The Date constructor and §21.4.4 Date.prototype. Spec-faithful surface

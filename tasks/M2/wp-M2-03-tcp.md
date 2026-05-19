@@ -10,7 +10,7 @@ depends_on:
   - "wp:M2-01-url-parser"
 blocks:
   - "wp:M2-04-tls"
-subsystem: "Tessera.Net"
+subsystem: "Starling.Net"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#tcp"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-03-tcp"

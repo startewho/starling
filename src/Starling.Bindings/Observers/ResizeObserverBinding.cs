@@ -1,8 +1,8 @@
 using System.Runtime.CompilerServices;
-using Tessera.Dom;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings.Observers;
+namespace Starling.Bindings.Observers;
 
 /*
  * TODO (B5-4 partial impl): real resize firing.

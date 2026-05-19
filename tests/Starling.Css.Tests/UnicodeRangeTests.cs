@@ -1,9 +1,9 @@
 using FluentAssertions;
-using Tessera.Css.FontFace;
-using Tessera.Css.Parser;
+using Starling.Css.FontFace;
+using Starling.Css.Parser;
 using Xunit;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 public sealed class UnicodeRangeTests
 {

@@ -1,6 +1,6 @@
 # Tasks — multi-agent coordination
 
-This directory is the **shared work queue** for Tessera. Every implementation work-package
+This directory is the **shared work queue** for Starling. Every implementation work-package
 described in [`../browser-plan/14_AGENT_TASKS.md`](../browser-plan/14_AGENT_TASKS.md)
 has a tracking file here. The file is the single source of truth for "is this
 package claimed, by whom, and how far along?"
@@ -36,7 +36,7 @@ claimed_at: ""
 branch: ""
 depends_on: []
 blocks: ["wp:M1-01b-tokenizer-text-states"]
-subsystem: Tessera.Html
+subsystem: Starling.Html
 plan_refs:
   - browser-plan/04_HTML_PARSING.md#tokenizer
 ---

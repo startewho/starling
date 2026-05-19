@@ -1,6 +1,6 @@
-using Tessera.Net.Tcp;
+using Starling.Net.Tcp;
 
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
 internal sealed class TcpConnectionStream : Stream
 {

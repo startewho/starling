@@ -8,7 +8,7 @@ using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using Starling.Gui.Avalonia.Chrome;
 using Starling.Gui.Avalonia.Theme;
-using Tessera.Telemetry;
+using Starling.Telemetry;
 
 namespace Starling.Gui.Avalonia.DevTools;
 

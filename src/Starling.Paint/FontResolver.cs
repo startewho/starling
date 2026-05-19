@@ -1,4 +1,4 @@
-namespace Tessera.Paint;
+namespace Starling.Paint;
 
 /// <summary>
 /// Public seam for font resolution. Historically wrapped Skia's

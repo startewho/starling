@@ -1,7 +1,7 @@
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
 /// <summary>
-/// TLS-protected byte stream established over a Tessera TCP connection.
+/// TLS-protected byte stream established over a Starling TCP connection.
 /// </summary>
 public interface ITlsTransport : IDisposable
 {

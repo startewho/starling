@@ -1,13 +1,13 @@
 using FluentAssertions;
-using Tessera.Css.Selectors;
-using Tessera.Css.Values;
-using Tessera.Dom;
-using Tessera.Html;
-using Tessera.Paint.DisplayList;
+using Starling.Css.Selectors;
+using Starling.Css.Values;
+using Starling.Dom;
+using Starling.Html;
+using Starling.Paint.DisplayList;
 using Xunit;
-using PaintList = Tessera.Paint.DisplayList.DisplayList;
+using PaintList = Starling.Paint.DisplayList.DisplayList;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 /// <summary>
 /// Locks down the <see cref="DisplayListBuilder.Build"/> style-override hook
@@ -33,7 +33,7 @@ public sealed class HoverDisplayListTests
             ?? throw new InvalidOperationException("Test fixture has no <a> element");
 
         var painter = new Painter();
-        var (root, style) = painter.LayoutDocumentWithStyle(doc, new Tessera.Layout.Size(400, 200), defaultFontSize: 16f);
+        var (root, style) = painter.LayoutDocumentWithStyle(doc, new Starling.Layout.Size(400, 200), defaultFontSize: 16f);
 
         // Baseline: no override → display list emits blue text.
         var baseline = new DisplayListBuilder().Build(root);
@@ -73,7 +73,7 @@ public sealed class HoverDisplayListTests
         var doc = HtmlParser.Parse(Html);
 
         var painter = new Painter();
-        var root = painter.LayoutDocument(doc, new Tessera.Layout.Size(400, 200), defaultFontSize: 16f);
+        var root = painter.LayoutDocument(doc, new Starling.Layout.Size(400, 200), defaultFontSize: 16f);
 
         var withoutHook = new DisplayListBuilder().Build(root);
         var withNullHook = new DisplayListBuilder().Build(root, styleOverride: _ => null);

@@ -1,18 +1,18 @@
 using System.Globalization;
 using System.Text;
-using Tessera.Dom;
-using Tessera.Js.Intrinsics;
-using Tessera.Js.Runtime;
-using Tessera.Net;
-using Tessera.Net.Http;
-using TesseraUrlParser = global::Tessera.Url.UrlParser;
+using Starling.Dom;
+using Starling.Js.Intrinsics;
+using Starling.Js.Runtime;
+using Starling.Net;
+using Starling.Net.Http;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-3 — installs the WHATWG Fetch surface (<c>fetch</c>, <c>Headers</c>,
 /// <c>Request</c>, <c>Response</c>, <c>AbortController</c>, <c>AbortSignal</c>)
-/// against a <see cref="TesseraHttpClient"/>.
+/// against a <see cref="StarlingHttpClient"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Cross-thread completion contract.</b> The actual HTTP send runs on
@@ -42,7 +42,7 @@ public static class FetchBinding
 {
     /// <summary>Install fetch + Headers + Request + Response + AbortController.
     /// Idempotent per realm.</summary>
-    public static void Install(JsRuntime runtime, TesseraHttpClient client, Document document)
+    public static void Install(JsRuntime runtime, StarlingHttpClient client, Document document)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(client);
@@ -418,7 +418,7 @@ public static class FetchBinding
     // fetch
     // =====================================================================
 
-    private static void InstallFetch(JsRuntime runtime, TesseraHttpClient client, Document document)
+    private static void InstallFetch(JsRuntime runtime, StarlingHttpClient client, Document document)
     {
         var realm = runtime.Realm;
         var fetch = new JsNativeFunction(realm, "fetch", 1, (_, args) =>
@@ -442,7 +442,7 @@ public static class FetchBinding
 
     /// <summary>Kick off the actual HTTP request on the thread pool and return
     /// a JS Promise that settles on the next microtask drain.</summary>
-    private static JsValue StartFetch(JsRuntime runtime, TesseraHttpClient client, RequestObject req)
+    private static JsValue StartFetch(JsRuntime runtime, StarlingHttpClient client, RequestObject req)
     {
         var realm = runtime.Realm;
         return MakePromise(realm, (resolve, reject) =>
@@ -604,7 +604,7 @@ public static class FetchBinding
 
     private static HttpRequest BuildWireRequest(JsRealm realm, RequestObject req)
     {
-        var parsed = TesseraUrlParser.Parse(req.Url);
+        var parsed = StarlingUrlParser.Parse(req.Url);
         if (parsed.IsErr)
             throw new JsThrow(realm.NewTypeError($"Invalid URL: {req.Url}"));
         var u = parsed.Value;
@@ -892,7 +892,7 @@ internal sealed class AbortSignalObject : JsObject
             _abortCallbacks.Clear();
         }
         // Fire the 'abort' event on the signal.
-        var ev = new Tessera.Dom.Events.Event("abort");
+        var ev = new Starling.Dom.Events.Event("abort");
         HostTarget.DispatchEvent(ev);
         foreach (var cb in toFire) { try { cb(reason); } catch { /* swallow */ } }
     }

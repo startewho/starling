@@ -1,11 +1,11 @@
-using Tessera.Css.Cascade;
-using Tessera.Dom;
-using Tessera.Layout;
-using Tessera.Layout.Box;
-using Tessera.Layout.Tree;
-using Tessera.Paint;
+using Starling.Css.Cascade;
+using Starling.Dom;
+using Starling.Layout;
+using Starling.Layout.Box;
+using Starling.Layout.Tree;
+using Starling.Paint;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// A fully laid-out page exposed to interactive shells. Owns the box tree
@@ -16,7 +16,7 @@ namespace Tessera.Engine;
 /// <remarks>
 /// Interactive callers walk <see cref="Root"/> to render native views, hit-test
 /// taps, drive Cmd-F, etc. The headless render path stays on
-/// <see cref="TesseraEngine.RenderAsync"/> and goes through the rasterizer.
+/// <see cref="StarlingEngine.RenderAsync"/> and goes through the rasterizer.
 /// </remarks>
 public sealed class LaidOutPage : IDisposable
 {
@@ -71,7 +71,7 @@ public sealed class LaidOutPage : IDisposable
     public double DocumentHeight => Root.Frame.Height;
 
     /// <summary>Default font size used when the page was first laid out.
-    /// Re-paints (e.g. via <see cref="TesseraEngine.RenderFrame"/>) reuse
+    /// Re-paints (e.g. via <see cref="StarlingEngine.RenderFrame"/>) reuse
     /// it so frame-to-frame rasters stay consistent.</summary>
     internal float? DefaultFontSize { get; }
 

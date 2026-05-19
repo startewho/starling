@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>ES2024 RegExp flag bits per §22.2.1.1.</summary>
 [System.Flags]

@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Media;
-using Tessera.Css.Parser;
+using Starling.Css.Media;
+using Starling.Css.Parser;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-cascade-5", "https://www.w3.org/TR/css-cascade-5/")]
 

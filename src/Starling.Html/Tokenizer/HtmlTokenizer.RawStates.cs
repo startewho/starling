@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// RCDATA / RAWTEXT / PLAINTEXT states from WHATWG HTML §13.2.5.2, .3, .5,

@@ -13,7 +13,7 @@ blocks:
   - "wp:M1-04-dom-events"
   - "wp:M1-06-css-selectors"
   - "wp:M4-02-dom-bindings-core"
-subsystem: "Tessera.Dom"
+subsystem: "Starling.Dom"
 plan_refs:
   - "browser-plan/05_DOM.md"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-03-dom-core"
@@ -25,7 +25,7 @@ plan_refs:
 Full Node/Element/Document hierarchy with mutation primitives.
 
 ## Outputs
-- `src/Tessera.Dom/{Node,NodeKind,Element,Document,Text,Comment,Attr,NamedNodeMap,DocumentFragment}.cs`
+- `src/Starling.Dom/{Node,NodeKind,Element,Document,Text,Comment,Attr,NamedNodeMap,DocumentFragment}.cs`
 
 ## Acceptance
 WPT `dom/nodes/Node-*` ≥ 90% (excluding events).

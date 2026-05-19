@@ -1,4 +1,4 @@
-namespace Tessera.Js.Lex;
+namespace Starling.Js.Lex;
 
 /// <summary>
 /// Every token category the lexer can emit. Mirrors ECMAScript §12

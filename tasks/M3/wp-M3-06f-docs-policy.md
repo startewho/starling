@@ -25,9 +25,9 @@ plan_refs:
 
 Phase 10 (docs half): rewrite the project documentation to retire "Rule 0" and
 describe the new **interop seam policy** — "managed-first, native at vetted
-seams." Native `LibraryImport` is confined to `Tessera.Skia` and
-`Tessera.Codecs`; every other engine project stays P/Invoke-free; `SslStream` is
-pure-managed BCL so `Tessera.Net` keeps its clean bill. This package describes
+seams." Native `LibraryImport` is confined to `Starling.Skia` and
+`Starling.Codecs`; every other engine project stays P/Invoke-free; `SslStream` is
+pure-managed BCL so `Starling.Net` keeps its clean bill. This package describes
 the target state and can land early — it does not depend on any code being
 written.
 
@@ -58,7 +58,7 @@ written.
   "managed-first, native at vetted seams."
 - `browser-plan/03_NETWORKING.md` has a "## TLS approach: SslStream" section;
   the `HttpClient` ban is still documented.
-- The two vetted interop projects (`Tessera.Skia`, `Tessera.Codecs`) are named
+- The two vetted interop projects (`Starling.Skia`, `Starling.Codecs`) are named
   as the only `LibraryImport`-allowed projects everywhere the policy is stated.
 - `10_WEB_APIS.md` crypto footnote points at `System.Security.Cryptography`.
 - No code, csproj, or CI-config changes in this package (CI config is `06l`).
@@ -83,7 +83,7 @@ written.
   reminder" became "## TLS approach" (SslStream behind `ITlsTransport`, TLS 1.3
   only, bundled CCADB `CustomTrustStore`); the `HttpClient` ban is kept explicit.
   `09_JS_ENGINE.md` needed no edit — it has no "Rule 0" reference and its
-  pure-managed claims + acceptance grep stay valid (`Tessera.Js` is not an
+  pure-managed claims + acceptance grep stay valid (`Starling.Js` is not an
   interop project).
   Verification: `grep -rn "Rule 0\|Rule-0" README.md AGENTS.md browser-plan/`
   returns only (a) the `RuleZeroTests` class name in `12_TESTING.md` — that is

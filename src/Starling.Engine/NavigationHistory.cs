@@ -1,4 +1,4 @@
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Browser-style session history: navigate appends, Back/Forward move the

@@ -52,7 +52,7 @@ agent sees the state.
 ## Repo map
 
 ```
-tessera/
+starling/
 ├── AGENTS.md                  ← you are here
 ├── README.md                  ← human-facing intro
 ├── browser-plan/              ← the design (immutable except by deliberate edit)
@@ -114,7 +114,7 @@ Skia/Graphite shim (`src/Starling.Skia` + `native/`) was removed in
 `src/Starling.Paint/Backend/ImageSharpBackend.cs` (SixLabors.ImageSharp 4 +
 ImageSharp.Drawing 3 + Fonts 3, pure-managed, requires the repo-root
 `sixlabors.lic`). An experimental WebGPU compute target is opt-in via
-`TESSERA_PAINT_BACKEND=imagesharp-webgpu`. There is no native graphics shim
+`STARLING_PAINT_BACKEND=imagesharp-webgpu`. There is no native graphics shim
 to build — a fresh checkout's `dotnet build` should succeed without any
 non-.NET prerequisites.
 

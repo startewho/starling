@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>AST nodes produced by <see cref="RegexParser"/>. The compiler in
 /// <see cref="RegexCompiler"/> consumes these to emit a flat instruction array

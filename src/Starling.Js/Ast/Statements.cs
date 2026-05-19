@@ -1,6 +1,6 @@
-using Tessera.Js.Lex;
+using Starling.Js.Lex;
 
-namespace Tessera.Js.Ast;
+namespace Starling.Js.Ast;
 
 /// <summary>Base for every JS statement node. ES2024 §14.</summary>
 public abstract record Statement(JsPosition Start, JsPosition End) : AstNode(Start, End);

@@ -11,7 +11,7 @@ depends_on:
   - "wp:M1-03-dom-core"
 blocks:
   - "wp:M1-07-css-cascade"
-subsystem: "Tessera.Css"
+subsystem: "Starling.Css"
 plan_refs:
   - "browser-plan/06_CSS.md#selectors"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-06-css-selectors"

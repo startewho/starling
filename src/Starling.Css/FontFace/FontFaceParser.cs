@@ -1,7 +1,7 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.FontFace;
+namespace Starling.Css.FontFace;
 
 /// <summary>
 /// Extracts <see cref="FontFaceRule"/> values from parsed stylesheets. The

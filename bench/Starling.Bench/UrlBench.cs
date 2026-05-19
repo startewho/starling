@@ -1,8 +1,8 @@
 using BenchmarkDotNet.Attributes;
-using TUrl = Tessera.Url.Url;
-using UrlParser = Tessera.Url.UrlParser;
+using TUrl = Starling.Url.Url;
+using UrlParser = Starling.Url.UrlParser;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // Backstops the M2 `url/` 100% WPT pass — UrlParser.Parse is hot on every
 // fetch, redirect, and relative-href resolution. Targets a mix of input

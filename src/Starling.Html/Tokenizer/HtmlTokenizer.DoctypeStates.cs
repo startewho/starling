@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// DOCTYPE states from WHATWG HTML §13.2.5.53–.68. Owned by wp:M1-01f.

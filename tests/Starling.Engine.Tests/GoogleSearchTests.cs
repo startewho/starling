@@ -3,15 +3,15 @@ using System.Net.Sockets;
 using System.Text;
 using FluentAssertions;
 using SixLabors.ImageSharp;
-using Tessera.Bindings;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
-using Tessera.Net;
+using Starling.Bindings;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
+using Starling.Net;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// B7 — the end-to-end google.com smoke test. Demonstrates that the M3 → M7
@@ -20,7 +20,7 @@ namespace Tessera.Engine.Tests;
 /// page served from a local <see cref="HttpListener"/>.
 ///
 /// <para>
-/// <see cref="TesseraEngine.RenderAsync"/> now executes page JavaScript
+/// <see cref="StarlingEngine.RenderAsync"/> now executes page JavaScript
 /// between HTML parse and layout (see <c>RunScriptsAsync</c> in
 /// <c>Engine.cs</c>): inline + classic external scripts run in document
 /// order, DOMContentLoaded and load fire, and fetch/XHR completions are
@@ -59,10 +59,10 @@ public sealed class GoogleSearchTests
         var (homeHtml, _) = LoadFixtures();
         using var server = await FixtureServer.StartAsync(homeHtml, searchResultsHtml: "");
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-b7-home-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-b7-home-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://127.0.0.1:{server.Port}/",
                 new RenderOptions(new Size(ViewportWidth, ViewportHeight), DefaultFontSize),
@@ -99,10 +99,10 @@ public sealed class GoogleSearchTests
         var (_, searchHtml) = LoadFixtures();
         using var server = await FixtureServer.StartAsync(homeHtml: "", searchHtml);
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-b7-search-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-b7-search-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 $"http://127.0.0.1:{server.Port}/search?q=hello",
                 new RenderOptions(new Size(ViewportWidth, ViewportHeight), DefaultFontSize),
@@ -169,7 +169,7 @@ public sealed class GoogleSearchTests
             if (level == "error") errors.Add(message);
         };
 
-        using var http = new TesseraHttpClient();
+        using var http = new StarlingHttpClient();
         WindowBinding.Install(runtime, doc, new WindowInstallOptions(
             DocumentUrl: server.BaseUrl + "/search?q=hello",
             HttpClient: http));
@@ -217,31 +217,31 @@ public sealed class GoogleSearchTests
 
         // The engine's display-text extractor reads from doc.Body — same
         // function the real render path uses on the post-parse Document.
-        var displayText = TesseraEngine.ExtractDisplayText(doc);
+        var displayText = StarlingEngine.ExtractDisplayText(doc);
         displayText.Should().Contain("Result one");
         displayText.Should().Contain("Result two");
         displayText.Should().Contain("Result three");
     }
 
     // -----------------------------------------------------------------
-    // Live-gated test (TESSERA_ALLOW_NETWORK=1 to opt in)
+    // Live-gated test (STARLING_ALLOW_NETWORK=1 to opt in)
     // -----------------------------------------------------------------
 
     [Fact]
     [Trait("Category", "NetworkLive")]
     public async Task Live_google_home_renders_offline_baseline_strings()
     {
-        if (Environment.GetEnvironmentVariable("TESSERA_ALLOW_NETWORK") != "1")
+        if (Environment.GetEnvironmentVariable("STARLING_ALLOW_NETWORK") != "1")
             return;
 
         var repoRoot = LocateRepoRoot();
         var homeFixture = Path.Combine(repoRoot, "testdata", "sites", "google-home.html");
         var searchFixture = Path.Combine(repoRoot, "testdata", "sites", "google-search-q-hello.html");
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-b7-live-home-{Guid.NewGuid():N}.png");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-b7-live-home-{Guid.NewGuid():N}.png");
         try
         {
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.RenderAsync(
                 "https://www.google.com/",
                 new RenderOptions(new Size(ViewportWidth, ViewportHeight), DefaultFontSize),
@@ -261,12 +261,12 @@ public sealed class GoogleSearchTests
             (text.Contains("Gmail") || text.Contains("Images")).Should().BeTrue(
                 "expected at least one of Gmail/Images in the top nav from the live HTML");
 
-            if (Environment.GetEnvironmentVariable("TESSERA_UPDATE_GOLDENS") == "1")
+            if (Environment.GetEnvironmentVariable("STARLING_UPDATE_GOLDENS") == "1")
             {
                 // Snapshot fresh HTML for the offline fixtures so future
                 // offline runs track the upstream shape.
-                using var client = new TesseraHttpClient();
-                var url = global::Tessera.Url.UrlParser.Parse("https://www.google.com/").Value;
+                using var client = new StarlingHttpClient();
+                var url = global::Starling.Url.UrlParser.Parse("https://www.google.com/").Value;
                 var resp = await client.GetAsync(url, TestContext.Current.CancellationToken);
                 if (resp.IsOk)
                 {
@@ -274,7 +274,7 @@ public sealed class GoogleSearchTests
                     await File.WriteAllBytesAsync(homeFixture, resp.Value.Body.ToArray(), TestContext.Current.CancellationToken);
                 }
 
-                var searchUrl = global::Tessera.Url.UrlParser.Parse("https://www.google.com/search?q=hello").Value;
+                var searchUrl = global::Starling.Url.UrlParser.Parse("https://www.google.com/search?q=hello").Value;
                 var searchResp = await client.GetAsync(searchUrl, TestContext.Current.CancellationToken);
                 if (searchResp.IsOk)
                 {

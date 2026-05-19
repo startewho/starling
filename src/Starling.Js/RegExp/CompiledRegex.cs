@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>The in-memory regex object the runtime holds — the result of
 /// parsing+compiling a pattern + flags.</summary>

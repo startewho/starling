@@ -1,7 +1,7 @@
-using Tessera.Css.Properties;
-using Tessera.Layout.Block;
+using Starling.Css.Properties;
+using Starling.Layout.Block;
 
-namespace Tessera.Layout.Position;
+namespace Starling.Layout.Position;
 
 /// <summary>
 /// Second-pass positioning for elements with <c>position: absolute</c> or

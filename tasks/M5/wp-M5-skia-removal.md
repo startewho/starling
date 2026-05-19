@@ -20,7 +20,7 @@ plan_refs:
 
 Rip the native Skia/Graphite rasterizer (`src/Starling.Skia` + `native/`
 shim) out of the tree and promote ImageSharp.Drawing 3 — which was already
-present behind the `EnableImageSharpDrawing3` / `#if TESSERA_IMAGESHARP_DRAWING`
+present behind the `EnableImageSharpDrawing3` / `#if STARLING_IMAGESHARP_DRAWING`
 toggles — to the sole, unconditional paint backend. Restores the engine to
 fully pure-managed: a fresh checkout's `dotnet build` succeeds without any
 non-.NET prerequisites.
@@ -47,11 +47,11 @@ non-.NET prerequisites.
   throw loudly.
 - `src/Starling.Paint/Backend/ImageSharpBackend.cs` and
   `src/Starling.Paint/ImageSharpTextMeasurer.cs` —
-  `#if TESSERA_IMAGESHARP_DRAWING` gates removed; doc-comments rewritten to
+  `#if STARLING_IMAGESHARP_DRAWING` gates removed; doc-comments rewritten to
   drop SkiaGraphiteBackend / SkiaTextMeasurer crefs.
 - `src/Starling.Paint/ImageSharpFontLookup.cs` — un-gated.
 - `src/Starling.Paint/Interop/WgpuNativeLoader.cs` — un-gated;
-  pragma-disable comment no longer cites `Tessera.Skia.Interop.NativeLoader`.
+  pragma-disable comment no longer cites `Starling.Skia.Interop.NativeLoader`.
 - `src/Starling.Paint/FontResolver.cs` — stripped to a no-op shim with the
   internal `ExpandFamilies` helper for CSS generic-keyword fallback chains.
   Public surface `Default`/ctor/`Dispose` preserved so existing callers
@@ -67,10 +67,10 @@ non-.NET prerequisites.
   renamed to `Backend_reuses_context_for_two_sequential_renders` and
   retargeted at `ImageSharpBackend`.
 - `tests/Starling.Bindings.Tests/WindowDocumentTests.cs` — drive-by IDE0005
-  fix (unused `using Tessera.Bindings;` removed; redundant under
-  `namespace Tessera.Bindings.Tests`).
+  fix (unused `using Starling.Bindings;` removed; redundant under
+  `namespace Starling.Bindings.Tests`).
 - `testdata/golden/snapshots/nginx.org.png` — re-vendored with
-  `TESSERA_UPDATE_GOLDENS=1` because the prior golden was rendered by Skia.
+  `STARLING_UPDATE_GOLDENS=1` because the prior golden was rendered by Skia.
 
 ## Docs / policy
 
@@ -88,9 +88,9 @@ non-.NET prerequisites.
 - `dotnet build Starling.sln -c Debug` — succeeds.
 - `dotnet test Starling.sln -c Debug --no-build` — green except for two
   pre-existing failures that are unrelated to this change:
-  - `Tessera.Paint.Tests.DisplayListBuilderTests.Underlined_link_emits_text_and_underline_fill`
+  - `Starling.Paint.Tests.DisplayListBuilderTests.Underlined_link_emits_text_and_underline_fill`
     (renderer-neutral DisplayList assertion; failed under both backends pre-removal).
-  - `Tessera.Codecs.Tests.NativeImageDecoderTests.DecodesPngCornerPixels`
+  - `Starling.Codecs.Tests.NativeImageDecoderTests.DecodesPngCornerPixels`
     (alpha 0xFF vs 0x80; reproduces against `git stash` baseline, so
     pre-existing in `Starling.Codecs`).
 
@@ -123,7 +123,7 @@ commit recorded in the handoff log below). See each linked file for detail:
   landed in a second commit: FontFaceRegistry → ImageSharpFontLookup wiring
   with a new round-trip test, wp:M5-css-02 WP rewritten for ImageSharp.Drawing 3,
   M3-06 addenda, doc-comment cleanup. Also dropped the now-redundant
-  `TESSERA_IMAGESHARP_DRAWING` `#if` guard in the three paint tests (the
+  `STARLING_IMAGESHARP_DRAWING` `#if` guard in the three paint tests (the
   define was only set by the removed `EnableImageSharpDrawing3` switch).
   Full `dotnet test` green except the same pre-existing
   `Underlined_link_emits_text_and_underline_fill` baseline failure.

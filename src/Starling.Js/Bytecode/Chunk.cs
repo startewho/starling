@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Tessera.Js.Bytecode;
+namespace Starling.Js.Bytecode;
 
 /// <summary>
 /// A bytecode chunk — bytes + constant pool + local-slot count.
@@ -52,7 +52,7 @@ public sealed class Chunk
 /// Constant-pool wrapper for a BigInt literal. The parser turns the lexeme
 /// (decimal / 0x / 0b / 0o, with the trailing <c>n</c> stripped) into a
 /// <see cref="System.Numerics.BigInteger"/> at AST-build time; the VM unboxes
-/// it via <see cref="Tessera.Js.Runtime.JsValue.BigInt(System.Numerics.BigInteger)"/>
+/// it via <see cref="Starling.Js.Runtime.JsValue.BigInt(System.Numerics.BigInteger)"/>
 /// when <see cref="Opcode.LoadConst"/> dispatches on this record.
 /// </summary>
 public sealed record JsBigIntPlaceholder(System.Numerics.BigInteger Value)
@@ -81,7 +81,7 @@ public sealed class ChunkBuilder
     public int LocalCount { get; private set; }
 
     /// <summary>gap:closure-write-back — record that <paramref name="slot"/>
-    /// is captured by a nested function and must use <see cref="Tessera.Js.Runtime.Cell"/>
+    /// is captured by a nested function and must use <see cref="Starling.Js.Runtime.Cell"/>
     /// storage. Reads and writes against the slot go through the cell-aware
     /// opcodes.</summary>
     public void MarkCaptured(int slot)

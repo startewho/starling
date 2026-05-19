@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Net.Http.Cookies;
+namespace Starling.Net.Http.Cookies;
 
 /// <summary>
 /// Parser for a single <c>Set-Cookie</c> header value per RFC 6265bis §5.2.

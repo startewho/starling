@@ -1,9 +1,9 @@
 using System.Text;
 using FluentAssertions;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Bindings.Tests;
+namespace Starling.Bindings.Tests;
 
 /// <summary>B5-3 XHR tests. Shares <see cref="LocalServer"/> fixture with
 /// FetchTests.</summary>

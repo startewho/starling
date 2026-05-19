@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// Shared helpers used by every intrinsic install path. The B2-2 follow-up

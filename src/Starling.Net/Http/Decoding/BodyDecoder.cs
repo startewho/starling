@@ -1,6 +1,6 @@
 using System.IO.Compression;
 
-namespace Tessera.Net.Http.Decoding;
+namespace Starling.Net.Http.Decoding;
 
 /// <summary>
 /// Applies HTTP <c>Content-Encoding</c> decoding stages to a buffered body.

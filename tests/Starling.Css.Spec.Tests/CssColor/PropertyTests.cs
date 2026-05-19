@@ -3,8 +3,8 @@
 // and will not overwrite this file.
 
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Values;
 
 namespace Starling.Css.Spec.Tests.CssColor;
 
@@ -25,7 +25,7 @@ public sealed class PropertyTests
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-color-4/#propdef-color"/>
     /// <para>Property <c>color</c> — value <c>&lt;color&gt;</c>; initial <c>CanvasText</c>.</para>
-    /// <para>Strict: the value parser produces a typed <see cref="Tessera.Css.Values.CssColor"/>
+    /// <para>Strict: the value parser produces a typed <see cref="Starling.Css.Values.CssColor"/>
     /// for the named-color, 8-bit hex, and modern <c>rgb()</c> syntaxes, with the
     /// spec-mandated R/G/B/A bytes.</para>
     /// </summary>
@@ -47,8 +47,8 @@ public sealed class PropertyTests
     [SpecFact]
     public void Parses_opacity()
     {
-        ParseSingle("opacity", "1").Should().Be(new Tessera.Css.Values.CssNumber(1));
-        ParseSingle("opacity", "0.5").Should().Be(new Tessera.Css.Values.CssNumber(0.5));
-        ParseSingle("opacity", "50%").Should().Be(new Tessera.Css.Values.CssPercentage(50));
+        ParseSingle("opacity", "1").Should().Be(new Starling.Css.Values.CssNumber(1));
+        ParseSingle("opacity", "0.5").Should().Be(new Starling.Css.Values.CssNumber(0.5));
+        ParseSingle("opacity", "50%").Should().Be(new Starling.Css.Values.CssPercentage(50));
     }
 }

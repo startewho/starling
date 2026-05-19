@@ -11,7 +11,7 @@ depends_on:
   - "wp:M1-01a-tokenizer-scaffold"
 blocks:
   - "wp:M1-01h-tokenizer-html5lib"
-subsystem: "Tessera.Html"
+subsystem: "Starling.Html"
 plan_refs:
   - "browser-plan/04_HTML_PARSING.md#tokenizer"
 ---
@@ -25,8 +25,8 @@ AttributeValueSingleQuoted, AttributeValueUnquoted, AfterAttributeValueQuoted,
 SelfClosingStartTag.
 
 ## Outputs
-- `src/Tessera.Html/Tokenizer/States/{TagOpen,EndTagOpen,TagName,...}.cs`
-- Tests under `tests/Tessera.Html.Tests/Tokenizer/TagStateTests.cs`.
+- `src/Starling.Html/Tokenizer/States/{TagOpen,EndTagOpen,TagName,...}.cs`
+- Tests under `tests/Starling.Html.Tests/Tokenizer/TagStateTests.cs`.
 
 ## Acceptance
 Hand-written tests for each state's transitions; html5lib subset for plain
@@ -42,7 +42,7 @@ Pick this up after a:
 - 2026-05-11T15:20Z — created.
 - 2026-05-11T15:32:56Z — claimed by agent-claude-cody, branch `wp-M1-01b-tokenizer-tag-states`
 - 2026-05-11T15:38Z — landed:
-  - `src/Tessera.Html/Tokenizer/HtmlTokenizer.TagStates.cs` (new partial,
+  - `src/Starling.Html/Tokenizer/HtmlTokenizer.TagStates.cs` (new partial,
     all 12 states from §13.2.5.6–40 plus tag-builder helpers).
   - Updated `HtmlTokenizer.cs` to be a partial class with a central
     `Dispatch` switch each cluster registers against. EOF handling
@@ -53,6 +53,6 @@ Pick this up after a:
   - Fixed an M1-01a spec deviation: PreprocessedStream no longer remaps
     NULL — per spec §13.2.5.1, Data emits NULL verbatim, name-buffer
     states map to U+FFFD with a parse error.
-  - 21 new tests in `tests/Tessera.Html.Tests/Tokenizer/TagStateTests.cs`.
+  - 21 new tests in `tests/Starling.Html.Tests/Tokenizer/TagStateTests.cs`.
 - 2026-05-11T15:38Z — `dotnet test` 70/70 green (was 49; +21 new).
   Marking complete.

@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout.Box;
 using Xunit;
 
-namespace Tessera.Layout.Tests;
+namespace Starling.Layout.Tests;
 
 /// <summary>
 /// CSS 2.1 §9.5 float / clear. McMaster.com's category grid is float-based

@@ -1,7 +1,7 @@
 using System.Runtime.Versioning;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
-namespace Tessera.Codecs.Linux;
+namespace Starling.Codecs.Linux;
 
 /// <summary>
 /// Linux image decoder. Linux ships no single system imaging framework, so this

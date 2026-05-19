@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 public enum ConsoleLevel
 {

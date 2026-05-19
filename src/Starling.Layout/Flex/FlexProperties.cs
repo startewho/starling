@@ -1,8 +1,8 @@
-namespace Tessera.Layout.Flex;
+namespace Starling.Layout.Flex;
 
 /// <summary>
 /// Strongly-typed flex container properties resolved from a
-/// <see cref="Tessera.Css.Cascade.ComputedStyle"/> in <see cref="FlexParser"/>.
+/// <see cref="Starling.Css.Cascade.ComputedStyle"/> in <see cref="FlexParser"/>.
 /// Single-line (no <c>flex-wrap: wrap</c>) is all this scope covers — the wrap
 /// keyword is parsed but treated as <c>nowrap</c>; multi-line layout is
 /// deferred to B6-3.

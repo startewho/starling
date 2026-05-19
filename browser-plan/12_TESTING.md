@@ -19,15 +19,15 @@
 
 ## Test project layout
 
-Every `src/Tessera.X` has a `tests/Tessera.X.Tests` mirror. Plus:
+Every `src/Starling.X` has a `tests/Starling.X.Tests` mirror. Plus:
 
 ```
 tests/
-├── Tessera.E2E/                   # cross-subsystem flows (URL -> rendered PNG)
-├── Tessera.Wpt/                   # Web Platform Tests harness
-├── Tessera.Test262/               # ECMA Test262 harness
-├── Tessera.Html5lib/              # html5lib-tests harness
-└── Tessera.Fuzz/                  # fuzz targets (with SharpFuzz)
+├── Starling.E2E/                   # cross-subsystem flows (URL -> rendered PNG)
+├── Starling.Wpt/                   # Web Platform Tests harness
+├── Starling.Test262/               # ECMA Test262 harness
+├── Starling.Html5lib/              # html5lib-tests harness
+└── Starling.Fuzz/                  # fuzz targets (with SharpFuzz)
 ```
 
 ## Conventions
@@ -107,7 +107,7 @@ The full Web Platform Tests is 2M+ cases. We don't run all of them. Subset selec
 - `streams/` (subset)
 - `encoding/`
 
-Runner (`Tessera.Wpt/Runner.cs`):
+Runner (`Starling.Wpt/Runner.cs`):
 ```csharp
 // loads testharness.js + testharnessreport.js into a Realm
 // loads the test page via Engine
@@ -134,7 +134,7 @@ WPT consumes `wpt/` directory pulled in via `git submodule` at a pinned SHA. Upd
 
 ## Test262 (ECMA-262 conformance)
 
-Pull as submodule. Harness in `Tessera.Test262/`. Per-test metadata in YAML frontmatter (`includes`, `flags`, `features`).
+Pull as submodule. Harness in `Starling.Test262/`. Per-test metadata in YAML frontmatter (`includes`, `flags`, `features`).
 
 Selection in v1: skip `[Stage 3]` proposals, skip `non-strict + es5-only` legacy cases. Run the rest.
 
@@ -158,7 +158,7 @@ Targets: 100% by end of M2 (HTML parsing is foundational).
 
 ## Fuzzing
 
-`Tessera.Fuzz` defines targets:
+`Starling.Fuzz` defines targets:
 
 ```csharp
 public class HtmlFuzz
@@ -187,7 +187,7 @@ Subsystems with fuzz targets:
 
 ## Benchmarks
 
-`bench/Tessera.Bench` is a BenchmarkDotNet harness. Each subsystem owns a `.cs` file:
+`bench/Starling.Bench` is a BenchmarkDotNet harness. Each subsystem owns a `.cs` file:
 
 ```csharp
 [MemoryDiagnoser]
@@ -203,32 +203,32 @@ Targets per [01_ARCHITECTURE.md performance budget](01_ARCHITECTURE.md). Regress
 
 ## Memory and leak tests
 
-Stress tests under `tests/Tessera.E2E/Memory/`:
+Stress tests under `tests/Starling.E2E/Memory/`:
 - Open + close 1000 pages: working set must return within 10MB of baseline.
 - Repeated navigations on the same page: no `JsObject` leak across `[GC.Collect; GC.WaitForPendingFinalizers]`.
 
 ## Interop seam policy test
 
 Under the interop seam policy ("managed-first, native at vetted seams"), native
-interop is confined to two designated projects — `Tessera.Skia` and
-`Tessera.Codecs`. The policy test greps every engine project *except* those two
+interop is confined to two designated projects — `Starling.Skia` and
+`Starling.Codecs`. The policy test greps every engine project *except* those two
 for `DllImport`/`LibraryImport` (the same project allowlist the CI `lint` job
 uses) and fails if any other project regresses. The two interop projects are
 enforced-clean by *omission* from the allowlist — they are simply never added to
 the list of projects scanned. There is no longer a `NoSslStream_InNetProject`
-test: `SslStream` is now the sanctioned TLS path, so `Tessera.Net` using it is
+test: `SslStream` is now the sanctioned TLS path, so `Starling.Net` using it is
 expected, not a violation.
 
 ```csharp
 public class InteropSeamPolicyTests
 {
     // The project allowlist — every engine project EXCEPT the two designated
-    // interop seams (Tessera.Skia, Tessera.Codecs), which are omitted on purpose.
+    // interop seams (Starling.Skia, Starling.Codecs), which are omitted on purpose.
     static readonly string[] EngineProjects =
     {
-        "Tessera.Common", "Tessera.Url", "Tessera.Net", "Tessera.Html",
-        "Tessera.Dom", "Tessera.Css", "Tessera.Layout", "Tessera.Paint",
-        "Tessera.Js", "Tessera.Bindings", "Tessera.Loop", "Tessera.Engine",
+        "Starling.Common", "Starling.Url", "Starling.Net", "Starling.Html",
+        "Starling.Dom", "Starling.Css", "Starling.Layout", "Starling.Paint",
+        "Starling.Js", "Starling.Bindings", "Starling.Loop", "Starling.Engine",
     };
 
     [Fact] public void NoPInvoke_InAnyEngineProject()
@@ -267,7 +267,7 @@ public sealed class EndToEndTests
 }
 ```
 
-E2E tests run only in nightly CI (slow, network-dependent). Locally guarded by env var `TESSERA_E2E=1`.
+E2E tests run only in nightly CI (slow, network-dependent). Locally guarded by env var `STARLING_E2E=1`.
 
 ## CI pipeline summary
 

@@ -1,7 +1,7 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Parser + evaluator for CSS Values 4 §10 math functions:

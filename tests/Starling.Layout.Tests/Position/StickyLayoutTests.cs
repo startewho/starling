@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout.Position;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout.Position;
 using Xunit;
 
-namespace Tessera.Layout.Tests.Position;
+namespace Starling.Layout.Tests.Position;
 
 /// <summary>
 /// Tests for <c>position: sticky</c>. Without a scroll model, sticky

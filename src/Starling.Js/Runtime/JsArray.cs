@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// ES2024 §10.4.2 Array exotic object. Dense backing storage with a magic

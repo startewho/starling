@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §25.5 JSON intrinsic. Implements <c>JSON.parse</c> and <c>JSON.stringify</c>

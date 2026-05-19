@@ -2,7 +2,7 @@ using Org.BouncyCastle.Asn1.X509;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.X509;
 
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
 public static class CertificateVerifier
 {

@@ -10,7 +10,7 @@ depends_on:
   - "wp:M1-03-dom-core"
 blocks:
   - "wp:M4-02-dom-bindings-core"
-subsystem: "Tessera.Dom"
+subsystem: "Starling.Dom"
 plan_refs:
   - "browser-plan/05_DOM.md#events"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-04-dom-events"
@@ -27,7 +27,7 @@ WPT `dom/events/**` (core dispatch) ≥ 95%.
 ## Handoff log
 - 2026-05-11T15:20Z — created.
 - 2026-05-11T19:58Z — unblocked by wp:M1-03-dom-core completion; available to claim.
-- 2026-05-12T19:30Z — reconciled as complete: `Tessera.Dom.Events`
+- 2026-05-12T19:30Z — reconciled as complete: `Starling.Dom.Events`
   provides EventTarget/Event dispatch with capture, target, bubble, once,
   cancelation, propagation stops, listener removal, and MouseEvent/CustomEvent
   coverage in `DomEventTests`.

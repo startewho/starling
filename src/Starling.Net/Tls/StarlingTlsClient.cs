@@ -2,15 +2,15 @@ using System.Text;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto;
 
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
-internal sealed class TesseraTlsClient : DefaultTlsClient
+internal sealed class StarlingTlsClient : DefaultTlsClient
 {
     private readonly TlsClientOptions _options;
     private readonly RootCertificates _roots;
     private readonly IList<ProtocolName> _protocolNames;
 
-    public TesseraTlsClient(TlsCrypto crypto, TlsClientOptions options, RootCertificates roots)
+    public StarlingTlsClient(TlsCrypto crypto, TlsClientOptions options, RootCertificates roots)
         : base(crypto)
     {
         _options = options;
@@ -23,16 +23,16 @@ internal sealed class TesseraTlsClient : DefaultTlsClient
     public string? NegotiatedApplicationProtocol { get; private set; }
 
     public override TlsAuthentication GetAuthentication() =>
-        new TesseraTlsAuthentication(_options, _roots);
+        new StarlingTlsAuthentication(_options, _roots);
 
     public override IDictionary<int, byte[]> GetClientExtensions()
     {
         var extensions = TlsExtensionsUtilities.EnsureExtensionsInitialised(base.GetClientExtensions());
-        return AddTesseraExtensions(extensions);
+        return AddStarlingExtensions(extensions);
     }
 
     internal IDictionary<int, byte[]> CreateClientExtensionsForTesting() =>
-        AddTesseraExtensions(new Dictionary<int, byte[]>());
+        AddStarlingExtensions(new Dictionary<int, byte[]>());
 
     public override void ProcessServerExtensions(IDictionary<int, byte[]> serverExtensions)
     {
@@ -62,7 +62,7 @@ internal sealed class TesseraTlsClient : DefaultTlsClient
         CipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
     ];
 
-    private IDictionary<int, byte[]> AddTesseraExtensions(IDictionary<int, byte[]> extensions)
+    private IDictionary<int, byte[]> AddStarlingExtensions(IDictionary<int, byte[]> extensions)
     {
         TlsExtensionsUtilities.AddServerNameExtensionClient(extensions, GetSniServerNames());
         TlsExtensionsUtilities.AddAlpnExtensionClient(extensions, _protocolNames);

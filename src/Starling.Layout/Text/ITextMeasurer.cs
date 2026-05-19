@@ -1,8 +1,8 @@
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 
-namespace Tessera.Layout.Text;
+namespace Starling.Layout.Text;
 
 /// <summary>
 /// One OpenType variation-axis setting. <see cref="Tag"/> is the four-letter

@@ -1,8 +1,8 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Properties;
+namespace Starling.Css.Properties;
 
 /// <summary>
 /// Family-name aware value parser for the <c>font-family</c> property.

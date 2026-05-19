@@ -1,13 +1,13 @@
 using FluentAssertions;
-using Tessera.Common.Image;
-using Tessera.Paint.Backend;
-using Tessera.Paint.DisplayList;
+using Starling.Common.Image;
+using Starling.Paint.Backend;
+using Starling.Paint.DisplayList;
 using Xunit;
-using LayoutRect = Tessera.Layout.Rect;
-using LayoutSize = Tessera.Layout.Size;
-using PaintList = Tessera.Paint.DisplayList.DisplayList;
+using LayoutRect = Starling.Layout.Rect;
+using LayoutSize = Starling.Layout.Size;
+using PaintList = Starling.Paint.DisplayList.DisplayList;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 /// <summary>
 /// Drives <see cref="ImageSharpBackend"/> with hand-built display lists so
@@ -115,14 +115,14 @@ public sealed class ImageSharpBackendTests
     /// for that frame because wgpu's default uncaptured-error handler turns
     /// a CreateTexture validation error into a process <c>abort()</c>, which
     /// no C# try/catch can intercept. Regression: loading netclaw.dev under
-    /// the AppHost default (<c>TESSERA_PAINT_BACKEND=imagesharp-gpu</c>)
+    /// the AppHost default (<c>STARLING_PAINT_BACKEND=imagesharp-gpu</c>)
     /// aborted Starling.Gui.Avalonia inside <c>wgpuDeviceCreateTexture</c>.
     /// </summary>
     [Fact]
     public void Oversized_viewport_falls_back_to_cpu_instead_of_aborting()
     {
         var list = new PaintList();
-        list.Add(new DisplayList.FillRect(new LayoutRect(0, 0, 100, 100), new Tessera.Css.Values.CssColor(0, 0, 255, 255)));
+        list.Add(new DisplayList.FillRect(new LayoutRect(0, 0, 100, 100), new Starling.Css.Values.CssColor(0, 0, 255, 255)));
 
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
 

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Tessera.Url;
+namespace Starling.Url;
 
 /// <summary>
 /// Host parser per WHATWG URL §4.5

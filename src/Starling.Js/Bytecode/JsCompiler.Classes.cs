@@ -1,8 +1,8 @@
-using Tessera.Js.Ast;
-using Tessera.Js.Lex;
-using Tessera.Js.Runtime;
+using Starling.Js.Ast;
+using Starling.Js.Lex;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Bytecode;
+namespace Starling.Js.Bytecode;
 
 /// <summary>
 /// B1b-2a — class declaration / expression / <c>super</c> / private

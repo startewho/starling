@@ -1,7 +1,7 @@
 using System.Numerics;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §21.2 BigInt — callable (not constructible) wrapper plus statics and

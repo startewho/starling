@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>Result of a successful regex match. Captures are stored as
 /// (start, end) pairs in <see cref="Captures"/>; -1 means "not captured on this

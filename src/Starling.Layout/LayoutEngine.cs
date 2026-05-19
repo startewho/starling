@@ -1,13 +1,13 @@
 using System.Diagnostics;
-using Tessera.Common.Diagnostics;
-using Tessera.Css.Cascade;
-using Tessera.Dom;
-using Tessera.Layout.Block;
-using Tessera.Layout.Box;
-using Tessera.Layout.Text;
-using Tessera.Layout.Tree;
+using Starling.Common.Diagnostics;
+using Starling.Css.Cascade;
+using Starling.Dom;
+using Starling.Layout.Block;
+using Starling.Layout.Box;
+using Starling.Layout.Text;
+using Starling.Layout.Tree;
 
-namespace Tessera.Layout;
+namespace Starling.Layout;
 
 /// <summary>
 /// Top-level layout façade. Consumes a parsed <see cref="Document"/>, runs the
@@ -76,7 +76,7 @@ public sealed class LayoutEngine
         // initial containing block and as the fixed-positioning anchor.
         using (_diag.Span("layout", "position"))
         {
-            var positioning = new Tessera.Layout.Position.PositionLayout(block, viewport);
+            var positioning = new Starling.Layout.Position.PositionLayout(block, viewport);
             positioning.LayoutPositioned(root);
         }
 

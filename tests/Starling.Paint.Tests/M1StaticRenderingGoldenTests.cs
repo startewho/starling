@@ -1,9 +1,9 @@
 using FluentAssertions;
-using Tessera.Html;
+using Starling.Html;
 using Xunit;
-using LayoutSize = Tessera.Layout.Size;
+using LayoutSize = Starling.Layout.Size;
 
-namespace Tessera.Paint.Tests;
+namespace Starling.Paint.Tests;
 
 [Trait("Category", "GoldenImage")]
 public sealed class M1StaticRenderingGoldenTests
@@ -29,7 +29,7 @@ public sealed class M1StaticRenderingGoldenTests
         Case("block margin stack", "<body><div style=\"background-color:#ff0000;width:60px;height:20px;margin-bottom:20px\"></div><div style=\"background-color:#0000ff;width:60px;height:20px;margin-top:20px\"></div></body>", requiredColors: [ColorCount.Red, ColorCount.Blue]),
         Case("display contents keeps descendants", "<body><div style=\"display:contents\"><p style=\"background-color:#008000;width:80px;height:30px\">inner</p></div></body>", requiredColors: [ColorCount.Green]),
         Case("section article nesting", "<body><section style=\"background-color:#ff0000;width:100px;height:80px\"><article style=\"background-color:#0000ff;width:50px;height:30px\">article</article></section></body>", requiredColors: [ColorCount.Red, ColorCount.Blue]),
-        Case("doctype document", "<!doctype html><html><head><title>x</title></head><body><main><h2>Static page</h2><p>rendered by Tessera</p></main></body></html>", minNonWhite: 100),
+        Case("doctype document", "<!doctype html><html><head><title>x</title></head><body><main><h2>Static page</h2><p>rendered by Starling</p></main></body></html>", minNonWhite: 100),
     };
 
     [Theory]

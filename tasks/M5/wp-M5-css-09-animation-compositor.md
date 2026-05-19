@@ -32,7 +32,7 @@ correct, time-varying values.
 
 ## Outputs
 
-- `Tessera.Css.Animations.AnimationCompositor`:
+- `Starling.Css.Animations.AnimationCompositor`:
   - `ComputedStyle Compose(Element, ComputedStyle staticStyle, double nowMs)`.
   - Per-element cache of "last cascaded snapshot" so transition triggering
     is correct on value changes.

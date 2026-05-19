@@ -1,6 +1,6 @@
-using Tessera.Js.Bytecode;
+using Starling.Js.Bytecode;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// User-defined JS function. Wraps a compiled <see cref="Chunk"/> plus the
@@ -162,7 +162,7 @@ public enum JsFunctionKind : byte
     Normal = 0,
     /// <summary>Async function — invocation returns a Promise; the body runs
     /// on a worker thread and suspends at <c>await</c> via the VM's
-    /// <see cref="Tessera.Js.Bytecode.Opcode.Suspend"/> opcode.</summary>
+    /// <see cref="Starling.Js.Bytecode.Opcode.Suspend"/> opcode.</summary>
     Async = 1,
     /// <summary>Generator function — invocation returns a Generator
     /// (iterator) object; body suspends at each <c>yield</c>.</summary>

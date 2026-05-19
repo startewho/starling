@@ -1,4 +1,4 @@
-namespace Tessera.Url;
+namespace Starling.Url;
 
 /// <summary>
 /// The "special scheme" set from WHATWG URL §3.1

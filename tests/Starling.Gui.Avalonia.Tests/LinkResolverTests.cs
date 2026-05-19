@@ -1,5 +1,5 @@
 using FluentAssertions;
-using Tessera.Gui;
+using Starling.Gui;
 using Xunit;
 
 namespace Starling.Gui.Avalonia.Tests;

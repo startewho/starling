@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// B1b-2c — runtime handle for a generator / async function body suspended
@@ -75,7 +75,7 @@ public sealed class SuspendedFrame
     /// The worker blocks immediately on <see cref="_resume"/>; it only starts
     /// running when the caller invokes <see cref="Resume"/>. The body must
     /// drive the VM's <c>RunInner</c> with this frame as the active
-    /// suspension target, so any <see cref="Tessera.Js.Bytecode.Opcode.Suspend"/>
+    /// suspension target, so any <see cref="Starling.Js.Bytecode.Opcode.Suspend"/>
     /// dispatches to <see cref="WorkerYield"/>.</summary>
     public void Start(System.Action body)
     {

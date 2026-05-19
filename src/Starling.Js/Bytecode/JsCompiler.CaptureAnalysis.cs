@@ -1,10 +1,10 @@
-using Tessera.Js.Ast;
+using Starling.Js.Ast;
 
-namespace Tessera.Js.Bytecode;
+namespace Starling.Js.Bytecode;
 
 /// <summary>
 /// gap:closure-write-back (wp:M3-04c2). Static analysis that decides which
-/// of a function's own locals must use shared <see cref="Tessera.Js.Runtime.Cell"/>
+/// of a function's own locals must use shared <see cref="Starling.Js.Runtime.Cell"/>
 /// storage rather than plain slot storage.
 /// </summary>
 /// <remarks>

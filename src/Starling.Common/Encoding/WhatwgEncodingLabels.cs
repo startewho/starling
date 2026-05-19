@@ -1,4 +1,4 @@
-namespace Tessera.Common.Encoding;
+namespace Starling.Common.Encoding;
 
 /// <summary>
 /// Maps WHATWG Encoding Standard labels to their canonical encoding name.
@@ -14,7 +14,7 @@ namespace Tessera.Common.Encoding;
 /// broken labels such as <c>iso-2022-cn</c>) is intentionally NOT mapped
 /// here. Callers that want to honour the spec's replacement behaviour
 /// should handle those labels explicitly; otherwise the engine will fall
-/// back to UTF-8 (Tessera's default). See <c>wp:M2-07d</c> notes.
+/// back to UTF-8 (Starling's default). See <c>wp:M2-07d</c> notes.
 /// </remarks>
 public static class WhatwgEncodingLabels
 {

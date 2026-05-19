@@ -1,6 +1,6 @@
-using Tessera.Dom;
+using Starling.Dom;
 
-namespace Tessera.Html.TreeBuilder;
+namespace Starling.Html.TreeBuilder;
 
 /// <summary>
 /// Stack of open elements per [HTML §13.2.4.2](https://html.spec.whatwg.org/multipage/parsing.html#the-stack-of-open-elements).

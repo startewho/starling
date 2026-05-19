@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §10.5 Proxy Exotic Object. Wraps a target object and a handler whose

@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §24.3 WeakMap Objects — object-keyed map with weak references so entries

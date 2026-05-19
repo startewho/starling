@@ -11,7 +11,7 @@ depends_on:
   - "wp:M3-04-js-vm"
 blocks:
   - "wp:M3-05-js-intrinsics"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#vm"
 ---
@@ -24,12 +24,12 @@ M3-04 slice landed top-level execution; this slice adds frame-based
 call/return so recursion + program structure work.
 
 ## Outputs
-- `src/Tessera.Js/Runtime/JsFunction.cs` — function value carrying a
+- `src/Starling.Js/Runtime/JsFunction.cs` — function value carrying a
   sub-chunk + parameter count.
-- `src/Tessera.Js/Bytecode/JsCompiler.cs` — emit sub-chunks for
+- `src/Starling.Js/Bytecode/JsCompiler.cs` — emit sub-chunks for
   `FunctionDeclaration`; hoist declarations so functions are callable
   before their textual position.
-- `src/Tessera.Js/Runtime/JsVm.cs` — extend `Call` to push a new frame
+- `src/Starling.Js/Runtime/JsVm.cs` — extend `Call` to push a new frame
   for a `JsFunction` callee; `Return`/`ReturnUndefined` pop the frame.
 
 ## Out of scope (queued)

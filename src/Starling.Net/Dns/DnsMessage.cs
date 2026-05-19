@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace Tessera.Net.Dns;
+namespace Starling.Net.Dns;
 
 /// <summary>
 /// DNS message wire format per RFC 1035 §4.1. Encoder + decoder.

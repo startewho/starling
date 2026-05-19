@@ -22,10 +22,10 @@ plan_refs:
 
 ## Goal
 
-Phase 2: write `native/shim/tessera_skia.{h,cpp}` — a small custom `extern "C"`
-ABI (~600–1000 lines) exposing exactly what the Tessera display list needs, and
+Phase 2: write `native/shim/starling_skia.{h,cpp}` — a small custom `extern "C"`
+ABI (~600–1000 lines) exposing exactly what the Starling display list needs, and
 nothing more. Statically link `libskia` + Dawn into a single
-`libtessera_skia.{dylib,dll,so}` per RID so .NET loads one native file with no
+`libstarling_skia.{dylib,dll,so}` per RID so .NET loads one native file with no
 transitive native-dep hell. WebGPU types **never** cross into .NET — they stay
 behind opaque `void*` handles. This is long pole #2.
 
@@ -39,7 +39,7 @@ behind opaque `void*` handles. This is long pole #2.
 
 ## Outputs
 
-- `native/shim/tessera_skia.h` + `tessera_skia.cpp` — the custom `extern "C"`
+- `native/shim/starling_skia.h` + `starling_skia.cpp` — the custom `extern "C"`
   ABI. Minimal C surface:
   - context/device lifecycle (`ts_context_create`, destroy);
   - surface create + canvas;
@@ -48,15 +48,15 @@ behind opaque `void*` handles. This is long pole #2.
   - font/typeface + `shape_text` + `font_metrics`;
   - `flush_and_submit` + `read_pixels` for golden/headless readback.
 - `native/shim/CMakeLists.txt` — statically links `libskia` + Dawn into a single
-  `libtessera_skia.{dylib,dll,so}` per RID.
+  `libstarling_skia.{dylib,dll,so}` per RID.
 - A tiny C++ smoke harness that fills a rect and reads back a PNG.
 
 ## Acceptance
 
-- `tessera_skia.h` exposes only the minimal surface above; WebGPU/`wgpu::` types
+- `starling_skia.h` exposes only the minimal surface above; WebGPU/`wgpu::` types
   appear nowhere in the header — they are opaque `void*` handles.
 - The CMake build produces a single statically-linked
-  `libtessera_skia.{dylib,dll,so}` per RID (no transitive native deps to ship).
+  `libstarling_skia.{dylib,dll,so}` per RID (no transitive native deps to ship).
 - The C++ smoke harness creates a context + surface, fills a rect via
   `fill_rect`, calls `flush_and_submit` + `read_pixels`, and writes a correct
   PNG.
@@ -69,7 +69,7 @@ behind opaque `void*` handles. This is long pole #2.
 - Master plan: `~/.claude/plans/make-a-plan-to-serialized-boole.md` (Phase 2).
 - The opaque-`void*` insulation is the key defense against WebGPU C-API churn —
   treat it as a hard rule, not a style preference.
-- `06h-skia-interop` consumes this: the `[LibraryImport("tessera_skia")]`
+- `06h-skia-interop` consumes this: the `[LibraryImport("starling_skia")]`
   bindings mirror exactly this header.
 - Dawn `Instance`/`Adapter`/`Device` creation inside `ts_context_create` is
   fleshed out in `06h` (Phase 4 wiring) — this package can stub the device path
@@ -80,14 +80,14 @@ behind opaque `void*` handles. This is long pole #2.
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
 - 2026-05-14T16:39:04Z — complete (agent-claude-cody-shim). **osx-arm64 only**;
   win/linux shims wait on those native builds. Summary:
-  - `tessera_skia.cpp` implemented for real against Skia Graphite + Dawn
+  - `starling_skia.cpp` implemented for real against Skia Graphite + Dawn
     (chrome/m140 headers). Context = `dawn::native::Instance` →
     `EnumerateAdapters` (Metal) → `Adapter::CreateDevice` → `wgpu::Device` +
     `Queue` → `skgpu::graphite::ContextFactory::MakeDawn` → `Context` +
     `Recorder`. Surfaces via `SkSurfaces::RenderTarget`. The 4 DisplayItem ops
     via `SkCanvas` drawRect/drawGlyphs/drawImageRect. Flush =
     `Recorder::snap` → `Context::insertRecording` → `submit(SyncToCpu::kYes)`.
-  - `libtessera_skia.dylib` (28 MB) builds + links; the C smoke harness
+  - `libstarling_skia.dylib` (28 MB) builds + links; the C smoke harness
     (`smoke_test.c`) passes — context+surface, clear→fill_rect→flush→readback,
     asserts background + rect pixels exact.
   - **C-ABI surface changes vs the scaffold (2):**

@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 public enum JsTypedArrayKind
 {

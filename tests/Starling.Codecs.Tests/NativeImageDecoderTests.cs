@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Codecs.Tests;
+namespace Starling.Codecs.Tests;
 
 /// <summary>
 /// End-to-end decode tests for <see cref="NativeImageDecoder"/>. The actual

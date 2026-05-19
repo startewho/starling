@@ -1,15 +1,15 @@
-/* Tessera design tokens
+/* Starling design tokens
    ───────────────────────────────────────────────────────────────────────
    Three themes (dark / light / contrast), two densities (comfy / compact),
    two type modes (sans / mono). All flow through CSS custom properties
-   from [data-theme], [data-density], [data-type] on .tessera root.
+   from [data-theme], [data-density], [data-type] on .starling root.
 */
 
 /* ─── Fonts ───────────────────────────────────────────────────────── */
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
 
 /* ─── Base theme: dark ────────────────────────────────────────────── */
-.tessera {
+.starling {
   /* surfaces */
   --bg:        #0c0d10;
   --panel:     #14161b;
@@ -30,7 +30,7 @@
   --faint:     #525866;
   --inverse:   #0c0d10;
 
-  /* accent (mint, carried over from current Tessera) */
+  /* accent (mint, carried over from current Starling) */
   --accent:    #7dd3a0;
   --accent-2:  #5fb886;
   --accent-on: #0c0d10;
@@ -100,7 +100,7 @@
 /* ─── Light theme ─────────────────────────────────────────────────── */
 /* Warm-paper bg, ink text, sage-mint accent kept readable on both.
    Saturation pulled down on flame colors so they read on a light panel. */
-.tessera[data-theme="light"] {
+.starling[data-theme="light"] {
   --bg:        #f4f3ee;        /* warm paper */
   --panel:     #fbfaf6;        /* card */
   --surface:   #ffffff;        /* input / well */
@@ -140,10 +140,10 @@
      color so it reads. Hooked in chrome.jsx via var(--bar-ink). */
   --bar-ink:   #1a1a17;
 }
-.tessera { --bar-ink: #0c0d10; }   /* default for dark/contrast */
+.starling { --bar-ink: #0c0d10; }   /* default for dark/contrast */
 
 /* ─── High contrast ───────────────────────────────────────────────── */
-.tessera[data-theme="contrast"] {
+.starling[data-theme="contrast"] {
   --bg:        #000000;
   --panel:     #0a0a0a;
   --surface:   #121214;
@@ -164,7 +164,7 @@
 }
 
 /* ─── Compact density ─────────────────────────────────────────────── */
-.tessera[data-density="compact"] {
+.starling[data-density="compact"] {
   --row:        28px;
   --row-sm:     24px;
   --row-xs:     20px;
@@ -183,16 +183,16 @@
 }
 
 /* ─── Mono mode ───────────────────────────────────────────────────── */
-.tessera[data-type="mono"] {
+.starling[data-type="mono"] {
   --font-chrome: var(--font-mono);
 }
-.tessera[data-type="mono"] { letter-spacing: -0.01em; }
+.starling[data-type="mono"] { letter-spacing: -0.01em; }
 
-/* ─── Resets for the things we use inside .tessera ────────────────── */
-.tessera, .tessera * {
+/* ─── Resets for the things we use inside .starling ────────────────── */
+.starling, .starling * {
   box-sizing: border-box;
 }
-.tessera button {
+.starling button {
   appearance: none;
   border: 0;
   background: transparent;
@@ -201,7 +201,7 @@
   cursor: pointer;
   padding: 0;
 }
-.tessera input {
+.starling input {
   appearance: none;
   border: 0;
   background: transparent;
@@ -211,7 +211,7 @@
 }
 
 /* Pill utility */
-.tessera .pill {
+.starling .pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -225,7 +225,7 @@
   border: 1px solid var(--accent-line);
   white-space: nowrap;
 }
-.tessera .pill .dot {
+.starling .pill .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -234,7 +234,7 @@
 }
 
 /* Stat utility */
-.tessera .stat {
+.starling .stat {
   display: inline-flex;
   align-items: baseline;
   gap: 4px;
@@ -242,14 +242,14 @@
   font-size: var(--fs-xs);
   color: var(--muted);
 }
-.tessera .stat b { color: var(--text); font-weight: 500; }
+.starling .stat b { color: var(--text); font-weight: 500; }
 
 /* Hairline divider */
-.tessera .hr {
+.starling .hr {
   height: 1px;
   background: var(--border);
 }
-.tessera .vr {
+.starling .vr {
   width: 1px;
   background: var(--border);
   align-self: stretch;

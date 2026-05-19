@@ -1,9 +1,9 @@
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Values;
 using Xunit;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 /// <summary>End-to-end smoke checks for the Values lane done-criteria.</summary>
 public sealed class ValuesSmokeTests

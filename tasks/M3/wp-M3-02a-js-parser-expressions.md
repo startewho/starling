@@ -11,7 +11,7 @@ depends_on:
   - "wp:M3-01-js-lexer"
 blocks:
   - "wp:M3-02b-js-parser-statements"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#parser"
 ---
@@ -20,20 +20,20 @@ plan_refs:
 
 ## Goal
 First slice of the JS parser. Lay down the AST type hierarchy under
-`src/Tessera.Js/Ast/` and a recursive-descent parser that consumes
+`src/Starling.Js/Ast/` and a recursive-descent parser that consumes
 `JsLexer` output to build expression trees with correct operator
 precedence + associativity per ES2024 §13.
 
 ## Inputs
 - wp:M3-01-js-lexer complete.
-- `src/Tessera.Js/Lex/JsLexer.cs` producing the token stream.
+- `src/Starling.Js/Lex/JsLexer.cs` producing the token stream.
 
 ## Outputs
-- `src/Tessera.Js/Ast/AstNode.cs` — node hierarchy base.
-- `src/Tessera.Js/Ast/Expressions.cs` — Literal, Identifier, Binary,
+- `src/Starling.Js/Ast/AstNode.cs` — node hierarchy base.
+- `src/Starling.Js/Ast/Expressions.cs` — Literal, Identifier, Binary,
   Unary, Conditional, Assignment, Member, Call, Sequence, This, Null,
   Boolean.
-- `src/Tessera.Js/Parse/JsParser.cs` — parser scaffold with public
+- `src/Starling.Js/Parse/JsParser.cs` — parser scaffold with public
   `ParseExpression(string)` entry plus `ParseProgram` stubbed for
   M3-02b to fill in.
 

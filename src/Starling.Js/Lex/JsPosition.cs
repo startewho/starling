@@ -1,4 +1,4 @@
-namespace Tessera.Js.Lex;
+namespace Starling.Js.Lex;
 
 /// <summary>
 /// Source position: 1-based line / column plus 0-based absolute char offset.

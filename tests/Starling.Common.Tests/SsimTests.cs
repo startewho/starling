@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 using Xunit;
 
-namespace Tessera.Common.Tests;
+namespace Starling.Common.Tests;
 
 public class SsimTests
 {

@@ -11,7 +11,7 @@ depends_on:
   - "wp:M3-06i-skia-backend"
 blocks:
   - "wp:M3-06k-gui-canvas"
-subsystem: "Tessera.Paint"
+subsystem: "Starling.Paint"
 plan_refs:
   - "browser-plan/08_FONTS_PAINT.md#fonts"
   - "browser-plan/08_FONTS_PAINT.md#display-list"
@@ -33,21 +33,21 @@ This is correctness, not regression.
 ## Inputs
 
 - `wp:M3-06i-skia-backend` complete: `SkiaGraphiteBackend` + `RenderedBitmap`
-  exist; `Tessera.Skia` exposes typeface/font/`shape_text`/`font_metrics`.
+  exist; `Starling.Skia` exposes typeface/font/`shape_text`/`font_metrics`.
 - Existing 3-tier font chain (bundled → embedded → system) and the embedded
   `OpenSans-Regular.ttf`.
 
 ## Outputs
 
-- `src/Tessera.Paint/FontResolver.cs` — rewritten to return Skia typefaces:
+- `src/Starling.Paint/FontResolver.cs` — rewritten to return Skia typefaces:
   `ts_typeface_from_data` for the embedded `OpenSans-Regular.ttf`,
   `ts_typeface_from_name` via Skia's `SkFontMgr`. The 3-tier chain stays
   conceptually identical.
-- `src/Tessera.Paint/SkiaTextMeasurer.cs` (new) — implements `ITextMeasurer`
+- `src/Starling.Paint/SkiaTextMeasurer.cs` (new) — implements `ITextMeasurer`
   with real HarfBuzz-shaped metrics.
-- `src/Tessera.Paint/Painter.cs` — `LayoutDocumentWithStyle` switches from
+- `src/Starling.Paint/Painter.cs` — `LayoutDocumentWithStyle` switches from
   `DefaultTextMeasurer` to `SkiaTextMeasurer`.
-- `src/Tessera.Layout/Text/ITextMeasurer.cs` — kept as the seam;
+- `src/Starling.Layout/Text/ITextMeasurer.cs` — kept as the seam;
   `DefaultTextMeasurer` is **kept** for paint-free layout unit tests.
 - `testdata/golden/` — re-vendored in full against the new shaped metrics.
 
@@ -77,8 +77,8 @@ This is correctness, not regression.
 
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
 - 2026-05-14T17:45:00Z — complete (agent-claude-cody-skia-fonts).
-  - **`SkiaTextMeasurer`** (`src/Tessera.Paint/`, public, `IDisposable`):
-    `ITextMeasurer` backed by `Tessera.Skia`. `MeasureWidth` shapes
+  - **`SkiaTextMeasurer`** (`src/Starling.Paint/`, public, `IDisposable`):
+    `ITextMeasurer` backed by `Starling.Skia`. `MeasureWidth` shapes
     `text + 'x'` via `ts_shape_text` and returns the trailing probe glyph's
     pen X — `ts_shape_text` exposes pen positions but not per-glyph advances,
     and the shim positions glyphs by accumulated advance with no contextual
@@ -93,12 +93,12 @@ This is correctness, not regression.
     embedded resource), tier 2 system families via `ts_typeface_from_name`,
     tier 3 `ts_typeface_from_name("sans-serif")`. Typeface resolved once and
     cached for the resolver lifetime; `FontResolver` is now `IDisposable`.
-    `internal` because `SkTypeface` is a `Tessera.Skia` internal handle.
+    `internal` because `SkTypeface` is a `Starling.Skia` internal handle.
   - **`Painter.LayoutDocumentWithStyle`** uses `SkiaTextMeasurer`;
     `DefaultTextMeasurer` kept (still `LayoutEngine`'s default — paint-free
     layout unit tests unchanged).
   - **Backend-default flip**: `Painter.SelectBackend()` now defaults to
-    `SkiaGraphite`; `TESSERA_PAINT_BACKEND=imagesharp` forces the legacy path.
+    `SkiaGraphite`; `STARLING_PAINT_BACKEND=imagesharp` forces the legacy path.
     Deliberate re-sequencing per the WP brief — layout runs on Skia metrics,
     so painting with ImageSharp (SixLabors metrics) would mismatch layout.
     `ImageSharpBackend.cs` kept, fully reachable.
@@ -106,11 +106,11 @@ This is correctness, not regression.
     (2.27% of bytes shifted from real shaped metrics). Inspected the
     regenerated render — heading, nav list, Cyrillic "русский", green banner
     link all legible, correctly laid out, no garbled glyphs/overflow.
-    `M1StaticRenderingGoldenTests` and `Tessera.Paint.Tests` pass unchanged
+    `M1StaticRenderingGoldenTests` and `Starling.Paint.Tests` pass unchanged
     (lower-bound pixel-count asserts — no threshold retune needed).
     `testdata/golden/live/example.com.png` NOT re-vendored: the live test is
     network-gated and skipped offline — regenerate with
-    `TESSERA_UPDATE_GOLDENS=1` on a networked run.
+    `STARLING_UPDATE_GOLDENS=1` on a networked run.
   - **Native shim gap (NOT fixable here — `native/*` is off-limits)**:
     `ts_canvas_draw_image` is a **no-op on Graphite canvases** —
     `SkImages::RasterFromPixmapCopy` + `drawImageRect` leaves the destination
@@ -119,7 +119,7 @@ This is correctness, not regression.
     image-pixel tests (`ImagePaintGoldenTests` ×2, `EngineRenderTests`
     image case) now pin `PaintBackend.ImageSharp` explicitly via a new
     optional `RenderDocument(... backend)` arg and `RenderOptions.Backend`.
-    Added `Tessera.Skia.Tests.SkiaInteropSmokeTests.DrawImage_BlitsPixels_IntoSurface`
+    Added `Starling.Skia.Tests.SkiaInteropSmokeTests.DrawImage_BlitsPixels_IntoSurface`
     as the exact repro — currently `[Fact(Skip=...)]`; un-skip once the shim
     uploads images. **Action for 06g/06i owner**: fix `ts_canvas_draw_image`.
   - **osx-arm64 only**: the shim dylib ships osx-arm64 only; the Skia text
@@ -128,6 +128,6 @@ This is correctness, not regression.
     override until the dylibs are built (wp:M3-06g).
   - Build + full `dotnet test` green on osx-arm64. Test-count delta: +1
     (`DrawImage_BlitsPixels_IntoSurface`, skipped). `dotnet run --project
-    src/Tessera.Headless -- render testdata/hello.html` eyeballed — clean,
+    src/Starling.Headless -- render testdata/hello.html` eyeballed — clean,
     legible "Hello, world." in real OpenSans metrics.
 - 2026-05-19T02:55Z — superseded by wp:M5-skia-removal (commit 7b7ebd0): the Skia/Graphite native shim was removed from the engine and ImageSharp.Drawing 3 became the sole paint backend. This WP is left in place as history.

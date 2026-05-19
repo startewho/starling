@@ -12,7 +12,7 @@ depends_on:
   - "wp:M3-06c-decoded-image"
 blocks:
   - "wp:M3-06j-skia-fonts"
-subsystem: "Tessera.Paint"
+subsystem: "Starling.Paint"
 plan_refs:
   - "browser-plan/08_FONTS_PAINT.md#display-list"
   - "browser-plan/08_FONTS_PAINT.md#raster-backend"
@@ -23,10 +23,10 @@ plan_refs:
 
 ## Goal
 
-Phase 5: add `SkiaGraphiteBackend` to `Tessera.Paint` — the same role as
+Phase 5: add `SkiaGraphiteBackend` to `Starling.Paint` — the same role as
 `ImageSharpBackend`, consuming the **100% unchanged** `DisplayList` /
-`DisplayItem` (that is the seam) and rendering through the `Tessera.Skia`
-handles. Introduce `RenderedBitmap` in `Tessera.Common` and have
+`DisplayItem` (that is the seam) and rendering through the `Starling.Skia`
+handles. Introduce `RenderedBitmap` in `Starling.Common` and have
 `Painter.RenderDocument` return it instead of `Image<Rgba32>`. Run old + new
 backends **side by side behind a flag** so output can be diffed before
 `ImageSharpBackend.cs` is deleted (deleted last, after goldens are re-baselined
@@ -34,22 +34,22 @@ in `06j`).
 
 ## Inputs
 
-- `wp:M3-06h-skia-interop` complete: `Tessera.Skia` with context/surface/canvas
+- `wp:M3-06h-skia-interop` complete: `Starling.Skia` with context/surface/canvas
   handles and a passing interop smoke test.
 - `wp:M3-06c-decoded-image` complete: `DecodedImage` is the final `DrawImage`
   payload type — the backend builds on that signature.
 
 ## Outputs
 
-- `src/Tessera.Common/Image/RenderedBitmap.cs` — `{ int Width, int Height,
+- `src/Starling.Common/Image/RenderedBitmap.cs` — `{ int Width, int Height,
   byte[] Rgba }`.
-- `src/Tessera.Paint/Backend/SkiaGraphiteBackend.cs` — walks `DisplayList`,
-  issues the 4 `DisplayItem` ops through `Tessera.Skia`, `flush_and_submit` +
+- `src/Starling.Paint/Backend/SkiaGraphiteBackend.cs` — walks `DisplayList`,
+  issues the 4 `DisplayItem` ops through `Starling.Skia`, `flush_and_submit` +
   `read_pixels` → `RenderedBitmap`.
-- `src/Tessera.Paint/Painter.cs` — `RenderDocument` returns `RenderedBitmap`;
+- `src/Starling.Paint/Painter.cs` — `RenderDocument` returns `RenderedBitmap`;
   backend selected behind a flag (`SkiaGraphiteBackend` vs `ImageSharpBackend`).
-- `src/Tessera.Engine/Engine.cs` (~lines 136–175) — consume `RenderedBitmap`.
-- `src/Tessera.Headless/Program.cs` — consume `RenderedBitmap` (PNG encode from
+- `src/Starling.Engine/Engine.cs` (~lines 136–175) — consume `RenderedBitmap`.
+- `src/Starling.Headless/Program.cs` — consume `RenderedBitmap` (PNG encode from
   raw RGBA stays in C# for now).
 - Golden test pixel-readers updated to read `RenderedBitmap`.
 - `DisplayList` / `DisplayItem` — **unchanged** (verify, do not edit).
@@ -58,11 +58,11 @@ in `06j`).
 
 - `SkiaGraphiteBackend` renders the display list with no edits to `DisplayList`
   or `DisplayItem`.
-- `RenderedBitmap` exists in `Tessera.Common`; `Painter.RenderDocument` returns
+- `RenderedBitmap` exists in `Starling.Common`; `Painter.RenderDocument` returns
   it; `Engine`, `Headless`, and golden pixel-readers consume it.
 - The dual-backend flag selects either backend; with the flag on
   `ImageSharpBackend`, all existing goldens still pass byte-exact.
-- `dotnet run --project src/Tessera.Headless -- render testdata/hello.html -o
+- `dotnet run --project src/Starling.Headless -- render testdata/hello.html -o
   out.png` succeeds on both backends; old-vs-new output is diffable behind the
   flag.
 - `ImageSharpBackend.cs` is **not** deleted in this package.
@@ -81,28 +81,28 @@ in `06j`).
 - 2026-05-14T00:00:00Z — created (agent-claude-cody) during the native-interop pivot WP filing.
 - 2026-05-14T17:55:00Z — complete (agent-claude-cody-skia-backend).
   - `RenderedBitmap` (`{Width,Height,byte[] Rgba}`, no-op `IDisposable`, `GetPixel`)
-    landed in `Tessera.Common`. `SkiaGraphiteBackend` walks the **unchanged**
+    landed in `Starling.Common`. `SkiaGraphiteBackend` walks the **unchanged**
     `DisplayList`: `FillRect`→`ts_canvas_fill_rect`, `StrokeRect`→
     `ts_canvas_stroke_rect`, `DrawText`→`ts_shape_text`+`ts_canvas_draw_text`
     (glyphs translated by the baseline origin), `DrawImage`→`ts_canvas_draw_image`
     (raw RGBA). One `SkContext` + typeface cached per backend instance; surface
     per render; `flush_and_submit`+`read_pixels`→`RenderedBitmap`.
   - **Flag**: `Painter.RenderDocument` gained an optional `PaintBackend?` param
-    and `Painter.SelectBackend()` reads env var **`TESSERA_PAINT_BACKEND`**
+    and `Painter.SelectBackend()` reads env var **`STARLING_PAINT_BACKEND`**
     (`skia`|`imagesharp`). **Default is ImageSharp** — goldens stay byte-exact,
     `dotnet test` green (no test-count delta; Paint.Tests still 33). ImageSharp
     is still the PNG encoder: `Engine` wraps `RenderedBitmap.Rgba` back into an
     `Image<Rgba32>` only for `SaveAsPng`.
   - `ImageSharpBackend` kept (not deleted) and gained `RenderToBitmap`.
-  - Internals access: `Tessera.Skia`'s Sk* handles are `internal`; since this WP
-    may not edit `src/Tessera.Skia/*`, the `InternalsVisibleTo "Tessera.Paint"`
-    is declared in `Directory.Build.props` scoped to the `Tessera.Skia` assembly.
+  - Internals access: `Starling.Skia`'s Sk* handles are `internal`; since this WP
+    may not edit `src/Starling.Skia/*`, the `InternalsVisibleTo "Starling.Paint"`
+    is declared in `Directory.Build.props` scoped to the `Starling.Skia` assembly.
   - **osx-arm64 only**: the shim dylib ships for osx-arm64; the Skia path throws
-    from the first native call elsewhere. `Tessera.Gui` (Mac Catalyst) now
-    transitively references `Tessera.Skia` — added a `DropTransitiveSkiaNative`
+    from the first native call elsewhere. `Starling.Gui` (Mac Catalyst) now
+    transitively references `Starling.Skia` — added a `DropTransitiveSkiaNative`
     target to its csproj so MAUI's `install_name_tool` doesn't choke on the
     bundled dylib. Proper GUI+Skia native wiring is **06k**'s job.
-  - Verified: `tessera render testdata/hello.html` on both backends produces a
+  - Verified: `starling render testdata/hello.html` on both backends produces a
     valid 800x600 RGBA PNG. Skia output is plausible (0.37% non-white text vs
     ImageSharp's 0.33%); 0.51% of pixels differ — expected GPU/AA divergence,
     goldens re-baselined in 06j.

@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>§26.1 The WeakRef constructor + prototype.</summary>
 public static class WeakRefCtor

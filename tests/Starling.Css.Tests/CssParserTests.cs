@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 using Xunit;
 using Starling.Spec;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 [Spec("css-syntax-3", "https://www.w3.org/TR/css-syntax-3/")]
 

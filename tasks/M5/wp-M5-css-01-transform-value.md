@@ -28,9 +28,9 @@ need a 4×4 stack and a stacking-context flatten step).
 
 ## Inputs
 
-- `Tessera.Css.Values.CssValueParser` — produces `CssFunctionValue` / `CssValueList`
+- `Starling.Css.Values.CssValueParser` — produces `CssFunctionValue` / `CssValueList`
   for each transform function in the declaration.
-- `Tessera.Css.Values.CssLength` / `CssPercentage` / `CssNumber` / `CssAngle` —
+- `Starling.Css.Values.CssLength` / `CssPercentage` / `CssNumber` / `CssAngle` —
   numeric argument types.
 
 ## Outputs

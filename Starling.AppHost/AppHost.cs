@@ -1,4 +1,4 @@
-// Aspire AppHost: brings up the Tessera dashboard (port printed on stdout —
+// Aspire AppHost: brings up the Starling dashboard (port printed on stdout —
 // typically http://localhost:18888) and launches the registered resources.
 // Run with:
 //
@@ -22,20 +22,20 @@ var repoRoot = LocateRepoRoot();
 // WebGPU-accelerated rasterizer out of the box. The build-time gate
 // (EnableImageSharpDrawing3) auto-flips on in Directory.Build.props when a
 // Six Labors license is present, so this default is wired end-to-end. The
-// developer-set TESSERA_PAINT_BACKEND below still wins (skia / imagesharp).
+// developer-set STARLING_PAINT_BACKEND below still wins (skia / imagesharp).
 //
 // MCP port: defaults to http://127.0.0.1:3078/mcp; the env var still wins
 // if the developer overrides it.
 var guiAvalonia = builder.AddProject<Projects.Starling_Gui_Avalonia>("gui-avalonia")
-    .WithEnvironment("TESSERA_PAINT_BACKEND", "imagesharp-gpu")
-    .WithEnvironment("TESSERA_MCP_URL", "http://127.0.0.1:3078/mcp")
+    .WithEnvironment("STARLING_PAINT_BACKEND", "imagesharp-gpu")
+    .WithEnvironment("STARLING_MCP_URL", "http://127.0.0.1:3078/mcp")
     .WithOtlpExporter();
 
 // Headless CLI. Pre-baked to render the bundled hello.html fixture; the args
 // are absolute paths because Aspire's default cwd for a project resource is
 // the csproj directory (src/Starling.Headless/), not the repo root.
 //
-// TESSERA_PAINT_BACKEND on the AppHost process is forwarded to the headless
+// STARLING_PAINT_BACKEND on the AppHost process is forwarded to the headless
 // resource — Aspire does not auto-propagate arbitrary host env vars, only
 // those added via WithEnvironment. Selecting `imagesharp` additionally
 // requires the headless build to compile in the backend, which means
@@ -45,14 +45,14 @@ var headless = builder.AddProject<Projects.Starling_Headless>("headless")
     .WithArgs(
         "render",
         Path.Combine(repoRoot, "testdata", "hello.html"),
-        "-o", Path.Combine(Path.GetTempPath(), "tessera-headless-out.png"))
+        "-o", Path.Combine(Path.GetTempPath(), "starling-headless-out.png"))
     .WithOtlpExporter();
 
-var paintBackend = Environment.GetEnvironmentVariable("TESSERA_PAINT_BACKEND");
+var paintBackend = Environment.GetEnvironmentVariable("STARLING_PAINT_BACKEND");
 if (!string.IsNullOrWhiteSpace(paintBackend))
 {
-    headless.WithEnvironment("TESSERA_PAINT_BACKEND", paintBackend);
-    guiAvalonia.WithEnvironment("TESSERA_PAINT_BACKEND", paintBackend);
+    headless.WithEnvironment("STARLING_PAINT_BACKEND", paintBackend);
+    guiAvalonia.WithEnvironment("STARLING_PAINT_BACKEND", paintBackend);
 }
 
 // wgpu-native (Rust) honors RUST_LOG for tracing. Forward it through so we

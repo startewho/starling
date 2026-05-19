@@ -11,7 +11,7 @@ depends_on:
 blocks:
   - "wp:M2-06-cookies"
   - "wp:M2-07-network-end-to-end"
-subsystem: "Tessera.Net"
+subsystem: "Starling.Net"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#http11"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-05-http1"
@@ -26,8 +26,8 @@ including content decoding needed by the networking pipeline.
 
 ## Outputs
 
-- `src/Tessera.Net/Http/H1/*`
-- `src/Tessera.Net/Http/Decoding/*`
+- `src/Starling.Net/Http/H1/*`
+- `src/Starling.Net/Http/Decoding/*`
 
 ## Acceptance
 
@@ -37,7 +37,7 @@ Chromium response modulo non-deterministic headers.
 ## Handoff log
 
 - 2026-05-11T19:30Z — created after wp:M2-04-tls completion; available to claim.
-- 2026-05-12T19:30Z — reconciled as complete: `TesseraHttpClient` wires DNS,
+- 2026-05-12T19:30Z — reconciled as complete: `StarlingHttpClient` wires DNS,
   TCP, optional TLS, H1 request writing, response parsing, gzip/chunked body
   decoding, and cookie-jar integration; engine HTTP tests now prove fetched
   HTML uses the full static rendering pipeline.

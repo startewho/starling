@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Js.Tests;
+namespace Starling.Js.Tests;
 
 public class PlaceholderSmokeTests
 {
@@ -9,6 +9,6 @@ public class PlaceholderSmokeTests
     public void Project_loads_and_xunit_runs()
     {
         // Reference the placeholder so the project reference isn't unused.
-        typeof(Tessera.Js.PlaceholderNote).Should().NotBeNull();
+        typeof(Starling.Js.PlaceholderNote).Should().NotBeNull();
     }
 }

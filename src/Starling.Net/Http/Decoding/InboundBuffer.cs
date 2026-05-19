@@ -1,4 +1,4 @@
-namespace Tessera.Net.Http.Decoding;
+namespace Starling.Net.Http.Decoding;
 
 /// <summary>
 /// Pull-buffered reader over a <see cref="Stream"/>. Used by the response parser

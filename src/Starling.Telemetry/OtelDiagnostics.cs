@@ -2,9 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
-using Tessera.Common.Diagnostics;
+using Starling.Common.Diagnostics;
 
-namespace Tessera.Telemetry;
+namespace Starling.Telemetry;
 
 /// <summary>
 /// Bridges <see cref="IDiagnostics"/> calls (Span/Log/Counter/Snapshot) to the

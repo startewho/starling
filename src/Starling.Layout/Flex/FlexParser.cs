@@ -1,9 +1,9 @@
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Layout.Block;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Layout.Block;
 
-namespace Tessera.Layout.Flex;
+namespace Starling.Layout.Flex;
 
 /// <summary>
 /// Translates the relevant flex keywords + lengths off a

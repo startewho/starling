@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>WHATWG HTML named character-reference table.</summary>
 public static class NamedCharacterReferences

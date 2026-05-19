@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace Tessera.Common.Diagnostics;
+namespace Starling.Common.Diagnostics;
 
 /// <summary>
 /// TEMPORARY diagnostic instrumentation for the native-shim heap-corruption
@@ -37,12 +37,12 @@ public static class NativeCallTrace
             var dir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (string.IsNullOrEmpty(dir))
                 dir = System.IO.Path.GetTempPath();
-            path = System.IO.Path.Combine(dir, "tessera-native-trace.log");
-            File.WriteAllText(path, $"# tessera native-call trace — started {DateTime.Now:O}\n");
+            path = System.IO.Path.Combine(dir, "starling-native-trace.log");
+            File.WriteAllText(path, $"# starling native-call trace — started {DateTime.Now:O}\n");
         }
         catch
         {
-            path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tessera-native-trace.log");
+            path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "starling-native-trace.log");
         }
         try { Console.Error.WriteLine($"[NativeCallTrace] writing to {path}"); } catch { }
         return path;

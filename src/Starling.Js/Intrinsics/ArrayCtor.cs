@@ -1,6 +1,6 @@
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §23.1 The Array constructor and §23.1.3 Array.prototype. Backed by the

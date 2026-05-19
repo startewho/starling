@@ -1,4 +1,4 @@
-namespace Tessera.Js.Lex;
+namespace Starling.Js.Lex;
 
 /// <summary>
 /// A lexer token. <see cref="Lexeme"/> is the raw source slice;

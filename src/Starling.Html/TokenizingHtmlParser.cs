@@ -1,7 +1,7 @@
-using Tessera.Dom;
-using Tessera.Html.Tokenizer;
+using Starling.Dom;
+using Starling.Html.Tokenizer;
 
-namespace Tessera.Html;
+namespace Starling.Html;
 
 internal static class TokenizingHtmlParser
 {

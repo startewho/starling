@@ -1,10 +1,10 @@
 using System.Runtime.CompilerServices;
-using Tessera.Dom;
-using Tessera.Dom.Events;
-using Tessera.Js.Runtime;
-using Tessera.Url;
+using Starling.Dom;
+using Starling.Dom.Events;
+using Starling.Js.Runtime;
+using Starling.Url;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-5 — HTML §7.7 <c>history</c> + <c>popstate</c>. Installs

@@ -1,6 +1,6 @@
-using Tessera.Dom;
+using Starling.Dom;
 
-namespace Tessera.Html;
+namespace Starling.Html;
 
 /// <summary>
 /// M0-only HTML parser. NOT spec-compliant. Just enough to recognize tag open /

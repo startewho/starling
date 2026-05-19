@@ -1,10 +1,10 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// Host-agnostic FIFO of Promise reaction jobs (HTML §8.1.5.1 "queue a
 /// microtask"). Lives on <see cref="JsRealm"/> so the Promise impl can
 /// schedule work without dragging in a hard dependency on
-/// <c>Tessera.Loop.WebEventLoop</c>.
+/// <c>Starling.Loop.WebEventLoop</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -14,7 +14,7 @@ namespace Tessera.Js.Runtime;
 ///   <item>
 ///     <description><b>Internal drain (default).</b> Jobs are enqueued into
 ///     the in-process queue and run when <see cref="DrainAll"/> is invoked.
-///     <see cref="JsVm.Run(Tessera.Js.Bytecode.Chunk)"/> drains automatically
+///     <see cref="JsVm.Run(Starling.Js.Bytecode.Chunk)"/> drains automatically
 ///     after each top-level script returns, so unit tests that don't wire up
 ///     a host loop still see promise reactions settle.</description>
 ///   </item>

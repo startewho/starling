@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Resolved value of the CSS <c>transform</c> property — a list of 2D

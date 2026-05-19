@@ -1,4 +1,4 @@
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// Per-origin pool of idle, kept-alive HTTP/1.1 transports. Keyed on

@@ -1,7 +1,7 @@
-using Tessera.Common.Image;
-using Tessera.Dom;
+using Starling.Common.Image;
+using Starling.Dom;
 
-namespace Tessera.Layout.Tree;
+namespace Starling.Layout.Tree;
 
 /// <summary>
 /// Looks up the decoded image (if any) for an <c>&lt;img&gt;</c> element.

@@ -35,7 +35,7 @@ frame.
 ## Inputs
 
 - `Starling.Layout.Box.Box` hierarchy.
-- `Tessera.Css.Values` — `CssTransform`, opacity, position, z-index, etc.
+- `Starling.Css.Values` — `CssTransform`, opacity, position, z-index, etc.
 - The CSS cascade already runs and exposes computed styles on each box.
 
 ## Outputs

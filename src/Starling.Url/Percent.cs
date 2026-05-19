@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Tessera.Url;
+namespace Starling.Url;
 
 /// <summary>
 /// Percent-encoding / -decoding helpers per WHATWG URL §1.3

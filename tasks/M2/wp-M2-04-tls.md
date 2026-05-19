@@ -10,7 +10,7 @@ depends_on:
   - "wp:M2-03-tcp"
 blocks:
   - "wp:M2-05-http1"
-subsystem: "Tessera.Net"
+subsystem: "Starling.Net"
 plan_refs:
   - "browser-plan/03_NETWORKING.md#tls-13-pure-managed"
   - "browser-plan/14_AGENT_TASKS.md#wpm2-04-tls"
@@ -26,8 +26,8 @@ and later HTTP/2.
 
 ## Outputs
 
-- `src/Tessera.Net/Tls/*`
-- `src/Tessera.Net/Resources/Roots/ccadb.pem`
+- `src/Starling.Net/Tls/*`
+- `src/Starling.Net/Resources/Roots/ccadb.pem`
 
 ## Acceptance
 

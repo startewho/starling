@@ -2,7 +2,7 @@
 
 This directory mirrors a focused slice of the upstream
 [`web-platform-tests/wpt/encoding/`](https://github.com/web-platform-tests/wpt/tree/master/encoding)
-suite that we exercise from `tests/Tessera.Engine.Tests/EngineEncodingTests.cs`.
+suite that we exercise from `tests/Starling.Engine.Tests/EngineEncodingTests.cs`.
 
 We do not vendor the WPT HTML harnesses (`*-decode-form.html`,
 `single-byte-decoder.html`, etc.) — they require a browser test runner.
@@ -22,7 +22,7 @@ Standard indexes (https://encoding.spec.whatwg.org/, snapshot 2026-04-22).
 ## Excluded subtests (and why)
 
 - `replacement` encoding tests (e.g. `iso-2022-cn-decode-form.html`):
-  Tessera does not implement the WHATWG "replacement" decoder yet — a
+  Starling does not implement the WHATWG "replacement" decoder yet — a
   deliberately-failing decoder for known-broken labels. Listed as
   follow-up in the wp:M2-07d commit log.
 - `x-user-defined`: not shipped by the BCL CodePages provider; would
@@ -30,7 +30,7 @@ Standard indexes (https://encoding.spec.whatwg.org/, snapshot 2026-04-22).
 - `iso-8859-10`, `iso-8859-14`, `iso-8859-16`: the .NET 10
   `System.Text.Encoding.CodePages` provider does not ship code pages
   28600 / 28604 / 28606, so `Encoding.GetEncoding("ISO-8859-10")` etc.
-  throw `ArgumentException`. Tessera's label table still maps these
+  throw `ArgumentException`. Starling's label table still maps these
   labels (so a future provider transparently picks them up) but the
   decode path falls back to UTF-8 instead of mis-decoding. Cover with a
   hand-rolled single-byte table in a follow-up if WPT pressure
@@ -41,9 +41,9 @@ Standard indexes (https://encoding.spec.whatwg.org/, snapshot 2026-04-22).
   byte rather than encoding the discrepancy. All other windows-1250
   positions tested round-trip correctly.
 - Streaming / form-submission tests: out of scope for v1 charset
-  sniffing — Tessera only decodes already-buffered HTTP response bodies.
+  sniffing — Starling only decodes already-buffered HTTP response bodies.
 - `textdecoder-fatal-streaming.html` and the TextDecoder API tests
-  generally: Tessera does not expose `TextDecoder` to script yet.
+  generally: Starling does not expose `TextDecoder` to script yet.
 
 The remaining curated corpus is large enough to validate every label
 family enumerated in `wp:M2-07d` (≥ 95% gate per the work-package

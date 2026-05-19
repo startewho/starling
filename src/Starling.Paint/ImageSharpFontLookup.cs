@@ -1,7 +1,7 @@
 using SixLabors.Fonts;
-using Tessera.Layout.Text;
+using Starling.Layout.Text;
 
-namespace Tessera.Paint;
+namespace Starling.Paint;
 
 /// <summary>
 /// Shared font lookup for the ImageSharp backend and text measurer. Walks the

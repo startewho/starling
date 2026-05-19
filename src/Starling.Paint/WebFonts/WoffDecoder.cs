@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
-namespace Tessera.Paint.WebFonts;
+namespace Starling.Paint.WebFonts;
 
 /// <summary>
 /// Decompresses a WOFF (Web Open Font Format, v1) container back to its

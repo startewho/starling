@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Dom.Tests;
+namespace Starling.Dom.Tests;
 
 public class DomTreeTests
 {

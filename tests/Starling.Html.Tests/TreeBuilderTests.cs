@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Dom;
+using Starling.Dom;
 using Xunit;
 
-namespace Tessera.Html.Tests;
+namespace Starling.Html.Tests;
 
 /// <summary>
 /// Spec-driven tree builder behavior. These exercise the insertion-mode

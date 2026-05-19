@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Intrinsics;
+namespace Starling.Js.Tests.Intrinsics;
 
 /// <summary>
 /// End-to-end coverage for the Promise intrinsic (B3-4). Each test spins up a
@@ -383,7 +383,7 @@ public class PromiseTests
         // When a host scheduler is installed, in-process drain is a no-op
         // and jobs are handed off to the host. The host is responsible for
         // pumping them on its own event-loop tick. This test exercises the
-        // hand-off — the host bridge in Tessera.Loop wraps the JS-function
+        // hand-off — the host bridge in Starling.Loop wraps the JS-function
         // dispatch in a fresh VM scope, which lives outside this engine
         // assembly (see B5-2 once it lands).
         var rt = new JsRuntime();

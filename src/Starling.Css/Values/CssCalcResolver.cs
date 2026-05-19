@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Used-value-time resolution for symbolic <see cref="CssCalc"/> trees and

@@ -497,7 +497,7 @@ public sealed class GuiMcpServer : IAsyncDisposable
 
     private static Uri ResolveEndpoint()
     {
-        var configured = Environment.GetEnvironmentVariable("TESSERA_MCP_URL");
+        var configured = Environment.GetEnvironmentVariable("STARLING_MCP_URL");
         if (string.IsNullOrWhiteSpace(configured))
             return new Uri(DefaultUrl);
 
@@ -507,7 +507,7 @@ public sealed class GuiMcpServer : IAsyncDisposable
             uri.AbsolutePath is "" or "/")
         {
             throw new InvalidOperationException(
-                "TESSERA_MCP_URL must be an absolute loopback HTTP URL with a path, for example http://127.0.0.1:3077/mcp.");
+                "STARLING_MCP_URL must be an absolute loopback HTTP URL with a path, for example http://127.0.0.1:3077/mcp.");
         }
 
         return uri;

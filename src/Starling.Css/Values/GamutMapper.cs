@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// CSS Color 4 §13.1 — gamut mapping by chroma reduction in Oklch.

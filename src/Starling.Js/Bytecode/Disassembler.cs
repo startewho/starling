@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace Tessera.Js.Bytecode;
+namespace Starling.Js.Bytecode;
 
 /// <summary>
 /// Renders a <see cref="Chunk"/> as human-readable text. Used by tests

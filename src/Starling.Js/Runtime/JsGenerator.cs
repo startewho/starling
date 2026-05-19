@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// B1b-2c — Generator instance. Returned by invoking a generator function

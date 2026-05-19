@@ -9,17 +9,17 @@ using Avalonia.Threading;
 using Starling.Gui.Avalonia.Chrome;
 using Starling.Gui.Avalonia.Imaging;
 using Starling.Gui.Avalonia.Theme;
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Image;
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Selectors;
-using Tessera.Engine;
-using Tessera.Gui; // linked BoxHitTester.cs lives in this namespace
+using Starling.Common.Diagnostics;
+using Starling.Common.Image;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Selectors;
+using Starling.Engine;
+using Starling.Gui; // linked BoxHitTester.cs lives in this namespace
 using AvColor = Avalonia.Media.Color;
-using DomElement = Tessera.Dom.Element;
-using DomNode = Tessera.Dom.Node;
-using LayoutBox = Tessera.Layout.Box.Box;
+using DomElement = Starling.Dom.Element;
+using DomNode = Starling.Dom.Node;
+using LayoutBox = Starling.Layout.Box.Box;
 
 namespace Starling.Gui.Avalonia.Controls;
 

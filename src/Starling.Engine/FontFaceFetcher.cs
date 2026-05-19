@@ -1,13 +1,13 @@
 using System.Diagnostics;
-using Tessera.Common.Diagnostics;
-using Tessera.Css.FontFace;
-using Tessera.Css.Parser;
-using Tessera.Net;
-using Tessera.Paint;
-using Tessera.Url;
-using TesseraUrl = global::Tessera.Url.Url;
+using Starling.Common.Diagnostics;
+using Starling.Css.FontFace;
+using Starling.Css.Parser;
+using Starling.Net;
+using Starling.Paint;
+using Starling.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Walks the document's parsed stylesheets, extracts every
@@ -21,11 +21,11 @@ namespace Tessera.Engine;
 internal sealed class FontFaceFetcher : IDisposable
 {
     private readonly IDiagnostics _diag;
-    private readonly Func<TesseraHttpClient> _httpFactory;
+    private readonly Func<StarlingHttpClient> _httpFactory;
     private readonly Dictionary<string, byte[]> _byUrl = new(StringComparer.Ordinal);
-    private TesseraHttpClient? _sharedHttp;
+    private StarlingHttpClient? _sharedHttp;
 
-    public FontFaceFetcher(IDiagnostics diag, Func<TesseraHttpClient> httpFactory)
+    public FontFaceFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
@@ -38,7 +38,7 @@ internal sealed class FontFaceFetcher : IDisposable
     /// the sheet that declared them, not the document (per CSS Cascade §4).
     /// </summary>
     public async Task FetchAllAsync(
-        IEnumerable<(StyleSheet Sheet, TesseraUrl? BaseUrl)> sheets,
+        IEnumerable<(StyleSheet Sheet, StarlingUrl? BaseUrl)> sheets,
         FontFaceRegistry registry,
         CancellationToken ct)
     {
@@ -57,7 +57,7 @@ internal sealed class FontFaceFetcher : IDisposable
 
     private async Task RegisterAsync(
         FontFaceRule rule,
-        TesseraUrl? baseUrl,
+        StarlingUrl? baseUrl,
         FontFaceRegistry registry,
         CancellationToken ct)
     {
@@ -112,7 +112,7 @@ internal sealed class FontFaceFetcher : IDisposable
         return f is "truetype" or "opentype" or "ttf" or "otf" or "woff" or "woff2";
     }
 
-    private async Task<byte[]?> FetchBytesAsync(string href, TesseraUrl? baseUrl, CancellationToken ct)
+    private async Task<byte[]?> FetchBytesAsync(string href, StarlingUrl? baseUrl, CancellationToken ct)
     {
         var absolute = ResolveAbsolute(href, baseUrl);
         if (absolute is null)
@@ -179,7 +179,7 @@ internal sealed class FontFaceFetcher : IDisposable
         }
     }
 
-    private static TesseraUrl? ResolveAbsolute(string href, TesseraUrl? baseUrl)
+    private static StarlingUrl? ResolveAbsolute(string href, StarlingUrl? baseUrl)
     {
         var parsed = baseUrl is null
             ? UrlParser.Parse(href)

@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Threading.Channels;
 
-namespace Tessera.Telemetry;
+namespace Starling.Telemetry;
 
 /// <summary>
 /// One measurement from any instrument the sink subscribed to. Tag values

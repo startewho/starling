@@ -1,11 +1,11 @@
 using System.Runtime.CompilerServices;
-using Tessera.Dom;
-using Tessera.Js.Runtime;
-using Tessera.Net.Http.Cookies;
-using Tessera.Url;
-using TesseraUrl = Tessera.Url.Url;
+using Starling.Dom;
+using Starling.Js.Runtime;
+using Starling.Net.Http.Cookies;
+using Starling.Url;
+using StarlingUrl = Starling.Url.Url;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-5 — HTML §7.5.4 / RFC 6265bis <c>document.cookie</c>. Routes the
@@ -67,7 +67,7 @@ public static class CookieBinding
             });
     }
 
-    private static (CookieJar? Jar, TesseraUrl? Url) Resolve(JsValue thisV)
+    private static (CookieJar? Jar, StarlingUrl? Url) Resolve(JsValue thisV)
     {
         var doc = DomWrappers.UnwrapDocument(thisV);
         if (doc is null) return (null, null);

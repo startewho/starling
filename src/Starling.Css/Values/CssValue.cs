@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 public abstract record CssValue;
 

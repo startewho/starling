@@ -1,11 +1,11 @@
 using System.IO.Compression;
 using System.Text;
 using FluentAssertions;
-using Tessera.Net.Http;
-using Tessera.Net.Http.H1;
+using Starling.Net.Http;
+using Starling.Net.Http.H1;
 using Xunit;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 public class H1ResponseParserTests
 {

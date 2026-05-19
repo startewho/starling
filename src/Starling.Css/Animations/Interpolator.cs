@@ -1,7 +1,7 @@
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Animations;
+namespace Starling.Css.Animations;
 
 /// <summary>
 /// Per-property value interpolation. CSS Transitions / Animations sample

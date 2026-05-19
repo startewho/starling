@@ -3,9 +3,9 @@
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Animations;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Animations;
+using Starling.Css.Values;
 
 namespace Starling.Css.Spec.Tests.CssAnimations;
 
@@ -31,7 +31,7 @@ public sealed class AtRuleTests
         k.Frames.Select(f => f.Offset).Should().Equal(0.0, 1.0);
         k.Frames[0].Declarations.Should().ContainSingle()
             .Which.Property.Should().Be("opacity");
-        k.Frames[1].Declarations[0].Value.Should().BeOfType<Tessera.Css.Values.CssNumber>()
+        k.Frames[1].Declarations[0].Value.Should().BeOfType<Starling.Css.Values.CssNumber>()
             .Which.Value.Should().Be(1);
     }
 }

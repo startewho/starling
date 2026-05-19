@@ -1,4 +1,4 @@
-namespace Tessera.Dom.Events;
+namespace Starling.Dom.Events;
 
 /// <summary>
 /// Base DOM Event per [DOM §2.2](https://dom.spec.whatwg.org/#event).

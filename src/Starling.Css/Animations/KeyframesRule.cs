@@ -1,6 +1,6 @@
-using Tessera.Css.Values;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Animations;
+namespace Starling.Css.Animations;
 
 /// <summary>
 /// A parsed <c>@keyframes</c> at-rule (CSS Animations 1 §4). The animation

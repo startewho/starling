@@ -1,7 +1,7 @@
-namespace Tessera.Js;
+namespace Starling.Js;
 
 /// <summary>
-/// Placeholder for M0. The real `Tessera.Js` lives in a later milestone —
+/// Placeholder for M0. The real `Starling.Js` lives in a later milestone —
 /// see the per-subsystem doc in browser-plan/.
 /// </summary>
 public static class PlaceholderNote

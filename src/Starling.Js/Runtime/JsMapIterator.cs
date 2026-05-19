@@ -1,6 +1,6 @@
-using Tessera.Js.Intrinsics;
+using Starling.Js.Intrinsics;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>§24.1.5 Map Iterator kind tag.</summary>
 public enum MapIteratorKind { Key, Value, KeyAndValue }

@@ -1,15 +1,15 @@
 using System.Diagnostics;
 using System.Text;
-using Tessera.Common.Diagnostics;
-using Tessera.Common.Encoding;
-using Tessera.Css;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Net;
-using Tessera.Url;
-using TesseraUrl = global::Tessera.Url.Url;
+using Starling.Common.Diagnostics;
+using Starling.Common.Encoding;
+using Starling.Css;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Net;
+using Starling.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// Fetches every <c>&lt;link rel="stylesheet" href="..."&gt;</c> referenced by
@@ -30,12 +30,12 @@ namespace Tessera.Engine;
 internal sealed class StylesheetFetcher : IDisposable
 {
     private readonly Dictionary<Element, StyleSheet> _byElement = [];
-    private readonly Dictionary<string, (StyleSheet Sheet, TesseraUrl Url)> _byUrl = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (StyleSheet Sheet, StarlingUrl Url)> _byUrl = new(StringComparer.Ordinal);
     private readonly IDiagnostics _diag;
-    private readonly Func<TesseraHttpClient> _httpFactory;
-    private TesseraHttpClient? _sharedHttp;
+    private readonly Func<StarlingHttpClient> _httpFactory;
+    private StarlingHttpClient? _sharedHttp;
 
-    public StylesheetFetcher(IDiagnostics diag, Func<TesseraHttpClient> httpFactory)
+    public StylesheetFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
@@ -50,13 +50,13 @@ internal sealed class StylesheetFetcher : IDisposable
     /// use this so relative <c>url()</c> values resolve against the sheet's
     /// origin, not the document's.
     /// </summary>
-    public IEnumerable<(StyleSheet Sheet, TesseraUrl BaseUrl)> EnumerateLoaded()
+    public IEnumerable<(StyleSheet Sheet, StarlingUrl BaseUrl)> EnumerateLoaded()
     {
         foreach (var entry in _byUrl.Values)
             yield return (entry.Sheet, entry.Url);
     }
 
-    public async Task FetchAllAsync(Document document, TesseraUrl? baseUrl, CancellationToken ct)
+    public async Task FetchAllAsync(Document document, StarlingUrl? baseUrl, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -98,7 +98,7 @@ internal sealed class StylesheetFetcher : IDisposable
         return false;
     }
 
-    private async Task<StyleSheet?> FetchAndParseAsync(TesseraUrl url, CancellationToken ct)
+    private async Task<StyleSheet?> FetchAndParseAsync(StarlingUrl url, CancellationToken ct)
     {
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached.Sheet;
@@ -215,7 +215,7 @@ internal sealed class StylesheetFetcher : IDisposable
         catch (ArgumentException) { return null; }
     }
 
-    private static TesseraUrl? ResolveAbsolute(string href, TesseraUrl? baseUrl)
+    private static StarlingUrl? ResolveAbsolute(string href, StarlingUrl? baseUrl)
     {
         var parsed = baseUrl is null
             ? UrlParser.Parse(href)

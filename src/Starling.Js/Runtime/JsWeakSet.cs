@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// §24.4 WeakSet Objects — object-only set with weak membership. Same

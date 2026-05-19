@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
 using Xunit;
 
-namespace Tessera.Css.Tests;
+namespace Starling.Css.Tests;
 
 /// <summary>
 /// Sanity checks for the UA stylesheet's handling of legacy HTML4 elements

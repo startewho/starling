@@ -9,7 +9,7 @@ depends_on:
   - "wp:M0-01-scaffold"
 blocks:
   - "wp:M1-02-html-tree-builder"
-subsystem: "Tessera.Html"
+subsystem: "Starling.Html"
 plan_refs:
   - "browser-plan/04_HTML_PARSING.md#tokenizer"
   - "browser-plan/14_AGENT_TASKS.md#wpm1-01-html-tokenizer"
@@ -25,8 +25,8 @@ reference resolution, and parse-error sink. Replaces the M0 `MinimalHtmlParser`.
 - wp:M0-01-scaffold complete.
 
 ## Outputs
-- `src/Tessera.Html/InputStream/{ByteSniffer,PreprocessedStream,CodePointReader}.cs`
-- `src/Tessera.Html/Tokenizer/{HtmlTokenizer,HtmlToken,States,CharacterReference,NamedCharacterReferences}.cs`
+- `src/Starling.Html/InputStream/{ByteSniffer,PreprocessedStream,CodePointReader}.cs`
+- `src/Starling.Html/Tokenizer/{HtmlTokenizer,HtmlToken,States,CharacterReference,NamedCharacterReferences}.cs`
 - `tools/gen-entities/Program.cs` (build-time entity table generator)
 - `testdata/spec/html-entities.json` (vendored from spec)
 

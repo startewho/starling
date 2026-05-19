@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 internal static class BigIntOps
 {

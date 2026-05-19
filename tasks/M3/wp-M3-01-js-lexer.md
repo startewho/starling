@@ -10,7 +10,7 @@ depends_on:
   - "wp:M0-02-common"
 blocks:
   - "wp:M3-02-js-parser"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#lexer"
   - "browser-plan/14_AGENT_TASKS.md#wpm3-01-js-lexer"
@@ -33,7 +33,7 @@ Unblocked at start of M0; safe for a parallel agent to take.
   `wp-M3-01-js-lexer`. Claim committed atomically before any
   implementation work — see AGENTS.md workflow.
 - 2026-05-11T17:05Z — landed pull-based ES2024 lexer in
-  `src/Tessera.Js/Lex/` (~1040 lines). Covers identifiers/keywords/
+  `src/Starling.Js/Lex/` (~1040 lines). Covers identifiers/keywords/
   numerics (decimal+hex+binary+octal+BigInt)/strings/punctuators/
   comments/position-tracking. Deferred to follow-up: template
   literals (need parser context), RegExp literals (parser

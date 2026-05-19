@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Url.Tests;
+namespace Starling.Url.Tests;
 
 public class UrlParserTests
 {

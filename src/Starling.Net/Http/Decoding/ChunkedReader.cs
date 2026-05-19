@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Tessera.Net.Http.Decoding;
+namespace Starling.Net.Http.Decoding;
 
 /// <summary>
 /// Decoder for HTTP/1.1 <c>Transfer-Encoding: chunked</c> framing per

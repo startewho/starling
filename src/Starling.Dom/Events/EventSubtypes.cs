@@ -1,4 +1,4 @@
-namespace Tessera.Dom.Events;
+namespace Starling.Dom.Events;
 
 /// <summary>UIEvent — see [UI Events §3.5](https://w3c.github.io/uievents/#interface-UIEvent).</summary>
 public class UiEvent : Event

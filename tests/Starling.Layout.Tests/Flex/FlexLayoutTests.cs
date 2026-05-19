@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Html;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Html;
+using Starling.Layout.Box;
 using Xunit;
 
-namespace Tessera.Layout.Tests.Flex;
+namespace Starling.Layout.Tests.Flex;
 
 /// <summary>
 /// Single-line flex tests. The flex container is always inside <c>&lt;body&gt;</c>

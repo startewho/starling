@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>ECMA-262 §6.1.5 Symbol value identity: an immutable, unique primitive token.</summary>
 public sealed class JsSymbol

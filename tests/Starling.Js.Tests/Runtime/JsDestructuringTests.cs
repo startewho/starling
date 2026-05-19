@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Runtime;
+namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
 /// End-to-end parse → compile → run coverage for ECMA-262 §13.15

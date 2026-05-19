@@ -1,10 +1,10 @@
 using FluentAssertions;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Js.Tests.Runtime;
+namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
 /// gap:opcode-fast-path-bypasses-accessors — the VM's <c>LoadGlobal</c>,

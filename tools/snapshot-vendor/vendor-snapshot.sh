@@ -75,7 +75,7 @@ fetch_record() {
   # -L follow redirects to land at the canonical file; -A sets a stable
   # UA so re-vendoring against the same server is deterministic.
   curl --silent --show-error --location \
-       -A "tessera-snapshot-vendor/1.0" \
+       -A "starling-snapshot-vendor/1.0" \
        -D "$header_file" \
        -o "$body_file" \
        "$url"
@@ -103,7 +103,7 @@ mkdir -p "$(dirname "$ROOT_LOCAL")"
 ROOT_TMP="$(mktemp)"
 ROOT_HDR="$(mktemp)"
 curl --silent --show-error --location \
-     -A "tessera-snapshot-vendor/1.0" \
+     -A "starling-snapshot-vendor/1.0" \
      -D "$ROOT_HDR" \
      -o "$ROOT_TMP" \
      "$ROOT_URL"

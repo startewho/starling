@@ -1,10 +1,10 @@
 using System.IO.Compression;
 using System.Text;
 using FluentAssertions;
-using Tessera.Net.Http.Decoding;
+using Starling.Net.Http.Decoding;
 using Xunit;
 
-namespace Tessera.Net.Tests.Http;
+namespace Starling.Net.Tests.Http;
 
 public class ChunkedReaderTests
 {

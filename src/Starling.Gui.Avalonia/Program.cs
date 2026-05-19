@@ -6,8 +6,8 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Starling.Gui.Avalonia.Theme;
 // Telemetry assembly is now Starling.Telemetry on disk but the in-file
-// namespace was not renamed in the Tessera→Starling pass.
-using Tessera.Telemetry;
+// namespace was not renamed in the Starling→Starling pass.
+using Starling.Telemetry;
 
 namespace Starling.Gui.Avalonia;
 
@@ -38,14 +38,14 @@ internal static class Program
 
     private static IServiceProvider BuildServices()
     {
-        // AddTesseraTelemetry's TBuilder constraint is IHostApplicationBuilder
+        // AddStarlingTelemetry's TBuilder constraint is IHostApplicationBuilder
         // (so the call site can chain on `WebApplication.CreateBuilder()` or
         // `Host.CreateApplicationBuilder()`). Use a HostApplicationBuilder to
         // satisfy the constraint, mutate its Services collection, then build a
         // plain ServiceProvider — we don't actually want the host's lifetime.
         var host = Host.CreateApplicationBuilder();
         host.Services.AddSingleton<ThemeManager>();
-        host.AddTesseraTelemetry("starling-gui-avalonia");
+        host.AddStarlingTelemetry("starling-gui-avalonia");
 
         var provider = host.Services.BuildServiceProvider();
 

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>
 /// A character class: a union of (lo, hi) UTF-16 code unit ranges, with

@@ -16,7 +16,7 @@ depends_on:
   - "wp:M1-01g-tokenizer-entities"
 blocks:
   - "wp:M1-02-html-tree-builder"
-subsystem: "Tessera.Html"
+subsystem: "Starling.Html"
 plan_refs:
   - "browser-plan/04_HTML_PARSING.md#tokenizer"
   - "browser-plan/12_TESTING.md"

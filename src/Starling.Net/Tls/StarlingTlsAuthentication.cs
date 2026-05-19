@@ -1,13 +1,13 @@
 using Org.BouncyCastle.Tls;
 
-namespace Tessera.Net.Tls;
+namespace Starling.Net.Tls;
 
-internal sealed class TesseraTlsAuthentication : TlsAuthentication
+internal sealed class StarlingTlsAuthentication : TlsAuthentication
 {
     private readonly TlsClientOptions _options;
     private readonly RootCertificates _roots;
 
-    public TesseraTlsAuthentication(TlsClientOptions options, RootCertificates roots)
+    public StarlingTlsAuthentication(TlsClientOptions options, RootCertificates roots)
     {
         _options = options;
         _roots = roots;

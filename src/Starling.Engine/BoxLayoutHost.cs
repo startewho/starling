@@ -1,9 +1,9 @@
-using Tessera.Bindings;
-using Tessera.Css.Cascade;
-using Tessera.Dom;
-using Tessera.Layout.Box;
+using Starling.Bindings;
+using Starling.Css.Cascade;
+using Starling.Dom;
+using Starling.Layout.Box;
 
-namespace Tessera.Engine;
+namespace Starling.Engine;
 
 /// <summary>
 /// <see cref="ILayoutHost"/> implementation backed by a single

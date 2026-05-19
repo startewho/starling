@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Css.Cascade;
-using Tessera.Gui;
-using Tessera.Html;
-using Tessera.Layout;
-using Tessera.Layout.Box;
+using Starling.Css.Cascade;
+using Starling.Gui;
+using Starling.Html;
+using Starling.Layout;
+using Starling.Layout.Box;
 using Xunit;
-using LayoutBox = Tessera.Layout.Box.Box;
+using LayoutBox = Starling.Layout.Box.Box;
 
 namespace Starling.Gui.Avalonia.Tests;
 

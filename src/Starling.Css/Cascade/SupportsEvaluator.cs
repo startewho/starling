@@ -1,9 +1,9 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Selectors;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Selectors;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Cascade;
+namespace Starling.Css.Cascade;
 
 // CSS Conditional 5 §3: evaluates `@supports` preludes.
 public static class SupportsEvaluator

@@ -1,6 +1,6 @@
-using Tessera.Js.Lex;
+using Starling.Js.Lex;
 
-namespace Tessera.Js.Ast;
+namespace Starling.Js.Ast;
 
 /// <summary>Base for every AST node. Carries source-range information so
 /// later passes (compiler, error reporting, source maps) can refer back.</summary>

@@ -74,14 +74,14 @@ jobs:
               src/Starling.Engine/
 
   # Live-network acceptance for the M2 exit demo (wp:M2-07b). Opt-in via
-  # TESSERA_ALLOW_NETWORK=1 so the main matrix is not at the mercy of
+  # STARLING_ALLOW_NETWORK=1 so the main matrix is not at the mercy of
   # third-party hosts. Linux-only: the live golden under
   # testdata/golden/live/example.com.png is pinned to one rasteriser.
   network-tests:
     name: network-tests (live HTTPS smoke)
     runs-on: ubuntu-24.04
     env:
-      TESSERA_ALLOW_NETWORK: "1"
+      STARLING_ALLOW_NETWORK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

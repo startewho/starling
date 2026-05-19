@@ -1,6 +1,6 @@
-using Tessera.Dom;
+using Starling.Dom;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// Pluggable host for layout-readback APIs (<c>getBoundingClientRect</c>,

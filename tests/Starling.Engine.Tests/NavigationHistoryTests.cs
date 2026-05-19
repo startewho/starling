@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 public sealed class NavigationHistoryTests
 {

@@ -10,7 +10,7 @@ depends_on:
   - "wp:M3-03-js-compiler"
 blocks:
   - "wp:M3-05-js-intrinsics"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#vm"
   - "browser-plan/14_AGENT_TASKS.md#wpm3-04-js-vm"
@@ -21,7 +21,7 @@ plan_refs:
 ## Goal
 Execute the bytecode emitted by `wp:M3-03-js-compiler`. After this lands,
 the lexer → parser → compiler → VM pipeline is end-to-end demoable:
-`tessera js script.js` can compute results.
+`starling js script.js` can compute results.
 
 ## Scope (this slice)
 

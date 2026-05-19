@@ -1,13 +1,13 @@
 using System.Diagnostics;
-using Tessera.Common.Diagnostics;
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
-using Tessera.Layout.Box;
-using Tessera.Layout.Text;
+using Starling.Common.Diagnostics;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
+using Starling.Layout.Box;
+using Starling.Layout.Text;
 
-namespace Tessera.Layout.Inline;
+namespace Starling.Layout.Inline;
 
 /// <summary>
 /// Lays out an anonymous block's inline children into line boxes. Produces

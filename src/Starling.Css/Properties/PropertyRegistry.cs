@@ -1,7 +1,7 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Properties;
+namespace Starling.Css.Properties;
 
 public static class PropertyRegistry
 {

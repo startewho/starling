@@ -12,7 +12,7 @@ depends_on:
 blocks:
   - "wp:M3-02c-js-parser-classes-modules"
   - "wp:M3-03-js-compiler"
-subsystem: "Tessera.Js"
+subsystem: "Starling.Js"
 plan_refs:
   - "browser-plan/09_JS_ENGINE.md#parser"
 ---
@@ -24,9 +24,9 @@ Bring the parser from expression-level to "can parse complete JS source
 files". Adds Statement AST + parser methods + the top-level Program node.
 
 ## Outputs
-- `src/Tessera.Js/Ast/Statements.cs` — Statement node hierarchy.
-- `src/Tessera.Js/Ast/Program.cs` — Program / Module root.
-- `src/Tessera.Js/Parse/JsParser.cs` — extend with statement parsing
+- `src/Starling.Js/Ast/Statements.cs` — Statement node hierarchy.
+- `src/Starling.Js/Ast/Program.cs` — Program / Module root.
+- `src/Starling.Js/Parse/JsParser.cs` — extend with statement parsing
   and `ParseProgram()` entry.
 
 ## Acceptance

@@ -1,7 +1,7 @@
-using Tessera.Dom;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings.Observers;
+namespace Starling.Bindings.Observers;
 
 /// <summary>
 /// B5-4 — Helpers for building <c>MutationRecord</c> / <c>IntersectionObserverEntry</c>

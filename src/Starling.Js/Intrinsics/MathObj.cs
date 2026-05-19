@@ -1,7 +1,7 @@
 using SysMath = System.Math;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §21.3 The Math Object. Installs the global <c>Math</c> namespace object on

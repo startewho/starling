@@ -1,4 +1,4 @@
-namespace Tessera.Js.Lex;
+namespace Starling.Js.Lex;
 
 /// <summary>
 /// Categorized lexer errors. Spec calls these "early errors" — the parser

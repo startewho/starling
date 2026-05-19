@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// WHATWG Console Standard. Installs the global <c>console</c> namespace object.

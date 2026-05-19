@@ -1,7 +1,7 @@
-namespace Tessera.Js.Bytecode;
+namespace Starling.Js.Bytecode;
 
 /// <summary>
-/// Tessera JS bytecode opcodes. Stack-based VM model (operands flow through
+/// Starling JS bytecode opcodes. Stack-based VM model (operands flow through
 /// an evaluation stack). Each opcode is followed by 0–2 immediate operand
 /// bytes encoding constant-pool indexes, local-slot indexes, or jump
 /// offsets.
@@ -49,7 +49,7 @@ public enum Opcode : byte
     /// captured writes in the function that owns the binding.</summary>
     StoreCellLocal,
     /// <summary>[u8 slot] — read the current slot value, wrap it in a fresh
-    /// <see cref="Tessera.Js.Runtime.Cell"/>, and store the cell back in
+    /// <see cref="Starling.Js.Runtime.Cell"/>, and store the cell back in
     /// the slot. Emitted at function entry for captured parameters whose
     /// values land in the slot by the VM's argument-copy step.</summary>
     PromoteParamCell,
@@ -63,7 +63,7 @@ public enum Opcode : byte
     /// this opcode hands the cell off intact.</summary>
     LoadUpvalueCell,
     /// <summary>[u8 slot] — §14.7.4.4 CreatePerIterationEnvironment. Read
-    /// the current <see cref="Tessera.Js.Runtime.Cell"/> stored in
+    /// the current <see cref="Starling.Js.Runtime.Cell"/> stored in
     /// <c>slot</c>, snapshot its <c>Value</c>, allocate a fresh Cell with
     /// the same value, and write the fresh cell back into the slot. Emitted
     /// at the top of each iteration of <c>for (let|const x = ...; ...; ...)</c>
@@ -200,7 +200,7 @@ public enum Opcode : byte
     /// are stamped onto the constructor's internal slot and run during
     /// later <c>new</c> invocations.</summary>
     BuildClass,
-    /// <summary>Push a fresh <see cref="Tessera.Js.Runtime.JsArray"/>
+    /// <summary>Push a fresh <see cref="Starling.Js.Runtime.JsArray"/>
     /// containing every argument the current frame received (in argument
     /// order). Used to forward all arguments to <c>super(...args)</c> in
     /// a synthesized default derived constructor.</summary>
@@ -240,7 +240,7 @@ public enum Opcode : byte
 
     // ----- for…in (B7-followup-b) -----
     /// <summary>Pop a value; if it's null or undefined, push an empty
-    /// <see cref="Tessera.Js.Runtime.JsArray"/>. Otherwise coerce to object
+    /// <see cref="Starling.Js.Runtime.JsArray"/>. Otherwise coerce to object
     /// and push a JsArray snapshot of enumerable string keys (own + inherited,
     /// dedup'd so shadowed names appear once with the most-derived shadowing
     /// rule, in insertion order per §14.7.5.10 ForIn/OfHeadEvaluation). The

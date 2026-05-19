@@ -1,4 +1,4 @@
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 public sealed class DocumentType : Node
 {

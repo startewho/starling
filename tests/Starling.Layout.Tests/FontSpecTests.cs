@@ -1,12 +1,12 @@
 using FluentAssertions;
-using Tessera.Css;
-using Tessera.Css.Cascade;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Layout.Text;
+using Starling.Css;
+using Starling.Css.Cascade;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Layout.Text;
 using Xunit;
 
-namespace Tessera.Layout.Tests;
+namespace Starling.Layout.Tests;
 
 public sealed class FontSpecTests
 {

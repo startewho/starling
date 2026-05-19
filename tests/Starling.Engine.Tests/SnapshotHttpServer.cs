@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Local-loopback HTTP server that serves a directory tree captured by

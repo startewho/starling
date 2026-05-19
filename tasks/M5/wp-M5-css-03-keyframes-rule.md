@@ -25,9 +25,9 @@ them from a parsed stylesheet. Mirrors the existing `FontFaceParser` pattern.
 
 ## Inputs
 
-- `Tessera.Css.Parser.CssParser` — already routes `@keyframes` through the
+- `Starling.Css.Parser.CssParser` — already routes `@keyframes` through the
   generic nested-rule `AtRule` branch, so the bodies are parsed as `StyleRule`s.
-- `Tessera.Css.Values.CssValueParser` — turns each declaration's tokens into a `CssValue`.
+- `Starling.Css.Values.CssValueParser` — turns each declaration's tokens into a `CssValue`.
 
 ## Outputs
 

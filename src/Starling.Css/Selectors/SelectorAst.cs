@@ -1,4 +1,4 @@
-namespace Tessera.Css.Selectors;
+namespace Starling.Css.Selectors;
 
 public sealed record SelectorList(IReadOnlyList<ComplexSelector> Selectors)
 {

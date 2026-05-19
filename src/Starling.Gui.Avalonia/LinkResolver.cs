@@ -1,7 +1,7 @@
-using Tessera.Url;
-using TesseraUrl = Tessera.Url.Url;
+using Starling.Url;
+using StarlingUrl = Starling.Url.Url;
 
-namespace Tessera.Gui;
+namespace Starling.Gui;
 
 /// <summary>
 /// Resolves an anchor's <c>href</c> attribute against the current page URL
@@ -20,7 +20,7 @@ public static class LinkResolver
     /// </summary>
     public static string? Resolve(string href, string? baseUrl)
     {
-        TesseraUrl? parsedBase = null;
+        StarlingUrl? parsedBase = null;
         if (!string.IsNullOrEmpty(baseUrl))
         {
             var baseParsed = UrlParser.Parse(baseUrl);

@@ -1,7 +1,7 @@
-using Tessera.Dom;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Runtime;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
 /// B5-1 — Installs the Node / Element / Document JS prototypes onto a realm.

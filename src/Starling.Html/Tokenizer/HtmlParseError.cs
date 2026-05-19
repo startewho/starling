@@ -1,4 +1,4 @@
-namespace Tessera.Html.Tokenizer;
+namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Parse-error codes from WHATWG HTML §13.2.2.

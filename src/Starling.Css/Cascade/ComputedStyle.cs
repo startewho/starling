@@ -1,9 +1,9 @@
 using System.Globalization;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 
-namespace Tessera.Css.Cascade;
+namespace Starling.Css.Cascade;
 
 public sealed class ComputedStyle
 {

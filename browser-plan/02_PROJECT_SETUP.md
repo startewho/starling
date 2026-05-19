@@ -15,36 +15,36 @@
 ## Bootstrap (one-shot, copy-paste runnable)
 
 ```bash
-mkdir tessera && cd tessera
+mkdir starling && cd starling
 git init -b main
 dotnet new gitignore
-dotnet new sln -n Tessera
+dotnet new sln -n Starling
 
 # Source projects (classlib unless noted)
 for p in Common Url Net Html Dom Css Layout Paint Js Bindings Loop Engine; do
-  dotnet new classlib -n "Tessera.$p" -o "src/Tessera.$p" -f net10.0
-  dotnet sln add "src/Tessera.$p/Tessera.$p.csproj"
+  dotnet new classlib -n "Starling.$p" -o "src/Starling.$p" -f net10.0
+  dotnet sln add "src/Starling.$p/Starling.$p.csproj"
 done
-dotnet new console -n Tessera.Headless -o "src/Tessera.Headless" -f net10.0
-dotnet sln add "src/Tessera.Headless/Tessera.Headless.csproj"
-dotnet new avalonia.app -n Tessera.Shell -o "src/Tessera.Shell" -f net10.0 || true   # if template installed
-dotnet sln add "src/Tessera.Shell/Tessera.Shell.csproj"
+dotnet new console -n Starling.Headless -o "src/Starling.Headless" -f net10.0
+dotnet sln add "src/Starling.Headless/Starling.Headless.csproj"
+dotnet new avalonia.app -n Starling.Shell -o "src/Starling.Shell" -f net10.0 || true   # if template installed
+dotnet sln add "src/Starling.Shell/Starling.Shell.csproj"
 
 # Test projects
 for p in Common Url Net Html Dom Css Layout Paint Js Bindings Loop Engine; do
-  dotnet new xunit -n "Tessera.$p.Tests" -o "tests/Tessera.$p.Tests" -f net10.0
-  dotnet sln add "tests/Tessera.$p.Tests/Tessera.$p.Tests.csproj"
-  dotnet add "tests/Tessera.$p.Tests/Tessera.$p.Tests.csproj" reference "src/Tessera.$p/Tessera.$p.csproj"
+  dotnet new xunit -n "Starling.$p.Tests" -o "tests/Starling.$p.Tests" -f net10.0
+  dotnet sln add "tests/Starling.$p.Tests/Starling.$p.Tests.csproj"
+  dotnet add "tests/Starling.$p.Tests/Starling.$p.Tests.csproj" reference "src/Starling.$p/Starling.$p.csproj"
 done
 
 # E2E project
-dotnet new xunit -n Tessera.E2E -o tests/Tessera.E2E -f net10.0
-dotnet sln add tests/Tessera.E2E/Tessera.E2E.csproj
-dotnet add tests/Tessera.E2E/Tessera.E2E.csproj reference src/Tessera.Engine/Tessera.Engine.csproj
+dotnet new xunit -n Starling.E2E -o tests/Starling.E2E -f net10.0
+dotnet sln add tests/Starling.E2E/Starling.E2E.csproj
+dotnet add tests/Starling.E2E/Starling.E2E.csproj reference src/Starling.Engine/Starling.Engine.csproj
 
 # Bench
-dotnet new console -n Tessera.Bench -o bench/Tessera.Bench -f net10.0
-dotnet sln add bench/Tessera.Bench/Tessera.Bench.csproj
+dotnet new console -n Starling.Bench -o bench/Starling.Bench -f net10.0
+dotnet sln add bench/Starling.Bench/Starling.Bench.csproj
 ```
 
 Then wire up references per the dependency graph in [01_ARCHITECTURE.md](01_ARCHITECTURE.md#project-graph).
@@ -52,8 +52,8 @@ Then wire up references per the dependency graph in [01_ARCHITECTURE.md](01_ARCH
 ## Directory layout
 
 ```
-tessera/
-├── Tessera.sln
+starling/
+├── Starling.sln
 ├── Directory.Build.props        # shared TFM + nullable + warnings
 ├── Directory.Packages.props     # central package versions (CPM)
 ├── .editorconfig
@@ -63,25 +63,25 @@ tessera/
 ├── specs/                       # vendored html-aam, css-2025-snapshot, etc.
 ├── testdata/                    # WPT subset, golden PNGs, fixtures
 ├── src/
-│   ├── Tessera.Common/
-│   ├── Tessera.Url/
-│   ├── Tessera.Net/
-│   ├── Tessera.Html/
-│   ├── Tessera.Dom/
-│   ├── Tessera.Css/
-│   ├── Tessera.Layout/
-│   ├── Tessera.Paint/
-│   ├── Tessera.Js/
-│   ├── Tessera.Bindings/
-│   ├── Tessera.Loop/
-│   ├── Tessera.Engine/
-│   ├── Tessera.Headless/        # CLI: tessera render <url> -o out.png
-│   └── Tessera.Shell/           # Avalonia UI
+│   ├── Starling.Common/
+│   ├── Starling.Url/
+│   ├── Starling.Net/
+│   ├── Starling.Html/
+│   ├── Starling.Dom/
+│   ├── Starling.Css/
+│   ├── Starling.Layout/
+│   ├── Starling.Paint/
+│   ├── Starling.Js/
+│   ├── Starling.Bindings/
+│   ├── Starling.Loop/
+│   ├── Starling.Engine/
+│   ├── Starling.Headless/        # CLI: starling render <url> -o out.png
+│   └── Starling.Shell/           # Avalonia UI
 ├── tests/
-│   ├── Tessera.<Module>.Tests/
-│   └── Tessera.E2E/
+│   ├── Starling.<Module>.Tests/
+│   └── Starling.E2E/
 └── bench/
-    └── Tessera.Bench/
+    └── Starling.Bench/
 ```
 
 ## `Directory.Build.props`
@@ -230,12 +230,12 @@ jobs:
       - name: forbid PInvoke outside the interop seams
         run: |
           ! grep -rn 'DllImport\|LibraryImport' \
-              src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/
+              src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/
 ```
 
 The lint job's `grep` enforces the interop seam policy: native interop
 (`DllImport`/`LibraryImport`) is allowed only in the two designated interop
-projects, `Tessera.Skia` and `Tessera.Codecs`, which are simply absent from the
+projects, `Starling.Skia` and `Starling.Codecs`, which are simply absent from the
 grep allowlist above. Every other engine project must stay P/Invoke-free.
 
 ## Lockfiles
@@ -249,10 +249,10 @@ Run `dotnet restore --use-lock-file` once per project, then commit `packages.loc
 dotnet build
 
 # Run headless renderer
-dotnet run --project src/Tessera.Headless -- render file://./testdata/hello.html -o out.png
+dotnet run --project src/Starling.Headless -- render file://./testdata/hello.html -o out.png
 
 # Run shell
-dotnet run --project src/Tessera.Shell
+dotnet run --project src/Starling.Shell
 
 # Run all tests
 dotnet test
@@ -261,7 +261,7 @@ dotnet test
 dotnet test --filter "FullyQualifiedName~TokenizerTests.DataState"
 
 # Run benchmarks
-dotnet run --project bench/Tessera.Bench -c Release -- --filter "*Tokenizer*"
+dotnet run --project bench/Starling.Bench -c Release -- --filter "*Tokenizer*"
 
 # Format
 dotnet format
@@ -269,15 +269,15 @@ dotnet format
 
 ## Headless CLI shape
 
-`Tessera.Headless` is the agent-friendly entry point. Used by integration tests, golden-image diffs, fuzzing, and "is the engine even alive" smoke checks.
+`Starling.Headless` is the agent-friendly entry point. Used by integration tests, golden-image diffs, fuzzing, and "is the engine even alive" smoke checks.
 
 ```
-tessera render <url-or-file> [-o out.png] [--viewport WxH] [--wait-for selector|networkidle|<ms>]
-tessera tokenize <file>            # prints token stream
-tessera parse <file>               # prints DOM as JSON-ish tree
-tessera style <file>               # prints computed styles per element
-tessera layout <file> [--viewport WxH]   # prints box tree
-tessera js <file>                  # evaluates a JS file under a synthetic Realm
+starling render <url-or-file> [-o out.png] [--viewport WxH] [--wait-for selector|networkidle|<ms>]
+starling tokenize <file>            # prints token stream
+starling parse <file>               # prints DOM as JSON-ish tree
+starling style <file>               # prints computed styles per element
+starling layout <file> [--viewport WxH]   # prints box tree
+starling js <file>                  # evaluates a JS file under a synthetic Realm
 ```
 
 Each subcommand maps 1:1 to a public API in [01_ARCHITECTURE.md](01_ARCHITECTURE.md#core-public-apis). Agents implementing a subsystem should add tests through this CLI so a human auditor (or another agent) can reproduce results manually.
@@ -287,7 +287,7 @@ Each subcommand maps 1:1 to a public API in [01_ARCHITECTURE.md](01_ARCHITECTURE
 1. One PR per work package (see [14_AGENT_TASKS.md](14_AGENT_TASKS.md)).
 2. Each PR includes tests. No PR is merged with failing or absent tests.
 3. No PR adds a NuGet package without bumping `Directory.Packages.props` and stating the reason in the PR body.
-4. No PR adds native interop (`DllImport`/`LibraryImport`) outside the two designated interop projects, `Tessera.Skia` and `Tessera.Codecs`. CI's `lint` job will fail otherwise.
+4. No PR adds native interop (`DllImport`/`LibraryImport`) outside the two designated interop projects, `Starling.Skia` and `Starling.Codecs`. CI's `lint` job will fail otherwise.
 
 ## Acceptance Tests
 
@@ -295,5 +295,5 @@ Each subcommand maps 1:1 to a public API in [01_ARCHITECTURE.md](01_ARCHITECTURE
 - [ ] `dotnet test` exits 0 with at least one test per subsystem project.
 - [ ] `dotnet format --verify-no-changes` exits 0.
 - [ ] CI badge green on all three OS matrix entries.
-- [ ] `tessera render file://testdata/hello.html -o out.png` writes a non-empty PNG.
-- [ ] `grep -rn 'DllImport\|LibraryImport' src/Tessera.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/` is empty (native interop is allowed only in `Tessera.Skia` and `Tessera.Codecs`).
+- [ ] `starling render file://testdata/hello.html -o out.png` writes a non-empty PNG.
+- [ ] `grep -rn 'DllImport\|LibraryImport' src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/` is empty (native interop is allowed only in `Starling.Skia` and `Starling.Codecs`).

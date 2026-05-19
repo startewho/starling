@@ -1,12 +1,12 @@
 using System.Net;
 using System.Net.Sockets;
-using Tessera.Common;
-using Tessera.Net.Dns;
+using Starling.Common;
+using Starling.Net.Dns;
 
-namespace Tessera.Net.Tcp;
+namespace Starling.Net.Tcp;
 
 /// <summary>
-/// Opens TCP connections by hostname, going through the Tessera DNS
+/// Opens TCP connections by hostname, going through the Starling DNS
 /// resolver. Returns an <see cref="ITcpConnection"/> on success.
 /// </summary>
 /// <remarks>

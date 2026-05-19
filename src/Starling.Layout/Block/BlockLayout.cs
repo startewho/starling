@@ -1,12 +1,12 @@
-using Tessera.Common.Diagnostics;
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Layout.Box;
-using Tessera.Layout.Inline;
-using Tessera.Layout.Text;
+using Starling.Common.Diagnostics;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Layout.Box;
+using Starling.Layout.Inline;
+using Starling.Layout.Text;
 
-namespace Tessera.Layout.Block;
+namespace Starling.Layout.Block;
 
 /// <summary>
 /// Block formatting context layout. Children stack vertically; inline children
@@ -150,7 +150,7 @@ internal sealed class BlockLayout
         double childContentHeight;
         if (IsFlexContainer(child.Style))
         {
-            var flex = new Tessera.Layout.Flex.FlexLayout(this, _viewport);
+            var flex = new Starling.Layout.Flex.FlexLayout(this, _viewport);
             childContentHeight = flex.Layout(child, width, explicitHeight);
         }
         else
@@ -226,7 +226,7 @@ internal sealed class BlockLayout
         double childContentHeight;
         if (IsFlexContainer(child.Style))
         {
-            var flex = new Tessera.Layout.Flex.FlexLayout(this, _viewport);
+            var flex = new Starling.Layout.Flex.FlexLayout(this, _viewport);
             childContentHeight = flex.Layout(child, width, explicitHeight);
         }
         else

@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Js.RegExp;
+using Starling.Js.RegExp;
 using Xunit;
 
-namespace Tessera.Js.Tests.RegExp;
+namespace Starling.Js.Tests.RegExp;
 
 /// <summary>
 /// VM-level (no JS surface) coverage for <see cref="RegexPikeVm"/>.

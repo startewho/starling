@@ -1,8 +1,8 @@
-using Tessera.Common.Image;
-using Tessera.Css.Cascade;
-using Tessera.Dom;
+using Starling.Common.Image;
+using Starling.Css.Cascade;
+using Starling.Dom;
 
-namespace Tessera.Layout.Box;
+namespace Starling.Layout.Box;
 
 public enum BoxKind : byte
 {

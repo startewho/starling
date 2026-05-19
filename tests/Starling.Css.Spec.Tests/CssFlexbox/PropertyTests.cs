@@ -3,9 +3,9 @@
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 
 namespace Starling.Css.Spec.Tests.CssFlexbox;
 

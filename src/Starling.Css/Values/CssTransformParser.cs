@@ -1,4 +1,4 @@
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Parses the <c>transform</c> property value into a strongly-typed

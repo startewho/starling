@@ -1,11 +1,11 @@
 using BenchmarkDotNet.Attributes;
-using Tessera.Css.Cascade;
-using Tessera.Css.Parser;
-using Tessera.Dom;
-using Tessera.Html;
-using Tessera.Layout;
+using Starling.Css.Cascade;
+using Starling.Css.Parser;
+using Starling.Dom;
+using Starling.Html;
+using Starling.Layout;
 
-namespace Tessera.Bench;
+namespace Starling.Bench;
 
 // Layout cost on a real-world page (the offline nginx.org snapshot — the same
 // fixture the M2 golden gate uses). Box-tree construction + block + inline

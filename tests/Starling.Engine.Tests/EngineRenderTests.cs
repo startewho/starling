@@ -1,23 +1,23 @@
 using FluentAssertions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
-using Tessera.Html;
+using Starling.Html;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 public class EngineRenderTests
 {
     [Fact]
     public void Render_writes_a_non_empty_png_for_hello_html()
     {
-        var fixture = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.html");
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.html");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
 
         try
         {
             File.WriteAllText(fixture, "<!doctype html><body><p>Hello, world.</p></body>");
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = engine.Render(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(400, 200), 28f),
@@ -38,7 +38,7 @@ public class EngineRenderTests
     [Fact]
     public void Render_fetches_and_paints_local_image_via_file_url()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}");
+        var dir = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         var imagePath = Path.Combine(dir, "swatch.png");
         var fixture = Path.Combine(dir, "page.html");
@@ -63,7 +63,7 @@ public class EngineRenderTests
             File.WriteAllText(fixture,
                 "<!doctype html><body><p>before<img src=\"swatch.png\">after</p></body>");
 
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             // Runs on the default (Skia) backend: wp:M3-06g2 fixed the shim's
             // ts_canvas_draw_image to upload pixels as a Graphite texture, so
             // blitted image pixels now land on a Graphite canvas too.
@@ -86,7 +86,7 @@ public class EngineRenderTests
     [Fact]
     public void Render_returns_err_for_missing_file()
     {
-        var engine = new TesseraEngine();
+        var engine = new StarlingEngine();
         var result = engine.Render(
             "file:///definitely-not-there.html",
             RenderOptions.Default,
@@ -99,8 +99,8 @@ public class EngineRenderTests
     [Fact]
     public void Render_uses_document_style_layout_and_paint_pipeline()
     {
-        var fixture = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.html");
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-{Guid.NewGuid():N}.png");
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.html");
+        var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
 
         try
         {
@@ -116,7 +116,7 @@ public class EngineRenderTests
                 </html>
                 """);
 
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = engine.Render(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(240, 140), 16f),
@@ -138,7 +138,7 @@ public class EngineRenderTests
     public void ExtractDisplayText_collapses_whitespace()
     {
         var doc = HtmlParser.Parse("<body>  Hello,   world. \n\t Next line. </body>");
-        TesseraEngine.ExtractDisplayText(doc).Should().Be("Hello, world. Next line.");
+        StarlingEngine.ExtractDisplayText(doc).Should().Be("Hello, world. Next line.");
     }
 
     private static int CountExact(Image<Rgba32> image, Rgba32 color)

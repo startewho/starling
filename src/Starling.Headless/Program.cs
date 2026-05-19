@@ -1,10 +1,10 @@
 using SixLabors.ImageSharp;
-using Tessera.Common.Diagnostics;
-using Tessera.Engine;
-using Tessera.Html.Tokenizer;
-using Tessera.Telemetry;
+using Starling.Common.Diagnostics;
+using Starling.Engine;
+using Starling.Html.Tokenizer;
+using Starling.Telemetry;
 
-namespace Tessera.Headless;
+namespace Starling.Headless;
 
 /// <summary>
 /// Agent-friendly CLI per browser-plan/02_PROJECT_SETUP.md §Headless CLI shape.
@@ -20,17 +20,17 @@ internal static class Program
     public static int Main(string[] args)
     {
         // Wire OTel before we do anything observable. When launched by Aspire
-        // (`dotnet run --project Tessera.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
+        // (`dotnet run --project Starling.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
         // is set and traces/metrics/logs flow to the Aspire dashboard. When
         // run directly, the providers are still wired but the exporter is a
         // no-op. We tee the OTel-backed IDiagnostics with ConsoleDiagnostics
         // so plain `dotnet run` still emits stderr trace lines.
         using var telemetry = OtelBootstrap.Initialize("starling-headless");
-        // TESSERA_DIAG_TRACE=1 lowers the console-diag floor to Trace so paint
+        // STARLING_DIAG_TRACE=1 lowers the console-diag floor to Trace so paint
         // span timings ([Trace] paint: - raster.command_record (Xms)) appear
         // on stderr — useful for backend perf comparisons without spinning up
         // an OTel collector. Default stays Info to keep normal CLI runs quiet.
-        var traceConsole = Environment.GetEnvironmentVariable("TESSERA_DIAG_TRACE") == "1";
+        var traceConsole = Environment.GetEnvironmentVariable("STARLING_DIAG_TRACE") == "1";
         s_diagnostics = new CompositeDiagnostics(
             new ConsoleDiagnostics { MinLevel = traceConsole ? DiagLevel.Trace : DiagLevel.Info },
             telemetry.Diagnostics);
@@ -213,7 +213,7 @@ internal static class Program
         // Allow bare paths in addition to file:// URLs — agent ergonomics.
         var url = NormalizeUrlOrPath(input);
 
-        var engine = new TesseraEngine(diagnostics: s_diagnostics);
+        var engine = new StarlingEngine(diagnostics: s_diagnostics);
 
         if (frames > 1)
         {
@@ -236,7 +236,7 @@ internal static class Program
     }
 
     private static int RenderFrameSequence(
-        TesseraEngine engine, string url, RenderOptions options, string outputTemplate,
+        StarlingEngine engine, string url, RenderOptions options, string outputTemplate,
         int frames, long frameStepMs)
     {
         // Lay the page out once, then ask the engine to repaint at evenly

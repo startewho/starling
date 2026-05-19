@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
-namespace Tessera.Telemetry;
+namespace Starling.Telemetry;
 
 /// <summary>
 /// A captured log record — the shape DevTools' ConsolePanel reads. Mirrors the
@@ -22,7 +22,7 @@ public readonly record struct LogRecord(
 /// <summary>
 /// In-memory ILoggerProvider that captures every log record into a bounded
 /// ring buffer and replays them to live subscribers. Registered as the first
-/// thing in <see cref="OtelBootstrap.AddTesseraTelemetry"/> so DevTools'
+/// thing in <see cref="OtelBootstrap.AddStarlingTelemetry"/> so DevTools'
 /// ConsolePanel can subscribe without depending on the OTLP pipeline.
 /// </summary>
 public sealed class InMemoryLogSink : ILoggerProvider

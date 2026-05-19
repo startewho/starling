@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// gap:closure-write-back (wp:M3-04c2). A shared, mutable storage box for a

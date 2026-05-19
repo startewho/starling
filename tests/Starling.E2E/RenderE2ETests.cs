@@ -1,10 +1,10 @@
 using FluentAssertions;
 using SixLabors.ImageSharp;
-using Tessera.Common.Diagnostics;
-using Tessera.Engine;
+using Starling.Common.Diagnostics;
+using Starling.Engine;
 using Xunit;
 
-namespace Tessera.E2E;
+namespace Starling.E2E;
 
 /// <summary>
 /// End-to-end static-rendering acceptance: drive the engine the same way the
@@ -22,8 +22,8 @@ public class RenderE2ETests
         var fixture = Path.Combine(repoRoot, "testdata", "hello.html");
         File.Exists(fixture).Should().BeTrue($"fixture missing: {fixture}");
 
-        var output = Path.Combine(Path.GetTempPath(), $"tessera-e2e-{Guid.NewGuid():N}.png");
-        var engine = new TesseraEngine(diagnostics: NoopDiagnostics.Instance);
+        var output = Path.Combine(Path.GetTempPath(), $"starling-e2e-{Guid.NewGuid():N}.png");
+        var engine = new StarlingEngine(diagnostics: NoopDiagnostics.Instance);
 
         try
         {

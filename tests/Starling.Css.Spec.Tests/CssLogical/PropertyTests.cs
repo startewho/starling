@@ -3,9 +3,9 @@
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
+using Starling.Css.Parser;
+using Starling.Css.Properties;
+using Starling.Css.Values;
 
 namespace Starling.Css.Spec.Tests.CssLogical;
 
@@ -417,7 +417,7 @@ public sealed class PropertyTests
         var decls = Expand("border-inline-start: 2px solid red;");
         decls.Single(d => d.Id == PropertyId.BorderInlineStartWidth).Value.Should().Be(new CssLength(2, CssLengthUnit.Px));
         decls.Single(d => d.Id == PropertyId.BorderInlineStartStyle).Value.Should().Be(new CssKeyword("solid"));
-        decls.Single(d => d.Id == PropertyId.BorderInlineStartColor).Value.Should().BeOfType<Tessera.Css.Values.CssColor>();
+        decls.Single(d => d.Id == PropertyId.BorderInlineStartColor).Value.Should().BeOfType<Starling.Css.Values.CssColor>();
     }
 
     /// <summary>Spec: <see href="https://drafts.csswg.org/css-logical-1/#propdef-border-inline-end"/>

@@ -2,12 +2,12 @@ using FluentAssertions;
 using SixLabors.ImageSharp;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// End-to-end coverage for the M5 animation frame loop: lay a page out once
 /// and ask the engine to repaint at multiple timestamps. The compositor
-/// inside <see cref="TesseraEngine.RenderFrame"/> seeds and ticks the
+/// inside <see cref="StarlingEngine.RenderFrame"/> seeds and ticks the
 /// AnimationEngine + TransitionEngine, so the pixels we get back at
 /// different <c>nowMs</c> values must differ while a CSS animation is in
 /// flight. This is the structural counterpart to a golden-PNG check —
@@ -23,7 +23,7 @@ public class AnimationFrameRenderTests
         // the div is fully transparent; at t=999 it is fully opaque. The
         // rendered bitmaps for those two frames must differ in the div's
         // pixel area — if they don't, the animation isn't being sampled.
-        var fixture = Path.Combine(Path.GetTempPath(), $"tessera-anim-{Guid.NewGuid():N}.html");
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-anim-{Guid.NewGuid():N}.html");
         try
         {
             File.WriteAllText(fixture,
@@ -33,7 +33,7 @@ public class AnimationFrameRenderTests
                 "          animation: fade 1000ms linear; }" +
                 "</style></head><body><div class=\"target\"></div></body></html>");
 
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var laid = await engine.LayoutPageAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(300, 300), FontSize: 16f),
@@ -69,13 +69,13 @@ public class AnimationFrameRenderTests
         // timestamps must produce byte-identical output. If this fails the
         // frame loop is non-deterministic for static content — a regression
         // that would silently invalidate any future golden-PNG suite.
-        var fixture = Path.Combine(Path.GetTempPath(), $"tessera-static-{Guid.NewGuid():N}.html");
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-static-{Guid.NewGuid():N}.html");
         try
         {
             File.WriteAllText(fixture,
                 "<!doctype html><html><body><div style=\"width:100px;height:100px;background:blue\"></div></body></html>");
 
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var laid = await engine.LayoutPageAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(200, 200), FontSize: 16f),

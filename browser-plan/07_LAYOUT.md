@@ -21,8 +21,8 @@
 ## Project layout
 
 ```
-src/Tessera.Layout/
-├── Tessera.Layout.csproj
+src/Starling.Layout/
+├── Starling.Layout.csproj
 ├── ILayoutEngine.cs
 ├── LayoutEngine.cs                     # façade
 ├── Box/

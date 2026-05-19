@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Loop.Tests;
+namespace Starling.Loop.Tests;
 
 public sealed class AnimationFrameTests
 {

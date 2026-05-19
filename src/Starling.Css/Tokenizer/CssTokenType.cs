@@ -1,4 +1,4 @@
-namespace Tessera.Css.Tokenizer;
+namespace Starling.Css.Tokenizer;
 
 public enum CssTokenType : byte
 {

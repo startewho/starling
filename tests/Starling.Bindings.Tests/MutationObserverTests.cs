@@ -1,11 +1,11 @@
 using FluentAssertions;
-using Tessera.Dom;
-using Tessera.Js.Bytecode;
-using Tessera.Js.Parse;
-using Tessera.Js.Runtime;
+using Starling.Dom;
+using Starling.Js.Bytecode;
+using Starling.Js.Parse;
+using Starling.Js.Runtime;
 using Xunit;
 
-namespace Tessera.Bindings.Tests;
+namespace Starling.Bindings.Tests;
 
 /// <summary>
 /// B5-4 — MutationObserver JS surface tests. The DOM-side mutation hook is

@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Xunit;
 
-namespace Tessera.Common.Tests;
+namespace Starling.Common.Tests;
 
 public class ResultTests
 {

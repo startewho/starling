@@ -24,7 +24,7 @@ depends_on:                            # required, list of wp ids (may be empty)
   - wp:M0-01-scaffold
 blocks:                                # optional, informational reverse-deps
   - wp:M1-01b-tokenizer-text-states
-subsystem: Tessera.Html                # required, short module name
+subsystem: Starling.Html                # required, short module name
 plan_refs:                             # required, at least one
   - browser-plan/04_HTML_PARSING.md#tokenizer
   - browser-plan/14_AGENT_TASKS.md#wpm1-01-html-tokenizer

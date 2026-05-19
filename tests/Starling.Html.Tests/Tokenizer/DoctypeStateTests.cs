@@ -1,8 +1,8 @@
 using FluentAssertions;
-using Tessera.Html.Tokenizer;
+using Starling.Html.Tokenizer;
 using Xunit;
 
-namespace Tessera.Html.Tests.Tokenizer;
+namespace Starling.Html.Tests.Tokenizer;
 
 /// <summary>Doctype cluster — wp:M1-01f.</summary>
 public class DoctypeStateTests

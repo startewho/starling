@@ -1,4 +1,4 @@
-namespace Tessera.Js.Runtime;
+namespace Starling.Js.Runtime;
 
 /// <summary>
 /// Spec §6.2.5 Property Descriptor. Every own property on an object has one.

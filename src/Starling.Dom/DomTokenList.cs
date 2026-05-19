@@ -1,6 +1,6 @@
 using System.Collections;
 
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 public sealed class DomTokenList : IReadOnlyList<string>
 {

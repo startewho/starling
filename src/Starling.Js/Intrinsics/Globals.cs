@@ -1,7 +1,7 @@
 using System.Text;
-using Tessera.Js.Runtime;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Intrinsics;
+namespace Starling.Js.Intrinsics;
 
 /// <summary>§19.2 global functions used by browser scripts.</summary>
 public static class Globals

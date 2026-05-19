@@ -1,7 +1,7 @@
-using Tessera.Js.Ast;
-using Tessera.Js.Lex;
+using Starling.Js.Ast;
+using Starling.Js.Lex;
 
-namespace Tessera.Js.Parse;
+namespace Starling.Js.Parse;
 
 /// <summary>
 /// Recursive-descent ES2024 parser. This slice (wp:M3-02a) implements

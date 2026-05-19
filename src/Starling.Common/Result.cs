@@ -1,4 +1,4 @@
-namespace Tessera.Common;
+namespace Starling.Common;
 
 /// <summary>
 /// Discriminated-union style result. Use for recoverable errors; reserve throwing

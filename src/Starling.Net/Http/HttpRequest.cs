@@ -1,6 +1,6 @@
-using TesseraUrl = global::Tessera.Url.Url;
+using StarlingUrl = global::Starling.Url.Url;
 
-namespace Tessera.Net.Http;
+namespace Starling.Net.Http;
 
 /// <summary>
 /// HTTP request value object. The <see cref="Body"/> is sent verbatim;
@@ -10,13 +10,13 @@ namespace Tessera.Net.Http;
 public sealed class HttpRequest
 {
     public string Method { get; }
-    public TesseraUrl Url { get; }
+    public StarlingUrl Url { get; }
     public HttpHeaders Headers { get; }
     public ReadOnlyMemory<byte> Body { get; }
 
     public HttpRequest(
         string method,
-        TesseraUrl url,
+        StarlingUrl url,
         HttpHeaders? headers = null,
         ReadOnlyMemory<byte> body = default)
     {
@@ -30,6 +30,6 @@ public sealed class HttpRequest
         Body = body;
     }
 
-    public static HttpRequest Get(TesseraUrl url, HttpHeaders? headers = null)
+    public static HttpRequest Get(StarlingUrl url, HttpHeaders? headers = null)
         => new("GET", url, headers);
 }

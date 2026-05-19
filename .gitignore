@@ -42,7 +42,7 @@ project.lock.json
 .DS_Store
 Thumbs.db
 
-# Tessera-specific
+# Starling-specific
 testdata/wpt/results/
 *.png.actual
 bench/results/

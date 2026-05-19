@@ -1,4 +1,4 @@
-namespace Tessera.Js.RegExp;
+namespace Starling.Js.RegExp;
 
 /// <summary>Compiled regex bytecode: instruction array + side tables for
 /// character classes and lookaround sub-programs.</summary>

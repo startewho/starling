@@ -1,9 +1,9 @@
 using FluentAssertions;
 using SixLabors.ImageSharp;
-using Tessera.Layout.Box;
+using Starling.Layout.Box;
 using Xunit;
 
-namespace Tessera.Engine.Tests;
+namespace Starling.Engine.Tests;
 
 /// <summary>
 /// Smoke-tests the interactive layout path that powers the GUI: cascade + layout
@@ -15,14 +15,14 @@ public class EngineLayoutPageTests
     [Fact]
     public async Task LayoutPageAsync_returns_box_tree_for_file_url()
     {
-        var fixture = Path.Combine(Path.GetTempPath(), $"tessera-layout-{Guid.NewGuid():N}.html");
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-layout-{Guid.NewGuid():N}.html");
         try
         {
             File.WriteAllText(fixture,
                 "<!doctype html><html><head><title>Smoke</title></head>" +
                 "<body><h1>Heading</h1><p>First paragraph.</p><p>Second.</p></body></html>");
 
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.LayoutPageAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(800, 600), FontSize: 16f),
@@ -52,11 +52,11 @@ public class EngineLayoutPageTests
     [Fact]
     public async Task LayoutPageAsync_disposes_idempotently()
     {
-        var fixture = Path.Combine(Path.GetTempPath(), $"tessera-layout-{Guid.NewGuid():N}.html");
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-layout-{Guid.NewGuid():N}.html");
         try
         {
             File.WriteAllText(fixture, "<!doctype html><body><p>x</p></body>");
-            var engine = new TesseraEngine();
+            var engine = new StarlingEngine();
             var result = await engine.LayoutPageAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(200, 200)),

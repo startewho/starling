@@ -1,4 +1,4 @@
-# Tessera — UX Handoff
+# Starling — UX Handoff
 
 A specification for implementing the chrome + devtools system shown in
 `index.html`. Built around the **Sidecar** variant (vertical tabs, devtools
@@ -13,11 +13,11 @@ docks right) in two themes (dark, light) plus a high-contrast option.
 
 ## 1 · Goals
 
-Tessera serves **two audiences with one UI**:
+Starling serves **two audiences with one UI**:
 
-1. **Engine hackers** building Tessera itself — need visibility into the
+1. **Engine hackers** building Starling itself — need visibility into the
    parser, layout engine, JS runtime, GC, IPC channels.
-2. **Web/app developers** using Tessera as their daily dev browser — need
+2. **Web/app developers** using Starling as their daily dev browser — need
    network waterfalls, console, performance timelines.
 
 The chrome stays small and polished by default; debug intensity lives in
@@ -42,7 +42,7 @@ how users learn to *feel* the engine working.
 
 ## 2 · Design Tokens
 
-All tokens flow through CSS custom properties at the `.tessera` root.
+All tokens flow through CSS custom properties at the `.starling` root.
 Themes are switched by `[data-theme]`, density by `[data-density]`, font
 mode by `[data-type]`. **See `theme.css` for the authoritative list.**
 
@@ -168,7 +168,7 @@ own window (out of scope for first cut).
 
 Top → bottom:
 
-1. **Wordmark row** (38 px) — "tessera" in mono, 13 px, weight 600.
+1. **Wordmark row** (38 px) — "starling" in mono, 13 px, weight 600.
    Macros title-bar drag region.
 2. **Command palette stub** (28 px) — single rounded well, label
    "search · jump · run", `⌘K` keybind on the right. Clicking opens a
@@ -326,7 +326,7 @@ The hero. From top to bottom:
 3. **Ruler (18 px)**: 50-ms ticks in mono `--fs-xs`. Dashed accent
    verticals at named markers: **FB / FCP / LCP / TTI**. (FB = first
    byte; the rest match Web Vitals.)
-4. **Thread groups**: one stack per thread. Tessera has at least
+4. **Thread groups**: one stack per thread. Starling has at least
    `Main`, `Loader`, `Compositor` — extend to GPU/Audio/Worker as those
    ship. Each thread can have multiple "rows" representing call-stack
    depth — the topmost row is tasks, rows below are nested calls.
@@ -371,7 +371,7 @@ A structured log table, not a freeform text stream.
 |-------------|--------|--------------------------------------|
 | Time        | 76 px  | `mm:ss.sss` since load               |
 | Level       | 64 px  | `error / warn / info / log / debug`  |
-| Source      | 64 px  | `tessera / parser / layout / page …` |
+| Source      | 64 px  | `starling / parser / layout / page …` |
 | Message     | flex   | text or pretty-printed object        |
 | Tag         | auto   | status code, timing, count           |
 
@@ -398,7 +398,7 @@ source and `js` category color.
 **Prompt** (30 px footer):
 
 - Mono caret `›` in accent color, then current input.
-- Tab-complete from page globals + Tessera-internal symbols.
+- Tab-complete from page globals + Starling-internal symbols.
 - Up-arrow walks history. ⌥-Up walks across the whole session.
 
 ### 5.4 Internals panel
@@ -494,7 +494,7 @@ chips visible so we hint at the future shape.
 
 ### 6.2 Theme switching
 
-`[data-theme]` on `.tessera` root flips all tokens at once. No fade
+`[data-theme]` on `.starling` root flips all tokens at once. No fade
 transition — clean cut. Webview content (rendered pages) does **not**
 follow the theme; it always renders against `--web-bg` (`#ffffff`).
 
@@ -507,7 +507,7 @@ resolution, but the explicit per-section value should always win.
   centered "New tab" command-palette stub.
 - **Page failed to load**: webview area paints a diagnostic skeleton —
   request waterfall on top, error stack below. Not a friendly error
-  page — Tessera assumes the user wants to debug.
+  page — Starling assumes the user wants to debug.
 - **DevTools recording, no events yet**: panel shows the toolbar + ruler
   + thread labels but no bars. "Press Rec to start" hint centered.
 

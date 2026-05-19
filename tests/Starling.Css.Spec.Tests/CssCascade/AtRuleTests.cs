@@ -3,12 +3,12 @@
 // Regenerate via: dotnet run --project tools/Starling.SpecGen -- generate-stubs
 
 using FluentAssertions;
-using Tessera.Css.Parser;
-using Tessera.Css.Media;
-using Tessera.Css.Cascade;
-using Tessera.Css.Properties;
-using Tessera.Css.Values;
-using Tessera.Dom;
+using Starling.Css.Parser;
+using Starling.Css.Media;
+using Starling.Css.Cascade;
+using Starling.Css.Properties;
+using Starling.Css.Values;
+using Starling.Dom;
 
 namespace Starling.Css.Spec.Tests.CssCascade;
 
@@ -50,6 +50,6 @@ public sealed class AtRuleTests
             @layer base { p { color: red; } }
             p { color: blue; }
             """));
-        engine.Compute(p).GetColor(PropertyId.Color).Should().Be(new Tessera.Css.Values.CssColor(0, 0, 255));
+        engine.Compute(p).GetColor(PropertyId.Color).Should().Be(new Starling.Css.Values.CssColor(0, 0, 255));
     }
 }

@@ -1,7 +1,7 @@
-using Tessera.Js.Ast;
-using Tessera.Js.Runtime;
+using Starling.Js.Ast;
+using Starling.Js.Runtime;
 
-namespace Tessera.Js.Bytecode;
+namespace Starling.Js.Bytecode;
 
 /// <summary>
 /// Walks a parsed JS <see cref="Program"/> and emits a <see cref="Chunk"/>
@@ -74,7 +74,7 @@ public sealed partial class JsCompiler
     /// function that are referenced from inside one or more nested
     /// functions. Computed by <see cref="CaptureAnalysis.Compute"/> before
     /// any bytecode is emitted; consulted at every declaration site to
-    /// decide whether the slot uses <see cref="Tessera.Js.Runtime.Cell"/>
+    /// decide whether the slot uses <see cref="Starling.Js.Runtime.Cell"/>
     /// storage.</summary>
     private HashSet<string> _capturedNames = new(StringComparer.Ordinal);
 
@@ -1094,7 +1094,7 @@ public sealed partial class JsCompiler
     /// DivertReturnThroughFinally path. For now the compiler throws so
     /// callers see a clear error instead of silently skipping a finally.
     /// </remarks>
-    private void EmitBreakOrContinue(Tessera.Js.Lex.JsPosition where, bool isBreak, string? label)
+    private void EmitBreakOrContinue(Starling.Js.Lex.JsPosition where, bool isBreak, string? label)
     {
         if (label is not null)
             throw new NotSupportedException(
@@ -1345,7 +1345,7 @@ public sealed partial class JsCompiler
 
     private static FunctionExpression BuildFunctionExpressionShim(
         Identifier? name, IReadOnlyList<Expression> @params, BlockStatement body,
-        Tessera.Js.Lex.JsPosition start, Tessera.Js.Lex.JsPosition end,
+        Starling.Js.Lex.JsPosition start, Starling.Js.Lex.JsPosition end,
         bool isAsync = false, bool isGenerator = false)
         => new(name, @params, body, Generator: isGenerator, start, end, Async: isAsync);
 

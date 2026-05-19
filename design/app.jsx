@@ -1,5 +1,5 @@
 /* global React, ReactDOM, DesignCanvas, DCSection, DCArtboard */
-// app.jsx — Tessera design exploration (B · Sidecar variant)
+// app.jsx — Starling design exploration (B · Sidecar variant)
 // Two sections of the same chrome variant, themed dark vs light, so the
 // chrome+devtools system can be evaluated side-by-side under each theme.
 
@@ -9,13 +9,13 @@ const { useState } = React;
 function FrameB({ devtools = null, panel, page = 'rendered' }) {
   const tabs = [
     { id: 't1', host: 'justinjackson.ca', title: 'Words — Justin Jackson' },
-    { id: 't2', host: 'tessera.dev',      title: 'M3 release notes', audio: true },
-    { id: 't3', host: 'github.com',       title: 'tessera-browser/tessera' },
+    { id: 't2', host: 'starling.dev',      title: 'M3 release notes', audio: true },
+    { id: 't3', host: 'github.com',       title: 'starling-browser/starling' },
     { id: 't4', host: 'localhost',        title: 'localhost:3000 · dev' },
   ];
   const pinned = [
     { id: 'p1', host: 'mail.fastmail.com', title: 'Mail' },
-    { id: 'p2', host: 'cal.tessera.dev',   title: 'Calendar' },
+    { id: 'p2', host: 'cal.starling.dev',   title: 'Calendar' },
   ];
   return (
     <div style={{
@@ -218,7 +218,7 @@ function Row({ label, children }) {
 function Themed({ tweaks, lockTheme, children }) {
   const theme = tweaks.theme === 'auto' ? lockTheme : tweaks.theme;
   return (
-    <div className="tessera"
+    <div className="starling"
          data-theme={theme}
          data-density={tweaks.density}
          data-type={tweaks.type}
@@ -246,7 +246,7 @@ function App() {
   return (
     <>
       <Tweaks value={tweaks} set={setTweaks} />
-      <DesignCanvas storageKey="tessera-canvas-b">
+      <DesignCanvas storageKey="starling-canvas-b">
 
         <DCSection
           id="dark"

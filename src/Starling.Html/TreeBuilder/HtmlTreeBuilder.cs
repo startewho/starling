@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Text;
-using Tessera.Common.Diagnostics;
-using Tessera.Dom;
-using Tessera.Html.Tokenizer;
+using Starling.Common.Diagnostics;
+using Starling.Dom;
+using Starling.Html.Tokenizer;
 
-namespace Tessera.Html.TreeBuilder;
+namespace Starling.Html.TreeBuilder;
 
 /// <summary>
 /// WHATWG HTML §13.2.6 tree construction stage. This is a pragmatic subset:

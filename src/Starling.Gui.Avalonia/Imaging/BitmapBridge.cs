@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Tessera.Common.Image;
+using Starling.Common.Image;
 
 namespace Starling.Gui.Avalonia.Imaging;
 

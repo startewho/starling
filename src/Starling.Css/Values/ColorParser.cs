@@ -1,7 +1,7 @@
-using Tessera.Css.Parser;
-using Tessera.Css.Tokenizer;
+using Starling.Css.Parser;
+using Starling.Css.Tokenizer;
 
-namespace Tessera.Css.Values;
+namespace Starling.Css.Values;
 
 /// <summary>
 /// Parses CSS Color 4/5 color functions: rgb()/rgba(), hsl()/hsla(), hwb(),

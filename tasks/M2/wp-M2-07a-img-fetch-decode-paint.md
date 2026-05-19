@@ -12,7 +12,7 @@ depends_on:
   - "wp:M1-08-layout-block-inline"
 blocks:
   - "wp:M2-07b-live-https-fixture"
-subsystem: "Tessera.Paint"
+subsystem: "Starling.Paint"
 plan_refs:
   - "browser-plan/08_FONTS_PAINT.md#display-list"
   - "browser-plan/07_LAYOUT.md#replaced-elements"
@@ -26,7 +26,7 @@ completed_at: "2026-05-13T14:32:16Z"
 ## Goal
 
 Render `<img src="…">` end-to-end: fetch the bytes through
-`TesseraHttpClient` (or read from `file://`), decode via `ImageSharp` (pure
+`StarlingHttpClient` (or read from `file://`), decode via `ImageSharp` (pure
 managed, Rule-0 clean), size the replaced-element box during layout, and emit
 a new `DrawImage` display item that the ImageSharp painter blits to the
 output PNG. Without this, every real public page is missing the dominant
@@ -34,30 +34,30 @@ visual element even when DOM + CSS are perfect.
 
 ## Inputs
 
-- `TesseraHttpClient` end-to-end fetch path (wp:M2-05 ✓).
+- `StarlingHttpClient` end-to-end fetch path (wp:M2-05 ✓).
 - Display-list pipeline and ImageSharp painter (wp:M1-09 ✓).
 - Block + inline layout with replaced-element seam (wp:M1-08 ✓).
 - `Document.BaseUri` for relative `src` resolution.
 
 ## Outputs
 
-- `src/Tessera.Paint/DisplayList/DisplayItem.cs` — add a `DrawImage` variant
+- `src/Starling.Paint/DisplayList/DisplayItem.cs` — add a `DrawImage` variant
   carrying a destination rect + a managed image handle (`ImageSharp.Image`
   or our own `DecodedImage` wrapper).
-- `src/Tessera.Paint/DisplayList/DisplayListBuilder.cs` — emit `DrawImage`
+- `src/Starling.Paint/DisplayList/DisplayListBuilder.cs` — emit `DrawImage`
   for `<img>` replaced boxes.
-- `src/Tessera.Paint/Painter.cs` — blit the decoded image (alpha-aware) into
+- `src/Starling.Paint/Painter.cs` — blit the decoded image (alpha-aware) into
   the target buffer at the destination rect, scaled if needed.
-- `src/Tessera.Layout/Inline/InlineLayout.cs` (and the block layout path for
+- `src/Starling.Layout/Inline/InlineLayout.cs` (and the block layout path for
   `display: block` images) — sizing rules: `width`/`height` attrs, then CSS
   `width`/`height`, then intrinsic image dimensions; preserve aspect ratio
   when only one axis is given.
-- `src/Tessera.Engine/Engine.cs` — during render, walk the parsed DOM,
+- `src/Starling.Engine/Engine.cs` — during render, walk the parsed DOM,
   resolve each `<img src="…">` to an absolute URL via `BaseUri`, fetch via
-  `TesseraHttpClient` (or read `file://`), decode once, and stash the
+  `StarlingHttpClient` (or read `file://`), decode once, and stash the
   `DecodedImage` on the element (or a parallel map) so layout and paint can
   read it without a second fetch.
-- `tests/Tessera.Paint.Tests/M1StaticRenderingGoldenTests.cs` (or a new
+- `tests/Starling.Paint.Tests/M1StaticRenderingGoldenTests.cs` (or a new
   sibling) — 3 golden tests:
   1. Inline PNG image from a local file (`testdata/images/dot.png`).
   2. Inline JPEG image (`testdata/images/swatch.jpg`).
@@ -83,7 +83,7 @@ visual element even when DOM + CSS are perfect.
 
 - ImageSharp's `Image.Load(stream)` auto-detects PNG/JPEG/GIF/BMP/WebP;
   start with PNG + JPEG.
-- Cache decoded images per absolute URL inside `TesseraEngine` so the same
+- Cache decoded images per absolute URL inside `StarlingEngine` so the same
   image referenced N times decodes once.
 - Defer: `srcset`, `<picture>`, `loading="lazy"`, `object-fit`. Note in
   follow-up.

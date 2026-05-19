@@ -1,14 +1,14 @@
 using System.Text;
-using Tessera.Dom;
-using Tessera.Js.Runtime;
-using Tessera.Net;
-using Tessera.Net.Http;
-using TesseraUrlParser = global::Tessera.Url.UrlParser;
+using Starling.Dom;
+using Starling.Js.Runtime;
+using Starling.Net;
+using Starling.Net.Http;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 
-namespace Tessera.Bindings;
+namespace Starling.Bindings;
 
 /// <summary>
-/// B5-3 — Legacy <c>XMLHttpRequest</c> backed by <see cref="TesseraHttpClient"/>.
+/// B5-3 — Legacy <c>XMLHttpRequest</c> backed by <see cref="StarlingHttpClient"/>.
 /// Google's bundles still use it heavily, so it's a first-class citizen even
 /// though it sits behind fetch.
 /// </summary>
@@ -29,7 +29,7 @@ namespace Tessera.Bindings;
 /// </remarks>
 public static class XhrBinding
 {
-    public static void Install(JsRuntime runtime, TesseraHttpClient client, Document document)
+    public static void Install(JsRuntime runtime, StarlingHttpClient client, Document document)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(client);
@@ -114,7 +114,7 @@ public static class XhrBinding
         }
     }
 
-    private static void InstallProtoMethods(JsRuntime runtime, TesseraHttpClient client, Document document, JsObject proto)
+    private static void InstallProtoMethods(JsRuntime runtime, StarlingHttpClient client, Document document, JsObject proto)
     {
         var realm = runtime.Realm;
         EventTargetBinding.DefineMethod(realm, proto, "open", (thisV, args) =>
@@ -193,10 +193,10 @@ public static class XhrBinding
         EventTargetBinding.DefineMethod(realm, proto, "overrideMimeType", (_, _) => JsValue.Undefined, length: 1);
     }
 
-    private static void SendImpl(JsRuntime runtime, TesseraHttpClient client, XhrObject x, byte[] body)
+    private static void SendImpl(JsRuntime runtime, StarlingHttpClient client, XhrObject x, byte[] body)
     {
         var realm = runtime.Realm;
-        var parsed = TesseraUrlParser.Parse(x.RequestUrl);
+        var parsed = StarlingUrlParser.Parse(x.RequestUrl);
         if (parsed.IsErr)
         {
             x.ReadyState = 4;
@@ -288,7 +288,7 @@ public static class XhrBinding
 
     private static void FireEventOnly(JsRealm realm, XhrObject x, string type)
     {
-        var ev = new Tessera.Dom.Events.Event(type);
+        var ev = new Starling.Dom.Events.Event(type);
         x.HostTarget.DispatchEvent(ev);
     }
 

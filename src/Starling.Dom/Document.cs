@@ -1,4 +1,4 @@
-namespace Tessera.Dom;
+namespace Starling.Dom;
 
 /// <summary>
 /// Root of a DOM tree. This M1 core covers node creation, tree lookup helpers,
