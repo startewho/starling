@@ -98,6 +98,37 @@ public class ToStringTagTests
     {
         Eval("Object.prototype.toString.call(new Uint8Array(0))").AsString.Should().Be("[object Uint8Array]");
         Eval("Object.prototype.toString.call(new Int32Array(0))").AsString.Should().Be("[object Int32Array]");
+        Eval("Object.prototype.toString.call(new Float32Array(0))").AsString.Should().Be("[object Float32Array]");
+    }
+
+    /// <summary>§23.2.3.34 — @@toStringTag lives on <c>%TypedArray%.prototype</c>
+    /// as an accessor, not as own data property on each concrete prototype.
+    /// Concrete prototypes (Uint8Array.prototype, …) have no own descriptor.</summary>
+    [Fact]
+    public void TypedArray_concrete_prototype_has_no_own_toStringTag()
+        => Eval("Object.getOwnPropertyDescriptor(Uint8Array.prototype, Symbol.toStringTag) === undefined")
+            .AsBool.Should().BeTrue();
+
+    [Fact]
+    public void Shared_TypedArray_prototype_exposes_toStringTag_accessor()
+    {
+        var r = Eval(@"
+            var p = Object.getPrototypeOf(Uint8Array.prototype);
+            var d = Object.getOwnPropertyDescriptor(p, Symbol.toStringTag);
+            (typeof d.get) + '|' + (d.set === undefined) + '|' + d.enumerable + '|' + d.configurable
+        ");
+        r.AsString.Should().Be("function|true|false|true");
+    }
+
+    [Fact]
+    public void TypedArray_toStringTag_getter_returns_undefined_on_non_TypedArray()
+    {
+        var r = Eval(@"
+            var p = Object.getPrototypeOf(Uint8Array.prototype);
+            var d = Object.getOwnPropertyDescriptor(p, Symbol.toStringTag);
+            d.get.call({})
+        ");
+        r.IsUndefined.Should().BeTrue();
     }
 
     [Fact]

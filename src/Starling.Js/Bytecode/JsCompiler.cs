@@ -737,32 +737,53 @@ public sealed partial class JsCompiler
     /// (evaluated for side effects), or null. Test and update are both
     /// optional; an absent test is treated as truthy.</summary>
     /// <remarks>
-    /// Per spec, <c>for (let i = …; …; …)</c> should create a fresh binding
-    /// per iteration. The current compiler lowers <c>let</c> the same as
-    /// <c>var</c> (per gap:closure-write-back's notes), so this distinction
-    /// doesn't bite yet; closures capturing the loop variable will see the
-    /// final value rather than a per-iteration snapshot. Tracked as a
-    /// follow-up.
+    /// Per §14.7.4.4 ForBodyEvaluation, <c>for (let|const i = ...; ...; ...)</c>
+    /// creates a fresh binding per iteration (CreatePerIterationEnvironment).
+    /// The compiler allocates a Cell-backed local slot for each let/const
+    /// binding declared in the init, emits the init normally, and then
+    /// emits <see cref="Opcode.RefreshLetBinding"/> at the top of every
+    /// iteration (after init, before test) so closures formed inside the
+    /// iteration body capture the iteration's own cell. <c>for (var i = ...)</c>
+    /// is unchanged: a single binding for the whole loop.
     /// </remarks>
     private void EmitFor(ForStatement f)
     {
         _scopes.Add(new());
-        // 1. Init.
-        switch (f.Init)
+
+        // Per-iteration let/const bindings: route the init through a
+        // Cell-backed local slot, then emit RefreshLetBinding at loopStart.
+        List<int>? perIterSlots = null;
+        if (f.Init is VariableDeclaration vdLet && (vdLet.Kind == "let" || vdLet.Kind == "const"))
         {
-            case null: break;
-            case VariableDeclaration vd: EmitVarDecl(vd); break;
-            case ExpressionStatement es:
-                EmitExpression(es.Expression);
-                _b.Emit(Opcode.Pop);
-                break;
-            case Expression ie:
-                EmitExpression(ie);
-                _b.Emit(Opcode.Pop);
-                break;
-            default:
-                throw new NotSupportedException(
-                    $"for-loop init '{f.Init.GetType().Name}' not supported");
+            perIterSlots = EmitForLetInit(vdLet);
+        }
+        else
+        {
+            switch (f.Init)
+            {
+                case null: break;
+                case VariableDeclaration vd: EmitVarDecl(vd); break;
+                case ExpressionStatement es:
+                    EmitExpression(es.Expression);
+                    _b.Emit(Opcode.Pop);
+                    break;
+                case Expression ie:
+                    EmitExpression(ie);
+                    _b.Emit(Opcode.Pop);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"for-loop init '{f.Init.GetType().Name}' not supported");
+            }
+        }
+
+        // §14.7.4.4 step 2 — refresh once after init, before the first test.
+        // The init's value is copied into a fresh cell so closures formed
+        // in iteration 1's body see an iteration-local binding.
+        if (perIterSlots is not null)
+        {
+            foreach (var slot in perIterSlots)
+                _b.Emit(Opcode.RefreshLetBinding, (byte)slot);
         }
 
         var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
@@ -776,9 +797,21 @@ public sealed partial class JsCompiler
             jExit = _b.EmitJump(Opcode.JumpIfFalse);
         }
         EmitStatement(f.Body);
-        // continue → update site.
+        // continue → update site (which also re-refreshes the bindings, so a
+        // `continue` from inside the body still gets per-iteration semantics
+        // for the next round).
         var updatePos = _b.Position;
         foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, updatePos);
+        // §14.7.4.4 step 3c — refresh after body, before update. The current
+        // iteration's mutations land in this iteration's cell (captured by
+        // any closures formed in the body); a fresh cell is allocated for
+        // the next iteration with the post-body value, and the update
+        // operates on that fresh cell.
+        if (perIterSlots is not null)
+        {
+            foreach (var slot in perIterSlots)
+                _b.Emit(Opcode.RefreshLetBinding, (byte)slot);
+        }
         if (f.Update is not null)
         {
             EmitExpression(f.Update);
@@ -791,6 +824,76 @@ public sealed partial class JsCompiler
         foreach (var p in loop.BreakPatches) _b.PatchJump(p);
         _loops.Pop();
         _scopes.RemoveAt(_scopes.Count - 1);
+    }
+
+    /// <summary>Allocate Cell-backed local slots for each identifier declared
+    /// in a <c>for (let|const ... ; ... ; ...)</c> init, emit the init
+    /// expressions, and return the slot list so the caller can emit
+    /// <see cref="Opcode.RefreshLetBinding"/> at the top of each iteration.
+    /// Unlike <see cref="EmitVarDecl"/>, this path bypasses the
+    /// script-top-as-global routing: spec requires <c>let</c> in a for-loop
+    /// init to be lexically scoped to the loop, never a global. Each
+    /// binding's slot is unconditionally marked captured (cell-backed) so
+    /// the refresh opcode can swap it per iteration without checking.
+    /// Destructuring patterns in the init currently fall back to the regular
+    /// path (no per-iteration semantics for the destructured names — rare
+    /// in practice, tracked as a follow-up).</summary>
+    private List<int> EmitForLetInit(VariableDeclaration vd)
+    {
+        var slots = new List<int>(vd.Declarations.Count);
+        foreach (var d in vd.Declarations)
+        {
+            if (d.Id is not Identifier id)
+            {
+                // Destructuring init: route through the regular pattern path
+                // and skip per-iteration semantics for now.
+                DeclarePatternBindings(d.Id);
+                if (d.Init is not null)
+                {
+                    var srcSlot = _b.ReserveLocal();
+                    EmitExpression(d.Init);
+                    _b.Emit(Opcode.StoreLocal, (byte)srcSlot);
+                    EmitPatternFromLocal(d.Id, srcSlot, isDeclaration: true);
+                }
+                continue;
+            }
+
+            // Allocate a Cell-backed slot in the for-loop's scope. Even at
+            // script-top the binding is loop-local (not a global), per spec.
+            var slot = _b.ReserveLocal();
+            _scopes[^1][id.Name] = slot;
+            _b.MarkCaptured(slot);
+            _b.Emit(Opcode.InitCellLocal, (byte)slot);
+            slots.Add(slot);
+
+            if (d.Init is not null)
+            {
+                EmitExpression(d.Init);
+                _b.Emit(Opcode.StoreCellLocal, (byte)slot);
+            }
+        }
+        return slots;
+    }
+
+    /// <summary>Per-iteration let/const binding for for-in / for-of: allocate
+    /// a Cell-backed slot for each identifier, declare it in the loop's
+    /// scope (overriding any preallocation from <see cref="DeclarePatternBindings"/>),
+    /// and return the slot list. Identifier-only LHS — destructuring on the
+    /// for-of LHS is bound by <see cref="EmitForOfBinding"/> directly into
+    /// these slots via the regular pattern path.</summary>
+    private List<int> ReserveForOfLetSlots(VariableDeclaration vd)
+    {
+        var slots = new List<int>(vd.Declarations.Count);
+        foreach (var d in vd.Declarations)
+        {
+            if (d.Id is not Identifier id) continue;
+            var slot = _b.ReserveLocal();
+            _scopes[^1][id.Name] = slot;
+            _b.MarkCaptured(slot);
+            _b.Emit(Opcode.InitCellLocal, (byte)slot);
+            slots.Add(slot);
+        }
+        return slots;
     }
 
     /// <summary>
@@ -826,10 +929,25 @@ public sealed partial class JsCompiler
         // Pre-declare any identifiers introduced by the LHS so the body sees
         // them as locals. For VariableDeclaration we declare each binding;
         // for a bare AssignmentTarget we leave the resolver to fall through
-        // to the parent scope.
+        // to the parent scope. Per §14.7.4.4, let/const bindings get per-
+        // iteration semantics: allocate Cell-backed slots and refresh each
+        // iteration so closures in the body capture an iteration-local cell.
+        List<int>? perIterSlots = null;
         if (fo.Left is VariableDeclaration vd0)
         {
-            foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+            if (vd0.Kind == "let" || vd0.Kind == "const")
+            {
+                perIterSlots = ReserveForOfLetSlots(vd0);
+                // Destructuring patterns and any non-identifier LHS still
+                // need the regular declare path; ReserveForOfLetSlots skips
+                // those, so call DeclarePatternBindings as a fallback.
+                foreach (var d in vd0.Declarations)
+                    if (d.Id is not Identifier) DeclarePatternBindings(d.Id);
+            }
+            else
+            {
+                foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+            }
         }
 
         var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
@@ -844,6 +962,13 @@ public sealed partial class JsCompiler
         _b.Emit(Opcode.LoadUndefined);
         _b.Emit(Opcode.StrictEq);
         var jExit = _b.EmitJump(Opcode.JumpIfTrue);
+        // CreatePerIterationEnvironment — refresh let/const bindings before
+        // the iteration's value is stored into them.
+        if (perIterSlots is not null)
+        {
+            foreach (var slot in perIterSlots)
+                _b.Emit(Opcode.RefreshLetBinding, (byte)slot);
+        }
         // Stack: [iterResult]. Extract .value.
         _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("value"));
         // Stack: [value]. Bind to LHS.
@@ -897,10 +1022,21 @@ public sealed partial class JsCompiler
         _b.Emit(Opcode.LoadZero);
         _b.Emit(Opcode.StoreLocal, (byte)iSlot);
 
-        // Pre-declare LHS bindings.
+        // Pre-declare LHS bindings. Per §14.7.4.4 CreatePerIterationEnvironment,
+        // let/const bindings get a fresh slot per iteration.
+        List<int>? perIterSlots = null;
         if (fi.Left is VariableDeclaration vd0)
         {
-            foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+            if (vd0.Kind == "let" || vd0.Kind == "const")
+            {
+                perIterSlots = ReserveForOfLetSlots(vd0);
+                foreach (var d in vd0.Declarations)
+                    if (d.Id is not Identifier) DeclarePatternBindings(d.Id);
+            }
+            else
+            {
+                foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+            }
         }
 
         var loop = new LoopFrame { TryDepthAtEntry = _tryDepth };
@@ -913,6 +1049,14 @@ public sealed partial class JsCompiler
         _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length"));
         _b.Emit(Opcode.GtEq);
         var jExit = _b.EmitJump(Opcode.JumpIfTrue);
+
+        // CreatePerIterationEnvironment — refresh let/const bindings before
+        // the iteration's key is stored into them.
+        if (perIterSlots is not null)
+        {
+            foreach (var slot in perIterSlots)
+                _b.Emit(Opcode.RefreshLetBinding, (byte)slot);
+        }
 
         // key = keys[i].
         _b.Emit(Opcode.LoadLocal, (byte)keysSlot);
@@ -1632,47 +1776,14 @@ public sealed partial class JsCompiler
     {
         if (yld.Delegate)
         {
-            // yield* iter — desugar via the iterator protocol:
-            //   const _it = GetIterator(expr);
-            //   let _r;
-            //   while (!(_r = IteratorStep(_it)).done) yield _r.value;
-            // Stack progression (LL):
-            //   [it] -- iterator-record handle on stack
-            //   loopStart: [it] IteratorStep -> [it, step | undefined]
-            //   If undefined, branch out (preserving 'it'). Else extract
-            //   .value, yield it, loop back.
+            // yield* iter — push the iterable and hand off to the VM-level
+            // YieldDelegate opcode, which implements §27.5.3.2 in full:
+            // it forwards the outer generator's next/return/throw into the
+            // inner iterator's matching method, exits when the inner says
+            // done, and pushes the inner's value as the result of the
+            // yield* expression.
             EmitExpression(yld.Argument!);
-            _b.Emit(Opcode.GetIterator); // [it]
-            var loopStart = _b.Position;
-            _b.Emit(Opcode.IteratorStep); // [it, step|undefined]
-            // Branch out if step === undefined (iterator done).
-            // JumpIfNotNullish jumps when the popped value is not nullish.
-            // We want to fall through to the loop body when step is an
-            // object and exit when step is undefined. Use Dup then
-            // JumpIfNotNullish to keep step on stack for the body.
-            _b.Emit(Opcode.Dup); // [it, step, step]
-            var keepGoing = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one
-            // Done: pop the residual undefined and pop the iterator-record handle.
-            _b.Emit(Opcode.Pop); // pop undefined (step)
-            _b.Emit(Opcode.Pop); // pop iterator-record
-            var afterEnd = _b.EmitJump(Opcode.Jump);
-            // Body: step is on top, it underneath. Extract step.value, yield.
-            _b.PatchJump(keepGoing);
-            _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("value")); // [it, value]
-            _b.Emit(Opcode.Suspend);
-            _b.EmitU8Raw(0); // yield kind
-            // After resume, value-sent is on top; discard it (yield*'s
-            // received-value semantics simplified — we don't forward
-            // .next(v) into the inner iterator).
-            _b.Emit(Opcode.Pop);
-            // Jump back to loopStart. Jump operand is computed from the
-            // byte after the operand, so we need delta from (jumpOpPos+3) to loopStart.
-            var jumpBackPos = _b.EmitJump(Opcode.Jump); // returns position of operand bytes
-            // jumpBackPos is the position of operand; jump source after operand = jumpBackPos + 2.
-            var delta = loopStart - (jumpBackPos + 2);
-            _b.PatchI16(jumpBackPos, (short)delta);
-            _b.PatchJump(afterEnd);
-            _b.Emit(Opcode.LoadUndefined);
+            _b.Emit(Opcode.YieldDelegate);
             return;
         }
 

@@ -51,6 +51,25 @@ public sealed class JsTypedArray : JsObject
         _ => 8,
     };
 
+    /// <summary>§23.2.3.34 [[TypedArrayName]] — concrete constructor name
+    /// (e.g. "Uint8Array", "Float32Array"). Read by the
+    /// <c>%TypedArray%.prototype[@@toStringTag]</c> accessor.</summary>
+    public string ConstructorName => Kind switch
+    {
+        JsTypedArrayKind.Int8 => "Int8Array",
+        JsTypedArrayKind.Uint8 => "Uint8Array",
+        JsTypedArrayKind.Uint8Clamped => "Uint8ClampedArray",
+        JsTypedArrayKind.Int16 => "Int16Array",
+        JsTypedArrayKind.Uint16 => "Uint16Array",
+        JsTypedArrayKind.Int32 => "Int32Array",
+        JsTypedArrayKind.Uint32 => "Uint32Array",
+        JsTypedArrayKind.Float32 => "Float32Array",
+        JsTypedArrayKind.Float64 => "Float64Array",
+        JsTypedArrayKind.BigInt64 => "BigInt64Array",
+        JsTypedArrayKind.BigUint64 => "BigUint64Array",
+        _ => throw new InvalidOperationException(),
+    };
+
     public override JsValue Get(string name)
     {
         if (TryIndex(name, out var index))

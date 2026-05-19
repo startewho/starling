@@ -38,6 +38,13 @@ public sealed class SuspendedFrame
     /// async <c>await</c> when the awaited promise rejects.</summary>
     public bool ResumeWithThrow { get; set; }
 
+    /// <summary>True when the caller wants to inject a Return completion
+    /// at the suspension point — used by generator <c>.return(v)</c> so
+    /// the worker walks any enclosing <c>finally</c> blocks before
+    /// completing with <see cref="ResumeValue"/> as the return value.
+    /// Mutually exclusive with <see cref="ResumeWithThrow"/>.</summary>
+    public bool ResumeWithReturn { get; set; }
+
     /// <summary>Value yielded by the worker (the operand of <c>yield expr</c>
     /// or <c>await expr</c>). For yield it becomes the result-object's
     /// <c>value</c>; for await it's the promise/value to settle on.</summary>
@@ -138,11 +145,12 @@ public sealed class SuspendedFrame
     /// completes. After this returns, callers should consult
     /// <see cref="Completed"/> and either <see cref="YieldedValue"/> (still
     /// running) or <see cref="ReturnValue"/> (done).</summary>
-    public void Resume(JsValue value, bool withThrow = false)
+    public void Resume(JsValue value, bool withThrow = false, bool withReturn = false)
     {
         if (Completed) return;
         ResumeValue = value;
         ResumeWithThrow = withThrow;
+        ResumeWithReturn = withReturn;
         _resume.Set();
         _yield.Wait();
         _yield.Reset();

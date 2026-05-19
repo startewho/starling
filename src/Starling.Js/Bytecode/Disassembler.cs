@@ -62,6 +62,7 @@ public static class Disassembler
                 case Opcode.LoadCellLocal:
                 case Opcode.StoreCellLocal:
                 case Opcode.PromoteParamCell:
+                case Opcode.RefreshLetBinding:
                 case Opcode.StoreUpvalue:
                 case Opcode.LoadUpvalueCell:
                 case Opcode.Call:
@@ -125,6 +126,9 @@ public static class Disassembler
                       .Append(" finally→").Append(finallyOffset == -1 ? "<none>" : (i + finallyOffset).ToString("D4"));
                     break;
                 }
+                case Opcode.YieldDelegate:
+                    sb.Append(op);
+                    break;
                 default:
                     sb.Append(op);
                     break;

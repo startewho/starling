@@ -62,6 +62,15 @@ public enum Opcode : byte
     /// regular <see cref="LoadUpvalue"/> dereferences through the cell;
     /// this opcode hands the cell off intact.</summary>
     LoadUpvalueCell,
+    /// <summary>[u8 slot] — §14.7.4.4 CreatePerIterationEnvironment. Read
+    /// the current <see cref="Tessera.Js.Runtime.Cell"/> stored in
+    /// <c>slot</c>, snapshot its <c>Value</c>, allocate a fresh Cell with
+    /// the same value, and write the fresh cell back into the slot. Emitted
+    /// at the top of each iteration of <c>for (let|const x = ...; ...; ...)</c>
+    /// (and the corresponding for-in / for-of forms) so closures created
+    /// inside the iteration body capture an iteration-specific binding
+    /// rather than sharing a single slot across iterations.</summary>
+    RefreshLetBinding,
 
     // ----- Globals (for free identifiers / Test262 host bindings) -----
     LoadGlobal,     // [u16 nameIdx] → push global by name
@@ -248,6 +257,18 @@ public enum Opcode : byte
     /// resume-value is the resolved value (or, if the awaited promise
     /// rejected, a <c>JsThrow</c> is raised at this point).</summary>
     Suspend,
+
+    /// <summary>§27.5.3.2 YieldDelegate (<c>yield* expr</c>). Pops an
+    /// iterable, builds an iterator-record, and runs the full delegate
+    /// protocol entirely inside the opcode handler: forwarding the outer
+    /// generator's resume kind (next/return/throw) into the inner
+    /// iterator's matching method on each round-trip. Exits only when the
+    /// inner iterator signals <c>done: true</c>, at which point the
+    /// inner's <c>value</c> is pushed onto the outer stack as the result
+    /// of the <c>yield*</c> expression. Throws SyntaxError if invoked
+    /// outside a generator context (no <see cref="Suspend"/>-style
+    /// suspension target).</summary>
+    YieldDelegate,
 
     Halt,           // end-of-program sentinel
 }

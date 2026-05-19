@@ -84,17 +84,24 @@ public static class GeneratorIntrinsics
             gen.Done = true;
             return IteratorIntrinsics.MakeResult(realm, sent, done: true);
         }
-        // Tell the worker to perform an early return: we model this as
-        // injecting a throw of a sentinel, then catching the sentinel in
-        // the caller. Simpler approach: signal via a flag on the frame.
-        // For minimal support, treat .return like a final completion —
-        // forcefully mark done. The worker thread will eventually GC.
+        // Signal the worker to perform an early Return at the current
+        // suspension point. The Suspend opcode handler raises a
+        // JsReturnSentinel which walks any enclosing try/finally frames
+        // before the body returns sent (or, if a finally overrides the
+        // completion via throw, the worker reports ThrewUncaught).
+        gen.Frame.Resume(sent, withReturn: true);
         gen.Done = true;
-        // Best-effort: trigger the worker to advance once so any finally
-        // blocks run. We inject a throw of a unique sentinel that we
-        // catch here. Skip for simplicity — finally semantics on .return
-        // are documented as a known gap.
-        return IteratorIntrinsics.MakeResult(realm, sent, done: true);
+        if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
+        // The worker may have observed the return at a yield inside an
+        // intermediate yield point (e.g. finally yields) — but our model
+        // is single-step: after Resume(withReturn), the body either
+        // completes or it yielded again. If it yielded again (rare —
+        // would require yield inside finally), still report done with
+        // sent: spec lets finally hijack the completion via further
+        // yields, but the simpler interpretation is to honor the caller's
+        // sent value as the return-completion value.
+        var v = gen.Frame.Completed ? gen.Frame.ReturnValue : sent;
+        return IteratorIntrinsics.MakeResult(realm, v, done: true);
     }
 
     private static JsValue GeneratorThrow(JsRealm realm, JsValue thisV, JsValue err)
