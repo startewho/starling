@@ -763,39 +763,117 @@ public static class PropertyRegistry
 
     private static IEnumerable<PropertyDeclaration> ExpandAnimation(List<CssValue> values, bool important)
     {
-        var sawDuration = false;
+        // Split on top-level commas. The value parser emits empty-name keywords
+        // for separator commas (verified by probe). Each segment is one layer
+        // per CSS Animations 1 §4.1.
+        var layers = SplitTopLevelCommas(values);
+
+        // Collect per-layer values for each Animation* longhand.
+        var names = new List<CssValue>();
+        var durations = new List<CssValue>();
+        var delays = new List<CssValue>();
+        var timings = new List<CssValue>();
+        var iterations = new List<CssValue>();
+        var directions = new List<CssValue>();
+        var fills = new List<CssValue>();
+        var playStates = new List<CssValue>();
+
+        foreach (var layer in layers)
+        {
+            string? name = null;
+            CssValue? duration = null, delay = null, timing = null, iteration = null;
+            CssValue? direction = null, fill = null, playState = null;
+
+            foreach (var v in layer)
+            {
+                if (v is CssTime || v is CssDimension { Unit: "s" or "ms" })
+                {
+                    if (duration is null) duration = v;
+                    else delay ??= v;
+                }
+                else if (v is CssNumber)
+                {
+                    iteration ??= v;
+                }
+                else if (v is CssKeyword k)
+                {
+                    if (k.Name is "infinite")
+                        iteration ??= v;
+                    else if (IsTimingFunctionKeyword(k.Name))
+                        timing ??= v;
+                    else if (k.Name is "normal" or "reverse" or "alternate" or "alternate-reverse")
+                        direction ??= v;
+                    else if (k.Name is "forwards" or "backwards" or "both")
+                        fill ??= v;
+                    else if (k.Name is "none")
+                    {
+                        // Ambiguous: name "none" or fill-mode "none". Per spec
+                        // §4.1 the first encountered keyword that fits an
+                        // un-set slot wins; prefer fill-mode if not yet set,
+                        // else name.
+                        if (fill is null) fill = v;
+                        else name ??= k.Name;
+                    }
+                    else if (k.Name is "running" or "paused")
+                        playState ??= v;
+                    else
+                        name ??= k.Name;
+                }
+                else if (v is CssFunctionValue f && IsTimingFunctionName(f.Name))
+                {
+                    timing ??= v;
+                }
+            }
+
+            names.Add(new CssKeyword(name ?? "none"));
+            durations.Add(duration ?? new CssTime(0, CssTimeUnit.Seconds));
+            delays.Add(delay ?? new CssTime(0, CssTimeUnit.Seconds));
+            timings.Add(timing ?? new CssKeyword("ease"));
+            iterations.Add(iteration ?? new CssNumber(1));
+            directions.Add(direction ?? new CssKeyword("normal"));
+            fills.Add(fill ?? new CssKeyword("none"));
+            playStates.Add(playState ?? new CssKeyword("running"));
+        }
+
+        if (names.Count == 0)
+            yield break;
+
+        yield return Emit(PropertyId.AnimationName, names, important);
+        yield return Emit(PropertyId.AnimationDuration, durations, important);
+        yield return Emit(PropertyId.AnimationDelay, delays, important);
+        yield return Emit(PropertyId.AnimationTimingFunction, timings, important);
+        yield return Emit(PropertyId.AnimationIterationCount, iterations, important);
+        yield return Emit(PropertyId.AnimationDirection, directions, important);
+        yield return Emit(PropertyId.AnimationFillMode, fills, important);
+        yield return Emit(PropertyId.AnimationPlayState, playStates, important);
+
+        static PropertyDeclaration Emit(PropertyId id, List<CssValue> layers, bool important)
+            => new(id, layers.Count == 1 ? layers[0] : new CssValueList(layers), important);
+    }
+
+    private static List<List<CssValue>> SplitTopLevelCommas(List<CssValue> values)
+    {
+        var layers = new List<List<CssValue>>();
+        var current = new List<CssValue>();
         foreach (var v in values)
         {
-            if (v is CssDimension { Unit: "s" or "ms" })
+            if (v is CssKeyword { Name: "" })
             {
-                if (!sawDuration)
-                {
-                    yield return new PropertyDeclaration(PropertyId.AnimationDuration, v, important);
-                    sawDuration = true;
-                }
-                else
-                    yield return new PropertyDeclaration(PropertyId.AnimationDelay, v, important);
+                layers.Add(current);
+                current = new List<CssValue>();
             }
-            else if (v is CssNumber n)
-                yield return new PropertyDeclaration(PropertyId.AnimationIterationCount, n, important);
-            else if (v is CssKeyword k)
+            else
             {
-                if (k.Name is "infinite")
-                    yield return new PropertyDeclaration(PropertyId.AnimationIterationCount, v, important);
-                else if (IsTimingFunctionKeyword(k.Name))
-                    yield return new PropertyDeclaration(PropertyId.AnimationTimingFunction, v, important);
-                else if (k.Name is "normal" or "reverse" or "alternate" or "alternate-reverse")
-                    yield return new PropertyDeclaration(PropertyId.AnimationDirection, v, important);
-                else if (k.Name is "none" or "forwards" or "backwards" or "both")
-                    yield return new PropertyDeclaration(PropertyId.AnimationFillMode, v, important);
-                else if (k.Name is "running" or "paused")
-                    yield return new PropertyDeclaration(PropertyId.AnimationPlayState, v, important);
-                else
-                    yield return new PropertyDeclaration(PropertyId.AnimationName, v, important);
+                current.Add(v);
             }
-            else if (v is CssFunctionValue f && IsTimingFunctionName(f.Name))
-                yield return new PropertyDeclaration(PropertyId.AnimationTimingFunction, v, important);
         }
+        layers.Add(current);
+        // Drop fully empty trailing layers (e.g. trailing comma with no
+        // values after it) but keep empty intermediates so the layer index
+        // matches author intent.
+        if (layers.Count > 0 && layers[^1].Count == 0)
+            layers.RemoveAt(layers.Count - 1);
+        return layers;
     }
 
     private static bool IsTimingFunctionKeyword(string name)

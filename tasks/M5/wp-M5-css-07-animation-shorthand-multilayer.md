@@ -1,7 +1,7 @@
 ---
 id: wp:M5-css-07-animation-shorthand-multilayer
 milestone: M5
-status: "claimed"
+status: "complete"
 claimed_by: "agent-copilot-claude-opus-4.7"
 claimed_at: "2026-05-19T15:27:27Z"
 branch: "main"
@@ -56,3 +56,11 @@ the cascaded longhand list values back into
 
 - 2026-05-19T16:25Z — created (agent-copilot-claude-opus-4.7).
 - 2026-05-19T15:27:27Z — claimed by agent-copilot-claude-opus-4.7, working on main
+- 2026-05-19T17:10Z — completed. `PropertyRegistry.ExpandAnimation` now splits on
+  top-level commas and emits parallel `CssValueList`s per longhand with proper
+  per-layer defaults. New `AnimationCompositor.BuildDeclarations(ComputedStyle)`
+  zips the longhands with §4.1 cycle-on-short-lists semantics and skips layers
+  whose `animation-name` is `none` (or empty). Also fixed a latent bug where the
+  old code only matched `CssDimension` for durations — the parser actually emits
+  `CssTime`, so single-layer durations were silently lost. 6 new tests + 471
+  Css suite green; full sln build green.
