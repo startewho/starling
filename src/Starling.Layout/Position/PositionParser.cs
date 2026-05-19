@@ -22,7 +22,6 @@ internal static class PositionParser
             "relative" => PositionKind.Relative,
             "absolute" => PositionKind.Absolute,
             "fixed" => PositionKind.Fixed,
-            // sticky is parsed but treated like relative — see PositionKind.Sticky.
             "sticky" => PositionKind.Sticky,
             _ => PositionKind.Static,
         };
