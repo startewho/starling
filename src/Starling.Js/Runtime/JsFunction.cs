@@ -11,13 +11,14 @@ namespace Tessera.Js.Runtime;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Closures (wp:M3-04c) use <em>snapshot semantics</em>: at
-/// <see cref="Opcode.MakeClosure"/> time, the parent frame pushes the
-/// current values of each captured variable, and the VM constructs a
-/// fresh <see cref="JsFunction"/> whose <see cref="Upvalues"/> array
-/// holds those snapshots. Mutation through an upvalue (i.e. the inner
-/// function reassigning a captured name and the parent observing it)
-/// is deferred to wp:M3-04c2 with Cell-based slots.
+/// gap:closure-write-back (wp:M3-04c2): closures use <em>live binding</em>
+/// semantics. At <see cref="Opcode.MakeClosure"/> time, the parent frame
+/// pushes references to the shared <see cref="Cell"/> objects that hold
+/// each captured binding's value; the VM constructs a fresh
+/// <see cref="JsFunction"/> whose <see cref="Upvalues"/> array stores
+/// those cell references (wrapped as <c>JsValue.Object(cell)</c>). Reads
+/// and writes from both the outer and the inner function go through the
+/// same cell, so writes propagate as the spec requires.
 /// </para>
 /// <para>
 /// A "template" JsFunction is what the compiler stuffs into the
@@ -31,8 +32,10 @@ public sealed class JsFunction : JsObject
     public string Name { get; }
     public Chunk Body { get; }
     public int ArityDeclared { get; }
-    /// <summary>Snapshotted captured values, in the order assigned by the
-    /// compiler. Empty for plain (non-capturing) functions.</summary>
+    /// <summary>Captured-binding cells, in the order assigned by the
+    /// compiler. Each entry is a <c>JsValue.Object(cell)</c> where the
+    /// <see cref="Cell"/> aliases the same storage the owning scope reads
+    /// and writes. Empty for plain (non-capturing) functions.</summary>
     public IReadOnlyList<JsValue> Upvalues { get; }
 
     /// <summary>B1b-2a: the prototype object on which this function lives

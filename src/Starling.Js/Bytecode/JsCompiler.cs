@@ -70,6 +70,14 @@ public sealed partial class JsCompiler
     /// of the same captured name reuse one upvalue slot.</summary>
     private readonly Dictionary<string, int> _upvalueByName = new(StringComparer.Ordinal);
 
+    /// <summary>gap:closure-write-back — names declared in this compiler's
+    /// function that are referenced from inside one or more nested
+    /// functions. Computed by <see cref="CaptureAnalysis.Compute"/> before
+    /// any bytecode is emitted; consulted at every declaration site to
+    /// decide whether the slot uses <see cref="Tessera.Js.Runtime.Cell"/>
+    /// storage.</summary>
+    private HashSet<string> _capturedNames = new(StringComparer.Ordinal);
+
     public JsCompiler() : this(parent: null) { }
 
     private JsCompiler(JsCompiler? parent)
@@ -77,9 +85,18 @@ public sealed partial class JsCompiler
         _parent = parent;
     }
 
+    /// <summary>gap:closure-write-back — is this name marked for shared-cell
+    /// storage in the current function?</summary>
+    private bool IsNameCaptured(string name) => _capturedNames.Contains(name);
+
+    /// <summary>gap:closure-write-back — convenience: did the compiler box
+    /// the local at this slot? Used by load/store emission sites.</summary>
+    private bool IsSlotCaptured(int slot) => _b.IsCaptured(slot);
+
     public static Chunk Compile(Program program, string? name = "<script>")
     {
         var c = new JsCompiler();
+        c.RunCaptureAnalysisForScript(program.Body);
         c.EmitProgram(program, keepLastExpression: false);
         return c._b.Build(name);
     }
@@ -92,12 +109,37 @@ public sealed partial class JsCompiler
     public static Chunk CompileForEval(Program program, string? name = "<eval>")
     {
         var c = new JsCompiler();
+        c.RunCaptureAnalysisForScript(program.Body);
         c.EmitProgram(program, keepLastExpression: true);
         return c._b.Build(name);
     }
 
+    /// <summary>gap:closure-write-back — populate <see cref="_capturedNames"/>
+    /// for the script-top "function": which top-level names are referenced
+    /// from inside nested functions? Top-level vars become globals in our
+    /// implementation, so they'd be writable via LoadGlobal/StoreGlobal
+    /// anyway, but function-decl bindings at script top still flow
+    /// through closure capture and need the cell treatment.</summary>
+    private void RunCaptureAnalysisForScript(IReadOnlyList<Statement> body)
+    {
+        _capturedNames = CaptureAnalysis.Compute(Array.Empty<Expression>(), body);
+    }
+
+    /// <summary>gap:closure-write-back — populate <see cref="_capturedNames"/>
+    /// for a function body. Run by the sub-compiler before any bytecode is
+    /// emitted, so declaration sites can pick the right opcode.</summary>
+    private void RunCaptureAnalysisForFunction(IReadOnlyList<Expression> parameters, IReadOnlyList<Statement> body)
+    {
+        _capturedNames = CaptureAnalysis.Compute(parameters, body);
+    }
+
     private void EmitProgram(Program p, bool keepLastExpression)
     {
+        // gap:closure-write-back — pre-allocate captured top-level vars
+        // BEFORE we hoist function declarations, so a hoisted function's
+        // body resolves a captured name to the parent's local (cell) slot
+        // instead of falling through to LoadGlobal/StoreGlobal.
+        PreallocateCapturedVarBindings(p.Body);
         // Hoist FunctionDeclarations: compile bodies, allocate locals,
         // emit StoreLocal in declaration order so they're callable before
         // their textual position (matches §10.2.11 / §13.2.1 var hoisting
@@ -127,13 +169,39 @@ public sealed partial class JsCompiler
 
     private void HoistFunctionDeclarations(IReadOnlyList<Statement> body)
     {
+        // At the script top there is no enclosing function, so hoisted
+        // function-declarations install themselves as globals (mirroring
+        // §10.2.11 host-defined global object behavior). Inside a function,
+        // they bind a fresh local slot in the function's variable scope.
+        var isScriptTop = _parent is null;
         foreach (var s in body)
         {
             if (s is not FunctionDeclaration fd) continue;
+            // Reserve the slot / register the binding BEFORE compiling the
+            // body, so the body can resolve `fd.Name` to itself (recursion)
+            // and so nested function bodies that capture the name go through
+            // the same upvalue.
+            int? slot = null;
+            if (!isScriptTop)
+            {
+                if (_scopes[^1].ContainsKey(fd.Name.Name))
+                {
+                    slot = _scopes[^1][fd.Name.Name];
+                }
+                else
+                {
+                    var fresh = _b.ReserveLocal();
+                    _scopes[^1][fd.Name.Name] = fresh;
+                    if (IsNameCaptured(fd.Name.Name)) _b.MarkCaptured(fresh);
+                    if (_b.IsCaptured(fresh)) _b.Emit(Opcode.InitCellLocal, (byte)fresh);
+                    slot = fresh;
+                }
+            }
             // Compile the body in a fresh sub-compiler parented to this
             // one so the body can resolve free identifiers as upvalues
             // captured from this scope.
             var sub = new JsCompiler(parent: this);
+            sub.RunCaptureAnalysisForFunction(fd.Params, fd.Body.Body);
             sub.EmitFunctionBody(fd);
             var chunk = sub._b.Build(fd.Name.Name);
 
@@ -144,11 +212,36 @@ public sealed partial class JsCompiler
             // closure instance.
             EmitFunctionConstructor(fd.Name.Name, chunk,
                 CountSimpleParams(fd.Params), sub._upvalues);
-            var nameIdx = _b.AddConstant(fd.Name.Name);
-            _b.EmitU16(Opcode.StoreGlobal, nameIdx);
-            // StoreGlobal does not re-push the value, so the stack is
-            // balanced after the hoist.
+            if (isScriptTop)
+            {
+                var nameIdx = _b.AddConstant(fd.Name.Name);
+                _b.EmitU16(Opcode.StoreGlobal, nameIdx);
+            }
+            else
+            {
+                EmitStoreLocalSlot(slot!.Value);
+            }
+            // StoreGlobal / StoreLocal-flavored ops do not re-push, so the
+            // stack is balanced after the hoist.
         }
+    }
+
+    /// <summary>gap:closure-write-back — emit the correct store opcode for
+    /// a local slot, accounting for whether the slot was promoted to a
+    /// cell.</summary>
+    private void EmitStoreLocalSlot(int slot)
+    {
+        if (_b.IsCaptured(slot)) _b.Emit(Opcode.StoreCellLocal, (byte)slot);
+        else _b.Emit(Opcode.StoreLocal, (byte)slot);
+    }
+
+    /// <summary>gap:closure-write-back — emit the correct load opcode for
+    /// a local slot, accounting for whether the slot was promoted to a
+    /// cell.</summary>
+    private void EmitLoadLocalSlot(int slot)
+    {
+        if (_b.IsCaptured(slot)) _b.Emit(Opcode.LoadCellLocal, (byte)slot);
+        else _b.Emit(Opcode.LoadLocal, (byte)slot);
     }
 
     /// <summary>Materialize a function as either a plain template
@@ -171,16 +264,28 @@ public sealed partial class JsCompiler
         if (upvalues.Count > 255)
             throw new NotSupportedException("more than 255 captured variables not supported");
 
-        // Push each captured value in upvalue-table order. For a local
-        // capture, the value lives in this compiler's locals; for a
-        // chained capture, it lives in this compiler's own upvalue table
-        // (which the running closure will read via LoadUpvalue).
+        // gap:closure-write-back — push the captured cell (not its value)
+        // so that the new closure aliases the same shared cell that the
+        // owning function reads and writes. Parent local slots already
+        // hold the cell as a JsValue (allocated by InitCellLocal /
+        // PromoteParamCell), so a plain LoadLocal pushes the cell. Parent
+        // upvalues are dereferenced by the default LoadUpvalue, so we
+        // need LoadUpvalueCell to push the cell intact.
         foreach (var u in upvalues)
         {
             if (u.IsLocalCapture)
+            {
+                // The parent's slot must already be a cell here (the
+                // static CaptureAnalysis seeded the parent's
+                // _capturedNames before any bytecode was emitted, and
+                // every declaration site honored that). Plain LoadLocal
+                // pushes the slot value — which is the cell.
                 _b.Emit(Opcode.LoadLocal, (byte)u.Index);
+            }
             else
-                _b.Emit(Opcode.LoadUpvalue, (byte)u.Index);
+            {
+                _b.Emit(Opcode.LoadUpvalueCell, (byte)u.Index);
+            }
         }
         _b.EmitU16(Opcode.MakeClosure, fnIdx);
         _b.EmitU8Raw((byte)upvalues.Count);
@@ -205,9 +310,115 @@ public sealed partial class JsCompiler
         // Reserve a local slot per simple-identifier parameter so the
         // callee sees args in slots 0..N-1.
         BindFunctionParameters(fd.Params);
+        // gap:closure-write-back — captured `var` bindings must exist as
+        // locals BEFORE we compile any nested function body that might
+        // resolve them as upvalues. Pre-allocate slots for every captured
+        // var in this function's body, and emit InitCellLocal so the slot
+        // already holds a Cell when an inner closure is constructed.
+        PreallocateCapturedVarBindings(fd.Body.Body);
+        // gap:closure-write-back — function-declarations declared inside a
+        // function body are hoisted to the top of the function per §13.2.1
+        // and §14.1.18 (function-scoped). Without this, an inner
+        // `function inner() {...}` would be silently dropped, breaking
+        // closure tests like `function outer(){ var x=0; function inner(){x=5} inner(); return x }`.
+        HoistFunctionDeclarations(fd.Body.Body);
         foreach (var inner in fd.Body.Body) EmitStatement(inner);
         // Implicit `return undefined` if the body didn't return.
         _b.Emit(Opcode.ReturnUndefined);
+    }
+
+    /// <summary>gap:closure-write-back — walk this function's body and
+    /// pre-allocate local slots for every <c>var</c>/<c>let</c>/<c>const</c>
+    /// binding whose name is captured by a nested function. Captured slots
+    /// are also initialized to a Cell (with undefined) immediately, so a
+    /// nested closure constructed during hoisting can capture the cell.
+    /// </summary>
+    /// <remarks>
+    /// Non-captured locals stay unallocated here — they're declared at
+    /// their textual site by <see cref="DeclarePatternBindings"/>, which
+    /// keeps the fast path unchanged for the overwhelming majority of
+    /// bindings.
+    /// </remarks>
+    private void PreallocateCapturedVarBindings(IReadOnlyList<Statement> body)
+    {
+        foreach (var s in body) PreallocateCapturedInStatement(s);
+    }
+
+    private void PreallocateCapturedInStatement(Statement? s)
+    {
+        if (s is null) return;
+        switch (s)
+        {
+            case VariableDeclaration vd:
+                foreach (var d in vd.Declarations) PreallocateCapturedInPattern(d.Id);
+                return;
+            case BlockStatement b: foreach (var x in b.Body) PreallocateCapturedInStatement(x); return;
+            case IfStatement i:
+                PreallocateCapturedInStatement(i.Consequent);
+                PreallocateCapturedInStatement(i.Alternate);
+                return;
+            case WhileStatement w: PreallocateCapturedInStatement(w.Body); return;
+            case DoWhileStatement dw: PreallocateCapturedInStatement(dw.Body); return;
+            case ForStatement f:
+                if (f.Init is VariableDeclaration fvd)
+                    foreach (var d in fvd.Declarations) PreallocateCapturedInPattern(d.Id);
+                PreallocateCapturedInStatement(f.Body);
+                return;
+            case ForInStatement fi:
+                if (fi.Left is VariableDeclaration vdi)
+                    foreach (var d in vdi.Declarations) PreallocateCapturedInPattern(d.Id);
+                PreallocateCapturedInStatement(fi.Body);
+                return;
+            case ForOfStatement fo:
+                if (fo.Left is VariableDeclaration vdo)
+                    foreach (var d in vdo.Declarations) PreallocateCapturedInPattern(d.Id);
+                PreallocateCapturedInStatement(fo.Body);
+                return;
+            case SwitchStatement sw:
+                foreach (var c in sw.Cases)
+                    foreach (var s2 in c.Consequent) PreallocateCapturedInStatement(s2);
+                return;
+            case TryStatement tr:
+                PreallocateCapturedInStatement(tr.Block);
+                if (tr.Handler is not null)
+                    foreach (var s2 in tr.Handler.Body.Body) PreallocateCapturedInStatement(s2);
+                if (tr.Finalizer is not null) PreallocateCapturedInStatement(tr.Finalizer);
+                return;
+            case LabeledStatement ls: PreallocateCapturedInStatement(ls.Body); return;
+        }
+    }
+
+    private void PreallocateCapturedInPattern(Expression? pattern)
+    {
+        if (pattern is null) return;
+        switch (pattern)
+        {
+            case Identifier id:
+                if (IsNameCaptured(id.Name) && !_scopes[^1].ContainsKey(id.Name))
+                {
+                    var slot = _b.ReserveLocal();
+                    _scopes[^1][id.Name] = slot;
+                    _b.MarkCaptured(slot);
+                    _b.Emit(Opcode.InitCellLocal, (byte)slot);
+                }
+                return;
+            case AssignmentExpression a when a.Op == "=": PreallocateCapturedInPattern(a.Target); return;
+            case ArrayExpression arr:
+                foreach (var el in arr.Elements)
+                {
+                    if (el is null) continue;
+                    PreallocateCapturedInPattern(el is SpreadElement sp ? sp.Argument : el);
+                }
+                return;
+            case ObjectExpression obj:
+                foreach (var prop in obj.Properties)
+                {
+                    if (prop.Value is SpreadElement sp) PreallocateCapturedInPattern(sp.Argument);
+                    else PreallocateCapturedInPattern(prop.Value);
+                }
+                return;
+            case SpreadElement spread: PreallocateCapturedInPattern(spread.Argument); return;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -335,8 +546,18 @@ public sealed partial class JsCompiler
             {
                 var slot = _b.ReserveLocal();
                 _scopes[^1][idParam.Name] = slot;
-                _b.Emit(Opcode.DeclareLocal, (byte)slot);
-                _b.Emit(Opcode.StoreLocal, (byte)slot);
+                // gap:closure-write-back — catch bindings can be captured too.
+                if (IsNameCaptured(idParam.Name))
+                {
+                    _b.MarkCaptured(slot);
+                    _b.Emit(Opcode.InitCellLocal, (byte)slot);
+                    _b.Emit(Opcode.StoreCellLocal, (byte)slot);
+                }
+                else
+                {
+                    _b.Emit(Opcode.DeclareLocal, (byte)slot);
+                    _b.Emit(Opcode.StoreLocal, (byte)slot);
+                }
             }
             else if (handler.Param is null)
             {
@@ -382,7 +603,7 @@ public sealed partial class JsCompiler
                     EmitExpression(d.Init);
                     if (!TryResolveLocal(id.Name, out var slot))
                         throw new InvalidOperationException($"missing declared local '{id.Name}'");
-                    _b.Emit(Opcode.StoreLocal, (byte)slot);
+                    EmitStoreLocalSlot(slot);
                 }
                 else
                 {
@@ -686,11 +907,13 @@ public sealed partial class JsCompiler
     {
         if (TryResolveLocal(name, out var slot))
         {
-            _b.Emit(Opcode.LoadLocal, (byte)slot);
+            EmitLoadLocalSlot(slot);
             return;
         }
         if (TryResolveUpvalue(name, out var upIdx))
         {
+            // gap:closure-write-back — every upvalue is a Cell now, so
+            // LoadUpvalue dereferences it transparently.
             _b.Emit(Opcode.LoadUpvalue, (byte)upIdx);
             return;
         }
@@ -768,18 +991,28 @@ public sealed partial class JsCompiler
     {
         if (up.Argument is Identifier id)
         {
-            if (!TryResolveLocal(id.Name, out var slot))
-                throw new NotSupportedException("update of global not yet supported");
-            _b.Emit(Opcode.LoadLocal, (byte)slot);
-            // For postfix, snapshot the current value before mutation.
-            if (!up.Prefix) _b.Emit(Opcode.Dup);
-            // Emit `+1` or `-1`.
-            _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));
-            _b.Emit(up.Op == "++" ? Opcode.Add : Opcode.Sub);
-            // For prefix, the new value is what we keep; dup it before storing.
-            if (up.Prefix) _b.Emit(Opcode.Dup);
-            _b.Emit(Opcode.StoreLocal, (byte)slot);
-            return;
+            // gap:closure-write-back — try local first, then upvalue, then global.
+            if (TryResolveLocal(id.Name, out var slot))
+            {
+                EmitLoadLocalSlot(slot);
+                if (!up.Prefix) _b.Emit(Opcode.Dup);
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));
+                _b.Emit(up.Op == "++" ? Opcode.Add : Opcode.Sub);
+                if (up.Prefix) _b.Emit(Opcode.Dup);
+                EmitStoreLocalSlot(slot);
+                return;
+            }
+            if (TryResolveUpvalue(id.Name, out var upIdx))
+            {
+                _b.Emit(Opcode.LoadUpvalue, (byte)upIdx);
+                if (!up.Prefix) _b.Emit(Opcode.Dup);
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));
+                _b.Emit(up.Op == "++" ? Opcode.Add : Opcode.Sub);
+                if (up.Prefix) _b.Emit(Opcode.Dup);
+                _b.Emit(Opcode.StoreUpvalue, (byte)upIdx);
+                return;
+            }
+            throw new NotSupportedException("update of global not yet supported");
         }
         throw new NotSupportedException("update target must be identifier in this slice");
     }
@@ -812,8 +1045,13 @@ public sealed partial class JsCompiler
                 EmitExpression(a.Value);
             }
             _b.Emit(Opcode.Dup); // assignment is an expression — leaves value on stack
+            // gap:closure-write-back — assigning to a captured upvalue must
+            // route through the shared cell; assignment to a captured local
+            // routes through StoreCellLocal.
             if (TryResolveLocal(id.Name, out var slot))
-                _b.Emit(Opcode.StoreLocal, (byte)slot);
+                EmitStoreLocalSlot(slot);
+            else if (TryResolveUpvalue(id.Name, out var upIdx))
+                _b.Emit(Opcode.StoreUpvalue, (byte)upIdx);
             else
                 _b.EmitU16(Opcode.StoreGlobal, _b.AddConstant(id.Name));
             return;
@@ -990,6 +1228,7 @@ public sealed partial class JsCompiler
         // free identifiers can be lazily resolved as upvalues captured
         // from this scope.
         var sub = new JsCompiler(parent: this);
+        sub.RunCaptureAnalysisForFunction(fe.Params, fe.Body.Body);
         sub.BindFunctionParameters(fe.Params);
         foreach (var s in fe.Body.Body) sub.EmitStatement(s);
         sub._b.Emit(Opcode.ReturnUndefined);
@@ -1083,6 +1322,14 @@ public sealed partial class JsCompiler
             if (param is Identifier id)
             {
                 _scopes[^1][id.Name] = argSlots[i];
+                // gap:closure-write-back — if the parameter is captured by a
+                // nested function, promote its argument value into a Cell so
+                // writes from the nested function propagate back.
+                if (IsNameCaptured(id.Name))
+                {
+                    _b.MarkCaptured(argSlots[i]);
+                    _b.Emit(Opcode.PromoteParamCell, (byte)argSlots[i]);
+                }
                 continue;
             }
 
@@ -1100,7 +1347,16 @@ public sealed partial class JsCompiler
                 {
                     var slot = _b.ReserveLocal();
                     _scopes[^1][id.Name] = slot;
-                    _b.Emit(Opcode.DeclareLocal, (byte)slot);
+                    // gap:closure-write-back — captured bindings use a Cell.
+                    if (IsNameCaptured(id.Name))
+                    {
+                        _b.MarkCaptured(slot);
+                        _b.Emit(Opcode.InitCellLocal, (byte)slot);
+                    }
+                    else
+                    {
+                        _b.Emit(Opcode.DeclareLocal, (byte)slot);
+                    }
                 }
                 return;
             case AssignmentExpression { Op: "=" } a:
@@ -1175,8 +1431,11 @@ public sealed partial class JsCompiler
 
     private void StoreBindingIdentifier(string name)
     {
+        // gap:closure-write-back — captured-local writes route through the cell.
         if (TryResolveLocal(name, out var slot))
-            _b.Emit(Opcode.StoreLocal, (byte)slot);
+            EmitStoreLocalSlot(slot);
+        else if (TryResolveUpvalue(name, out var upIdx))
+            _b.Emit(Opcode.StoreUpvalue, (byte)upIdx);
         else
             _b.EmitU16(Opcode.StoreGlobal, _b.AddConstant(name));
     }

@@ -228,19 +228,68 @@ public sealed class JsVm
                 case Opcode.LoadLocal: Push(locals[ReadU8()]); break;
                 case Opcode.StoreLocal: locals[ReadU8()] = Pop(); break;
 
+                // ----- Captured locals (gap:closure-write-back) -----
+                case Opcode.InitCellLocal:
+                {
+                    var slot = ReadU8();
+                    locals[slot] = JsValue.Object(new Cell(JsValue.Undefined));
+                    break;
+                }
+                case Opcode.LoadCellLocal:
+                {
+                    var slot = ReadU8();
+                    var cell = (Cell)locals[slot].AsObject;
+                    Push(cell.Value);
+                    break;
+                }
+                case Opcode.StoreCellLocal:
+                {
+                    var slot = ReadU8();
+                    var cell = (Cell)locals[slot].AsObject;
+                    cell.Value = Pop();
+                    break;
+                }
+                case Opcode.PromoteParamCell:
+                {
+                    var slot = ReadU8();
+                    locals[slot] = JsValue.Object(new Cell(locals[slot]));
+                    break;
+                }
+                case Opcode.StoreUpvalue:
+                {
+                    var idx = ReadU8();
+                    var cell = (Cell)upvalues[idx].AsObject;
+                    cell.Value = Pop();
+                    break;
+                }
+                case Opcode.LoadUpvalueCell:
+                {
+                    var idx = ReadU8();
+                    Push(upvalues[idx]);
+                    break;
+                }
+
                 // ----- Globals -----
+                // gap:opcode-fast-path-bypasses-accessors — route global
+                // reads/writes through AbstractOperations.Get/Set so accessor
+                // descriptors on the global object (e.g. `location` defined via
+                // Object.defineProperty with a getter) invoke their getter/setter
+                // instead of silently returning undefined / overwriting the slot.
                 case Opcode.LoadGlobal:
                 {
                     var idx = ReadU16();
                     var name = (string)constants[idx]!;
-                    Push(_runtime.GetGlobal(name));
+                    var globalObj = _runtime.Realm.GlobalObject;
+                    Push(AbstractOperations.Get(this, globalObj, name, JsValue.Object(globalObj)));
                     break;
                 }
                 case Opcode.StoreGlobal:
                 {
                     var idx = ReadU16();
                     var name = (string)constants[idx]!;
-                    _runtime.SetGlobal(name, Pop());
+                    var value = Pop();
+                    var globalObj = _runtime.Realm.GlobalObject;
+                    AbstractOperations.Set(this, globalObj, name, value, JsValue.Object(globalObj));
                     break;
                 }
 
@@ -545,8 +594,14 @@ public sealed class JsVm
 
                 case Opcode.LoadUpvalue:
                 {
+                    // gap:closure-write-back — every upvalue is a Cell, so
+                    // dereference to push the current bound value. Use
+                    // LoadUpvalueCell to push the raw cell (for further
+                    // chained captures).
                     var idx = ReadU8();
-                    Push(upvalues[idx]);
+                    var upV = upvalues[idx];
+                    if (upV.IsObject && upV.AsObject is Cell c) Push(c.Value);
+                    else Push(upV); // legacy snapshot path — empty in practice
                     break;
                 }
 
@@ -696,10 +751,15 @@ public sealed class JsVm
                     {
                         var srcObj = src.AsObject;
                         var dstObj = dst.AsObject;
+                        // CopyDataProperties (§7.3.27) invokes getters on the source,
+                        // not the data-only fast path. Mirror that here so accessor
+                        // properties are spread by their getter's return value.
                         foreach (var key in srcObj.EnumerableKeys())
-                            dstObj.Set(key, srcObj.Get(key));
+                            AbstractOperations.Set(this, dstObj, key,
+                                AbstractOperations.Get(this, srcObj, key));
                         foreach (var key in srcObj.EnumerableSymbolKeys())
-                            dstObj.Set(key, srcObj.Get(key));
+                            AbstractOperations.Set(this, dstObj, JsPropertyKey.Symbol(key),
+                                AbstractOperations.Get(this, srcObj, JsPropertyKey.Symbol(key)));
                     }
                     break;
                 }
@@ -713,11 +773,13 @@ public sealed class JsVm
                     var srcObj = src.IsObject ? src.AsObject : (!src.IsNullish ? AbstractOperations.ToObject(_runtime.Realm, src) : null);
                     var len = 0;
                     if (srcObj is not null)
-                        len = Math.Max(0, (int)Math.Truncate(JsValue.ToNumber(srcObj.Get("length"))));
+                        len = Math.Max(0, (int)Math.Truncate(JsValue.ToNumber(
+                            AbstractOperations.Get(this, srcObj, "length"))));
                     if (srcObj is not null)
                     {
                         for (var i = start; i < len; i++)
-                            result.Push(srcObj.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                            result.Push(AbstractOperations.Get(this, srcObj,
+                                i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                     }
                     Push(JsValue.Object(result));
                     break;
@@ -813,17 +875,24 @@ public sealed class JsVm
                     }
                     var src = Pop();
                     var result = _runtime.Realm.NewOrdinaryObject();
+                    // CopyDataProperties (§7.3.27) — accessor getters on the
+                    // source must be invoked, not bypassed by the data-only
+                    // fast path. Route through AbstractOperations.Get.
                     if (src.IsObject)
                     {
                         var srcObj = src.AsObject;
                         foreach (var key in srcObj.EnumerableKeys())
-                            if (!excluded.Contains(key)) result.Set(key, srcObj.Get(key));
+                            if (!excluded.Contains(key))
+                                AbstractOperations.Set(this, result, key,
+                                    AbstractOperations.Get(this, srcObj, key));
                     }
                     else if (!src.IsNullish)
                     {
                         var srcObj = AbstractOperations.ToObject(_runtime.Realm, src);
                         foreach (var key in srcObj.EnumerableKeys())
-                            if (!excluded.Contains(key)) result.Set(key, srcObj.Get(key));
+                            if (!excluded.Contains(key))
+                                AbstractOperations.Set(this, result, key,
+                                    AbstractOperations.Get(this, srcObj, key));
                     }
                     Push(JsValue.Object(result));
                     break;

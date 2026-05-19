@@ -23,14 +23,27 @@ public sealed class Chunk
     public IReadOnlyList<object?> Constants { get; }
     public int LocalCount { get; }
     public string? Name { get; }
+    /// <summary>gap:closure-write-back — the set of local-slot indices in
+    /// this chunk that the compiler promoted to <c>Cell</c> storage because
+    /// at least one nested function references the binding. Empty for
+    /// functions with no captured locals (the common case).</summary>
+    public IReadOnlySet<int> CapturedSlots { get; }
 
     public Chunk(byte[] code, IReadOnlyList<object?> constants, int localCount, string? name = null)
+        : this(code, constants, localCount, name, capturedSlots: null)
+    {
+    }
+
+    public Chunk(byte[] code, IReadOnlyList<object?> constants, int localCount, string? name, IReadOnlySet<int>? capturedSlots)
     {
         Code = code ?? throw new ArgumentNullException(nameof(code));
         Constants = constants ?? throw new ArgumentNullException(nameof(constants));
         LocalCount = localCount;
         Name = name;
+        CapturedSlots = capturedSlots ?? EmptyCaptured;
     }
+
+    private static readonly IReadOnlySet<int> EmptyCaptured = new HashSet<int>();
 
     public override string ToString() => Disassembler.Disassemble(this);
 }
@@ -64,7 +77,20 @@ public sealed class ChunkBuilder
     private readonly List<byte> _code = [];
     private readonly List<object?> _constants = [];
     private readonly Dictionary<string, int> _stringPool = new(StringComparer.Ordinal);
+    private HashSet<int>? _capturedSlots;
     public int LocalCount { get; private set; }
+
+    /// <summary>gap:closure-write-back — record that <paramref name="slot"/>
+    /// is captured by a nested function and must use <see cref="Tessera.Js.Runtime.Cell"/>
+    /// storage. Reads and writes against the slot go through the cell-aware
+    /// opcodes.</summary>
+    public void MarkCaptured(int slot)
+    {
+        _capturedSlots ??= [];
+        _capturedSlots.Add(slot);
+    }
+
+    public bool IsCaptured(int slot) => _capturedSlots is not null && _capturedSlots.Contains(slot);
 
     public int Position => _code.Count;
 
@@ -159,5 +185,5 @@ public sealed class ChunkBuilder
     }
 
     public Chunk Build(string? name = null)
-        => new(_code.ToArray(), _constants.ToArray(), LocalCount, name);
+        => new(_code.ToArray(), _constants.ToArray(), LocalCount, name, _capturedSlots);
 }

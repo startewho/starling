@@ -48,6 +48,24 @@ public sealed class JsRealm
     public JsObject? WeakMapConstructor { get; internal set; }
     public JsObject? WeakSetConstructor { get; internal set; }
 
+    // B4-6 — WeakRef / FinalizationRegistry constructors.
+    public JsObject? WeakRefConstructor { get; internal set; }
+    public JsObject? FinalizationRegistryConstructor { get; internal set; }
+
+    /// <summary>§26.1 "kept alive" set — every successful
+    /// <c>WeakRef.prototype.deref()</c> adds its target here so it survives
+    /// for the rest of the current job. <see cref="JsRuntime.DrainMicrotasks"/>
+    /// clears the set after each drain (a coarser cadence than the per-job
+    /// clearing required by spec — unobservable in practice because JS can't
+    /// force a GC between two <c>deref</c> calls inside the same job).</summary>
+    public HashSet<JsObject> KeptAlive { get; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Weak handles to every live <see cref="JsFinalizationRegistry"/>
+    /// allocated against this realm. Walked at the end of every microtask
+    /// drain to discover collected targets and schedule their cleanup
+    /// callbacks. Weakly held so dropped registries can be reclaimed.</summary>
+    public List<WeakReference<JsFinalizationRegistry>> FinalizationRegistries { get; } = new();
+
     // B3-4: Promise constructor + the host-agnostic microtask queue used by
     // its reaction jobs. The MicrotaskQueue is allocated unconditionally so
     // Promise install can schedule reactions even before a host scheduler

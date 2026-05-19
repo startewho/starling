@@ -124,13 +124,14 @@ public class JsClosureTests
     }
 
     [Fact]
-    public void Snapshot_does_not_observe_later_local_reassignment()
+    public void Closure_observes_later_local_reassignment()
     {
-        // After the closure is built, reassigning the captured local
-        // in the parent must NOT change what the closure returns —
-        // that's the defining property of snapshot semantics. (When
-        // wp:M3-04c2 introduces Cell-based upvalues, this test will
-        // change behavior; we'll update it then.)
+        // gap:closure-write-back (wp:M3-04c2): closures now use Cell-based
+        // upvalues, so reassigning the captured local in the parent IS
+        // observed by the closure on the next call. This is the JS spec
+        // behavior — what V8/SpiderMonkey/JSC all do — and what every
+        // real-world closure pattern (counters, event handlers, module
+        // pattern) depends on.
         var r = Eval(@"
             function make() {
                 var n = 10;
@@ -140,7 +141,7 @@ public class JsClosureTests
             }
             make();
         ");
-        r.AsNumber.Should().Be(10);
+        r.AsNumber.Should().Be(999);
     }
 
     [Fact]
