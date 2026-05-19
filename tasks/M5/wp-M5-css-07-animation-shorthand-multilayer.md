@@ -10,6 +10,7 @@ subsystem: Starling.Css
 plan_refs:
   - browser-plan/06_CSS.md
   - browser-plan/13_MILESTONES.md#m5-avalonia-shell-interactivity-polish
+completed_at: "2026-05-19T15:32:21Z"
 ---
 
 # wp:M5-css-07-animation-shorthand-multilayer — Multi-layer animation shorthand
@@ -64,3 +65,4 @@ the cascaded longhand list values back into
   old code only matched `CssDimension` for durations — the parser actually emits
   `CssTime`, so single-layer durations were silently lost. 6 new tests + 471
   Css suite green; full sln build green.
+- 2026-05-19T15:32:21Z — merged; complete
