@@ -128,7 +128,8 @@ public sealed record FunctionDeclaration(
     IReadOnlyList<Expression> Params,
     BlockStatement Body,
     bool Generator,
-    JsPosition Start, JsPosition End)
+    JsPosition Start, JsPosition End,
+    bool Async = false)
     : Statement(Start, End);
 
 /// <summary>

@@ -142,6 +142,26 @@ public sealed record FunctionExpression(
     IReadOnlyList<Expression> Params, // Identifier or destructuring binding pattern (ES2024 §14.3.3)
     BlockStatement Body,
     bool Generator,
+    JsPosition Start, JsPosition End,
+    bool Async = false)
+    : Expression(Start, End);
+
+/// <summary>
+/// B1b-2c — <c>yield expr</c> or <c>yield</c> or <c>yield* iter</c>. Only
+/// legal inside a generator body; the compiler/VM error if seen elsewhere.
+/// </summary>
+public sealed record YieldExpression(
+    Expression? Argument,
+    bool Delegate, // yield*
+    JsPosition Start, JsPosition End)
+    : Expression(Start, End);
+
+/// <summary>
+/// B1b-2c — <c>await expr</c>. Only legal inside an async function or
+/// async generator body.
+/// </summary>
+public sealed record AwaitExpression(
+    Expression Argument,
     JsPosition Start, JsPosition End)
     : Expression(Start, End);
 
@@ -157,7 +177,8 @@ public sealed record ArrowFunctionExpression(
     AstNode Body,                // BlockStatement or Expression
     bool IsExpression,           // true => Body is an Expression (concise body)
     bool Async,
-    JsPosition Start, JsPosition End)
+    JsPosition Start, JsPosition End,
+    bool Generator = false)
     : Expression(Start, End);
 
 /// <summary>

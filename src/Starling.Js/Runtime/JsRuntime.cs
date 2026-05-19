@@ -46,6 +46,7 @@ public sealed class JsRuntime
         BooleanCtor.Install(Realm);
         SymbolCtor.Install(Realm);
         IteratorIntrinsics.Install(Realm); // B3-2 — depends on SymbolCtor for @@iterator.
+        GeneratorIntrinsics.Install(Realm); // B1b-2c — depends on IteratorIntrinsics for %IteratorPrototype%.
         MapCtor.Install(Realm);            // B3-3 — depends on B3-2 iterator protocol.
         SetCtor.Install(Realm);
         WeakMapCtor.Install(Realm);
