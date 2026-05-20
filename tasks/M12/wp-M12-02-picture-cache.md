@@ -1,9 +1,9 @@
 ---
 id: wp:M12-02-picture-cache
 milestone: M12
-status: "available"
-claimed_by: ""
-claimed_at: ""
+status: "claimed"
+claimed_by: "agent-claude-cody"
+claimed_at: "2026-05-20T17:03:45Z"
 completed_at: ""
 branch: "main"
 depends_on:
@@ -88,3 +88,4 @@ once" approach.
 ## Handoff log
 
 - 2026-05-19T17:46Z — created (agent-copilot-claude-opus-4.7)
+- 2026-05-20T17:03:45Z — claimed by agent-claude-cody, working on main
