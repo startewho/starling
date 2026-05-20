@@ -1,10 +1,10 @@
 ---
 id: wp:M12-01-viewport-clip
 milestone: M12
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-20T16:52:08Z"
-completed_at: ""
+completed_at: "2026-05-20T17:00:10Z"
 branch: "main"
 depends_on: []
 blocks:
@@ -128,3 +128,4 @@ permanent fix for the netclaw.dev / wgpu 8192 px texture crash class
     offset translation, null-viewport == legacy). Full solution builds;
     full suite green (Paint.Tests 94/94, all projects 0 failures).
   - Unblocks wp:M12-02-picture-cache (its only dep).
+- 2026-05-20T17:00:10Z — merged; complete
