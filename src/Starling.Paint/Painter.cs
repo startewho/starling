@@ -9,6 +9,7 @@ using Starling.Layout.Tree;
 using Starling.Paint.Backend;
 using Starling.Paint.DisplayList;
 using LayoutEngineImpl = Starling.Layout.LayoutEngine;
+using LayoutRect = Starling.Layout.Rect;
 using LayoutSize = Starling.Layout.Size;
 using PaintList = Starling.Paint.DisplayList.DisplayList;
 
@@ -71,7 +72,8 @@ public sealed class Painter
         Func<Element, StyleSheet?>? externalStylesheet,
         FontFaceRegistry? webFonts,
         double? nowMs,
-        ColorScheme colorScheme = ColorScheme.Light)
+        ColorScheme colorScheme = ColorScheme.Light,
+        LayoutRect? clipViewport = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -79,16 +81,20 @@ public sealed class Painter
 
         PaintList displayList;
         using (_diag.Span("paint", "display_list"))
-            displayList = new DisplayListBuilder().Build(root, styleOverride: null, images: images);
+            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
 
         using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
             // DisplayList is the renderer-neutral seam. ImageSharp.Drawing 3
-            // is the only backend after the Skia shim removal.
+            // is the only backend after the Skia shim removal. When a clip
+            // viewport is supplied the bitmap is sized to it (and translated by
+            // its offset); otherwise the full layout viewport is rendered.
             try
             {
                 using var backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
-                return backend.Render(displayList, viewport);
+                return clipViewport is { } clip
+                    ? backend.Render(displayList, clip)
+                    : backend.Render(displayList, viewport);
             }
             catch (Exception ex)
             {
@@ -192,7 +198,7 @@ public sealed class Painter
     /// <paramref name="nowMs"/>. Used by the frame loop so the
     /// <see cref="StyleEngine.AnimationEngine"/> / <see cref="StyleEngine.TransitionEngine"/>
     /// state seeded on a retained engine survives across paints (the
-    /// fresh-engine path of <see cref="RenderDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?, double?, ColorScheme)"/>
+    /// fresh-engine path of <see cref="RenderDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?, double?, ColorScheme, LayoutRect?)"/>
     /// would reseed every call, restarting animations on each frame).
     /// Callers tick the engines before invoking this.
     /// </summary>
@@ -202,7 +208,8 @@ public sealed class Painter
         LayoutSize viewport,
         IImageResolver? images,
         FontFaceRegistry? webFonts,
-        double nowMs)
+        double nowMs,
+        LayoutRect? clipViewport = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(style);
@@ -217,12 +224,14 @@ public sealed class Painter
 
             PaintList displayList;
             using (_diag.Span("paint", "display_list"))
-                displayList = new DisplayListBuilder().Build(root, styleOverride: null, images: images);
+                displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
 
             using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
             {
                 using var backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
-                return backend.Render(displayList, viewport);
+                return clipViewport is { } clip
+                    ? backend.Render(displayList, clip)
+                    : backend.Render(displayList, viewport);
             }
         }
         finally
