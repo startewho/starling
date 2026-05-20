@@ -19,26 +19,114 @@ namespace Starling.Paint.DisplayList;
 public sealed class DisplayListBuilder
 {
     /// <summary>
-    /// Builds a display list from a laid-out box tree. <paramref name="styleOverride"/>
-    /// is an optional per-box hook used to swap in fresh styles without
-    /// re-laying out — interactive shells call it with hover/focus-recascaded
-    /// styles so <c>a:hover { color: red }</c> repaints in red at the same
-    /// glyph positions. Returning <c>null</c> for a box keeps the
-    /// layout-time <see cref="Box.Style"/>.
+    /// Overdraw margin (CSS px) added around the viewport before culling.
+    /// Items whose AABB falls within this margin of the visible region are
+    /// still emitted so partial-pixel scroll and sub-pixel rounding don't pop
+    /// content at the edges.
+    /// </summary>
+    private const double OverdrawMargin = 64d;
+
+    /// <summary>
+    /// Builds a display list from a laid-out box tree (no culling — every item
+    /// is emitted). <paramref name="styleOverride"/> is an optional per-box
+    /// hook used to swap in fresh styles without re-laying out — interactive
+    /// shells call it with hover/focus-recascaded styles so
+    /// <c>a:hover { color: red }</c> repaints in red at the same glyph
+    /// positions. Returning <c>null</c> for a box keeps the layout-time
+    /// <see cref="Box.Style"/>.
     /// </summary>
     public DisplayList Build(BlockBox root, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null)
+        => Build(root, viewport: null, styleOverride, images);
+
+    /// <summary>
+    /// Builds a display list, optionally culling to a page-coordinate
+    /// <paramref name="viewport"/>. When <paramref name="viewport"/> is
+    /// non-null only items whose (post-transform) page-coordinate AABB
+    /// intersects the viewport (expanded by <see cref="OverdrawMargin"/>) are
+    /// emitted, and transformed subtrees with no surviving items skip their
+    /// <see cref="PushTransform"/>/<see cref="PopTransform"/> bracket entirely
+    /// so the cost stays O(items on screen). When null, every item is emitted
+    /// (the full-page behavior the headless screenshot path relies on).
+    /// </summary>
+    public DisplayList Build(BlockBox root, Rect? viewport, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         var list = new DisplayList();
-        Visit(root, new Rect(0, 0, root.Frame.Width, root.Frame.Height), list, originX: 0, originY: 0, styleOverride, images);
+        Rect? cull = viewport is { } v
+            ? new Rect(v.X - OverdrawMargin, v.Y - OverdrawMargin, v.Width + 2 * OverdrawMargin, v.Height + 2 * OverdrawMargin)
+            : null;
+        Visit(box: root, list, originX: 0, originY: 0, current: Matrix2D.Identity, cull, styleOverride, images, slice: null);
         return list;
     }
+
+    /// <summary>
+    /// Builds the display-list <em>slice</em> for a single compositor layer
+    /// rooted at <paramref name="sliceRoot"/>: the items <paramref name="sliceRoot"/>
+    /// and its subtree paint, EXCLUDING any box (other than the slice root
+    /// itself) for which <paramref name="isLayerBoundary"/> returns true — those
+    /// boxes are descendant layers and the <see cref="Compositor.LayerTreeBuilder"/>
+    /// emits them into their own slices. <paramref name="originX"/> /
+    /// <paramref name="originY"/> are the page-coord content origin of the slice
+    /// root's PARENT (i.e. the same origin its enclosing <see cref="Visit"/> call
+    /// would have used), so a slice is painted in the SAME page coordinate space
+    /// as the flat build — the layer's transform/opacity are applied later, at
+    /// composite time, not baked into the slice.
+    /// <para>
+    /// When <paramref name="suppressRootTransform"/> is true the slice root's own
+    /// CSS <c>transform</c> bracket is skipped: the layer carries that transform
+    /// (<see cref="Compositor.CompositorLayer.Transform"/>) and applies it at
+    /// composite time, so the slice holds the untransformed (upright) content.
+    /// Nested non-promoted transformed descendants inside the slice still get
+    /// their normal push/pop brackets.
+    /// </para>
+    /// </summary>
+    internal DisplayList BuildLayerSlice(
+        Box sliceRoot,
+        double originX,
+        double originY,
+        Func<Box, bool> isLayerBoundary,
+        bool suppressRootTransform,
+        Func<Box, ComputedStyle?>? styleOverride = null,
+        IImageResolver? images = null)
+    {
+        ArgumentNullException.ThrowIfNull(sliceRoot);
+        ArgumentNullException.ThrowIfNull(isLayerBoundary);
+        var list = new DisplayList();
+        var slice = new LayerSlice(sliceRoot, isLayerBoundary);
+        if (suppressRootTransform)
+        {
+            // The slice root's transform is owned by its layer, so paint its
+            // own box + children directly (no transform bracket) in local space.
+            var frameX = originX + sliceRoot.Frame.X;
+            var frameY = originY + sliceRoot.Frame.Y;
+            PaintBoxAndChildren(sliceRoot, list, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+        }
+        else
+        {
+            Visit(sliceRoot, list, originX, originY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Threaded through the recursion during a layer-slice build. Carries the
+    /// slice root (which is always emitted even though it is itself a layer
+    /// boundary) and the predicate identifying descendant layer boundaries to
+    /// exclude. Null on the flat full-document build, where every box is emitted.
+    /// </summary>
+    private sealed record LayerSlice(Box Root, Func<Box, bool> IsBoundary);
 
     private static ComputedStyle? EffectiveStyle(Box box, Func<Box, ComputedStyle?>? styleOverride)
         => styleOverride?.Invoke(box) ?? box.Style;
 
-    private static void Visit(Box box, Rect rootBounds, DisplayList list, double originX, double originY, Func<Box, ComputedStyle?>? styleOverride, IImageResolver? images)
+    private static void Visit(Box box, DisplayList list, double originX, double originY, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride, IImageResolver? images, LayerSlice? slice)
     {
+        // Layer-slice mode: a descendant that is itself a layer root paints into
+        // its OWN slice, not this one. The slice root is exempt — it is the box
+        // this slice is rooted at, so it must paint here.
+        if (slice is not null && !ReferenceEquals(box, slice.Root) && slice.IsBoundary(box))
+            return;
+
         var frameX = originX + box.Frame.X;
         var frameY = originY + box.Frame.Y;
 
@@ -50,16 +138,60 @@ public sealed class DisplayListBuilder
         // most common case and matches the spec's initial value.
         var transformMatrix = TryGetTransformMatrix(box, styleOverride, frameX, frameY);
         var transformed = transformMatrix is not null;
-        if (transformed)
-            list.Add(new PushTransform(transformMatrix!.Value));
-
-        PaintBoxAndChildren(box, rootBounds, list, frameX, frameY, styleOverride, images);
 
         if (transformed)
-            list.Add(PopTransform.Instance);
+        {
+            // Items inside the transform must be culled using their
+            // post-transform AABB, so compose the matrix onto the active one
+            // and paint the subtree into a scratch list. Only if it produced
+            // visible items do we emit the bracket — an entirely off-screen
+            // transformed subtree contributes nothing and stays O(on-screen).
+            var composed = current.Multiply(transformMatrix!.Value);
+            var scratch = new DisplayList();
+            PaintBoxAndChildren(box, scratch, frameX, frameY, composed, cull, styleOverride, images, slice);
+            if (scratch.Items.Count > 0)
+            {
+                list.Add(new PushTransform(transformMatrix.Value));
+                foreach (var item in scratch.Items)
+                    list.Add(item);
+                list.Add(PopTransform.Instance);
+            }
+            return;
+        }
+
+        PaintBoxAndChildren(box, list, frameX, frameY, current, cull, styleOverride, images, slice);
     }
 
-    private static void PaintBoxAndChildren(Box box, Rect rootBounds, DisplayList list, double frameX, double frameY, Func<Box, ComputedStyle?>? styleOverride, IImageResolver? images)
+    /// <summary>
+    /// Adds <paramref name="item"/> to <paramref name="list"/> unless culling is
+    /// active and the item's page-coordinate AABB (the local <paramref name="bounds"/>
+    /// transformed by <paramref name="current"/>) does not intersect the
+    /// viewport.
+    /// </summary>
+    private static void Emit(DisplayList list, DisplayItem item, Rect bounds, Matrix2D current, Rect? cull)
+    {
+        if (cull is { } c && !Intersects(TransformedAabb(bounds, current), c)) return;
+        list.Add(item);
+    }
+
+    private static Rect TransformedAabb(Rect r, Matrix2D m)
+    {
+        if (m.IsIdentity) return r;
+        var (x0, y0) = m.Transform(r.X, r.Y);
+        var (x1, y1) = m.Transform(r.X + r.Width, r.Y);
+        var (x2, y2) = m.Transform(r.X + r.Width, r.Y + r.Height);
+        var (x3, y3) = m.Transform(r.X, r.Y + r.Height);
+        var minX = Math.Min(Math.Min(x0, x1), Math.Min(x2, x3));
+        var minY = Math.Min(Math.Min(y0, y1), Math.Min(y2, y3));
+        var maxX = Math.Max(Math.Max(x0, x1), Math.Max(x2, x3));
+        var maxY = Math.Max(Math.Max(y0, y1), Math.Max(y2, y3));
+        return new Rect(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    private static bool Intersects(Rect a, Rect b)
+        => a.X < b.Right && a.Right > b.X && a.Y < b.Bottom && a.Bottom > b.Y;
+
+    private static void PaintBoxAndChildren(Box box, DisplayList list, double frameX, double frameY, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride, IImageResolver? images, LayerSlice? slice)
     {
         // Backgrounds and borders for box-bearing boxes. BlockContainer and
         // AnonymousBlock always qualify; InlineBox qualifies only when it is
@@ -73,24 +205,25 @@ public sealed class DisplayListBuilder
             var bg = style.GetColor(PropertyId.BackgroundColor);
             if (bg is { A: > 0 })
             {
-                list.Add(new FillRect(new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height), bg, FillRectPixelAlignment.Preserve));
+                var bounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+                Emit(list, new FillRect(bounds, bg, FillRectPixelAlignment.Preserve), bounds, current, cull);
             }
 
             // CSS Backgrounds 3 §3 — background-image paints inside the
             // box's padding box (border-box is the default origin per spec,
             // but at this layout fidelity the padding+border distinction
             // is unobservable and using the frame is correct).
-            EmitBackgroundImage(box, frameX, frameY, list, style, images);
+            EmitBackgroundImage(box, frameX, frameY, list, current, cull, style, images);
 
             // Borders. Painter renders one stroke per side that has a non-zero width.
-            EmitBorders(box, frameX, frameY, list, style);
+            EmitBorders(box, frameX, frameY, list, current, cull, style);
         }
 
         // Inline content: text fragments live on TextBoxes, positioned in their
         // anonymous-block parent's content box.
         if (box is TextBox textBox)
         {
-            EmitTextFragments(textBox, frameX, frameY, list, styleOverride);
+            EmitTextFragments(textBox, frameX, frameY, list, current, cull, styleOverride);
             return; // Text boxes have no children.
         }
 
@@ -100,9 +233,8 @@ public sealed class DisplayListBuilder
         // document-space top-left.
         if (box is ImageBox imageBox)
         {
-            list.Add(new DrawImage(
-                new Rect(frameX, frameY, imageBox.Frame.Width, imageBox.Frame.Height),
-                imageBox.Source));
+            var bounds = new Rect(frameX, frameY, imageBox.Frame.Width, imageBox.Frame.Height);
+            Emit(list, new DrawImage(bounds, imageBox.Source), bounds, current, cull);
             return; // ImageBox has no children.
         }
 
@@ -111,7 +243,7 @@ public sealed class DisplayListBuilder
         var contentOriginX = frameX + box.Border.Left + box.Padding.Left;
         var contentOriginY = frameY + box.Border.Top + box.Padding.Top;
         foreach (var child in box.Children)
-            Visit(child, rootBounds, list, contentOriginX, contentOriginY, styleOverride, images);
+            Visit(child, list, contentOriginX, contentOriginY, current, cull, styleOverride, images, slice);
     }
 
     /// <summary>
@@ -122,7 +254,7 @@ public sealed class DisplayListBuilder
     /// visible window, the sprite PNG is the source, and bg-position picks
     /// which slice maps to the window.
     /// </summary>
-    private static void EmitBackgroundImage(Box box, double frameX, double frameY, DisplayList list, ComputedStyle style, IImageResolver? images)
+    private static void EmitBackgroundImage(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style, IImageResolver? images)
     {
         if (images is null) return;
         var url = style.Get(PropertyId.BackgroundImage) switch
@@ -171,10 +303,8 @@ public sealed class DisplayListBuilder
         var srcW = destW * scaleX;
         var srcH = destH * scaleY;
 
-        list.Add(new DrawImage(
-            new Rect(frameX + destX, frameY + destY, destW, destH),
-            decoded,
-            new Rect(srcX, srcY, srcW, srcH)));
+        var dest = new Rect(frameX + destX, frameY + destY, destW, destH);
+        Emit(list, new DrawImage(dest, decoded, new Rect(srcX, srcY, srcW, srcH)), dest, current, cull);
     }
 
     private static (double Width, double Height) ResolveBackgroundSize(CssValue? value, double boxW, double boxH, double nativeW, double nativeH)
@@ -259,7 +389,7 @@ public sealed class DisplayListBuilder
     /// is a known limitation tracked in the WP follow-ups; full
     /// <c>transform-origin</c> value parsing is its own work item.
     /// </summary>
-    private static Matrix2D? TryGetTransformMatrix(Box box, Func<Box, ComputedStyle?>? styleOverride, double frameX, double frameY)
+    internal static Matrix2D? TryGetTransformMatrix(Box box, Func<Box, ComputedStyle?>? styleOverride, double frameX, double frameY)
     {
         if (box.Frame.Width <= 0 && box.Frame.Height <= 0) return null;
         var style = EffectiveStyle(box, styleOverride);
@@ -282,7 +412,7 @@ public sealed class DisplayListBuilder
         return postOrigin.Multiply(local).Multiply(preOrigin);
     }
 
-    private static void EmitBorders(Box box, double x, double y, DisplayList list, ComputedStyle style)
+    private static void EmitBorders(Box box, double x, double y, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style)
     {
         var top = box.Border.Top;
         var right = box.Border.Right;
@@ -295,17 +425,28 @@ public sealed class DisplayListBuilder
         var bottomColor = style.GetColor(PropertyId.BorderBottomColor);
         var leftColor = style.GetColor(PropertyId.BorderLeftColor);
 
-        if (top > 0 && topColor.A > 0)
-            list.Add(new FillRect(new Rect(x, y, box.Frame.Width, top), topColor, FillRectPixelAlignment.Preserve));
+        {
+            var b = new Rect(x, y, box.Frame.Width, top);
+            Emit(list, new FillRect(b, topColor, FillRectPixelAlignment.Preserve), b, current, cull);
+        }
         if (right > 0 && rightColor.A > 0)
-            list.Add(new FillRect(new Rect(x + box.Frame.Width - right, y, right, box.Frame.Height), rightColor, FillRectPixelAlignment.Preserve));
+        {
+            var b = new Rect(x + box.Frame.Width - right, y, right, box.Frame.Height);
+            Emit(list, new FillRect(b, rightColor, FillRectPixelAlignment.Preserve), b, current, cull);
+        }
         if (bottom > 0 && bottomColor.A > 0)
-            list.Add(new FillRect(new Rect(x, y + box.Frame.Height - bottom, box.Frame.Width, bottom), bottomColor, FillRectPixelAlignment.Preserve));
+        {
+            var b = new Rect(x, y + box.Frame.Height - bottom, box.Frame.Width, bottom);
+            Emit(list, new FillRect(b, bottomColor, FillRectPixelAlignment.Preserve), b, current, cull);
+        }
         if (left > 0 && leftColor.A > 0)
-            list.Add(new FillRect(new Rect(x, y, left, box.Frame.Height), leftColor, FillRectPixelAlignment.Preserve));
+        {
+            var b = new Rect(x, y, left, box.Frame.Height);
+            Emit(list, new FillRect(b, leftColor, FillRectPixelAlignment.Preserve), b, current, cull);
+        }
     }
 
-    private static void EmitTextFragments(TextBox text, double x, double y, DisplayList list, Func<Box, ComputedStyle?>? styleOverride)
+    private static void EmitTextFragments(TextBox text, double x, double y, DisplayList list, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride)
     {
         if (text.Fragments.Count == 0) return;
         var style = EffectiveStyle(text, styleOverride);
@@ -320,7 +461,16 @@ public sealed class DisplayListBuilder
         foreach (var frag in text.Fragments)
         {
             if (frag.Text.Length == 0 || string.IsNullOrWhiteSpace(frag.Text)) continue;
-            list.Add(new DrawText(
+            var baselineY = y + frag.Y + frag.Baseline;
+            // Cull bounds: the glyph run sits on the baseline. Cover ascent
+            // (≈ font size above the baseline) and a small descent below so the
+            // AABB safely encloses the rasterized glyphs.
+            var glyphBounds = new Rect(
+                x + frag.X,
+                baselineY - fontSize,
+                frag.Width,
+                fontSize * 1.3d);
+            Emit(list, new DrawText(
                 frag.Text,
                 x + frag.X,
                 y + frag.Y,
@@ -329,19 +479,17 @@ public sealed class DisplayListBuilder
                 spec.Families,
                 spec.Bold,
                 spec.Italic,
-                frag.Shaped));
+                frag.Shaped), glyphBounds, current, cull);
 
             if (IsUnderlined(style))
             {
                 // TODO: Underline position and thickness are font-dependent
                 // as are overline and strikethrough.
                 // Investigate whether browsers actually use the font metric or just eyeball it.
-                var underlineY = y + frag.Y + frag.Baseline;
+                var underlineY = baselineY;
                 var underlineHeight = Math.Max(1d, Math.Round(fontSize / 16d));
-                list.Add(new FillRect(
-                    new Rect(x + frag.X, underlineY, frag.Width, underlineHeight),
-                    color,
-                    FillRectPixelAlignment.SnapToDevicePixels));
+                var ul = new Rect(x + frag.X, underlineY, frag.Width, underlineHeight);
+                Emit(list, new FillRect(ul, color, FillRectPixelAlignment.SnapToDevicePixels), ul, current, cull);
             }
         }
     }
