@@ -73,7 +73,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         _pageImage = new Image
         {
-            Stretch = Stretch.Uniform,
+            // The backend renders the visible viewport region at device px;
+            // BitmapBridge tags the WriteableBitmap with the render DPI so
+            // Avalonia maps it 1:1 to CSS px. The image is sized to the
+            // viewport and repositioned to the scroll offset on every scroll.
+            Stretch = Stretch.None,
             HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left,
             VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Top,
             IsVisible = false,
@@ -111,6 +115,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = _placeholderHost,
         };
+        // Re-render the visible viewport region whenever the user scrolls or
+        // the viewport size changes (M12 viewport-clipped paint: the page is no
+        // longer rasterized whole, only the on-screen rect each frame).
+        _scroll.ScrollChanged += (_, _) => RenderViewportRegion();
 
         _findEntry = new TextBox
         {
@@ -173,8 +181,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     /// <summary>
     /// Renders <paramref name="page"/> through the paint pipeline and shows
-    /// the resulting bitmap. The image's pixel dimensions equal the document size;
-    /// the ScrollViewer scrolls anything taller than the viewport.
+    /// the resulting bitmap. The page-sized <see cref="_pageCanvas"/> provides
+    /// the scroll extent (virtual content), while <see cref="_pageImage"/> is
+    /// sized to the visible viewport and re-rendered for the current scroll
+    /// offset — only the on-screen region is rasterized each frame (M12
+    /// viewport-clipped paint).
     /// </summary>
     public void ShowPage(LaidOutPage page)
     {
@@ -188,19 +199,59 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _hoverOverrides = null;
 
         _currentScale = GetRenderScale();
-        RenderPageBitmap();
 
-        _pageImage.Width = page.Root.Frame.Width;
-        _pageImage.Height = page.Root.Frame.Height;
+        // Page-sized canvas = scroll extent. The bitmap overlaid on it is only
+        // viewport-sized; ShowPage resets to the top, then renders that region.
         _pageImage.IsVisible = true;
-
         _pageCanvas.Width = page.Root.Frame.Width;
         _pageCanvas.Height = page.Root.Frame.Height;
         _scroll.Content = _pageCanvas;
 
+        _scroll.Offset = new Vector(0, 0);
+        RenderViewportRegion();
+
         using (_diag.Span("gui", "show_page.hit_index"))
             _fragments = BoxHitTester.CollectFragments(page.Root);
         RebuildFindIndex();
+    }
+
+    /// <summary>
+    /// The currently-visible page-coordinate rectangle: the scroll offset plus
+    /// the ScrollViewer viewport size. Falls back to the page width / a nominal
+    /// height before the control has been measured.
+    /// </summary>
+    private Starling.Layout.Rect CurrentViewportRect()
+    {
+        var pageW = _currentPage?.Root.Frame.Width ?? 0;
+        var pageH = _currentPage?.Root.Frame.Height ?? 0;
+
+        var vpW = _scroll.Viewport.Width > 0 ? _scroll.Viewport.Width : Math.Max(1, pageW);
+        var vpH = _scroll.Viewport.Height > 0 ? _scroll.Viewport.Height : Math.Max(1, Math.Min(pageH, 1024));
+
+        var offX = _scroll.Offset.X;
+        var offY = _scroll.Offset.Y;
+
+        // Clamp so we never request a region past the page extent.
+        vpW = Math.Max(1, Math.Min(vpW, Math.Max(1, pageW - offX)));
+        vpH = Math.Max(1, Math.Min(vpH, Math.Max(1, pageH - offY)));
+
+        return new Starling.Layout.Rect(offX, offY, vpW, vpH);
+    }
+
+    /// <summary>
+    /// Renders the current viewport region and positions the bitmap at the
+    /// scroll offset so it stays aligned with the page-coordinate overlays.
+    /// </summary>
+    private void RenderViewportRegion()
+    {
+        if (_currentPage is null) return;
+        var rect = CurrentViewportRect();
+        RenderPageBitmap(rect);
+
+        _pageImage.Width = rect.Width;
+        _pageImage.Height = rect.Height;
+        Canvas.SetLeft(_pageImage, rect.X);
+        Canvas.SetTop(_pageImage, rect.Y);
     }
 
     private double GetRenderScale()
@@ -365,7 +416,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         }
 
         _hoverOverrides = newOverrides;
-        RenderPageBitmap();
+        RenderViewportRegion();
     }
 
     private static Dictionary<DomElement, ComputedStyle> BuildHoverOverrides(DomElement hovered, StyleEngine style)
@@ -418,13 +469,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Renders <c>_currentPage.Root</c> through the paint pipeline, threading
-    /// the current hover overrides into <see cref="DisplayListBuilder"/> so
-    /// <c>a:hover</c> rules repaint without re-layout. Called once on each
-    /// page load and on every hover transition that changes paint-affecting
-    /// styles.
+    /// Renders the <paramref name="viewport"/> region of <c>_currentPage.Root</c>
+    /// through the paint pipeline, threading the current hover overrides into
+    /// <see cref="DisplayListBuilder"/> so <c>a:hover</c> rules repaint without
+    /// re-layout. Called on page load, on scroll, and on every hover transition
+    /// that changes paint-affecting styles.
     /// </summary>
-    private void RenderPageBitmap()
+    private void RenderPageBitmap(Starling.Layout.Rect viewport)
     {
         if (_currentPage is null) return;
 
@@ -435,7 +486,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         RenderedBitmap rendered;
         using (_diag.Span("gui", "render"))
-            rendered = _renderer.Render(_currentPage.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver);
+            rendered = _renderer.Render(_currentPage.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver, viewport);
         WriteableBitmap bmp;
         using (rendered)
             bmp = BitmapBridge.ToWriteableBitmap(rendered, _currentScale);
