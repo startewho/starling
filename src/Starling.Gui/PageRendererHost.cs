@@ -7,6 +7,7 @@ using Starling.Layout.Tree;
 using Starling.Paint;
 using Starling.Paint.Backend;
 using Starling.Paint.DisplayList;
+using LayoutRect = Starling.Layout.Rect;
 using LayoutSize = Starling.Layout.Size;
 using PaintList = Starling.Paint.DisplayList.DisplayList;
 
@@ -33,17 +34,29 @@ internal sealed class PageRendererHost : IDisposable
         _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
     }
 
-    public RenderedBitmap Render(BlockBox root, float scale = 1.0f, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null)
+    /// <summary>
+    /// Renders <paramref name="root"/>. When <paramref name="viewport"/> is
+    /// supplied (a page-coordinate <see cref="LayoutRect"/>: X/Y = scroll
+    /// offset, Width/Height = visible size), the display list is culled to it
+    /// and the output bitmap is sized to the viewport — the scroll-driven path.
+    /// When omitted, the full page is rendered into a bitmap sized to
+    /// <c>root.Frame</c> (the legacy full-page behavior; the CPU rasterizer
+    /// handles arbitrarily large surfaces).
+    /// </summary>
+    public RenderedBitmap Render(BlockBox root, float scale = 1.0f, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, LayoutRect? viewport = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
 
-        PaintList displayList = new DisplayListBuilder().Build(root, styleOverride, images);
-        var surfaceSize = new LayoutSize(
-            Math.Max(1, root.Frame.Width),
-            Math.Max(1, root.Frame.Height));
+        PaintList displayList = new DisplayListBuilder().Build(root, viewport, styleOverride, images);
         try
         {
+            if (viewport is { } v)
+                return _backend.Render(displayList, v, scale);
+
+            var surfaceSize = new LayoutSize(
+                Math.Max(1, root.Frame.Width),
+                Math.Max(1, root.Frame.Height));
             return _backend.Render(displayList, surfaceSize, scale);
         }
         catch (Exception ex)
