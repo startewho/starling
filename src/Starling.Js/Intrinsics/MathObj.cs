@@ -72,6 +72,13 @@ public static class MathObj
         // Math.clz32 — count leading zeroes of ToUint32(x). 32 when x is 0.
         DefineUnary(realm, math, "clz32", x => Clz32(x));
 
+        // Math.random — pseudo-random number in [0, 1). §21.3.2.27 leaves the
+        // algorithm implementation-defined and explicitly non-cryptographic;
+        // Random.Shared is thread-safe (.NET 6+) which matters because the
+        // engine may pump callbacks across threads.
+        IntrinsicHelpers.DefineMethod(realm, math, "random", 0,
+            (_, _) => JsValue.Number(System.Random.Shared.NextDouble()));
+
         // ---------- Two-argument methods -------------------------------------
         IntrinsicHelpers.DefineMethod(realm, math, "atan2", 2, (_, args) =>
         {
