@@ -55,7 +55,14 @@ public static class UaStyleSheet
         h5 { display: block; font-size: 0.83em; margin: 1.67em 0; font-weight: 700; }
         h6 { display: block; font-size: 0.67em; margin: 2.33em 0; font-weight: 700; }
         ul, ol, menu { margin: 1em 0; padding-left: 40px; }
+        /* CSS Lists 3 §2 / HTML §15.3.4 UA defaults. list-style-type inherits,
+           so setting it on the container reaches every <li> descendant. */
+        ul, menu { list-style-type: disc; }
+        ol { list-style-type: decimal; }
         li { display: list-item; }
+        /* Nested list marker types (HTML rendering §15.3.4). */
+        ul ul { list-style-type: circle; }
+        ul ul ul { list-style-type: square; }
         hr {
           display: block;
           margin: 0.5em 0;

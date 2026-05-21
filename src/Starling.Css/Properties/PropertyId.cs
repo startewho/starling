@@ -252,4 +252,10 @@ public enum PropertyId
 
     // Visual effects (appended): box shadow
     BoxShadow,
+    // Generated content + lists (CSS Content 3, CSS Lists 3)
+    Content,
+    ListStyleType,
+    ListStylePosition,
+    ListStyleImage,
+    Quotes,
 }
