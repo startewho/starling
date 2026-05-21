@@ -93,6 +93,7 @@ structure).
 | [wp:M3-04c3-js-var-block-scope](M3/wp-M3-04c3-js-var-block-scope.md) | 🟢 complete | agent-claude-cody | Starling.Js |
 | [wp:M3-04j-js-static-block-class-name](M3/wp-M3-04j-js-static-block-class-name.md) | 🟢 complete | agent-claude-cody | Starling.Js |
 | [wp:M3-03e-js-switch-statement](M3/wp-M3-03e-js-switch-statement.md) | 🟢 complete | agent-claude-cody-switch | Starling.Js |
+| [wp:M3-02e-js-test262](M3/wp-M3-02e-js-test262.md) | 🟢 complete | agent-claude-cody-test262 | Starling.Js |
 | [wp:M3-06-native-interop-pivot](M3/wp-M3-06-native-interop-pivot.md) | 🟢 complete | agent-claude-cody | build |
 | [wp:M3-06a-native-scaffold](M3/wp-M3-06a-native-scaffold.md) | 🟢 complete | agent-claude-cody-native | build |
 | [wp:M3-06b-native-build](M3/wp-M3-06b-native-build.md) | 🟢 complete | agent-claude-cody-native | build |
@@ -244,9 +245,18 @@ static elements run, so `static {}` / static fields can reference the class
 (`wp:M3-04j`). JS suite now **1232 green**; downstream Bindings 136 + Engine 122
 green.
 
-Remaining JS work: Test262 ≥ 80% (`wp:M3-02e`). One small known gap left:
-- **member/super update forms** — `obj.x++` / `super[k]++` only support
-  identifier targets (`EmitUpdate` limitation). Low priority.
+**Test262 harness landed (`wp:M3-02e`, 2026-05-21).** `tools/fetch-test262.sh`
+(pinned SHA, gitignored corpus) + `tests/Starling.Js.Test262.Tests/` runner
+(frontmatter-aware: flags / includes / negative / async, strict+non-strict).
+Enabling fix: a VM call-depth guard that throws `RangeError` instead of a fatal
+native stack overflow. **Baseline: `test/language` 37.77%** (16,447/43,546);
+floor-gated at 37% (ratchet). `built-ins` is opt-in pending slow-test hardening.
+
+Remaining JS work toward **Test262 ≥ 80%** — each a follow-up engine WP, biggest
+buckets first: `language/expressions` (35%, ~21k scenarios), `eval-code` (no
+`eval` global), `arguments-object` (3.5%), `global-code`/`block-scope`. Plus one
+small known gap: **member/super update forms** — `obj.x++` / `super[k]++` only
+support identifier targets (`EmitUpdate` limitation). Low priority.
 
 ## Recently completed
 

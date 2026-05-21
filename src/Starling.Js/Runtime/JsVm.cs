@@ -27,6 +27,16 @@ public sealed class JsVm
     private readonly JsRuntime _runtime;
     private const int MaxStack = 1024;
 
+    /// <summary>Maximum nested JS call depth before a <c>RangeError</c> is
+    /// thrown. Each JS call recurses through <c>Run</c> in C#, so an
+    /// unbounded JS recursion would otherwise overflow the native stack and
+    /// crash the process (uncatchable). The spec leaves the limit
+    /// implementation-defined (§"so long as … the implementation … throws a
+    /// RangeError"); this value is conservative to stay safe on a default
+    /// (~1 MB) thread stack while still admitting normal recursion.</summary>
+    private const int MaxCallDepth = 1000;
+    private int _callDepth;
+
     public JsVm(JsRuntime runtime)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -142,8 +152,15 @@ public sealed class JsVm
         // reviver, JSON.stringify replacer/toJSON, etc.) can dispatch JS
         // callables. Save/restore in case of reentry from a nested host
         // invocation chain.
+        // Guard the native stack: each nested JS call recurses through here, so
+        // cap the depth and surface a catchable RangeError instead of a fatal
+        // StackOverflowException.
+        if (_callDepth >= MaxCallDepth)
+            throw new JsThrow(_runtime.Realm.NewRangeError("Maximum call stack size exceeded"));
+
         var prevVm = _runtime.Realm.ActiveVm;
         _runtime.Realm.ActiveVm = this;
+        _callDepth++;
         try
         {
             var result = RunInner(chunk, args, thisValue, upvalues, currentFunction, newTarget, suspension);
@@ -157,6 +174,7 @@ public sealed class JsVm
         }
         finally
         {
+            _callDepth--;
             _runtime.Realm.ActiveVm = prevVm;
         }
     }

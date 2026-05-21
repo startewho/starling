@@ -50,3 +50,6 @@ out.png
 TestResults/
 
 **/sixlabors.lic
+
+# Test262 conformance corpus (fetched via tools/fetch-test262.sh)
+testdata/test262/
