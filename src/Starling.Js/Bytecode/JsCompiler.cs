@@ -2190,6 +2190,18 @@ public sealed partial class JsCompiler
         var sub = new JsCompiler(parent: this);
         sub.RunCaptureAnalysisForFunction(fe.Params, fe.Body.Body);
         sub.BindFunctionParameters(fe.Params);
+        // gap:closure-write-back — pre-allocate captured vars as cell slots
+        // BEFORE hoisting, so a hoisted inner function that writes an outer var
+        // resolves it to the parent's cell slot rather than LoadGlobal/Store-
+        // Global. Mirrors EmitProgram and the class-method body paths.
+        sub.PreallocateCapturedVarBindings(fe.Body.Body);
+        // Function declarations nested in a function *expression* / arrow body
+        // are function-scoped and hoisted to the top of the body (§14.1.18),
+        // exactly as in EmitFunctionBody for function declarations. Without this
+        // an inner `function f(){…}` inside an IIFE/expression is never bound, so
+        // references to it compile to (undefined) globals — breaking all
+        // IIFE/webpack/bundler code.
+        sub.HoistFunctionDeclarations(fe.Body.Body);
         foreach (var s in fe.Body.Body) sub.EmitStatement(s);
         sub._b.Emit(Opcode.ReturnUndefined);
         // Per ES2024 §15.2 NamedEvaluation, anonymous FunctionExpression
