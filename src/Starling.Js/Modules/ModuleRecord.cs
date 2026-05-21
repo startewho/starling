@@ -59,6 +59,21 @@ public sealed class ModuleRecord
     /// (§16.2.1.5 [[EvaluationError]]).</summary>
     internal JsThrow? EvaluationError { get; set; }
 
+    /// <summary>wp:M3-03b — true when this module's body uses a top-level
+    /// <c>await</c> (or transitively, when it must await an async dependency).
+    /// When set the loader builds <see cref="Instance"/> as an
+    /// <see cref="JsFunctionKind.Async"/> function, so evaluating the body returns
+    /// a Promise and the body suspends at each <c>await</c>.</summary>
+    internal bool HasTopLevelAwait { get; set; }
+
+    /// <summary>wp:M3-03b — §16.2.1.5 [[CycleRoot]] / async-evaluation slot. For
+    /// an async module this is the Promise returned by invoking the async body;
+    /// it settles when the body finishes (or rejects on a top-level-await
+    /// rejection / synchronous throw). Null for a synchronous module (no
+    /// async settling needed). The loader chains dependents on this so an
+    /// importer's body waits for this module to finish.</summary>
+    internal JsPromise? EvaluationPromise { get; set; }
+
     public ModuleRecord(
         string url,
         Chunk body,

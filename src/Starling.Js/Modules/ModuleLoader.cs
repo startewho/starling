@@ -1,4 +1,5 @@
 using Starling.Js.Bytecode;
+using Starling.Js.Intrinsics;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
 
@@ -21,11 +22,17 @@ namespace Starling.Js.Modules;
 /// binding of each module; an imported name reuses the exporting module's cell.
 /// </para>
 /// <para>
-/// <b>Deferred.</b> Top-level <c>await</c> is detected (a module whose body
-/// uses it) only insofar as the synchronous evaluation contract holds: a module
-/// graph that needs async settling is evaluated synchronously and its microtasks
-/// drained by the host. Dynamic <c>import()</c> and <c>import.meta</c> are out of
-/// scope for this slice.
+/// <b>Top-level await (wp:M3-03b).</b> A module whose body uses top-level
+/// <c>await</c> (or that imports such a module) evaluates asynchronously: its
+/// body is an <see cref="JsFunctionKind.Async"/> function that suspends on each
+/// <c>await</c> and returns a Promise. <see cref="Evaluate"/> waits for a
+/// module's async dependencies before running its body and propagates rejections
+/// as <see cref="ModuleRecord.EvaluationError"/>. <see cref="LoadAndEvaluate"/>
+/// drives <see cref="MicrotaskQueue.DrainAll"/> to quiescence so the root settles
+/// synchronously from the host's perspective. Non-TLA graphs keep the
+/// synchronous fast path unchanged. <see cref="EvaluateToPromise"/> is the
+/// reusable "evaluate to a Promise" entry that dynamic <c>import()</c>
+/// (wp:M3-03c) builds on. <c>import.meta</c> is out of scope for this slice.
 /// </para>
 /// </remarks>
 public sealed class ModuleLoader
@@ -49,8 +56,42 @@ public sealed class ModuleLoader
     {
         var record = LoadGraph(specifier, referrer);
         Link(record);
-        Evaluate(record);
+
+        // wp:M3-03b — kick off evaluation (returns a Promise for a TLA graph,
+        // null for a fully synchronous graph), then drain the microtask queue to
+        // quiescence so an async root settles synchronously from the host's
+        // point of view. A synchronous graph completes inside Evaluate and the
+        // drain is a near no-op (it still runs any reactions the body queued).
+        EvaluateToPromise(record);
+        _runtime.Realm.Microtasks.DrainAll();
+
+        // Surface a top-level-await rejection / synchronous throw as the module
+        // graph's evaluation error (matching the synchronous contract).
+        if (record.EvaluationError is not null) throw record.EvaluationError;
         return record;
+    }
+
+    /// <summary>wp:M3-03b — reusable "evaluate this module to a Promise" entry.
+    /// Links must have completed. Returns a <see cref="JsPromise"/> that settles
+    /// when the module's whole subtree (dependencies + own body) has finished
+    /// evaluating; rejection carries the evaluation error. Dynamic <c>import()</c>
+    /// (wp:M3-03c) calls this to obtain the promise it resolves to the module's
+    /// namespace. The returned promise is never null — a synchronous graph yields
+    /// an already-settled promise.</summary>
+    internal JsPromise EvaluateToPromise(ModuleRecord record)
+    {
+        var realm = _runtime.Realm;
+        var promise = Evaluate(record);
+        if (promise is not null) return promise;
+
+        // Fully synchronous subtree: produce an already-settled promise so
+        // callers (import()) get a uniform shape.
+        var settled = new JsPromise(realm.PromisePrototype);
+        if (record.EvaluationError is not null)
+            PromiseCtor.Reject(realm, settled, record.EvaluationError.Value);
+        else
+            PromiseCtor.Resolve(realm, settled, JsValue.Undefined);
+        return settled;
     }
 
     // -----------------------------------------------------------------------
@@ -70,7 +111,10 @@ public sealed class ModuleLoader
         var compiled = JsCompiler.CompileModule(program, url);
 
         var record = new ModuleRecord(
-            url, compiled.Chunk, compiled.Imports, compiled.Exports, compiled.RequestedModules);
+            url, compiled.Chunk, compiled.Imports, compiled.Exports, compiled.RequestedModules)
+        {
+            HasTopLevelAwait = compiled.HasTopLevelAwait,
+        };
         // Stash the binding order on the record via a side table so Link can
         // wire upvalue cells in slot order.
         _bindingOrders[record] = compiled.BindingOrder;
@@ -119,7 +163,14 @@ public sealed class ModuleLoader
             upvalues[i] = JsValue.Object(cell);
         }
 
-        record.Instance = new JsFunction(record.Url, record.Body, arityDeclared: 0, upvalues);
+        record.Instance = new JsFunction(record.Url, record.Body, arityDeclared: 0, upvalues)
+        {
+            // wp:M3-03b — a top-level-await module body is, runtime-wise, an async
+            // function body: invoking it routes through StartAsyncBody, suspends
+            // at each await, and returns a Promise. Non-TLA modules stay Normal
+            // and keep the synchronous evaluation contract.
+            Kind = record.HasTopLevelAwait ? JsFunctionKind.Async : JsFunctionKind.Normal,
+        };
         record.Status = ModuleStatus.Linked;
     }
 
@@ -193,35 +244,172 @@ public sealed class ModuleLoader
     // Phase 3 — evaluate (§16.2.1.5.4): depth-first, idempotent, cycle-safe.
     // -----------------------------------------------------------------------
 
-    private void Evaluate(ModuleRecord record)
+    /// <summary>§16.2.1.5.4 Evaluate, extended for async (top-level-await)
+    /// modules (wp:M3-03b). Returns <c>null</c> when the module's whole subtree
+    /// evaluated synchronously (no async settling needed — the historical
+    /// contract for non-TLA graphs). Returns a <see cref="JsPromise"/> when the
+    /// module (or a dependency) is async: that promise settles once the body has
+    /// finished, and is stored on <see cref="ModuleRecord.EvaluationPromise"/> so
+    /// the result is idempotent and importers can chain on it.</summary>
+    private JsPromise? Evaluate(ModuleRecord record)
     {
         if (record.Status is ModuleStatus.Evaluating or ModuleStatus.Evaluated)
         {
-            if (record.EvaluationError is not null) throw record.EvaluationError;
-            return;
+            // Re-entrant (idempotent or cycle back-edge). For a synchronous
+            // module that already errored, preserve the throwing contract.
+            if (record.EvaluationError is not null && record.EvaluationPromise is null)
+                throw record.EvaluationError;
+            return record.EvaluationPromise;
         }
         record.Status = ModuleStatus.Evaluating;
 
+        // Evaluate dependencies first so their bindings are initialised before
+        // this module's body reads them. The Evaluating guard above breaks
+        // cycles: a cyclic dependency observes whatever bindings the
+        // partially-run module has published so far (spec behavior). An async
+        // dependency yields a pending Promise we must wait on before running
+        // our own body.
+        var depPromises = new List<JsPromise>();
+        foreach (var dep in record.RequestedModules)
+        {
+            JsPromise? depPromise;
+            try
+            {
+                depPromise = Evaluate(Resolve(dep, record.Url));
+            }
+            catch (JsThrow ex)
+            {
+                // Synchronous dependency threw — propagate as our error too,
+                // mirroring the historical synchronous contract.
+                record.EvaluationError = ex;
+                record.Status = ModuleStatus.Evaluated;
+                throw;
+            }
+            if (depPromise is not null) depPromises.Add(depPromise);
+        }
+
+        var needsAsync = record.HasTopLevelAwait || depPromises.Count > 0;
+        if (!needsAsync)
+        {
+            // Synchronous fast path — unchanged behavior for non-TLA graphs.
+            try
+            {
+                var vm = _runtime.Realm.ActiveVm ?? new JsVm(_runtime);
+                vm.CallFunction(record.Instance!, JsValue.Undefined, Array.Empty<JsValue>());
+            }
+            catch (JsThrow ex)
+            {
+                record.EvaluationError = ex;
+                record.Status = ModuleStatus.Evaluated;
+                throw;
+            }
+            record.Status = ModuleStatus.Evaluated;
+            return null;
+        }
+
+        // Async path: this module's evaluation completes asynchronously. Build
+        // its evaluation Promise up-front so any cycle back-edge that resolves
+        // after this point can chain on it.
+        var evalPromise = new JsPromise(_runtime.Realm.PromisePrototype);
+        record.EvaluationPromise = evalPromise;
+        record.Status = ModuleStatus.Evaluated; // "kicked off"; settles via microtasks
+
+        WhenAll(depPromises,
+            onFulfilled: () => RunBodyAsync(record, evalPromise),
+            onRejected: reason =>
+            {
+                // A dependency's evaluation errored — do NOT run our body; adopt
+                // its error as ours (§16.2.1.5.4: a module errors if a dependency
+                // errors).
+                record.EvaluationError = new JsThrow(reason);
+                PromiseCtor.Reject(_runtime.Realm, evalPromise, reason);
+            });
+        return evalPromise;
+    }
+
+    /// <summary>Run an async module's body after its async dependencies have
+    /// settled, then settle <paramref name="evalPromise"/>. The body is an
+    /// <see cref="JsFunctionKind.Async"/> function (for a TLA module) or a
+    /// <see cref="JsFunctionKind.Normal"/> function (a module that only had to
+    /// wait on async deps); either way invoking it via the VM produces the right
+    /// shape, and we adopt the resulting Promise (TLA) or settle immediately
+    /// (sync body).</summary>
+    private void RunBodyAsync(ModuleRecord record, JsPromise evalPromise)
+    {
+        var realm = _runtime.Realm;
+        var vm = realm.ActiveVm ?? new JsVm(_runtime);
+        JsValue result;
         try
         {
-            // Evaluate dependencies first so their bindings are initialised
-            // before this module's body reads them. The Evaluating guard above
-            // breaks cycles: a cyclic dependency observes whatever bindings the
-            // partially-run module has published so far (spec behavior).
-            foreach (var dep in record.RequestedModules)
-                Evaluate(Resolve(dep, record.Url));
-
-            var vm = _runtime.Realm.ActiveVm ?? new JsVm(_runtime);
-            vm.CallFunction(record.Instance!, JsValue.Undefined, Array.Empty<JsValue>());
+            result = vm.CallFunction(record.Instance!, JsValue.Undefined, Array.Empty<JsValue>());
         }
         catch (JsThrow ex)
         {
+            // A non-async (Normal-kind) body that threw synchronously after
+            // awaiting deps.
             record.EvaluationError = ex;
-            record.Status = ModuleStatus.Evaluated;
-            throw;
+            PromiseCtor.Reject(realm, evalPromise, ex.Value);
+            return;
         }
 
-        record.Status = ModuleStatus.Evaluated;
+        // For a TLA module the body returned its own Promise — adopt it: when it
+        // fulfils, fulfil our evaluation promise; when it rejects, capture the
+        // error and reject. For a Normal-kind body, CallFunction returned a plain
+        // value and we simply fulfil.
+        if (result.IsObject && result.AsObject is JsPromise bodyPromise)
+        {
+            var onFulfill = new JsNativeFunction("", (_, _) =>
+            {
+                PromiseCtor.Resolve(realm, evalPromise, JsValue.Undefined);
+                return JsValue.Undefined;
+            }, isConstructor: false);
+            var onReject = new JsNativeFunction("", (_, args) =>
+            {
+                var reason = args.Length > 0 ? args[0] : JsValue.Undefined;
+                record.EvaluationError = new JsThrow(reason);
+                PromiseCtor.Reject(realm, evalPromise, reason);
+                return JsValue.Undefined;
+            }, isConstructor: false);
+            var then = AbstractOperations.Get(vm, bodyPromise, "then");
+            AbstractOperations.Call(vm, then, JsValue.Object(bodyPromise),
+                new[] { JsValue.Object(onFulfill), JsValue.Object(onReject) });
+        }
+        else
+        {
+            PromiseCtor.Resolve(realm, evalPromise, JsValue.Undefined);
+        }
+    }
+
+    /// <summary>Promise.all-style join over module evaluation promises. Invokes
+    /// <paramref name="onFulfilled"/> once every promise has fulfilled, or
+    /// <paramref name="onRejected"/> with the first rejection reason (short-circuit:
+    /// later settlements are ignored). Empty list → fulfil synchronously. Built on
+    /// the async-function-style <c>.then</c> wiring already used by the VM, so it
+    /// rides the same microtask queue the loader drains.</summary>
+    private void WhenAll(List<JsPromise> promises, Action onFulfilled, Action<JsValue> onRejected)
+    {
+        if (promises.Count == 0) { onFulfilled(); return; }
+
+        var vm = _runtime.Realm.ActiveVm ?? new JsVm(_runtime);
+        var remaining = promises.Count;
+        var done = false;
+
+        foreach (var p in promises)
+        {
+            var onFulfill = new JsNativeFunction("", (_, _) =>
+            {
+                if (!done && --remaining == 0) { done = true; onFulfilled(); }
+                return JsValue.Undefined;
+            }, isConstructor: false);
+            var onReject = new JsNativeFunction("", (_, args) =>
+            {
+                if (!done) { done = true; onRejected(args.Length > 0 ? args[0] : JsValue.Undefined); }
+                return JsValue.Undefined;
+            }, isConstructor: false);
+            var then = AbstractOperations.Get(vm, p, "then");
+            AbstractOperations.Call(vm, then, JsValue.Object(p),
+                new[] { JsValue.Object(onFulfill), JsValue.Object(onReject) });
+        }
     }
 
     // -----------------------------------------------------------------------

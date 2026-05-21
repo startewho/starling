@@ -26,9 +26,17 @@ namespace Starling.Js.Bytecode;
 /// <c>StoreUpvalue</c> (already supported by the VM) do the dereferencing.
 /// </para>
 /// <para>
-/// <b>Deferred.</b> Top-level <c>await</c> is not lowered here (the loader
-/// reports it); see <see cref="ModuleLoader"/>. <c>import.meta</c> and dynamic
-/// <c>import()</c> are out of scope for this slice.
+/// <b>Top-level await (wp:M3-03b).</b> A module whose body contains a top-level
+/// <c>await</c> (an <see cref="AwaitExpression"/> — or a <c>for await</c> loop —
+/// that is NOT nested inside a non-async function/method/arrow) evaluates
+/// asynchronously. The compiler detects this
+/// (<see cref="ModuleCompilation.HasTopLevelAwait"/>); the loader then builds the
+/// body <see cref="Runtime.JsFunction"/> with <see cref="Runtime.JsFunctionKind.Async"/>,
+/// so the VM's existing <c>StartAsyncBody</c>/<c>ScheduleAwait</c> machinery
+/// suspends the body at each <c>await</c> and the body returns a Promise. Modules
+/// with no top-level await keep <see cref="Runtime.JsFunctionKind.Normal"/> and
+/// the synchronous fast path. <c>import.meta</c> and dynamic <c>import()</c> are
+/// out of scope for this slice.
 /// </para>
 /// </remarks>
 public sealed partial class JsCompiler
@@ -82,7 +90,172 @@ public sealed partial class JsCompiler
 
         _b.Emit(Opcode.Halt);
         var chunk = _b.Build(name);
-        return new ModuleCompilation(chunk, imports, exports, requested, bindingOrder);
+
+        // wp:M3-03b — does the module body use top-level await? Detection runs
+        // over the AST (not bytecode) so it can distinguish a top-level await
+        // from one nested in a non-async function. The loader uses this to build
+        // the body as an Async-kind function.
+        var hasTopLevelAwait = ModuleBodyHasTopLevelAwait(program.Body);
+
+        return new ModuleCompilation(chunk, imports, exports, requested, bindingOrder, hasTopLevelAwait);
+    }
+
+    // -----------------------------------------------------------------------
+    // wp:M3-03b — top-level await detection (ES2024 §16.2.1.6.2 "Module body
+    // contains await"). An await is "top-level" when it appears in the module
+    // body's own execution context — i.e. NOT inside a nested function, method,
+    // accessor, or arrow (each of those introduces its own [[Async]] context).
+    // A `for await (… of …)` loop counts as a top-level await. await inside a
+    // nested async function is that function's await and is NOT top-level.
+    // -----------------------------------------------------------------------
+
+    /// <summary>True when the module body contains a top-level
+    /// <c>await</c> / <c>for await</c> not nested in any function boundary.</summary>
+    private static bool ModuleBodyHasTopLevelAwait(IReadOnlyList<Statement> body)
+    {
+        foreach (var s in body)
+            if (StatementHasTopLevelAwait(s)) return true;
+        return false;
+    }
+
+    private static bool StatementHasTopLevelAwait(Statement s)
+    {
+        switch (s)
+        {
+            // for await (… of …) — the loop itself is a top-level await.
+            case ForOfStatement { Await: true }:
+                return true;
+
+            case BlockStatement b:
+                return ModuleBodyHasTopLevelAwait(b.Body);
+            case ExpressionStatement es:
+                return ExprHasTopLevelAwait(es.Expression);
+            case ReturnStatement rs:
+                return rs.Argument is not null && ExprHasTopLevelAwait(rs.Argument);
+            case ThrowStatement ts:
+                return ExprHasTopLevelAwait(ts.Argument);
+            case IfStatement ifs:
+                return ExprHasTopLevelAwait(ifs.Test)
+                    || StatementHasTopLevelAwait(ifs.Consequent)
+                    || (ifs.Alternate is not null && StatementHasTopLevelAwait(ifs.Alternate));
+            case WhileStatement ws:
+                return ExprHasTopLevelAwait(ws.Test) || StatementHasTopLevelAwait(ws.Body);
+            case DoWhileStatement dws:
+                return StatementHasTopLevelAwait(dws.Body) || ExprHasTopLevelAwait(dws.Test);
+            case ForStatement fs:
+                return (fs.Init is Expression fi && ExprHasTopLevelAwait(fi))
+                    || (fs.Init is Statement fis && StatementHasTopLevelAwait(fis))
+                    || (fs.Test is not null && ExprHasTopLevelAwait(fs.Test))
+                    || (fs.Update is not null && ExprHasTopLevelAwait(fs.Update))
+                    || StatementHasTopLevelAwait(fs.Body);
+            case ForInStatement fis2:
+                return (fis2.Left is Expression le && ExprHasTopLevelAwait(le))
+                    || (fis2.Left is Statement ls && StatementHasTopLevelAwait(ls))
+                    || ExprHasTopLevelAwait(fis2.Right)
+                    || StatementHasTopLevelAwait(fis2.Body);
+            case ForOfStatement fos:
+                return (fos.Left is Expression loe && ExprHasTopLevelAwait(loe))
+                    || (fos.Left is Statement los && StatementHasTopLevelAwait(los))
+                    || ExprHasTopLevelAwait(fos.Right)
+                    || StatementHasTopLevelAwait(fos.Body);
+            case SwitchStatement sw:
+                if (ExprHasTopLevelAwait(sw.Discriminant)) return true;
+                foreach (var c in sw.Cases)
+                {
+                    if (c.Test is not null && ExprHasTopLevelAwait(c.Test)) return true;
+                    foreach (var cs in c.Consequent)
+                        if (StatementHasTopLevelAwait(cs)) return true;
+                }
+                return false;
+            case TryStatement tr:
+                return StatementHasTopLevelAwait(tr.Block)
+                    || (tr.Handler is not null && StatementHasTopLevelAwait(tr.Handler.Body))
+                    || (tr.Finalizer is not null && StatementHasTopLevelAwait(tr.Finalizer));
+            case LabeledStatement ls2:
+                return StatementHasTopLevelAwait(ls2.Body);
+            case VariableDeclaration vd:
+                foreach (var d in vd.Declarations)
+                    if (d.Init is not null && ExprHasTopLevelAwait(d.Init)) return true;
+                return false;
+
+            // Module items: a declaration's initializer can hold a top-level
+            // await (e.g. `export const x = await f();`).
+            case ExportLocalDeclaration eld:
+                return StatementHasTopLevelAwait(eld.Declaration);
+            case ExportDefaultDeclaration edd:
+                return edd.Declaration is Expression dde && ExprHasTopLevelAwait(dde);
+
+            // FunctionDeclaration / ClassDeclaration introduce their own context;
+            // their bodies are NOT module top-level. import/export-spec lists,
+            // empty/break/continue/debugger: no top-level await.
+            default:
+                return false;
+        }
+    }
+
+    private static bool ExprHasTopLevelAwait(Expression e)
+    {
+        switch (e)
+        {
+            case AwaitExpression:
+                return true;
+
+            // Function boundaries — anything inside introduces a new execution
+            // context, so awaits within are NOT module top-level.
+            case FunctionExpression:
+            case ArrowFunctionExpression:
+            case ClassExpression:
+                return false;
+
+            case UnaryExpression u: return ExprHasTopLevelAwait(u.Argument);
+            case UpdateExpression up: return ExprHasTopLevelAwait(up.Argument);
+            case BinaryExpression b: return ExprHasTopLevelAwait(b.Left) || ExprHasTopLevelAwait(b.Right);
+            case LogicalExpression lg: return ExprHasTopLevelAwait(lg.Left) || ExprHasTopLevelAwait(lg.Right);
+            case AssignmentExpression a: return ExprHasTopLevelAwait(a.Target) || ExprHasTopLevelAwait(a.Value);
+            case ConditionalExpression c:
+                return ExprHasTopLevelAwait(c.Test) || ExprHasTopLevelAwait(c.Consequent) || ExprHasTopLevelAwait(c.Alternate);
+            case SequenceExpression seq:
+                foreach (var x in seq.Expressions) if (ExprHasTopLevelAwait(x)) return true;
+                return false;
+            case MemberExpression m:
+                return ExprHasTopLevelAwait(m.Object) || (m.Computed && ExprHasTopLevelAwait(m.Property));
+            case CallExpression call:
+                if (ExprHasTopLevelAwait(call.Callee)) return true;
+                foreach (var arg in call.Arguments) if (ExprHasTopLevelAwait(arg)) return true;
+                return false;
+            case NewExpression ne:
+                if (ExprHasTopLevelAwait(ne.Callee)) return true;
+                foreach (var arg in ne.Arguments) if (ExprHasTopLevelAwait(arg)) return true;
+                return false;
+            case SpreadElement sp: return ExprHasTopLevelAwait(sp.Argument);
+            case ArrayExpression arr:
+                foreach (var el in arr.Elements) if (el is not null && ExprHasTopLevelAwait(el)) return true;
+                return false;
+            case ObjectExpression obj:
+                foreach (var p in obj.Properties)
+                {
+                    if (p.Computed && ExprHasTopLevelAwait(p.Key)) return true;
+                    if (ExprHasTopLevelAwait(p.Value)) return true;
+                }
+                return false;
+            case TemplateLiteral tl:
+                foreach (var x in tl.Expressions) if (ExprHasTopLevelAwait(x)) return true;
+                return false;
+            case TaggedTemplateExpression tte:
+                if (ExprHasTopLevelAwait(tte.Tag)) return true;
+                foreach (var x in tte.Quasi.Expressions) if (ExprHasTopLevelAwait(x)) return true;
+                return false;
+            case SuperPropertyExpression sup:
+                return sup.Computed && ExprHasTopLevelAwait(sup.Property);
+            case SuperCallExpression sc:
+                foreach (var arg in sc.Arguments) if (ExprHasTopLevelAwait(arg)) return true;
+                return false;
+
+            // Literals, identifiers, this, private-name refs, yield (not legal at
+            // module top level): no nested top-level await.
+            default:
+                return false;
+        }
     }
 
     /// <summary>Register a module top-level binding name as an upvalue. The
@@ -416,12 +589,17 @@ public sealed partial class JsCompiler
 /// <param name="RequestedModules">Distinct dependency specifiers, first-seen order.</param>
 /// <param name="BindingOrder">Upvalue slot order: each entry says which binding
 /// the slot at that index holds (local cell vs. imported cell).</param>
+/// <param name="HasTopLevelAwait">wp:M3-03b — true when the module body uses a
+/// top-level <c>await</c> (or <c>for await</c>) not nested in a function. The
+/// loader builds the body as an <see cref="Runtime.JsFunctionKind.Async"/>
+/// function so it suspends/returns a Promise; false keeps the synchronous path.</param>
 public sealed record ModuleCompilation(
     Chunk Chunk,
     IReadOnlyList<ModuleImportEntry> Imports,
     IReadOnlyList<ModuleExportEntry> Exports,
     IReadOnlyList<string> RequestedModules,
-    IReadOnlyList<ModuleBindingSlot> BindingOrder);
+    IReadOnlyList<ModuleBindingSlot> BindingOrder,
+    bool HasTopLevelAwait = false);
 
 /// <summary>One upvalue slot in a compiled module body. Locals get a fresh cell
 /// from the loader; imports reuse the exporting module's cell, identified by
