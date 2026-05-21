@@ -199,6 +199,19 @@ internal sealed class LayerTreeBuilder
                 // descent below so the AABB encloses the rasterized glyphs.
                 bounds = new Rect(t.X, t.Y - t.FontSize, EstimateTextWidth(t), t.FontSize * 1.3);
                 return true;
+            case DrawTextDecoration d:
+                // Decoration lines span the full glyph box (overline above,
+                // line-through mid, underline below the baseline).
+                bounds = new Rect(d.X, d.BaselineY - d.FontSize, d.Width, d.FontSize * 1.3);
+                return true;
+            case DrawTextShadow s:
+                // Offset + blurred copy of the glyph run.
+                bounds = new Rect(
+                    s.X + s.OffsetX - s.Blur,
+                    s.Y - s.FontSize + s.OffsetY - s.Blur,
+                    EstimateShadowWidth(s) + 2 * s.Blur,
+                    s.FontSize * 1.3 + 2 * s.Blur);
+                return true;
             default:
                 bounds = Rect.Empty;
                 return false;
@@ -207,6 +220,9 @@ internal sealed class LayerTreeBuilder
 
     private static double EstimateTextWidth(DrawText t)
         => t.Shaped is { } run && run.Advance > 0 ? run.Advance : t.Text.Length * t.FontSize * 0.6;
+
+    private static double EstimateShadowWidth(DrawTextShadow s)
+        => s.Shaped is { } run && run.Advance > 0 ? run.Advance : s.Text.Length * s.FontSize * 0.6;
 
     private static Rect TransformedAabb(Rect r, Matrix2D m)
     {

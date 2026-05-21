@@ -1,10 +1,10 @@
 ---
 id: wp:M5-css-15-text-decoration
 milestone: M5
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody-textdecor"
 claimed_at: "2026-05-20T00:00:00Z"
-completed_at: ""
+completed_at: "2026-05-20T00:00:00Z"
 branch: "worktree"
 depends_on:
   - wp:M5-skia-removal
@@ -82,3 +82,37 @@ color, thickness, offset — and `text-shadow`.
 ## Handoff log
 
 - 2026-05-20 — created + claimed by agent-claude-cody-textdecor (orchestrated batch).
+- 2026-05-20 — implemented + completed by agent-claude-cody-textdecor.
+  - Worktree branched from a stale base (pre-scaffold); fast-forward-merged
+    `main` (40d1f02) into the worktree before starting so shared paint files
+    were current.
+  - `text-shadow`: new `PropertyId.TextShadow` (inherited), typed
+    `CssTextShadow`/`CssTextShadowLayer` value + `ParseTextShadow` (none |
+    `<color>? && <length>{2,3}`#, multi-layer comma split, absolute lengths →px,
+    color leads/trails, currentColor = null layer color, malformed layers dropped).
+  - Display list: appended `DrawTextDecoration` (lines flags, style enum,
+    color, thickness, underline-offset, font identity) and `DrawTextShadow`
+    (text + offset + blur + color) to `DisplayItem.cs`. Replaced the FillRect
+    underline hack in `EmitTextFragments` with shadow-then-glyph-then-decoration
+    emission; added decoration/shadow resolution helpers (color defaults to
+    currentColor, thickness `auto`=0 sentinel, offset px/%/auto).
+  - Backend: `DrawTextDecoration` resolves underline/overline/line-through
+    y-positions from real SixLabors `FontMetrics` (UnderlinePosition/Thickness,
+    StrikeoutPosition, Ascender); solid/double/dotted/dashed via `Pens.*`, wavy
+    via cubic-Bézier sine path. `DrawTextShadow`: sharp = offset glyph copy;
+    blurred = off-screen `Image<Rgba32>` text + `GaussianBlur` composited via
+    `canvas.DrawImage`, staged in `pendingImageSources` to survive deferred
+    rasterization. Added bounds cases to `LayerTreeBuilder` for both items.
+  - Tests: `tests/Starling.Css.Tests/TextDecorationTests.cs` (10), spec
+    `tests/Starling.Css.Spec.Tests/CssTextDecor3/` (5 SpecFacts), adapted the
+    underline paint test + added line-through/overline/colored/dashed/thickness/
+    shadow-order probes and backend raster tests (decoration styles, sharp+blur
+    shadow). Regenerated `testdata/golden/snapshots/nginx.org.png` (underline
+    now metric-positioned/stroked; SSIM 0.974 vs old golden, visually identical
+    apart from the intended underline refinement).
+  - Green: Css.Tests 515/1skip, Css.Spec.Tests 58/13pre-existing-skip,
+    Paint.Tests 154/0, Engine render+snapshot 29/0.
+  - Deferred/notes: wavy is a Bézier sine approximation (not exact spec
+    waveform); `text-decoration-skip-ink` and `text-underline-position` (sub/
+    over) are not honored; blurred-shadow off-screen layer renders at 1:1 CSS
+    px so it softens slightly at high DPI.
