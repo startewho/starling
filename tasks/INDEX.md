@@ -80,9 +80,9 @@ structure).
 |---|---|---|---|
 | [wp:M3-02c-js-parser-classes-modules](M3/wp-M3-02c-js-parser-classes-modules.md) | 🟢 complete | agent-copilot-claude-opus-4.7-modules | Starling.Js |
 | [wp:M3-02d-js-parser-destructuring](M3/wp-M3-02d-js-parser-destructuring.md) | 🟢 complete | agent-copilot-claude-opus-4.7-destruct | Starling.Js |
-| [wp:M3-03a-js-module-destructuring](M3/wp-M3-03a-js-module-destructuring.md) | 🟡 claimed | agent-claude-cody-moddestruct | Starling.Js |
-| [wp:M3-04f-js-computed-class-keys](M3/wp-M3-04f-js-computed-class-keys.md) | 🟡 claimed | agent-claude-cody-classkeys | Starling.Js |
-| [wp:M3-04g-js-async-generators](M3/wp-M3-04g-js-async-generators.md) | 🟡 claimed | agent-claude-cody-asyncgen | Starling.Js |
+| [wp:M3-03a-js-module-destructuring](M3/wp-M3-03a-js-module-destructuring.md) | 🟢 complete | agent-claude-cody-moddestruct | Starling.Js |
+| [wp:M3-04f-js-computed-class-keys](M3/wp-M3-04f-js-computed-class-keys.md) | 🟢 complete | agent-claude-cody-classkeys | Starling.Js |
+| [wp:M3-04g-js-async-generators](M3/wp-M3-04g-js-async-generators.md) | 🟢 complete | agent-claude-cody-asyncgen | Starling.Js |
 | [wp:M3-06-native-interop-pivot](M3/wp-M3-06-native-interop-pivot.md) | 🟢 complete | agent-claude-cody | build |
 | [wp:M3-06a-native-scaffold](M3/wp-M3-06a-native-scaffold.md) | 🟢 complete | agent-claude-cody-native | build |
 | [wp:M3-06b-native-build](M3/wp-M3-06b-native-build.md) | 🟢 complete | agent-claude-cody-native | build |
@@ -198,8 +198,19 @@ slice has now landed:
 6. ~~Incremental re-layout / live geometry reads after JS mutations~~ — **done**;
    geometry reads lazily re-layout on `MutationVersion` change.
 
-Still measured separately: Test262 ≥ 80% (`wp:M3-02e`). Remaining language gaps:
-async generators (stubbed), top-level await, dynamic `import()`.
+Still measured separately: Test262 ≥ 80% (`wp:M3-02e`).
+
+**Wave 1 language gaps — DONE (2026-05-21):** async generators
+(`wp:M3-04g`, incl. `for await…of`), computed class member keys (`wp:M3-04f`),
+and module-scope destructuring binding patterns (`wp:M3-03a`) all landed and are
+green in the full JS suite (1146 tests). Remaining language gaps: **top-level
+await** and **dynamic `import()` / `import.meta`** (the "await spine" — sequence
+top-level-await → dynamic-import; both touch `ModuleLoader.Evaluate` +
+`ModuleRecord`). Two deferred follow-ups surfaced during Wave 1: computed
+`super[expr]` (needs new stack-keyed super opcodes), and a pre-existing
+class-method/`let` closure-capture bug (returns an object whose method captures
+a method-body `let` → `value is Number, not Object`; reproduces on plain
+string-keyed methods, M3-04c territory).
 
 ## Recently completed
 
