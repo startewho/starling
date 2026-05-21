@@ -88,6 +88,12 @@ public sealed class StarlingEngine
             return Fail($"URL parse failed: {parsed.Error}");
 
         var u = parsed.Value;
+        // One HTTP client (one connection pool) for the whole page load: the
+        // document fetch and every resource fetch (css/js/fonts/images) share
+        // it, so same-origin requests reuse a keep-alive transport instead of
+        // re-doing DNS+TCP+TLS per request. Cheap to construct (no socket until
+        // first use), so it is created even for file:// renders.
+        using var http = _httpFactory();
         string html;
         try
         {
@@ -108,7 +114,7 @@ public sealed class StarlingEngine
                 Result<(string Html, StarlingUrl FinalUrl), RenderError> fetched;
                 using (_diag.Span("engine", "fetch_html"))
                 {
-                    fetched = await FetchHtmlAsync(u, ct).ConfigureAwait(false);
+                    fetched = await FetchHtmlAsync(u, http, ct).ConfigureAwait(false);
                 }
                 if (fetched.IsErr)
                     return Fail(fetched.Error.Message);
@@ -139,8 +145,8 @@ public sealed class StarlingEngine
             doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
         }
 
-        using var images = new ImageFetcher(_diag, _httpFactory);
-        using var stylesheets = new StylesheetFetcher(_diag, _httpFactory);
+        using var images = new ImageFetcher(_diag, http);
+        using var stylesheets = new StylesheetFetcher(_diag, http);
         using (_diag.Span("engine", "fetch_resources"))
         {
             await Task.WhenAll(
@@ -150,7 +156,7 @@ public sealed class StarlingEngine
         }
 
         using var webFonts = new FontFaceRegistry();
-        using (var fontFaceFetcher = new FontFaceFetcher(_diag, _httpFactory))
+        using (var fontFaceFetcher = new FontFaceFetcher(_diag, http))
         using (_diag.Span("engine", "fetch_fonts"))
         {
             await fontFaceFetcher
@@ -163,7 +169,7 @@ public sealed class StarlingEngine
         // layout/paint pass below. Best-effort: a script that throws is
         // logged via the realm's console sink and the remaining scripts
         // still run.
-        using (var scripts = new ScriptFetcher(_diag, _httpFactory))
+        using (var scripts = new ScriptFetcher(_diag, http))
         {
             using (_diag.Span("engine", "fetch_scripts"))
             {
@@ -315,7 +321,14 @@ public sealed class StarlingEngine
             }
             else if (u.IsHttp || u.IsHttps)
             {
-                var fetched = await FetchHtmlAsync(u, ct).ConfigureAwait(false);
+                // GUI layout path: the document fetch uses a throwaway client,
+                // and the resource fetchers below keep their own clients. Tying
+                // one shared pool to this path needs the client's lifetime bound
+                // to the returned LaidOutPage (which owns the fetchers); that is
+                // a follow-up. RenderAsync already shares one pool per page.
+                Result<(string Html, StarlingUrl FinalUrl), RenderError> fetched;
+                using (var htmlHttp = _httpFactory())
+                    fetched = await FetchHtmlAsync(u, htmlHttp, ct).ConfigureAwait(false);
                 if (fetched.IsErr)
                     return Result<LaidOutPage, RenderError>.Err(fetched.Error);
                 html = fetched.Value.Html;
@@ -891,9 +904,9 @@ public sealed class StarlingEngine
     /// and the page's `&lt;img src="/images/..."&gt;` must resolve against
     /// the www host; the original (pre-redirect) URL would 404.
     /// </summary>
-    private async Task<Result<(string Html, StarlingUrl FinalUrl), RenderError>> FetchHtmlAsync(StarlingUrl url, CancellationToken ct)
+    private async Task<Result<(string Html, StarlingUrl FinalUrl), RenderError>> FetchHtmlAsync(
+        StarlingUrl url, StarlingHttpClient http, CancellationToken ct)
     {
-        using var http = _httpFactory();
         var current = url;
 
         for (var redirects = 0; redirects <= MaxRedirects; redirects++)

@@ -34,11 +34,27 @@ internal sealed class StylesheetFetcher : IDisposable
     private readonly IDiagnostics _diag;
     private readonly Func<StarlingHttpClient> _httpFactory;
     private StarlingHttpClient? _sharedHttp;
+    private readonly bool _ownsHttp;
 
     public StylesheetFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
+        _ownsHttp = true;
+    }
+
+    /// <summary>
+    /// Use a caller-owned <see cref="StarlingHttpClient"/> so resource fetches
+    /// share one connection pool — same-origin requests reuse the keep-alive
+    /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
+    /// shared client is owned by the caller and is not disposed by this fetcher.
+    /// </summary>
+    public StylesheetFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    {
+        _diag = diag;
+        _sharedHttp = sharedHttp;
+        _httpFactory = () => sharedHttp;
+        _ownsHttp = false;
     }
 
     public StyleSheet? Resolve(Element element)
@@ -227,7 +243,7 @@ internal sealed class StylesheetFetcher : IDisposable
     {
         _byUrl.Clear();
         _byElement.Clear();
-        _sharedHttp?.Dispose();
+        if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
 }

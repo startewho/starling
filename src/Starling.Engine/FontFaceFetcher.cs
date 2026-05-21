@@ -24,11 +24,27 @@ internal sealed class FontFaceFetcher : IDisposable
     private readonly Func<StarlingHttpClient> _httpFactory;
     private readonly Dictionary<string, byte[]> _byUrl = new(StringComparer.Ordinal);
     private StarlingHttpClient? _sharedHttp;
+    private readonly bool _ownsHttp;
 
     public FontFaceFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
+        _ownsHttp = true;
+    }
+
+    /// <summary>
+    /// Use a caller-owned <see cref="StarlingHttpClient"/> so resource fetches
+    /// share one connection pool — same-origin requests reuse the keep-alive
+    /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
+    /// shared client is owned by the caller and is not disposed by this fetcher.
+    /// </summary>
+    public FontFaceFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    {
+        _diag = diag;
+        _sharedHttp = sharedHttp;
+        _httpFactory = () => sharedHttp;
+        _ownsHttp = false;
     }
 
     /// <summary>
@@ -188,7 +204,7 @@ internal sealed class FontFaceFetcher : IDisposable
     public void Dispose()
     {
         _byUrl.Clear();
-        _sharedHttp?.Dispose();
+        if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
 }
