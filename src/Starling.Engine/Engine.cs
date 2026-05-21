@@ -169,6 +169,15 @@ public sealed class StarlingEngine
         // layout/paint pass below. Best-effort: a script that throws is
         // logged via the realm's console sink and the remaining scripts
         // still run.
+        //
+        // The host built for JS holds the box tree it last laid out. When a
+        // script reads geometry (so a layout was materialized) and nothing
+        // layout-affecting changes afterwards, the engine reuses that exact box
+        // tree for the final paint instead of running a second full cascade +
+        // layout (Win B). `jsLayoutHost` survives past the script block; it is
+        // nulled when a late resource invalidates the tree, and reuse is
+        // additionally gated on HasLayout + an unchanged mutation version below.
+        BoxLayoutHost? jsLayoutHost = null;
         using (var scripts = new ScriptFetcher(_diag, http))
         {
             using (_diag.Span("engine", "fetch_scripts"))
@@ -197,12 +206,20 @@ public sealed class StarlingEngine
                             doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
                             colorScheme: options.PreferredColorScheme);
                 }
-                ILayoutHost layoutHost = new BoxLayoutHost(doc, Relayout);
+                jsLayoutHost = new BoxLayoutHost(doc, Relayout);
 
                 using (_diag.Span("engine", "run_scripts"))
                 {
-                    await RunScriptsAsync(doc, u, scripts, layoutHost, ct).ConfigureAwait(false);
+                    await RunScriptsAsync(doc, u, scripts, jsLayoutHost, ct).ConfigureAwait(false);
                 }
+
+                // Snapshot how many images/stylesheets were loaded before the
+                // post-script fetch. If that fetch pulls in anything new, a late
+                // image intrinsic size or a new sheet's cascade can change
+                // layout — so we must NOT reuse the pre-script box tree.
+                var imagesBefore = images.LoadedCount;
+                var sheetsBefore = stylesheets.LoadedCount;
+
                 // Scripts may have added <img> or new stylesheet links;
                 // re-run the resource fetch so the post-script DOM is
                 // fully loaded before paint. URL dedupe makes the second
@@ -213,6 +230,13 @@ public sealed class StarlingEngine
                         images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
                         stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
                     ).ConfigureAwait(false);
+                }
+
+                if (images.LoadedCount != imagesBefore || stylesheets.LoadedCount != sheetsBefore)
+                {
+                    // A late resource arrived — its intrinsic size / cascade may
+                    // shift layout. Discard the cached tree and re-layout.
+                    jsLayoutHost = null;
                 }
             }
         }
@@ -231,17 +255,47 @@ public sealed class StarlingEngine
         // result rendering) land in RenderOutcome.DisplayText.
         var displayText = ExtractDisplayText(doc);
 
+        var renderViewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
+
+        // Win B: reuse the layout JS already materialized when it is provably
+        // still valid, painting straight from that box tree instead of running a
+        // second full cascade + layout. ALL of these must hold:
+        //   • a layout was actually materialized for JS — with the lazy host that
+        //     means a script read geometry / computed style (HasLayout);
+        //   • the DOM has not mutated since that layout
+        //     (doc.MutationVersion == host.LaidOutVersion);
+        //   • no layout-affecting resource arrived after it (jsLayoutHost is
+        //     nulled above when fetch_resources_post_js loaded a new image/sheet);
+        //   • viewport / font-size / color-scheme are unchanged within a single
+        //     render (the host laid out with these exact options, so identical by
+        //     construction).
+        // Background images prefetched in fetch_backgrounds above are paint-only
+        // (they never change layout) and resolve through the same images resolver
+        // during the display-list build, so they do not block reuse.
+        var canReuse = jsLayoutHost is { } host
+            && host.HasLayout
+            && doc.MutationVersion == host.LaidOutVersion;
+
         Starling.Common.Image.RenderedBitmap bitmap;
         using (_diag.Span("engine", "render_document"))
         {
-            bitmap = _painter.RenderDocument(
-                doc,
-                new LayoutSize(options.Viewport.Width, options.Viewport.Height),
-                options.FontSize,
-                images,
-                stylesheets.Resolve,
-                webFonts,
-                colorScheme: options.PreferredColorScheme);
+            if (canReuse)
+            {
+                _diag.Counter("engine.render.reused_prelayout", 1);
+                var (reuseRoot, _) = jsLayoutHost!.Materialized;
+                bitmap = _painter.PaintLaidOut(reuseRoot, renderViewport, images, webFonts);
+            }
+            else
+            {
+                bitmap = _painter.RenderDocument(
+                    doc,
+                    renderViewport,
+                    options.FontSize,
+                    images,
+                    stylesheets.Resolve,
+                    webFonts,
+                    colorScheme: options.PreferredColorScheme);
+            }
             Activity.Current?.SetTag("image.w", bitmap.Width);
             Activity.Current?.SetTag("image.h", bitmap.Height);
         }

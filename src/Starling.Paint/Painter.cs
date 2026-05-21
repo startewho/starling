@@ -116,6 +116,50 @@ public sealed class Painter
     }
 
     /// <summary>
+    /// Paint an <em>already-laid-out</em> box tree: build the display list and
+    /// rasterize it, skipping cascade + layout entirely. The caller owns the
+    /// <paramref name="root"/> (typically produced by an earlier layout that is
+    /// still valid). Used by the engine to reuse the pre-script layout for the
+    /// final render when nothing layout-affecting changed after scripts ran —
+    /// collapsing two full layouts into one. Emits the same <c>display_list</c>
+    /// and <c>raster:*</c> spans as <see cref="RenderDocument(Document, LayoutSize, float?, IImageResolver?, Func{Element, StyleSheet?}?, FontFaceRegistry?, double?, ColorScheme, LayoutRect?)"/>
+    /// (but no <c>layout</c> / <c>style_cascade</c> span), so telemetry stays
+    /// consistent and a span-counting harness can verify exactly one layout ran.
+    /// </summary>
+    public RenderedBitmap PaintLaidOut(
+        Starling.Layout.Box.BlockBox root,
+        LayoutSize viewport,
+        IImageResolver? images = null,
+        FontFaceRegistry? webFonts = null,
+        LayoutRect? clipViewport = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+
+        PaintList displayList;
+        using (_diag.Span("paint", "display_list"))
+            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+
+        using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
+        {
+            try
+            {
+                IPaintBackend backend;
+                using (_diag.Span("paint", "raster.backend_init"))
+                    backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
+                using (backend)
+                    return clipViewport is { } clip
+                        ? backend.Render(displayList, clip)
+                        : backend.Render(displayList, viewport);
+            }
+            catch (Exception ex)
+            {
+                _diag.LogException("paint", ex, $"raster backend '{PaintBackendSelector.Selected}' failed");
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
     /// Run cascade + layout without rasterizing. Returns the laid-out box tree
     /// for callers that want to walk it themselves — interactive shells (a real
     /// browser frame) consume this so taps, selection, and Cmd-F can resolve

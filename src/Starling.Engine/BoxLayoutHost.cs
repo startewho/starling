@@ -29,6 +29,7 @@ internal sealed class BoxLayoutHost : ILayoutHost
     private readonly Dictionary<Element, Box> _boxByElement = new(ReferenceEqualityComparer.Instance);
     private readonly Document? _document;
     private readonly Func<(BlockBox Root, StyleEngine Style)>? _relayout;
+    private BlockBox? _root;
     private StyleEngine? _style;
     private int _laidOutVersion;
     private bool _laidOut;
@@ -43,6 +44,7 @@ internal sealed class BoxLayoutHost : ILayoutHost
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(style);
+        _root = root;
         _style = style;
         _document = document;
         _relayout = relayout;
@@ -71,6 +73,27 @@ internal sealed class BoxLayoutHost : ILayoutHost
     }
 
     /// <summary>
+    /// Whether a layout has actually been materialized yet. False for a deferred
+    /// host whose geometry was never read — in that case there is no box tree to
+    /// reuse and the engine must run its own layout for the final paint.
+    /// </summary>
+    public bool HasLayout => _laidOut;
+
+    /// <summary>The document mutation version the held layout reflects.</summary>
+    public int LaidOutVersion => _laidOutVersion;
+
+    /// <summary>
+    /// The layout the host currently holds, paired with the style engine it was
+    /// computed with. Only valid once <see cref="HasLayout"/> is true. The engine
+    /// reads this after script execution to reuse the already-materialized box
+    /// tree for the final paint — skipping a redundant second cascade + layout
+    /// (Win B) — when nothing layout-affecting has changed since
+    /// (<see cref="LaidOutVersion"/> still equals the document's
+    /// <see cref="Document.MutationVersion"/> and no late resources arrived).
+    /// </summary>
+    public (BlockBox Root, StyleEngine Style) Materialized => (_root!, _style!);
+
+    /// <summary>
     /// If a DOM mutation has advanced the document's mutation version since the
     /// last layout, re-run layout and rebuild the element→box index. No-op for a
     /// static snapshot (no recompute delegate) or when nothing has mutated.
@@ -82,6 +105,7 @@ internal sealed class BoxLayoutHost : ILayoutHost
             return;
 
         var (root, style) = _relayout();
+        _root = root;
         _style = style;
         _boxByElement.Clear();
         Index(root);

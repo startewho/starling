@@ -57,6 +57,14 @@ internal sealed class StylesheetFetcher : IDisposable
         _ownsHttp = false;
     }
 
+    /// <summary>
+    /// Number of stylesheets fetched + parsed so far. The engine snapshots this
+    /// before and after the post-script resource fetch: a newly loaded sheet
+    /// changes the cascade (and therefore layout), so a growth here forces a
+    /// full re-layout instead of reusing the pre-script box tree.
+    /// </summary>
+    public int LoadedCount => _byUrl.Count;
+
     public StyleSheet? Resolve(Element element)
         => _byElement.TryGetValue(element, out var sheet) ? sheet : null;
 

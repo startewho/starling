@@ -59,6 +59,16 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         _ownsHttp = false;
     }
 
+    /// <summary>
+    /// Total number of resolved images currently cached — both element-keyed
+    /// (<c>&lt;img&gt;</c> intrinsic sizes) and URL-keyed (CSS
+    /// <c>background-image</c> / prefetched url()). The engine snapshots this
+    /// before and after the post-script resource fetch to decide whether a new
+    /// layout-affecting image arrived (a late intrinsic size changes layout); if
+    /// the count is unchanged it can safely reuse the pre-script layout.
+    /// </summary>
+    public int LoadedCount => _byElement.Count + _byUrl.Count;
+
     public bool TryResolve(Element element, out ResolvedImage image)
         => _byElement.TryGetValue(element, out image);
 
