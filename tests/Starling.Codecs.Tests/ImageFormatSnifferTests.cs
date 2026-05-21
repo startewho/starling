@@ -67,4 +67,60 @@ public sealed class ImageFormatSnifferTests
         byte[] partial = [0x89, 0x50, 0x4E, 0x47];
         ImageFormatSniffer.Detect(partial).Should().Be(ImageFormat.Unknown);
     }
+
+    // --- SVG detection ------------------------------------------------------
+
+    [TestMethod]
+    public void DetectsSvgRootElement()
+    {
+        ImageFormatSniffer.Detect("<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"u8)
+            .Should().Be(ImageFormat.Svg);
+    }
+
+    [TestMethod]
+    public void DetectsSvgWithXmlProlog()
+    {
+        ImageFormatSniffer.Detect("<?xml version=\"1.0\"?>\n<svg></svg>"u8)
+            .Should().Be(ImageFormat.Svg);
+    }
+
+    [TestMethod]
+    public void DetectsSvgWithLeadingWhitespaceAndBom()
+    {
+        // UTF-8 BOM (EF BB BF), then whitespace, then the root element.
+        byte[] bytes = [0xEF, 0xBB, 0xBF, (byte)' ', (byte)'\n', (byte)'<', (byte)'s', (byte)'v', (byte)'g', (byte)'>'];
+        ImageFormatSniffer.Detect(bytes).Should().Be(ImageFormat.Svg);
+    }
+
+    [TestMethod]
+    public void DetectsSvgWithDoctype()
+    {
+        ImageFormatSniffer.Detect(
+            "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"svg11.dtd\">\n<svg/>"u8)
+            .Should().Be(ImageFormat.Svg);
+    }
+
+    [TestMethod]
+    public void DetectsSvgWithLeadingComment()
+    {
+        ImageFormatSniffer.Detect("<!-- generator --><svg></svg>"u8)
+            .Should().Be(ImageFormat.Svg);
+    }
+
+    [TestMethod]
+    public void DoesNotDetectPlainXmlAsSvg()
+    {
+        // An XML document that is clearly not SVG must not sniff as SVG.
+        ImageFormatSniffer.Detect("<?xml version=\"1.0\"?><note><to>x</to></note>"u8)
+            .Should().Be(ImageFormat.Unknown);
+    }
+
+    [TestMethod]
+    public void LooksLikeSvgPublicHelperMatchesDetect()
+    {
+        ImageFormatSniffer.LooksLikeSvg("<svg></svg>"u8).Should().BeTrue();
+        // Raster signatures must not be mistaken for SVG.
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        ImageFormatSniffer.LooksLikeSvg(png).Should().BeFalse();
+    }
 }

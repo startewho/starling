@@ -5,6 +5,7 @@ using Starling.Common.Image;
 using Starling.Dom;
 using Starling.Layout.Tree;
 using Starling.Net;
+using Starling.Paint.Svg;
 using Starling.Url;
 using StarlingUrl = global::Starling.Url.Url;
 
@@ -257,18 +258,23 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
             }
 
             Activity.Current?.SetTag("bytes", bytes.Length);
-            // NativeImageDecoder sniffs PNG/JPEG/WebP/GIF/BMP and decodes via
-            // the OS-native codec, returning a backend-neutral DecodedImage
+            // SVG is a vector (XML) format the OS-native raster codecs cannot
+            // touch. Sniff it first and route to the pure-managed rasterizer in
+            // Starling.Paint (ImageSharp.Drawing); everything else goes through
+            // NativeImageDecoder, which sniffs PNG/JPEG/WebP/GIF/BMP and decodes
+            // via the OS-native codec. Both return a backend-neutral DecodedImage
             // (straight RGBA8888, top-down, tightly packed) so nothing
             // downstream names a concrete decoder type.
-            var decoded = NativeImageDecoder.Decode(bytes);
+            DecodedImage decoded = NativeImageDecoder.IsSvg(bytes)
+                ? SvgImageDecoder.Decode(bytes)
+                : NativeImageDecoder.Decode(bytes);
             Activity.Current?.SetTag("image.w", decoded.Width);
             Activity.Current?.SetTag("image.h", decoded.Height);
             _byUrl[key] = decoded;
             _diag.Counter("engine.fetch.image", 1);
             return decoded;
         }
-        catch (Exception ex) when (ex is IOException or ImageDecodeException)
+        catch (Exception ex) when (ex is IOException or ImageDecodeException or SvgDecodeException)
         {
             _diag.Log(DiagLevel.Warn, "engine", $"Image decode failed {url}: {ex.Message}");
             _diag.Counter("engine.fetch.image.failed", 1);

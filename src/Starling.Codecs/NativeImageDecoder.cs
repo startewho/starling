@@ -35,6 +35,12 @@ public static class NativeImageDecoder
             throw new ImageDecodeException("Cannot decode an empty image buffer.");
 
         var format = ImageFormatSniffer.Detect(bytes);
+        if (format == ImageFormat.Svg)
+            throw new ImageDecodeException(
+                "SVG is a vector format and cannot be decoded by the OS-native raster " +
+                "codecs. Route it to the managed SVG rasterizer (Starling.Paint); the " +
+                "engine does this automatically via ImageFormatSniffer.LooksLikeSvg.");
+
         if (format == ImageFormat.Unknown)
             throw new ImageDecodeException(
                 "Unrecognised image format: no PNG/JPEG/WebP/GIF/BMP signature in the leading bytes.");
@@ -42,6 +48,16 @@ public static class NativeImageDecoder
         IImageDecoder backend = SelectBackend();
         return backend.Decode(bytes);
     }
+
+    /// <summary>
+    /// True when <paramref name="bytes"/> sniff as an SVG document. The engine
+    /// uses this to route SVG to the managed vector rasterizer
+    /// (<c>Starling.Paint</c>) instead of this OS-native raster path, which can
+    /// only decode bitmap containers. Exposed publicly because the
+    /// <see cref="ImageFormat"/> enum and its sniffer are internal to this
+    /// interop seam.
+    /// </summary>
+    public static bool IsSvg(ReadOnlySpan<byte> bytes) => ImageFormatSniffer.LooksLikeSvg(bytes);
 
     /// <summary>
     /// Pick the decoder backend for the current OS. Split out so tests can

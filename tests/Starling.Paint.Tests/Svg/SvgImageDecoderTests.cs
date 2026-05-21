@@ -1,0 +1,303 @@
+using AwesomeAssertions;
+using SixLabors.ImageSharp;
+using Starling.Common.Image;
+using Starling.Paint.Svg;
+using Starling.Spec;
+
+namespace Starling.Paint.Tests.Svg;
+
+/// <summary>
+/// Conformance + behavioural tests for the managed SVG rasterizer
+/// (<see cref="SvgImageDecoder"/>). Covers intrinsic sizing, the shape set
+/// real-world icons use, presentation/style/class cascade, and golden colour
+/// spot-checks on synthetic documents. Real McMaster fixtures (the failing
+/// case that motivated this WP) are decoded end-to-end.
+/// </summary>
+[TestClass]
+[Spec("svg11", "https://www.w3.org/TR/SVG11/", section: "rasterization")]
+public sealed class SvgImageDecoderTests
+{
+    private const string SvgUrl = "https://www.w3.org/TR/SVG11/";
+
+    private static readonly string FixtureDir =
+        Path.Combine(AppContext.BaseDirectory, "testdata", "images", "svg");
+
+    private static (byte R, byte G, byte B, byte A) PixelAt(DecodedImage img, int x, int y)
+    {
+        var px = img.Pixels.Span;
+        int i = (y * img.Width + x) * 4;
+        return (px[i], px[i + 1], px[i + 2], px[i + 3]);
+    }
+
+    private static bool AnyNonTransparent(DecodedImage img)
+    {
+        var px = img.Pixels.Span;
+        for (int i = 3; i < px.Length; i += 4)
+            if (px[i] != 0)
+                return true;
+        return false;
+    }
+
+    private static int CountWhere(DecodedImage img, Func<(byte R, byte G, byte B, byte A), bool> pred)
+    {
+        int n = 0;
+        for (int y = 0; y < img.Height; y++)
+            for (int x = 0; x < img.Width; x++)
+                if (pred(PixelAt(img, x, y)))
+                    n++;
+        return n;
+    }
+
+    // --- intrinsic sizing ---------------------------------------------------
+
+    [Spec("svg11", SvgUrl, section: "coords.html#IntrinsicSizing")]
+    [SpecFact]
+    public void Intrinsic_size_from_width_and_height()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='40' height='25' viewBox='0 0 40 25'><rect width='40' height='25' fill='red'/></svg>");
+        img.Width.Should().Be(40);
+        img.Height.Should().Be(25);
+    }
+
+    [Spec("svg11", SvgUrl, section: "coords.html#ViewBoxAttribute")]
+    [SpecFact]
+    public void Intrinsic_size_falls_back_to_viewBox_when_no_width_height()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg viewBox='0 0 21 21.9'><circle cx='8.7' cy='8.7' r='8.1' fill='black'/></svg>");
+        img.Width.Should().Be(21);
+        img.Height.Should().Be(22); // 21.9 ceils to 22
+    }
+
+    [Spec("svg11", SvgUrl, section: "coords.html#IntrinsicSizing")]
+    [SpecFact]
+    public void Intrinsic_size_defaults_to_150_when_no_size_info()
+    {
+        using var img = SvgImageDecoder.DecodeText("<svg><rect width='10' height='10' fill='red'/></svg>");
+        img.Width.Should().Be(150);
+        img.Height.Should().Be(150);
+    }
+
+    // --- golden colour spot-checks on synthetic SVGs ------------------------
+
+    [Spec("svg11", SvgUrl, section: "shapes.html#RectElement")]
+    [SpecFact]
+    public void Filled_red_rect_produces_red_pixels()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='20' height='20' viewBox='0 0 20 20'><rect x='0' y='0' width='20' height='20' fill='#ff0000'/></svg>");
+
+        AnyNonTransparent(img).Should().BeTrue();
+        var center = PixelAt(img, 10, 10);
+        center.R.Should().BeGreaterThan(200);
+        center.G.Should().BeLessThan(60);
+        center.B.Should().BeLessThan(60);
+        center.A.Should().Be(255);
+    }
+
+    [Spec("svg11", SvgUrl, section: "shapes.html#CircleElement")]
+    [SpecFact]
+    public void Filled_blue_circle_is_blue_at_center_and_transparent_at_corner()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='40' height='40' viewBox='0 0 40 40'><circle cx='20' cy='20' r='15' fill='rgb(0,0,255)'/></svg>");
+
+        var center = PixelAt(img, 20, 20);
+        center.B.Should().BeGreaterThan(200);
+        center.R.Should().BeLessThan(60);
+        center.A.Should().Be(255);
+
+        // The corner is outside the r=15 circle → transparent.
+        PixelAt(img, 0, 0).A.Should().Be(0);
+    }
+
+    [Spec("svg11", SvgUrl, section: "painting.html#FillProperty")]
+    [SpecFact]
+    public void Named_color_and_currentColor_resolve()
+    {
+        using var named = SvgImageDecoder.DecodeText(
+            "<svg width='10' height='10' viewBox='0 0 10 10'><rect width='10' height='10' fill='green'/></svg>");
+        PixelAt(named, 5, 5).G.Should().BeGreaterThan(100);
+
+        // currentColor resolves to the supplied color (cyan-ish).
+        using var cur = SvgImageDecoder.DecodeText(
+            "<svg width='10' height='10' viewBox='0 0 10 10'><rect width='10' height='10' fill='currentColor'/></svg>",
+            currentColor: Color.FromPixel(new SixLabors.ImageSharp.PixelFormats.Rgba32(0, 200, 200, 255)));
+        var px = PixelAt(cur, 5, 5);
+        px.G.Should().BeGreaterThan(150);
+        px.B.Should().BeGreaterThan(150);
+    }
+
+    [Spec("svg11", SvgUrl, section: "painting.html#FillProperty")]
+    [SpecFact]
+    public void Fill_none_produces_no_fill()
+    {
+        // fill:none with no stroke → fully transparent output.
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='20' height='20' viewBox='0 0 20 20'><rect width='20' height='20' fill='none'/></svg>");
+        AnyNonTransparent(img).Should().BeFalse();
+    }
+
+    [Spec("svg11", SvgUrl, section: "painting.html#StrokeProperty")]
+    [SpecFact]
+    public void Stroked_line_produces_pixels()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='20' height='20' viewBox='0 0 20 20'><line x1='2' y1='2' x2='18' y2='18' stroke='#000000' stroke-width='2'/></svg>");
+        AnyNonTransparent(img).Should().BeTrue();
+        // A point on the diagonal should be dark.
+        PixelAt(img, 10, 10).A.Should().BeGreaterThan(0);
+    }
+
+    [Spec("svg11", SvgUrl, section: "painting.html#FillRuleProperty")]
+    [SpecFact]
+    public void Fill_rule_evenodd_leaves_inner_hole_transparent()
+    {
+        // Outer 20x20 square with an inner 8x12 hole; even-odd leaves the hole
+        // empty, nonzero (same winding) would fill it. Both subpaths are wound
+        // clockwise so even-odd is the discriminator.
+        const string Svg =
+            "<svg width='20' height='20' viewBox='0 0 20 20'>" +
+            "<path fill-rule='evenodd' fill='#000000' " +
+            "d='M0 0 H20 V20 H0 Z M6 4 H14 V16 H6 Z'/></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+
+        PixelAt(img, 2, 10).A.Should().BeGreaterThan(0);   // in the outer ring
+        PixelAt(img, 10, 10).A.Should().Be(0);             // inside the hole
+    }
+
+    [Spec("svg11", SvgUrl, section: "coords.html#TransformAttribute")]
+    [SpecFact]
+    public void Group_transform_translates_geometry()
+    {
+        // A 4x4 red rect at origin, translated to (10,10) by the group.
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='20' height='20' viewBox='0 0 20 20'>" +
+            "<g transform='translate(10,10)'><rect width='4' height='4' fill='red'/></g></svg>");
+
+        PixelAt(img, 12, 12).R.Should().BeGreaterThan(200); // moved here
+        PixelAt(img, 2, 2).A.Should().Be(0);                // empty at origin
+    }
+
+    [Spec("svg11", SvgUrl, section: "painting.html#FillOpacityProperty")]
+    [SpecFact]
+    public void Fill_opacity_reduces_alpha()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='10' height='10' viewBox='0 0 10 10'><rect width='10' height='10' fill='#000000' fill-opacity='0.5'/></svg>");
+        var a = PixelAt(img, 5, 5).A;
+        a.Should().BeInRange(100, 160); // ~127
+    }
+
+    [Spec("svg11", SvgUrl, section: "styling.html#StyleAttribute")]
+    [SpecFact]
+    public void Style_attribute_overrides_presentation_attribute()
+    {
+        // presentation fill=red, but style="" sets blue → blue wins.
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='10' height='10' viewBox='0 0 10 10'><rect width='10' height='10' fill='red' style='fill:#0000ff'/></svg>");
+        var px = PixelAt(img, 5, 5);
+        px.B.Should().BeGreaterThan(200);
+        px.R.Should().BeLessThan(60);
+    }
+
+    [Spec("svg11", SvgUrl, section: "styling.html#StyleElement")]
+    [SpecFact]
+    public void Style_element_class_rules_apply()
+    {
+        // The geometry carries no inline paint — colour lives in a class rule,
+        // exactly like the McMaster fixtures.
+        const string Svg =
+            "<svg width='10' height='10' viewBox='0 0 10 10'>" +
+            "<style>.fillme{fill:#00ff00;}</style>" +
+            "<rect class='fillme' width='10' height='10'/></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+        PixelAt(img, 5, 5).G.Should().BeGreaterThan(200);
+    }
+
+    [Spec("svg11", SvgUrl, section: "paths.html#PathDataEllipticalArcCommands")]
+    [SpecFact]
+    public void Arc_command_renders_a_filled_region()
+    {
+        // A half-disc traced with an arc; just assert it produces filled pixels
+        // (the path parser arc test asserts the geometry precisely).
+        const string Svg =
+            "<svg width='40' height='40' viewBox='0 0 40 40'>" +
+            "<path fill='#000000' d='M5 20 A15 15 0 0 1 35 20 Z'/></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+        AnyNonTransparent(img).Should().BeTrue();
+        PixelAt(img, 20, 14).A.Should().BeGreaterThan(0); // inside the arc cap
+    }
+
+    // --- malformed / edge cases ---------------------------------------------
+
+    [Spec("svg11", SvgUrl, section: "rasterization")]
+    [SpecFact]
+    public void Malformed_xml_throws_SvgDecodeException()
+    {
+        var act = () => SvgImageDecoder.DecodeText("<svg><rect></svg>");
+        act.Should().Throw<SvgDecodeException>();
+    }
+
+    [Spec("svg11", SvgUrl, section: "rasterization")]
+    [SpecFact]
+    public void Non_svg_root_throws()
+    {
+        var act = () => SvgImageDecoder.DecodeText("<html><body/></html>");
+        act.Should().Throw<SvgDecodeException>();
+    }
+
+    [Spec("svg11", SvgUrl, section: "rasterization")]
+    [SpecFact]
+    public void Unknown_elements_are_ignored_gracefully()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='10' height='10' viewBox='0 0 10 10'>" +
+            "<foreignObject/><unknownThing x='1'/>" +
+            "<rect width='10' height='10' fill='red'/></svg>");
+        PixelAt(img, 5, 5).R.Should().BeGreaterThan(200);
+    }
+
+    // --- real McMaster fixtures (the motivating failure) --------------------
+
+    [TestMethod]
+    [DataRow("MastheadLogo.svg", 457, 66)]              // viewBox 0 0 456.5 65.7
+    [DataRow("searchIconLightGray.svg", 21, 22)]        // viewBox 0 0 21 21.9
+    [DataRow("searchBoxVerticalSeparatorDefault.svg", 1, 13)]
+    [DataRow("searchBoxClearButtonLightGray.svg", 12, 12)]
+    [DataRow("searchIconRefreshedLightGray.svg", 20, 20)]
+    [Spec("svg11", SvgUrl, section: "rasterization")]
+    public void McMaster_fixture_decodes_to_expected_dimensions(string file, int w, int h)
+    {
+        var path = Path.Combine(FixtureDir, file);
+        File.Exists(path).Should().BeTrue($"fixture '{file}' should be copied to test output ({path})");
+        using var img = SvgImageDecoder.Decode(File.ReadAllBytes(path));
+        img.Width.Should().Be(w);
+        img.Height.Should().Be(h);
+        AnyNonTransparent(img).Should().BeTrue($"'{file}' should rasterize to non-empty pixels");
+    }
+
+    [Spec("svg11", SvgUrl, section: "rasterization")]
+    [SpecFact]
+    public void McMaster_separator_fills_with_its_class_color()
+    {
+        // searchBoxVerticalSeparatorDefault: a single grey (#cbcbcb) rect.
+        var path = Path.Combine(FixtureDir, "searchBoxVerticalSeparatorDefault.svg");
+        using var img = SvgImageDecoder.Decode(File.ReadAllBytes(path));
+        // 1x13 image; the middle pixel should be the grey fill.
+        var px = PixelAt(img, 0, 6);
+        px.A.Should().BeGreaterThan(0);
+        px.R.Should().BeInRange(180, 220); // ~0xcb
+    }
+
+    [Spec("svg11", SvgUrl, section: "rasterization")]
+    [SpecFact]
+    public void DecodedImage_buffer_is_tightly_packed_rgba8888_top_down()
+    {
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='8' height='5' viewBox='0 0 8 5'><rect width='8' height='5' fill='red'/></svg>");
+        // Invariant: length == width*height*4, no row padding.
+        img.Pixels.Length.Should().Be(8 * 5 * 4);
+    }
+}
