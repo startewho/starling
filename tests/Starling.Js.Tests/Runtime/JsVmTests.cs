@@ -259,6 +259,25 @@ public class JsVmTests
     }
 
     [TestMethod]
+    public void Unbounded_recursion_throws_catchable_RangeError_not_a_process_crash()
+    {
+        // Must surface as a catchable JsThrow (RangeError), never an uncatchable
+        // StackOverflowException that crashes the host process. Guarded by the
+        // call-depth cap + RuntimeHelpers.TryEnsureSufficientExecutionStack.
+        var act = () => Eval("function f(){ return f(); } f();");
+        act.Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("message").AsString.Should().Contain("call stack");
+    }
+
+    [TestMethod]
+    public void Recursion_RangeError_is_catchable_from_JS()
+    {
+        // try/catch inside JS must be able to recover from deep recursion.
+        Eval("var ok=false; function f(){ return f(); } try { f(); } catch (e) { ok = true; } ok;")
+            .AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Not_a_function_error_names_the_global_callee()
     {
         var act = () => Eval("nopeFn();");

@@ -33,7 +33,15 @@ public sealed class JsVm
     /// crash the process (uncatchable). The spec leaves the limit
     /// implementation-defined (§"so long as … the implementation … throws a
     /// RangeError"); this value is conservative to stay safe on a default
-    /// (~1 MB) thread stack while still admitting normal recursion.</summary>
+    /// (~1 MB) thread stack while still admitting normal recursion.
+    ///
+    /// Empirically the recursive interpreter (RunInner is a large method, ~4
+    /// native frames per JS call) overflows the render path's thread stack near
+    /// ~300 JS frames — well below the old 1000 limit, so an uncatchable
+    /// StackOverflowException (process crash) won out over the guard. 150 keeps a
+    /// safety margin so the guard reliably wins and throws a catchable RangeError.
+    /// (Proper deep-recursion support — running the VM on a dedicated large-stack
+    /// thread / trampolining — is a follow-up; see wp:M3-13.)</summary>
     private const int MaxCallDepth = 1000;
     private int _callDepth;
 
@@ -162,7 +170,17 @@ public sealed class JsVm
         // Guard the native stack: each nested JS call recurses through here, so
         // cap the depth and surface a catchable RangeError instead of a fatal
         // StackOverflowException.
-        if (_callDepth >= MaxCallDepth)
+        // Coarse logical cap, plus a probe of the *actual* remaining native
+        // stack. The logical cap alone is unreliable: native frames-per-JS-call
+        // vary (calls routed through native intrinsics like String.prototype.
+        // replace / Function.prototype.call burn several extra native frames),
+        // so a fixed depth can overflow the thread stack before the cap is hit.
+        // TryEnsureSufficientExecutionStack() reports true while enough stack
+        // remains for a typical call chain; when it goes false we surface a
+        // catchable RangeError instead of an uncatchable StackOverflowException
+        // that would crash the whole process.
+        if (_callDepth >= MaxCallDepth ||
+            !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new JsThrow(_runtime.Realm.NewRangeError("Maximum call stack size exceeded"));
 
         var prevVm = _runtime.Realm.ActiveVm;
