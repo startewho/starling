@@ -387,7 +387,13 @@ public sealed partial class JsCompiler
     private void EmitSuperProperty(SuperPropertyExpression sp)
     {
         if (sp.Computed)
-            throw new NotSupportedException("computed super.[expr] is not supported in B1b-2a");
+        {
+            // wp:M3-04h — super[expr]: evaluate the key, then resolve through the
+            // home object's prototype with `this` as the receiver at runtime.
+            EmitExpression(sp.Property);
+            _b.Emit(Opcode.LoadSuperComputed);
+            return;
+        }
         var name = ((Identifier)sp.Property).Name;
         _b.EmitU16(Opcode.LoadSuperProperty, _b.AddConstant(name));
     }

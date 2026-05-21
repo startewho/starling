@@ -1625,6 +1625,31 @@ public sealed partial class JsCompiler
                 _b.EmitU16(Opcode.StoreGlobal, _b.AddConstant(id.Name));
             return;
         }
+        if (a.Target is SuperPropertyExpression sptarget)
+        {
+            // wp:M3-04h — super[expr] = v (and compound forms). Per spec
+            // (§13.3.4 / PutValue on a super reference) the write targets the
+            // receiver `this`, while the read for compound forms resolves
+            // through the home object's prototype.
+            if (!sptarget.Computed)
+                throw new NotSupportedException("super.x = v is not supported in B1b-2a");
+            if (a.Op != "=")
+            {
+                // Compound `super[k] op= v`: evaluate the key once, dup it for the
+                // read, apply the op, then store back to `this`.
+                EmitExpression(sptarget.Property);   // [key]
+                _b.Emit(Opcode.Dup);                 // [key, key]
+                _b.Emit(Opcode.LoadSuperComputed);   // [key, oldVal]
+                EmitExpression(a.Value);             // [key, oldVal, rhs]
+                _b.Emit(CompoundOpToBinaryOpcode(a.Op)); // [key, newVal]
+                _b.Emit(Opcode.StoreSuperComputed);  // [newVal]
+                return;
+            }
+            EmitExpression(sptarget.Property);        // [key]
+            EmitExpression(a.Value);                  // [key, value]
+            _b.Emit(Opcode.StoreSuperComputed);       // [value]
+            return;
+        }
         if (a.Target is MemberExpression me)
         {
             // Super-property assignment: super.x = v writes to `this`.
@@ -1727,12 +1752,20 @@ public sealed partial class JsCompiler
         // super.method(args) — must bind this=current this.
         if (call.Callee is SuperPropertyExpression sp)
         {
-            if (sp.Computed)
-                throw new NotSupportedException("computed super[...] is not supported in B1b-2a");
-            var name = ((Identifier)sp.Property).Name;
             // Push this for receiver, then the resolved super method.
             _b.Emit(_classMethodDepth > 0 ? Opcode.LoadThisChecked : Opcode.LoadThis);  // [this]
-            _b.EmitU16(Opcode.LoadSuperProperty, _b.AddConstant(name));                 // [this, fn]
+            if (sp.Computed)
+            {
+                // wp:M3-04h — super[expr](args): evaluate the key and resolve via
+                // LoadSuperComputed, leaving [this, fn] for the method dispatch.
+                EmitExpression(sp.Property);                                            // [this, key]
+                _b.Emit(Opcode.LoadSuperComputed);                                      // [this, fn]
+            }
+            else
+            {
+                var name = ((Identifier)sp.Property).Name;
+                _b.EmitU16(Opcode.LoadSuperProperty, _b.AddConstant(name));             // [this, fn]
+            }
             if (hasSpread)
             {
                 EmitArgsAsArray(call.Arguments);

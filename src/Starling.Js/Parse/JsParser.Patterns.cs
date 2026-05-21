@@ -149,7 +149,10 @@ public sealed partial class JsParser
                 ReinterpretAssignmentTarget(assignment.Target), assignment.Value, assignment.Start, assignment.End),
             AssignmentPattern assignment => new AssignmentPattern(
                 ReinterpretAssignmentTarget(assignment.Target), assignment.Default, assignment.Start, assignment.End),
-            Identifier or MemberExpression => expr,
+            // wp:M3-04h — `super[expr]` (and `super.name`) are valid
+            // SimpleAssignmentTargets per §13.15.1; the compiler lowers the
+            // write to StoreSuperComputed / StoreSuperProperty.
+            Identifier or MemberExpression or SuperPropertyExpression => expr,
             BindingPattern => expr,
             _ => throw new JsParseException("invalid destructuring assignment target", expr.Start),
         };
