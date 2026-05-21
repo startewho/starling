@@ -344,14 +344,14 @@ public sealed class JsVm
                 }
                 case Opcode.StoreUpvalue:
                 {
-                    var idx = ReadU8();
+                    var idx = ReadU16();
                     var cell = (Cell)upvalues[idx].AsObject;
                     cell.Value = Pop();
                     break;
                 }
                 case Opcode.LoadUpvalueCell:
                 {
-                    var idx = ReadU8();
+                    var idx = ReadU16();
                     Push(upvalues[idx]);
                     break;
                 }
@@ -764,7 +764,7 @@ public sealed class JsVm
                 case Opcode.MakeClosure:
                 {
                     var idx = ReadU16();
-                    var nUpvalues = ReadU8();
+                    var nUpvalues = ReadU16();
                     var template = (JsFunction)constants[idx]!;
                     var captured = new JsValue[nUpvalues];
                     for (var i = nUpvalues - 1; i >= 0; i--) captured[i] = Pop();
@@ -782,7 +782,7 @@ public sealed class JsVm
                     // dereference to push the current bound value. Use
                     // LoadUpvalueCell to push the raw cell (for further
                     // chained captures).
-                    var idx = ReadU8();
+                    var idx = ReadU16();
                     var upV = upvalues[idx];
                     if (upV.IsObject && upV.AsObject is Cell c) Push(c.Value);
                     else Push(upV); // legacy snapshot path — empty in practice

@@ -203,6 +203,23 @@ public sealed class ChunkBuilder
         EmitU16(op, slot);
     }
 
+    /// <summary>Emit an upvalue opcode (<see cref="Opcode.LoadUpvalue"/>,
+    /// <see cref="Opcode.StoreUpvalue"/>, <see cref="Opcode.LoadUpvalueCell"/>)
+    /// with a 16-bit upvalue-index operand. Upvalue indices are addressed with
+    /// a u16 (not u8) so functions that capture more than 255 outer bindings —
+    /// common in large minified bundles such as Google Tag Manager / gtag,
+    /// whose inner closures reference hundreds of hoisted vars — address every
+    /// captured binding uniquely. A u8 operand previously hard-capped captures
+    /// at 255 (throwing at compile time), leaving large bundles' declarations
+    /// undefined.</summary>
+    public void EmitUpvalue(Opcode op, int idx)
+    {
+        if (idx is < 0 or > 0xFFFF)
+            throw new InvalidOperationException(
+                $"upvalue index {idx} exceeds the u16 limit (65535); function captures too many bindings");
+        EmitU16(op, idx);
+    }
+
     /// <summary>
     /// Emit a jump opcode with a placeholder offset; returns the position of
     /// the offset bytes for later patching via <see cref="PatchJump"/>.

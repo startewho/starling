@@ -310,8 +310,8 @@ public sealed partial class JsCompiler
             return;
         }
 
-        if (upvalues.Count > 255)
-            throw new NotSupportedException("more than 255 captured variables not supported");
+        if (upvalues.Count > 65535)
+            throw new NotSupportedException("more than 65535 captured variables not supported");
 
         // gap:closure-write-back — push the captured cell (not its value)
         // so that the new closure aliases the same shared cell that the
@@ -333,11 +333,11 @@ public sealed partial class JsCompiler
             }
             else
             {
-                _b.Emit(Opcode.LoadUpvalueCell, (byte)u.Index);
+                _b.EmitUpvalue(Opcode.LoadUpvalueCell, u.Index);
             }
         }
         _b.EmitU16(Opcode.MakeClosure, fnIdx);
-        _b.EmitU8Raw((byte)upvalues.Count);
+        _b.EmitU16Raw(upvalues.Count);
     }
 
     private static int CountSimpleParams(IReadOnlyList<Expression> ps)
@@ -1670,7 +1670,7 @@ public sealed partial class JsCompiler
         {
             // gap:closure-write-back — every upvalue is a Cell now, so
             // LoadUpvalue dereferences it transparently.
-            _b.Emit(Opcode.LoadUpvalue, (byte)upIdx);
+            _b.EmitUpvalue(Opcode.LoadUpvalue, upIdx);
             return;
         }
         _b.EmitU16(Opcode.LoadGlobal, _b.AddConstant(name));
@@ -1717,8 +1717,8 @@ public sealed partial class JsCompiler
 
     private int AddUpvalue(string name, UpvalueRef u)
     {
-        if (_upvalues.Count >= 255)
-            throw new NotSupportedException("more than 255 upvalues per function not supported");
+        if (_upvalues.Count >= 65535)
+            throw new NotSupportedException("more than 65535 upvalues per function not supported");
         var idx = _upvalues.Count;
         _upvalues.Add(u);
         _upvalueByName[name] = idx;
@@ -1760,12 +1760,12 @@ public sealed partial class JsCompiler
             }
             if (TryResolveUpvalue(id.Name, out var upIdx))
             {
-                _b.Emit(Opcode.LoadUpvalue, (byte)upIdx);
+                _b.EmitUpvalue(Opcode.LoadUpvalue, upIdx);
                 if (!up.Prefix) _b.Emit(Opcode.Dup);
                 _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));
                 _b.Emit(up.Op == "++" ? Opcode.Add : Opcode.Sub);
                 if (up.Prefix) _b.Emit(Opcode.Dup);
-                _b.Emit(Opcode.StoreUpvalue, (byte)upIdx);
+                _b.EmitUpvalue(Opcode.StoreUpvalue, upIdx);
                 return;
             }
             // gap:script-top-var-not-global — `x++` where `x` is a global
@@ -1952,7 +1952,7 @@ public sealed partial class JsCompiler
             if (TryResolveLocal(id.Name, out var slot))
                 EmitStoreLocalSlot(slot);
             else if (TryResolveUpvalue(id.Name, out var upIdx))
-                _b.Emit(Opcode.StoreUpvalue, (byte)upIdx);
+                _b.EmitUpvalue(Opcode.StoreUpvalue, upIdx);
             else
                 _b.EmitU16(Opcode.StoreGlobal, _b.AddConstant(id.Name));
             return;
@@ -2106,13 +2106,13 @@ public sealed partial class JsCompiler
             }
             if (TryResolveUpvalue(id.Name, out var upIdx))
             {
-                _b.Emit(Opcode.LoadUpvalue, (byte)upIdx); // [cur]
+                _b.EmitUpvalue(Opcode.LoadUpvalue, upIdx); // [cur]
                 _b.Emit(Opcode.Dup);
                 var j = _b.EmitJump(jmp);
                 _b.Emit(Opcode.Pop);
                 EmitExpression(a.Value);
                 _b.Emit(Opcode.Dup);
-                _b.Emit(Opcode.StoreUpvalue, (byte)upIdx); // [rhs]
+                _b.EmitUpvalue(Opcode.StoreUpvalue, upIdx); // [rhs]
                 _b.PatchJump(j);
                 return;
             }
@@ -2820,7 +2820,7 @@ public sealed partial class JsCompiler
         if (TryResolveLocal(name, out var slot))
             EmitStoreLocalSlot(slot);
         else if (TryResolveUpvalue(name, out var upIdx))
-            _b.Emit(Opcode.StoreUpvalue, (byte)upIdx);
+            _b.EmitUpvalue(Opcode.StoreUpvalue, upIdx);
         else
             _b.EmitU16(Opcode.StoreGlobal, _b.AddConstant(name));
     }
