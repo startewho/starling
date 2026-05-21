@@ -130,6 +130,12 @@ structure).
 > builds are still pending, so those CI legs are honestly red until they exist.
 > Open follow-ups are listed in the parent WP's handoff log.
 
+## M4 — Real-world site compatibility
+
+| ID | Status | Owner | Subsystem |
+|---|---|---|---|
+| [wp:M4-01-api-gap-mcmaster](M4/web-api-gap-mcmaster.md) | 🟢 complete | agent-claude-cody | Starling.Bindings |
+
 ## M5 — Avalonia shell + interactivity polish
 
 CSS-bucket follow-ups from M1 that were deliberately deferred. (Selector

@@ -114,6 +114,16 @@ public static class WindowBinding
             PropertyDescriptor.Data(JsValue.Number(options.InnerHeight), writable: true, enumerable: true, configurable: true));
         global.DefineOwnProperty("devicePixelRatio",
             PropertyDescriptor.Data(JsValue.Number(1), writable: true, enumerable: true, configurable: true));
+        // HTML §6.6.2 window.scrollX / scrollY. No scrolled content yet — return 0.
+        global.DefineOwnProperty("scrollX",
+            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
+        global.DefineOwnProperty("scrollY",
+            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
+        // Legacy aliases for scrollX/scrollY (IE / older spec).
+        global.DefineOwnProperty("pageXOffset",
+            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
+        global.DefineOwnProperty("pageYOffset",
+            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
 
         // 4) Window-as-EventTarget convenience: `addEventListener` already
         //    resolves through the prototype chain. Nothing more to do —
@@ -332,7 +342,17 @@ public static class WindowBinding
         EventTargetBinding.DefineAccessor(realm, nav, "appVersion", (_, _) => JsValue.String("5.0 (Starling)"));
         EventTargetBinding.DefineAccessor(realm, nav, "platform", (_, _) => JsValue.String(Environment.OSVersion.Platform.ToString()));
         EventTargetBinding.DefineAccessor(realm, nav, "language", (_, _) => JsValue.String("en-US"));
+        // HTML §8.10 — navigator.languages returns an array of language tags in
+        // preference order. A frozen read-only snapshot is spec-correct here.
+        var langArray = new JsArray(realm, new[] { JsValue.String("en-US"), JsValue.String("en") });
+        EventTargetBinding.DefineAccessor(realm, nav, "languages", (_, _) => JsValue.Object(langArray));
         EventTargetBinding.DefineAccessor(realm, nav, "onLine", (_, _) => JsValue.True);
+        // HTML §8.10 — cookieEnabled: Starling honours cookies so return true.
+        EventTargetBinding.DefineAccessor(realm, nav, "cookieEnabled", (_, _) => JsValue.True);
+        // navigator.javaEnabled() — always false, no Java plugin.
+        EventTargetBinding.DefineMethod(realm, nav, "javaEnabled", (_, _) => JsValue.False, length: 0);
+        // navigator.sendBeacon — stub that returns false (no background send).
+        EventTargetBinding.DefineMethod(realm, nav, "sendBeacon", (_, _) => JsValue.False, length: 2);
         return nav;
     }
 

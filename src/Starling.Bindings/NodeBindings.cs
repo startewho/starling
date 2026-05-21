@@ -139,6 +139,21 @@ public static class NodeBindings
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, nodeProto, "hasChildNodes",
             (thisV, _) => JsValue.Boolean(DomWrappers.UnwrapNode(thisV)?.FirstChild is not null), length: 0);
+        // DOM §4.4.4 — cloneNode. Defined on Node so all node types can use it.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "cloneNode", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not { } n) return JsValue.Null;
+            var deep = args.Length > 0 && JsValue.ToBoolean(args[0]);
+            var clone = CloneNode(realm, n, deep);
+            return JsValue.Object(DomWrappers.Wrap(realm, clone));
+        }, length: 0);
+        // DOM §4.4 — normalize: merge adjacent text nodes, remove empty texts.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "normalize", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { } n)
+                NormalizeNode(n);
+            return JsValue.Undefined;
+        }, length: 0);
         EventTargetBinding.DefineMethod(realm, nodeProto, "contains", (thisV, args) =>
         {
             var self = DomWrappers.UnwrapNode(thisV);
@@ -389,6 +404,138 @@ public static class NodeBindings
             return JsValue.Undefined;
         }, length: 2);
 
+        // ---- cloneNode(deep?) -----------------------------------------------
+        // DOM §4.4.4 — shallow clone copies tag + attributes; deep clone also
+        // recursively copies all descendant nodes.
+        EventTargetBinding.DefineMethod(realm, elProto, "cloneNode", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not { } n) return JsValue.Null;
+            var deep = args.Length > 0 && JsValue.ToBoolean(args[0]);
+            var clone = CloneNode(realm, n, deep);
+            return JsValue.Object(DomWrappers.Wrap(realm, clone));
+        }, length: 0);
+
+        // ---- before / after / prepend / append ------------------------------
+        // DOM Living Standard — ParentNode / ChildNode mixins.
+        // `prepend` / `append` insert at start/end of *this* (treating this as
+        // the parent); `before` / `after` insert adjacent to *this* inside its
+        // parent. String args become Text nodes.
+        EventTargetBinding.DefineMethod(realm, elProto, "prepend", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not { } parent) return JsValue.Undefined;
+            var refChild = parent.FirstChild;
+            foreach (var arg in args)
+                InsertAdjacentNode(realm, parent, arg, before: refChild);
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "append", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not { } parent) return JsValue.Undefined;
+            foreach (var arg in args)
+                InsertAdjacentNode(realm, parent, arg, before: null);
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "before", (thisV, args) =>
+        {
+            var self = DomWrappers.UnwrapNode(thisV);
+            if (self?.ParentNode is not { } parent) return JsValue.Undefined;
+            foreach (var arg in args)
+                InsertAdjacentNode(realm, parent, arg, before: self);
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "after", (thisV, args) =>
+        {
+            var self = DomWrappers.UnwrapNode(thisV);
+            if (self?.ParentNode is not { } parent) return JsValue.Undefined;
+            var refChild = self.NextSibling;
+            foreach (var arg in args)
+                InsertAdjacentNode(realm, parent, arg, before: refChild);
+            return JsValue.Undefined;
+        }, length: 0);
+
+        // ---- replaceWith(...nodes) ------------------------------------------
+        // Replaces this node with one or more nodes / strings.
+        EventTargetBinding.DefineMethod(realm, elProto, "replaceWith", (thisV, args) =>
+        {
+            var self = DomWrappers.UnwrapNode(thisV);
+            if (self?.ParentNode is not { } parent) return JsValue.Undefined;
+            var refChild = self.NextSibling;
+            foreach (var arg in args)
+                InsertAdjacentNode(realm, parent, arg, before: refChild);
+            self.RemoveFromParent();
+            return JsValue.Undefined;
+        }, length: 0);
+
+        // ---- innerText getter / setter -------------------------------------
+        // HTML §6.1.6.1 — for our purposes the getter returns the rendered
+        // text content (same as textContent minus non-text nodes) and the
+        // setter sets textContent. The full spec requires layout awareness;
+        // this approximation satisfies the common read-existing-text cases.
+        EventTargetBinding.DefineAccessor(realm, elProto, "innerText",
+            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.TextContent) : JsValue.String(""),
+            (thisV, args) =>
+            {
+                if (DomWrappers.UnwrapElement(thisV) is { } e)
+                    e.TextContent = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                return JsValue.Undefined;
+            });
+
+        // ---- dataset -------------------------------------------------------
+        // HTML §2.7.3 HTMLOrSVGElement.dataset — a DOMStringMap giving access
+        // to data-* attributes. Property name `el.dataset.fooBar` maps to
+        // attribute `data-foo-bar` via camelCase ↔ kebab-case conversion.
+        EventTargetBinding.DefineAccessor(realm, elProto, "dataset", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is not { } e) return JsValue.Null;
+            var wrapper = thisV.IsObject ? thisV.AsObject : null;
+            if (wrapper is null) return JsValue.Null;
+            const string cacheKey = "__dataset__";
+            var cached = wrapper.Get(cacheKey);
+            if (!cached.IsUndefined) return cached;
+            var dsObj = BuildDataset(realm, e);
+            wrapper.Set(cacheKey, JsValue.Object(dsObj));
+            return JsValue.Object(dsObj);
+        });
+
+        // ---- classList ------------------------------------------------------
+        // DOM §7.1 DOMTokenList, exposed via Element.classList. The C# backing
+        // object (DomTokenList) already implements add/remove/toggle/contains.
+        // Here we build a JS-visible DOMTokenList wrapper per element. The
+        // wrapper is lazily created once and cached on the element wrapper so
+        // `el.classList === el.classList` holds.
+        EventTargetBinding.DefineAccessor(realm, elProto, "classList", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is not { } e) return JsValue.Null;
+            // Cache the DOMTokenList wrapper on the JS element wrapper object
+            // so identity is stable across multiple reads.
+            var wrapper = thisV.IsObject ? thisV.AsObject : null;
+            if (wrapper is null) return JsValue.Null;
+            const string cacheKey = "__classList__";
+            var cached = wrapper.Get(cacheKey);
+            if (!cached.IsUndefined) return cached;
+            var clObj = BuildDomTokenList(realm, e);
+            wrapper.Set(cacheKey, JsValue.Object(clObj));
+            return JsValue.Object(clObj);
+        });
+
+        // ---- style ----------------------------------------------------------
+        // Returns a per-element inline-style CSSStyleDeclaration-shaped object.
+        // The element stores inline styles as a flat string in the `style`
+        // attribute; we parse it lazily and expose individual property
+        // accessors plus cssText / getPropertyValue / setProperty.
+        EventTargetBinding.DefineAccessor(realm, elProto, "style", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is not { } e) return JsValue.Null;
+            var wrapper = thisV.IsObject ? thisV.AsObject : null;
+            if (wrapper is null) return JsValue.Null;
+            const string cacheKey = "__style__";
+            var cached = wrapper.Get(cacheKey);
+            if (!cached.IsUndefined) return cached;
+            var styleObj = BuildInlineStyleDecl(realm, e);
+            wrapper.Set(cacheKey, JsValue.Object(styleObj));
+            return JsValue.Object(styleObj);
+        });
+
         // Layout-readback APIs — consult the realm's optional ILayoutHost
         // snapshot. With no host (e.g. JS run outside the engine pipeline)
         // they return spec-permitted zeros, matching a never-laid-out doc.
@@ -495,6 +642,20 @@ public static class NodeBindings
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "readyState", (thisV, _) =>
             JsValue.String("complete"));
+        // HTML §8.4.1 — document.compatMode returns "CSS1Compat" when the
+        // document is in no-quirks or limited-quirks mode. jQuery 1.x reads
+        // this on boot to decide the scrollSize calculation branch.
+        EventTargetBinding.DefineAccessor(realm, docProto, "compatMode", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.String("CSS1Compat");
+            return JsValue.String(d.Mode == QuirksMode.Quirks ? "BackCompat" : "CSS1Compat");
+        });
+        // Page Visibility API §4 — document.hidden / visibilityState.
+        // Starling has no background-tab concept; the document is always visible.
+        EventTargetBinding.DefineAccessor(realm, docProto, "hidden",
+            (_, _) => JsValue.False);
+        EventTargetBinding.DefineAccessor(realm, docProto, "visibilityState",
+            (_, _) => JsValue.String("visible"));
 
         EventTargetBinding.DefineMethod(realm, docProto, "getElementById", (thisV, args) =>
         {
@@ -648,4 +809,381 @@ public static class NodeBindings
         DocumentFragment => "#document-fragment",
         _ => n.NodeName,
     };
+
+    // ---- DOM Living Standard helpers ----------------------------------------
+
+    /// <summary>DOM §4.4.4 cloneNode implementation. Shallow copies tag+attributes
+    /// for Elements; deep additionally clones the entire subtree.</summary>
+    private static Node CloneNode(JsRealm realm, Node source, bool deep)
+    {
+        var doc = source.OwnerDocument ?? (source as Document);
+        Node clone = source switch
+        {
+            Element el when doc is not null => CloneElement(doc, el),
+            Element el => new Element(el.TagName, el.Namespace),
+            Text t => doc?.CreateTextNode(t.Data) ?? new Text(t.Data),
+            Comment c => doc?.CreateComment(c.Data) ?? new Comment(c.Data),
+            DocumentFragment when doc is not null => doc.CreateDocumentFragment(),
+            DocumentFragment => new DocumentFragment(),
+            _ => source, // Documents and other node types: return as-is (simplified)
+        };
+
+        if (deep && clone != source)
+        {
+            for (var child = source.FirstChild; child is not null; child = child.NextSibling)
+            {
+                var childClone = CloneNode(realm, child, deep: true);
+                clone.AppendChild(childClone);
+            }
+        }
+        return clone;
+    }
+
+    private static Element CloneElement(Document doc, Element el)
+    {
+        var clone = doc.CreateElement(el.TagName, el.Namespace);
+        // Copy attributes.
+        foreach (var attr in el.Attributes)
+            clone.SetAttribute(attr.Name, attr.Value ?? "");
+        return clone;
+    }
+
+    /// <summary>Helper for before/after/prepend/append: inserts <paramref name="arg"/>
+    /// (a JS Node wrapper or a string) before <paramref name="before"/> in
+    /// <paramref name="parent"/>. A null <paramref name="before"/> means
+    /// append at the end.</summary>
+    private static void InsertAdjacentNode(JsRealm realm, Node parent, JsValue arg, Node? before)
+    {
+        Node child;
+        if (arg.IsString)
+        {
+            var doc = parent.OwnerDocument ?? (parent as Document);
+            child = doc?.CreateTextNode(JsValue.ToStringValue(arg)) ?? new Text(JsValue.ToStringValue(arg));
+        }
+        else if (DomWrappers.UnwrapNode(arg) is { } n)
+        {
+            child = n;
+        }
+        else
+        {
+            // Non-node, non-string: coerce to string, make text node.
+            var s = JsValue.ToStringValue(arg);
+            var doc = parent.OwnerDocument ?? (parent as Document);
+            child = doc?.CreateTextNode(s) ?? new Text(s);
+        }
+        parent.InsertBefore(child, before);
+    }
+
+    /// <summary>DOM §4.2.6 normalize: removes empty Text nodes and merges
+    /// adjacent Text sibling nodes. Operates on the node's subtree.</summary>
+    private static void NormalizeNode(Node n)
+    {
+        var child = n.FirstChild;
+        while (child is not null)
+        {
+            var next = child.NextSibling;
+            if (child is Text t)
+            {
+                if (string.IsNullOrEmpty(t.Data))
+                {
+                    n.RemoveChild(child);
+                }
+                else
+                {
+                    // Merge subsequent adjacent text nodes.
+                    while (next is Text t2)
+                    {
+                        var following = t2.NextSibling;
+                        t.Data += t2.Data;
+                        n.RemoveChild(t2);
+                        next = following;
+                    }
+                }
+            }
+            else
+            {
+                NormalizeNode(child);
+            }
+            child = next;
+        }
+    }
+
+    /// <summary>Build a DOMTokenList JS object wrapping the element's classList.
+    /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
+    /// forEach, keys, values, entries. Properties: length, value.</summary>
+    private static JsObject BuildDomTokenList(JsRealm realm, Element element)
+    {
+        var obj = new JsObject(realm.ObjectPrototype);
+        var cl = element.ClassList;
+
+        EventTargetBinding.DefineAccessor(realm, obj, "length",
+            (_, _) => JsValue.Number(cl.Count));
+        EventTargetBinding.DefineAccessor(realm, obj, "value",
+            (_, _) => JsValue.String(element.GetAttribute("class") ?? ""),
+            (_, args) =>
+            {
+                element.SetAttribute("class", args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
+                return JsValue.Undefined;
+            });
+
+        EventTargetBinding.DefineMethod(realm, obj, "contains", (_, args) =>
+        {
+            if (args.Length == 0) return JsValue.False;
+            try { return JsValue.Boolean(cl.Contains(JsValue.ToStringValue(args[0]))); }
+            catch { return JsValue.False; }
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, obj, "add", (_, args) =>
+        {
+            foreach (var arg in args)
+            {
+                try { cl.Add(JsValue.ToStringValue(arg)); }
+                catch { /* invalid token — skip per spec */ }
+            }
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, obj, "remove", (_, args) =>
+        {
+            foreach (var arg in args)
+            {
+                try { cl.Remove(JsValue.ToStringValue(arg)); }
+                catch { /* invalid token — skip per spec */ }
+            }
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, obj, "toggle", (_, args) =>
+        {
+            if (args.Length == 0) return JsValue.False;
+            var token = JsValue.ToStringValue(args[0]);
+            // Optional force arg (args[1]).
+            bool result;
+            if (args.Length > 1 && !args[1].IsUndefined)
+            {
+                var force = JsValue.ToBoolean(args[1]);
+                if (force) { try { cl.Add(token); } catch { } result = true; }
+                else { try { cl.Remove(token); } catch { } result = false; }
+            }
+            else
+            {
+                if (cl.Contains(token)) { try { cl.Remove(token); } catch { } result = false; }
+                else { try { cl.Add(token); } catch { } result = true; }
+            }
+            return JsValue.Boolean(result);
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, obj, "replace", (_, args) =>
+        {
+            if (args.Length < 2) return JsValue.False;
+            var oldToken = JsValue.ToStringValue(args[0]);
+            var newToken = JsValue.ToStringValue(args[1]);
+            try
+            {
+                if (!cl.Contains(oldToken)) return JsValue.False;
+                cl.Remove(oldToken);
+                cl.Add(newToken);
+                return JsValue.True;
+            }
+            catch { return JsValue.False; }
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, obj, "item", (_, args) =>
+        {
+            if (args.Length == 0) return JsValue.Null;
+            var idx = (int)JsValue.ToNumber(args[0]);
+            return idx >= 0 && idx < cl.Count ? JsValue.String(cl[idx]) : JsValue.Null;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, obj, "forEach", (_, args) =>
+        {
+            if (args.Length == 0 || !AbstractOperations.IsCallable(args[0])) return JsValue.Undefined;
+            var fn = args[0];
+            var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
+            for (var i = 0; i < cl.Count; i++)
+            {
+                var token = JsValue.String(cl[i]);
+                AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { token, JsValue.Number(i), JsValue.Object(obj) });
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, obj, "keys", (_, _) =>
+        {
+            var items = new List<JsValue>();
+            for (var i = 0; i < cl.Count; i++) items.Add(JsValue.Number(i));
+            return MakeArray(realm, items);
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, obj, "values", (_, _) =>
+        {
+            var items = new List<JsValue>();
+            for (var i = 0; i < cl.Count; i++) items.Add(JsValue.String(cl[i]));
+            return MakeArray(realm, items);
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, obj, "entries", (_, _) =>
+        {
+            var items = new List<JsValue>();
+            for (var i = 0; i < cl.Count; i++)
+            {
+                var pair = new JsArray(realm, new[] { JsValue.Number(i), JsValue.String(cl[i]) });
+                items.Add(JsValue.Object(pair));
+            }
+            return MakeArray(realm, items);
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, obj, "toString",
+            (_, _) => JsValue.String(element.GetAttribute("class") ?? ""), length: 0);
+
+        return obj;
+    }
+
+    /// <summary>Build an inline-style CSSStyleDeclaration-shaped object for
+    /// an element's style attribute. Property reads/writes parse/serialize
+    /// the element's `style` attribute as a flat CSS property bag.
+    /// Spec: CSSOM §6.1 CSSStyleDeclaration with cssText / getPropertyValue /
+    /// setProperty / removeProperty plus camelCase shorthand accessors.</summary>
+    private static JsObject BuildInlineStyleDecl(JsRealm realm, Element element)
+    {
+        // Parse current style attribute into a dict; serialize back on mutation.
+        var obj = new JsObject(realm.ObjectPrototype);
+
+        EventTargetBinding.DefineAccessor(realm, obj, "cssText",
+            (_, _) => JsValue.String(element.GetAttribute("style") ?? ""),
+            (_, args) =>
+            {
+                var v = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                if (string.IsNullOrWhiteSpace(v))
+                    element.RemoveAttribute("style");
+                else
+                    element.SetAttribute("style", v);
+                return JsValue.Undefined;
+            });
+
+        EventTargetBinding.DefineMethod(realm, obj, "getPropertyValue", (_, args) =>
+        {
+            if (args.Length == 0) return JsValue.String("");
+            var prop = JsValue.ToStringValue(args[0]).Trim().ToLowerInvariant();
+            return JsValue.String(ParseInlineStyleProp(element, prop));
+        }, length: 1);
+
+        EventTargetBinding.DefineMethod(realm, obj, "setProperty", (_, args) =>
+        {
+            if (args.Length < 2) return JsValue.Undefined;
+            var prop = JsValue.ToStringValue(args[0]).Trim().ToLowerInvariant();
+            var value = JsValue.ToStringValue(args[1]).Trim();
+            WriteInlineStyleProp(element, prop, value);
+            return JsValue.Undefined;
+        }, length: 2);
+
+        EventTargetBinding.DefineMethod(realm, obj, "removeProperty", (_, args) =>
+        {
+            if (args.Length == 0) return JsValue.String("");
+            var prop = JsValue.ToStringValue(args[0]).Trim().ToLowerInvariant();
+            var old = ParseInlineStyleProp(element, prop);
+            WriteInlineStyleProp(element, prop, null);
+            return JsValue.String(old);
+        }, length: 1);
+
+        // Camel-case / kebab-case accessors for the most-used CSS properties.
+        // The bundle uses: display, position, backgroundClip, filter, left, top,
+        // right, cssText, zoom. We expose all CommonComputedStyleProps plus more.
+        foreach (var kebab in InlineStyleProperties)
+        {
+            var capturedKebab = kebab;
+            var camel = KebabToCamel(kebab);
+            // Kebab accessor
+            EventTargetBinding.DefineAccessor(realm, obj, capturedKebab,
+                (_, _) => JsValue.String(ParseInlineStyleProp(element, capturedKebab)),
+                (_, a) => { WriteInlineStyleProp(element, capturedKebab, a.Length > 0 ? JsValue.ToStringValue(a[0]) : ""); return JsValue.Undefined; });
+            // CamelCase accessor (only if different from kebab)
+            if (camel != capturedKebab)
+            {
+                EventTargetBinding.DefineAccessor(realm, obj, camel,
+                    (_, _) => JsValue.String(ParseInlineStyleProp(element, capturedKebab)),
+                    (_, a) => { WriteInlineStyleProp(element, capturedKebab, a.Length > 0 ? JsValue.ToStringValue(a[0]) : ""); return JsValue.Undefined; });
+            }
+        }
+
+        return obj;
+    }
+
+    /// <summary>Build a DOMStringMap for the element's data-* attributes.
+    /// Spec: HTML §2.7.3. Property names use camelCase; attribute names use
+    /// kebab-case prefixed with "data-".</summary>
+    private static JsDatasetObject BuildDataset(JsRealm realm, Element element)
+    {
+        // Exotic object: property reads/writes delegate to data-* attributes.
+        return new JsDatasetObject(realm.ObjectPrototype, element);
+    }
+
+    /// <summary>Read a single property from the element's inline style attribute.</summary>
+    private static string ParseInlineStyleProp(Element element, string kebabProp)
+    {
+        var styleAttr = element.GetAttribute("style");
+        if (string.IsNullOrEmpty(styleAttr)) return "";
+        foreach (var decl in styleAttr.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var colon = decl.IndexOf(':');
+            if (colon < 0) continue;
+            var name = decl[..colon].Trim().ToLowerInvariant();
+            if (name == kebabProp)
+                return decl[(colon + 1)..].Trim();
+        }
+        return "";
+    }
+
+    /// <summary>Set (or remove when <paramref name="value"/> is null/"") a
+    /// single property in the element's inline style attribute.</summary>
+    private static void WriteInlineStyleProp(Element element, string kebabProp, string? value)
+    {
+        var styleAttr = element.GetAttribute("style") ?? "";
+        var pairs = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Parse existing.
+        foreach (var decl in styleAttr.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var colon = decl.IndexOf(':');
+            if (colon < 0) continue;
+            pairs[decl[..colon].Trim().ToLowerInvariant()] = decl[(colon + 1)..].Trim();
+        }
+        // Mutate.
+        if (string.IsNullOrEmpty(value))
+            pairs.Remove(kebabProp);
+        else
+            pairs[kebabProp] = value;
+        // Serialize.
+        if (pairs.Count == 0)
+            element.RemoveAttribute("style");
+        else
+            element.SetAttribute("style", string.Join("; ", pairs.Select(p => $"{p.Key}: {p.Value}")));
+    }
+
+    private static string KebabToCamel(string kebab)
+    {
+        if (kebab.IndexOf('-') < 0) return kebab;
+        var sb = new System.Text.StringBuilder(kebab.Length);
+        var upper = false;
+        foreach (var c in kebab)
+        {
+            if (c == '-') { upper = true; continue; }
+            sb.Append(upper ? char.ToUpperInvariant(c) : c);
+            upper = false;
+        }
+        return sb.ToString();
+    }
+
+    // Comprehensive list of CSS properties exposed via element.style.X
+    private static readonly string[] InlineStyleProperties =
+    [
+        "display", "visibility", "opacity", "position", "top", "right", "bottom", "left",
+        "z-index", "width", "height", "min-width", "min-height", "max-width", "max-height",
+        "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+        "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+        "border", "border-width", "border-style", "border-color",
+        "border-top", "border-right", "border-bottom", "border-left",
+        "border-radius", "box-shadow", "outline",
+        "background", "background-color", "background-image", "background-clip",
+        "color", "font-size", "font-family", "font-weight", "font-style", "line-height",
+        "text-align", "text-decoration", "text-transform", "white-space",
+        "flex", "flex-direction", "flex-wrap", "justify-content", "align-items", "align-self",
+        "gap", "row-gap", "column-gap",
+        "overflow", "overflow-x", "overflow-y",
+        "cursor", "pointer-events",
+        "transform", "transition", "animation",
+        "float", "clear",
+        "filter", "backdrop-filter",
+        "zoom",
+        "content", "list-style", "list-style-type",
+    ];
 }

@@ -71,3 +71,107 @@ public static class DomWrappers
     /// not a wrapped node of the expected type.</summary>
     internal static T? UnwrapAs<T>(JsValue v) where T : class => EventTargetBinding.ResolveHost(v) as T;
 }
+
+/// <summary>
+/// Exotic JS object backing <c>element.dataset</c> (HTML §2.7.3 DOMStringMap).
+/// Property reads/writes delegate to the element's <c>data-*</c> attributes.
+/// Name mapping: camelCase property ↔ "data-" + kebab-case attribute name.
+/// </summary>
+internal sealed class JsDatasetObject : JsObject
+{
+    private readonly Element _element;
+
+    public JsDatasetObject(JsObject proto, Element element) : base(proto)
+    {
+        _element = element;
+    }
+
+    // camelCase → data-kebab-case
+    private static string PropToAttr(string name)
+    {
+        var sb = new System.Text.StringBuilder("data-");
+        foreach (var c in name)
+        {
+            if (char.IsUpper(c)) { sb.Append('-'); sb.Append(char.ToLowerInvariant(c)); }
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    // data-kebab-case → camelCase
+    private static string AttrToProp(string attr)
+    {
+        // Strip "data-" prefix
+        if (!attr.StartsWith("data-", StringComparison.OrdinalIgnoreCase)) return attr;
+        var kebab = attr[5..];
+        var sb = new System.Text.StringBuilder(kebab.Length);
+        var upper = false;
+        foreach (var c in kebab)
+        {
+            if (c == '-') { upper = true; continue; }
+            sb.Append(upper ? char.ToUpperInvariant(c) : c);
+            upper = false;
+        }
+        return sb.ToString();
+    }
+
+    public override JsValue Get(string name)
+    {
+        var attr = _element.GetAttribute(PropToAttr(name));
+        return attr is not null ? JsValue.String(attr) : base.Get(name);
+    }
+
+    public override void Set(string name, JsValue value)
+    {
+        _element.SetAttribute(PropToAttr(name), JsValue.ToStringValue(value));
+    }
+
+    public override bool DefineOwnProperty(string name, PropertyDescriptor desc)
+    {
+        if (desc.IsAccessor) return base.DefineOwnProperty(name, desc);
+        _element.SetAttribute(PropToAttr(name), JsValue.ToStringValue(desc.Value));
+        return true;
+    }
+
+    public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
+    {
+        var attr = _element.GetAttribute(PropToAttr(name));
+        if (attr is not null)
+            return PropertyDescriptor.Data(JsValue.String(attr), writable: true, enumerable: true, configurable: true);
+        return base.GetOwnPropertyDescriptor(name);
+    }
+
+    public override bool Has(string name)
+    {
+        if (_element.HasAttribute(PropToAttr(name))) return true;
+        return base.Has(name);
+    }
+
+    public override bool HasOwn(string name)
+    {
+        if (_element.HasAttribute(PropToAttr(name))) return true;
+        return base.HasOwn(name);
+    }
+
+    public override bool Delete(string name)
+    {
+        if (_element.HasAttribute(PropToAttr(name)))
+        {
+            _element.RemoveAttribute(PropToAttr(name));
+            return true;
+        }
+        return base.Delete(name);
+    }
+
+    public override IEnumerable<string> EnumerableKeys()
+    {
+        foreach (var attr in _element.Attributes)
+        {
+            if (attr.Name.StartsWith("data-", StringComparison.OrdinalIgnoreCase))
+                yield return AttrToProp(attr.Name);
+        }
+    }
+
+    public override IEnumerable<string> Keys =>
+        EnumerableKeys().Concat(base.Keys);
+}

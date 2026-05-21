@@ -121,6 +121,45 @@ public static class EventTargetBinding
         realm.EventConstructor = evCtor;
         realm.GlobalObject.DefineOwnProperty("Event",
             PropertyDescriptor.Data(JsValue.Object(evCtor), writable: true, enumerable: false, configurable: true));
+
+        // ----- CustomEvent (inherits from Event)
+        // DOM §2.2 CustomEvent — adds the `detail` property to Event. The host
+        // CustomEvent class stores detail as object? but JS consumers expect it
+        // as a JsValue. We stash the detail on the JsEventWrapper itself.
+        var customEvProto = new JsObject(evProto);
+        DefineAccessor(realm, customEvProto, "detail", (thisV, _) =>
+        {
+            if (thisV.IsObject && thisV.AsObject is JsCustomEventWrapper cw) return cw.Detail;
+            return JsValue.Null;
+        });
+
+        var customEvCtor = new JsNativeFunction(realm, "CustomEvent", 1, (_, args) =>
+        {
+            if (args.Length == 0 || args[0].IsUndefined)
+                throw new JsThrow(realm.NewTypeError("CustomEvent constructor requires a type"));
+            var type = JsValue.ToStringValue(args[0]);
+            var init = default(EventInit);
+            var detail = JsValue.Null;
+            if (args.Length > 1 && args[1].IsObject)
+            {
+                var initObj = args[1].AsObject;
+                init = new EventInit(
+                    Bubbles: JsValue.ToBoolean(initObj.Get("bubbles")),
+                    Cancelable: JsValue.ToBoolean(initObj.Get("cancelable")),
+                    Composed: JsValue.ToBoolean(initObj.Get("composed")));
+                var d = initObj.Get("detail");
+                if (!d.IsUndefined) detail = d;
+            }
+            var host = new CustomEvent(type, init);
+            CacheCustomEventDetail(host, detail);
+            return JsValue.Object(new JsCustomEventWrapper(customEvProto, host, detail));
+        }, isConstructor: true);
+        customEvCtor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(customEvProto), writable: false, enumerable: false, configurable: false));
+        customEvProto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(customEvCtor), writable: true, enumerable: false, configurable: true));
+        realm.GlobalObject.DefineOwnProperty("CustomEvent",
+            PropertyDescriptor.Data(JsValue.Object(customEvCtor), writable: true, enumerable: false, configurable: true));
     }
 
     /// <summary>Associate an existing host <see cref="EventTarget"/> with a JS
@@ -195,6 +234,9 @@ public static class EventTargetBinding
         return JsValue.Boolean(host.DispatchEvent(wrapper.HostEvent));
     }
 
+    // ---- DispatchEvent overload helper (accepts CustomEvent wrapper too)
+    // JsCustomEventWrapper inherits JsEventWrapper so the cast above covers it.
+
     // ---- Helpers
 
     /// <summary>Pump a JS listener call. Synthesizes a VM if none is active so
@@ -227,7 +269,47 @@ public static class EventTargetBinding
             "Cannot synthesize a VM: realm has no associated JsRuntime. Was WindowBinding.Install ever called?");
 
     private static JsEventWrapper WrapHostEvent(JsRealm realm, Event ev)
-        => new(realm.EventPrototype ?? realm.ObjectPrototype, ev);
+    {
+        // When the host event is a CustomEvent that originated from JS (and
+        // was therefore a JsCustomEventWrapper), we need to preserve the JS
+        // detail value. The listener wrapper for the JS-created custom event
+        // IS itself the JsCustomEventWrapper stored in the runtime.  We walk
+        // the realm's custom event registry to find it, but the simplest
+        // approach is: wrap a fresh JsCustomEventWrapper when the host event
+        // is a CustomEvent so the listener sees `e.detail`.
+        if (ev is CustomEvent ce)
+        {
+            var ceProto = GetCustomEventProto(realm);
+            // Try to locate the JS detail value that was stored when the event
+            // was constructed. We stash it in CustomEventDetailCache.
+            var detail = CustomEventDetailCache.TryGetValue(ce, out var box) ? box.Value : JsValue.Null;
+            return new JsCustomEventWrapper(ceProto ?? realm.EventPrototype ?? realm.ObjectPrototype, ce, detail);
+        }
+        return new JsEventWrapper(realm.EventPrototype ?? realm.ObjectPrototype, ev);
+    }
+
+    // Cache: CustomEvent → JsValue detail. Populated when JS constructs new CustomEvent(...).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CustomEvent, JsValueBox>
+        CustomEventDetailCache = new();
+
+    internal static void CacheCustomEventDetail(CustomEvent ev, JsValue detail)
+    {
+        CustomEventDetailCache.GetValue(ev, _ => new JsValueBox(detail));
+    }
+
+    private static JsObject? GetCustomEventProto(JsRealm realm)
+    {
+        // The CustomEvent prototype is stored as the prototype of any
+        // JsCustomEventWrapper in this realm — we retrieve it via the
+        // global "CustomEvent" constructor's .prototype property.
+        var customEvCtor = realm.GlobalObject.Get("CustomEvent");
+        if (customEvCtor.IsObject)
+        {
+            var proto = customEvCtor.AsObject.Get("prototype");
+            if (proto.IsObject) return proto.AsObject;
+        }
+        return null;
+    }
 
     internal static bool TryGetHostEvent(JsValue v, out Event ev)
     {
@@ -276,10 +358,19 @@ public static class EventTargetBinding
 
 /// <summary>JS wrapper for a host <see cref="Event"/>. Identity is the spec
 /// [[HostEvent]] slot — accessor methods read directly off it.</summary>
-internal sealed class JsEventWrapper : JsObject
+internal class JsEventWrapper : JsObject
 {
     public Event HostEvent { get; }
     public JsEventWrapper(JsObject proto, Event hostEvent) : base(proto) { HostEvent = hostEvent; }
+}
+
+/// <summary>Wrapper for <c>CustomEvent</c> that carries a JS-value
+/// <c>detail</c> slot alongside the host event object.</summary>
+internal sealed class JsCustomEventWrapper : JsEventWrapper
+{
+    public JsValue Detail { get; }
+    public JsCustomEventWrapper(JsObject proto, CustomEvent hostEvent, JsValue detail)
+        : base(proto, hostEvent) { Detail = detail; }
 }
 
 /// <summary>Per-target listener bookkeeping. Listeners are mapped from the
@@ -306,3 +397,12 @@ internal sealed class ListenerRegistry
 /// <summary>A bare host <see cref="EventTarget"/> used when JS constructs
 /// <c>new EventTarget()</c> directly (i.e. not attached to a DOM node).</summary>
 internal sealed class InMemoryEventTarget : EventTarget { }
+
+/// <summary>Boxing wrapper so <see cref="JsValue"/> (a struct) can be stored
+/// in a <see cref="System.Runtime.CompilerServices.ConditionalWeakTable{TKey,TValue}"/>
+/// (which requires reference-type values).</summary>
+internal sealed class JsValueBox
+{
+    public JsValue Value { get; }
+    public JsValueBox(JsValue v) { Value = v; }
+}
