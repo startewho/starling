@@ -21,6 +21,17 @@ public class MathTests
     }
 
     [TestMethod]
+    public void Math_random_is_a_function_in_unit_interval()
+    {
+        Eval("typeof Math.random;").AsString.Should().Be("function");
+        for (var i = 0; i < 50; i++)
+        {
+            var r = Eval("Math.random();").AsNumber;
+            r.Should().BeGreaterThanOrEqualTo(0.0).And.BeLessThan(1.0);
+        }
+    }
+
+    [TestMethod]
     public void Math_E_matches_system_e()
     {
         Eval("Math.E;").AsNumber.Should().Be(System.Math.E);
