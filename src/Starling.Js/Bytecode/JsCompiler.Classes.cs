@@ -176,6 +176,11 @@ public sealed partial class JsCompiler
             bodyBlock = userCtor.Body;
         }
 
+        // wp:M3-04c2 — run the same mutated-capture → Cell promotion the plain
+        // function-body pipeline runs (JsCompiler.EmitFunctionBody). Capture
+        // analysis must precede BindFunctionParameters so a captured + mutated
+        // constructor parameter is promoted to a Cell (PromoteParamCell).
+        sub.RunCaptureAnalysisForFunction(parameters, bodyBlock.Body);
         sub.BindFunctionParameters(parameters);
 
         if (synthesizedDerived)
@@ -199,6 +204,12 @@ public sealed partial class JsCompiler
                 sub._b.Emit(Opcode.RunFieldInits);
             }
 
+            // wp:M3-04c2 — pre-allocate Cell slots for captured var/let/const
+            // and hoist nested function declarations, exactly like
+            // EmitFunctionBody, so closures formed in the constructor body
+            // capture a shared cell instead of a raw value.
+            sub.PreallocateCapturedVarBindings(bodyBlock.Body);
+            sub.HoistFunctionDeclarations(bodyBlock.Body);
             foreach (var s in bodyBlock.Body) sub.EmitStatement(s);
         }
 
@@ -222,7 +233,14 @@ public sealed partial class JsCompiler
         var sub = new JsCompiler(parent: this);
         sub._privateScopes.Push(_privateScopes.Peek());
         sub._classMethodDepth = 1;
+        // wp:M3-04c2 — method/accessor bodies use the same mutated-capture →
+        // Cell pipeline as plain functions (JsCompiler.EmitFunctionBody).
+        // Capture analysis must precede BindFunctionParameters so a captured +
+        // mutated method parameter is promoted to a Cell (PromoteParamCell).
+        sub.RunCaptureAnalysisForFunction(md.Params, md.Body.Body);
         sub.BindFunctionParameters(md.Params);
+        sub.PreallocateCapturedVarBindings(md.Body.Body);
+        sub.HoistFunctionDeclarations(md.Body.Body);
         foreach (var s in md.Body.Body) sub.EmitStatement(s);
         sub._b.Emit(Opcode.ReturnUndefined);
         sub._privateScopes.Pop();
@@ -303,6 +321,14 @@ public sealed partial class JsCompiler
         var sub = new JsCompiler(parent: this);
         sub._privateScopes.Push(_privateScopes.Peek());
         sub._classMethodDepth = 1;
+        // wp:M3-04c2 — the field-init thunk is a single expression, but run the
+        // same capture analysis the function-body pipeline runs so any nested
+        // closure inside the initializer that mutates a captured binding is
+        // treated identically to plain functions. (The thunk has no params /
+        // statement-level declarations, so no preallocate/hoist is required.)
+        sub.RunCaptureAnalysisForFunction(
+            Array.Empty<Expression>(),
+            new[] { (Statement)new ExpressionStatement(field.Initializer, field.Initializer.Start, field.Initializer.End) });
         if (field.Computed)
         {
             sub.EmitExpression(field.Initializer);
@@ -334,6 +360,12 @@ public sealed partial class JsCompiler
         var sub = new JsCompiler(parent: this);
         sub._privateScopes.Push(_privateScopes.Peek());
         sub._classMethodDepth = 1;
+        // wp:M3-04c2 — static-block bodies run their own statement list and so
+        // need the same mutated-capture → Cell promotion + function hoisting as
+        // plain function bodies.
+        sub.RunCaptureAnalysisForFunction(Array.Empty<Expression>(), block.Body);
+        sub.PreallocateCapturedVarBindings(block.Body);
+        sub.HoistFunctionDeclarations(block.Body);
         foreach (var s in block.Body) sub.EmitStatement(s);
         sub._b.Emit(Opcode.ReturnUndefined);
         sub._privateScopes.Pop();
