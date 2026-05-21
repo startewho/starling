@@ -465,6 +465,40 @@ public sealed class StyleEngine
         ArgumentNullException.ThrowIfNull(root);
     }
 
+    /// <summary>
+    /// Compute the cascade for a pseudo-element (<c>::before</c>/<c>::after</c>/
+    /// <c>::marker</c>) of <paramref name="element"/>. Only rules whose selector
+    /// targets the same pseudo-element contribute; inherited properties are
+    /// resolved from the originating element's own <paramref name="elementStyle"/>
+    /// (CSS Pseudo 4 §3.1 — a pseudo-element inherits from its originating
+    /// element, not from the element's parent). Returns null when no rule sets a
+    /// renderable <c>content</c> (so callers can skip box synthesis cheaply for
+    /// the overwhelmingly common no-pseudo case).
+    /// </summary>
+    public ComputedStyle? ComputePseudoElement(
+        Element element,
+        PseudoElement pseudo,
+        ComputedStyle elementStyle,
+        SelectorMatchContext? baseContext = null)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentNullException.ThrowIfNull(elementStyle);
+
+        var b = baseContext ?? SelectorMatchContext.Default;
+        var pseudoContext = new SelectorMatchContext
+        {
+            HoveredElement = b.HoveredElement,
+            ActiveElement = b.ActiveElement,
+            FocusedElement = b.FocusedElement,
+            TargetElement = b.TargetElement,
+            ScopeElement = b.ScopeElement,
+            DocumentUrl = b.DocumentUrl,
+            VisitedHrefs = b.VisitedHrefs,
+            PseudoElement = pseudo,
+        };
+        return Compute(element, parentStyle: elementStyle, context: pseudoContext);
+    }
+
     private ComputedStyle Compute(Element element, ComputedStyle? parentStyle, SelectorMatchContext? context = null)
     {
         var allCandidates = new Dictionary<PropertyId, List<CascadedValue>>();

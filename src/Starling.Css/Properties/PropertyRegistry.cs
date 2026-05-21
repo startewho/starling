@@ -41,6 +41,13 @@ public static class PropertyRegistry
         PropertyId.PointerEvents,
         PropertyId.CaretColor,
         PropertyId.ColorScheme,
+        // CSS Lists 3 §2: list-style-* are inherited so a marker type set on
+        // the list container applies to every list item descendant. `quotes`
+        // is inherited per CSS Content 3 §5.
+        PropertyId.ListStyleType,
+        PropertyId.ListStylePosition,
+        PropertyId.ListStyleImage,
+        PropertyId.Quotes,
     ];
 
     public static IReadOnlyList<PropertyId> All { get; } = Enum.GetValues<PropertyId>();
@@ -230,6 +237,15 @@ public static class PropertyRegistry
             PropertyId.AnimationFillMode => new CssKeyword("none"),
             PropertyId.AnimationPlayState => new CssKeyword("running"),
             PropertyId.AnimationComposition => new CssKeyword("replace"),
+
+            // Generated content + lists
+            // CSS Content 3 §2.1 — `content` initial is `normal` (computes to
+            // `none` on ::before/::after, to the element's contents otherwise).
+            PropertyId.Content => new CssKeyword("normal"),
+            PropertyId.ListStyleType => new CssKeyword("disc"),
+            PropertyId.ListStylePosition => new CssKeyword("outside"),
+            PropertyId.ListStyleImage => new CssKeyword("none"),
+            PropertyId.Quotes => new CssKeyword("auto"),
 
             _ => new CssKeyword("initial"),
         };
@@ -520,6 +536,12 @@ public static class PropertyRegistry
             // ---- Text decoration shorthand ----
             case "text-decoration":
                 foreach (var item in ExpandTextDecoration(values, important))
+                    yield return item;
+                break;
+
+            // ---- List shorthand ----
+            case "list-style":
+                foreach (var item in ExpandListStyle(values, important))
                     yield return item;
                 break;
 
@@ -834,6 +856,59 @@ public static class PropertyRegistry
         }
     }
 
+    private static IEnumerable<PropertyDeclaration> ExpandListStyle(List<CssValue> values, bool important)
+    {
+        // CSS Lists 3 §2.5 — list-style: <list-style-type> || <list-style-position> || <list-style-image>
+        // `none` is ambiguous (it can satisfy list-style-type OR list-style-image);
+        // per spec the first `none` sets list-style-type and a second sets the image,
+        // but the common case is a single `none` meaning "no marker", which we map to
+        // the type. Author CSS like `list-style: square inside` sets two longhands;
+        // an unspecified longhand is reset to its initial value.
+        CssValue? type = null;
+        CssValue? position = null;
+        CssValue? image = null;
+        var sawNone = false;
+
+        foreach (var v in values)
+        {
+            if (v is CssUrl || v is CssFunctionValue { Name: "linear-gradient" or "radial-gradient" or "conic-gradient" or "image-set" or "url" })
+            {
+                image ??= v;
+            }
+            else if (v is CssKeyword k)
+            {
+                if (k.Name is "inside" or "outside")
+                    position ??= v;
+                else if (k.Name == "none")
+                {
+                    // First none → type; a second none → image (per §2.5).
+                    if (!sawNone) { type ??= new CssKeyword("none"); sawNone = true; }
+                    else image ??= new CssKeyword("none");
+                }
+                else if (IsListStyleTypeKeyword(k.Name))
+                    type ??= v;
+                else
+                    type ??= v; // custom @counter-style names etc.
+            }
+            else if (v is CssString)
+            {
+                // A <string> in list-style is a custom marker counter symbol;
+                // route it to list-style-type so the marker can render it.
+                type ??= v;
+            }
+        }
+
+        yield return new PropertyDeclaration(PropertyId.ListStyleType, type ?? new CssKeyword("disc"), important);
+        yield return new PropertyDeclaration(PropertyId.ListStylePosition, position ?? new CssKeyword("outside"), important);
+        yield return new PropertyDeclaration(PropertyId.ListStyleImage, image ?? new CssKeyword("none"), important);
+    }
+
+    private static bool IsListStyleTypeKeyword(string name)
+        => name is "disc" or "circle" or "square" or "decimal" or "decimal-leading-zero"
+            or "lower-alpha" or "upper-alpha" or "lower-latin" or "upper-latin"
+            or "lower-roman" or "upper-roman" or "lower-greek"
+            or "armenian" or "georgian" or "none";
+
     private static IEnumerable<PropertyDeclaration> ExpandTransition(List<CssValue> values, bool important)
     {
         // Simplified single-layer transition shorthand.
@@ -1053,6 +1128,7 @@ public static class PropertyRegistry
         ["scroll-padding"] = [PropertyId.ScrollPaddingTop, PropertyId.ScrollPaddingRight, PropertyId.ScrollPaddingBottom, PropertyId.ScrollPaddingLeft],
         ["overscroll-behavior"] = [PropertyId.OverscrollBehaviorX, PropertyId.OverscrollBehaviorY],
         ["text-decoration"] = [PropertyId.TextDecorationLine, PropertyId.TextDecorationStyle, PropertyId.TextDecorationColor, PropertyId.TextDecorationThickness],
+        ["list-style"] = [PropertyId.ListStyleType, PropertyId.ListStylePosition, PropertyId.ListStyleImage],
         ["transition"] = [PropertyId.TransitionProperty, PropertyId.TransitionDuration, PropertyId.TransitionTimingFunction, PropertyId.TransitionDelay],
         ["animation"] =
         [
