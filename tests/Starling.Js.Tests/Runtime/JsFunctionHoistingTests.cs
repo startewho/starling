@@ -49,6 +49,22 @@ public class JsFunctionHoistingTests
                     return req(0);
                   })([function(module,exports,req){exports.v=42;}]).v").AsNumber.Should().Be(42);
 
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-functiondeclarationinstantiation", "10.2.11 FunctionDeclarationInstantiation")]
+    public void Sibling_function_can_call_a_later_defined_sibling_inside_a_function_scope()
+        // Forward reference between sibling function declarations: `a` calls `b`
+        // which is declared AFTER it. All sibling names must be hoisted before
+        // any body is compiled, else `b` compiles to an (undefined) global.
+        // (Real-world: Google Analytics' gtag.js does exactly this.)
+        => Eval("(function(){ function a(){ return b(); } function b(){ return 9; } return a(); })()")
+            .AsNumber.Should().Be(9);
+
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-functiondeclarationinstantiation", "10.2.11 FunctionDeclarationInstantiation")]
+    public void Multiple_siblings_forward_reference_a_last_defined_sibling()
+        => Eval("(function(){ function m(){return n();} function o(){return n();} function n(){return 5;} return m()+o(); })()")
+            .AsNumber.Should().Be(10);
+
     private static JsValue Eval(string src)
     {
         var program = new JsParser(src).ParseProgram();

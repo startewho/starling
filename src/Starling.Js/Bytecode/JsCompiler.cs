@@ -217,19 +217,24 @@ public sealed partial class JsCompiler
         // §10.2.11 host-defined global object behavior). Inside a function,
         // they bind a fresh local slot in the function's variable scope.
         var isScriptTop = _parent is null;
+
+        // PASS 1 — register a slot / binding for EVERY function declaration in
+        // this scope BEFORE compiling any body. Without this, a body that
+        // forward-references a LATER-defined sibling (e.g. `function a(){return
+        // b();} function b(){…}`) compiles that reference to a (undefined)
+        // global instead of capturing the sibling's slot as an upvalue. (At
+        // script top, declarations are late-bound globals so order is moot, but
+        // registering uniformly is harmless.)
+        var hoisted = new List<(FunctionDeclaration Fd, int? Slot)>();
         foreach (var s in body)
         {
             if (s is not FunctionDeclaration fd) continue;
-            // Reserve the slot / register the binding BEFORE compiling the
-            // body, so the body can resolve `fd.Name` to itself (recursion)
-            // and so nested function bodies that capture the name go through
-            // the same upvalue.
             int? slot = null;
             if (!isScriptTop)
             {
-                if (_scopes[^1].ContainsKey(fd.Name.Name))
+                if (_scopes[^1].TryGetValue(fd.Name.Name, out var existing))
                 {
-                    slot = _scopes[^1][fd.Name.Name];
+                    slot = existing;
                 }
                 else
                 {
@@ -240,19 +245,24 @@ public sealed partial class JsCompiler
                     slot = fresh;
                 }
             }
-            // Compile the body in a fresh sub-compiler parented to this
-            // one so the body can resolve free identifiers as upvalues
-            // captured from this scope.
+            hoisted.Add((fd, slot));
+        }
+
+        // PASS 2 — compile each body + construct the closure + store. All
+        // sibling names are registered now, so cross-references (forward and
+        // backward) resolve to the right slot/upvalue.
+        foreach (var (fd, slot) in hoisted)
+        {
+            // Compile the body in a fresh sub-compiler parented to this one so
+            // the body can resolve free identifiers as upvalues captured here.
             var sub = new JsCompiler(parent: this);
             sub.RunCaptureAnalysisForFunction(fd.Params, fd.Body.Body);
             sub.EmitFunctionBody(fd);
             var chunk = sub._b.Build(fd.Name.Name);
 
-            // Emit either LoadFunction (no captures) or push upvalues +
-            // MakeClosure. Either way, leave the function value on the
-            // stack, then store under the function's name as a global so
-            // recursive references inside the body resolve to the same
-            // closure instance.
+            // Push the function value (LoadFunction or upvalues + MakeClosure),
+            // then store under the function's name (global at script top, else
+            // the reserved local slot).
             EmitFunctionConstructor(fd.Name.Name, chunk,
                 CountSimpleParams(fd.Params), sub._upvalues,
                 ResolveFunctionKind(fd.Async, fd.Generator));
@@ -265,8 +275,6 @@ public sealed partial class JsCompiler
             {
                 EmitStoreLocalSlot(slot!.Value);
             }
-            // StoreGlobal / StoreLocal-flavored ops do not re-push, so the
-            // stack is balanced after the hoist.
         }
     }
 
