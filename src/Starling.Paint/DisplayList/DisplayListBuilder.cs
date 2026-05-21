@@ -256,8 +256,25 @@ public sealed class DisplayListBuilder
     /// </summary>
     private static void EmitBackgroundImage(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style, IImageResolver? images)
     {
+        var bgImage = style.Get(PropertyId.BackgroundImage);
+
+        // CSS Images 3 §3 — `background-image: <gradient>`. Gradients paint
+        // directly from the typed value and don't need an image resolver; map
+        // the recognised gradient functions to a FillGradient over the box.
+        // Anything that doesn't parse (e.g. conic, malformed syntax) fails
+        // soft, matching the unresolved-image path below.
+        if (bgImage is CssFunctionValue gradientFn
+            && CssGradientParser.TryParseFunction(gradientFn, out var gradient)
+            && gradient.IsPaintable
+            && box.Frame.Width > 0 && box.Frame.Height > 0)
+        {
+            var gbounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+            Emit(list, new FillGradient(gbounds, gradient), gbounds, current, cull);
+            return;
+        }
+
         if (images is null) return;
-        var url = style.Get(PropertyId.BackgroundImage) switch
+        var url = bgImage switch
         {
             CssUrl u => u.Value,
             _ => null,
