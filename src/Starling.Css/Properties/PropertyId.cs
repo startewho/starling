@@ -248,4 +248,11 @@ public enum PropertyId
     AnimationFillMode,
     AnimationPlayState,
     AnimationComposition,
+
+    // Generated content + lists (CSS Content 3, CSS Lists 3)
+    Content,
+    ListStyleType,
+    ListStylePosition,
+    ListStyleImage,
+    Quotes,
 }
