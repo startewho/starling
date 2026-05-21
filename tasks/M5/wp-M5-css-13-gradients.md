@@ -1,10 +1,10 @@
 ---
 id: wp:M5-css-13-gradients
 milestone: M5
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody-gradients"
 claimed_at: "2026-05-20T00:00:00Z"
-completed_at: ""
+completed_at: "2026-05-20T00:00:00Z"
 branch: "worktree"
 depends_on:
   - wp:M5-skia-removal
@@ -80,3 +80,33 @@ rasterize it with ImageSharp brushes.
 ## Handoff log
 
 - 2026-05-20 — created + claimed by agent-claude-cody-gradients (orchestrated batch).
+- 2026-05-20 — **complete** (agent-claude-cody-gradients).
+  - **Parse**: new `src/Starling.Css/Values/CssGradient.cs` (typed `CssGradient`
+    record + `CssGradientLine`/`CssColorStop`/shape/size/position enums) and
+    `src/Starling.Css/Values/CssGradientParser.cs` (fail-soft parser over
+    `CssFunctionValue`, mirroring `CssTransformParser`). Handles
+    `linear-gradient`/`radial-gradient` + `repeating-*`, `<angle>` and
+    `to <side-or-corner>` lines, radial `circle|ellipse`/size/`at <position>`,
+    explicit stop positions (length/percentage), and the two-position stop
+    shorthand. `conic-gradient` parses to a `Conic` kind but `IsPaintable` is
+    false.
+  - **Paint**: appended `FillGradient(Rect, CssGradient)` to `DisplayItem.cs`;
+    added a gradient arm at the top of `EmitBackgroundImage` (gradients paint
+    without an image resolver); added a `case FillGradient` adjacent to
+    `case DrawImage` in `ImageSharpBackend.cs` mapping stops →
+    `LinearGradientBrush`/`RadialGradientBrush` (CSS angle → endpoints, radial
+    size → radius, even stop distribution + monotonic clamping).
+  - **Tests** (all green):
+    - `tests/Starling.Css.Tests/CssGradientParserTests.cs` — 14 parse cases.
+    - `tests/Starling.Css.Spec.Tests/CssImages3/` (`_spec.md` +
+      `GradientParseTests.cs`) — 5 `[Spec("css-images-3", …)] [SpecFact]`.
+    - `tests/Starling.Paint.Tests/GradientPaintTests.cs` — 7 pixel-probe +
+      end-to-end tests incl. the 90deg red→blue left/right probe.
+  - **Deferred**: `conic-gradient` — ImageSharp.Drawing 3 has no conic/sweep
+    brush (only Linear/Radial/PathGradient), documented in `CssImages3/_spec.md`
+    and `CssGradient.cs`. Explicit radial radius lengths (`100px 50px`) are
+    recognised as a prelude but not yet honored for sizing (falls back to
+    farthest-corner ellipse).
+  - Build + Css.Tests (519) + Css.Spec.Tests (58) + Paint.Tests (145) +
+    Engine.Tests (122) green. Worktree rebased onto current main (40d1f02)
+    since it had branched from a stale base.
