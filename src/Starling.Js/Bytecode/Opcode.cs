@@ -180,6 +180,18 @@ public enum Opcode : byte
     /// (per spec, <c>super.name = v</c> sets the property on the receiver,
     /// not the prototype). Pushes the assigned value back.</summary>
     StoreSuperProperty,
+    /// <summary>[no operand] — pop key; push the property looked up on
+    /// <c>[[HomeObject]].[[Prototype]]</c> with the current frame's
+    /// <c>this</c> as the receiver for accessor getters. Lowering for
+    /// <c>super[expr]</c> reads (wp:M3-04h). The key is run through
+    /// <c>ToPropertyKey</c> at runtime (supports string and Symbol keys).
+    /// Stack: [..., key] → [..., value].</summary>
+    LoadSuperComputed,
+    /// <summary>[no operand] — pop value, pop key; write to
+    /// <c>this[ToPropertyKey(key)]</c> (per spec, <c>super[expr] = v</c> sets
+    /// the property on the receiver <c>this</c>, not the prototype) — wp:M3-04h.
+    /// Pushes the assigned value back. Stack: [..., key, value] → [..., value].</summary>
+    StoreSuperComputed,
     /// <summary>[u16 mangledNameIdx] — pop receiver, push the value of the
     /// private slot. Throws TypeError if the receiver lacks the slot
     /// (handled in VM). The mangled name is a class-unique constant pool

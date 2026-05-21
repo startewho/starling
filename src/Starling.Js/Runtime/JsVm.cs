@@ -1204,6 +1204,39 @@ public sealed class JsVm
                     Push(value);
                     break;
                 }
+                case Opcode.LoadSuperComputed:
+                {
+                    // wp:M3-04h — super[expr] read. Like LoadSuperProperty but the
+                    // key is taken from the stack and coerced via ToPropertyKey
+                    // (§13.3.7.2 GetSuperBase + §13.3.4 MakeSuperPropertyReference).
+                    var key = Pop();
+                    if (currentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' is only allowed inside class methods"));
+                    var propertyKey = AbstractOperations.ToPropertyKey(this, key);
+                    var superProto = currentFunction.HomeObject.Prototype;
+                    if (superProto is null)
+                    {
+                        Push(JsValue.Undefined);
+                        break;
+                    }
+                    Push(AbstractOperations.Get(this, superProto, propertyKey, thisV));
+                    break;
+                }
+                case Opcode.StoreSuperComputed:
+                {
+                    // wp:M3-04h — super[expr] = v. Mirrors StoreSuperProperty:
+                    // per spec the write targets the receiver `this`, not the
+                    // prototype. Key is coerced via ToPropertyKey.
+                    var value = Pop();
+                    var key = Pop();
+                    if (currentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' is only allowed inside class methods"));
+                    var propertyKey = AbstractOperations.ToPropertyKey(this, key);
+                    if (thisV.IsObject)
+                        AbstractOperations.Set(this, thisV.AsObject, propertyKey, value);
+                    Push(value);
+                    break;
+                }
                 case Opcode.PrivateGet:
                 {
                     var idx = ReadU16();
