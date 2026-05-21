@@ -285,6 +285,27 @@ public sealed record CssFunctionValue(string Name, IReadOnlyList<CssValue> Argum
 
 public sealed record CssValueList(IReadOnlyList<CssValue> Values) : CssValue;
 
+/// <summary>
+/// A single <c>text-shadow</c> layer (CSS Text Decoration 3 §5):
+/// <c>&lt;color&gt;? &amp;&amp; [&lt;length&gt;{2,3}]</c> — an X/Y offset, an optional
+/// non-negative blur radius (defaults to 0), and an optional color (defaults to
+/// <c>currentColor</c>, signalled by <see cref="Color"/> being <c>null</c>).
+/// Offsets and blur are stored in CSS px (resolved at parse time when authored
+/// in absolute units; em/percent are left at face value for the painter to
+/// approximate).
+/// </summary>
+public sealed record CssTextShadowLayer(double OffsetX, double OffsetY, double Blur, CssColor? Color);
+
+/// <summary>
+/// A typed <c>text-shadow</c> value — an ordered list of shadow layers painted
+/// back-to-front (first layer on top), per CSS Text Decoration 3 §5. The keyword
+/// <c>none</c> parses to an empty layer list.
+/// </summary>
+public sealed record CssTextShadow(IReadOnlyList<CssTextShadowLayer> Layers) : CssValue
+{
+    public static CssTextShadow None { get; } = new([]);
+}
+
 public sealed record CssVarReference(string Name, CssValue? Fallback) : CssValue;
 
 /// <summary>

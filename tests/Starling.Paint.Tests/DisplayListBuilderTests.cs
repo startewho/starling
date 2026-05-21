@@ -101,12 +101,116 @@ public sealed class DisplayListBuilderTests
     }
 
     [TestMethod]
-    public void Underlined_link_emits_text_and_underline_fill()
+    public void Underlined_link_emits_text_and_underline_decoration()
     {
+        // UA stylesheet: a { color: blue; text-decoration: underline; }. The
+        // underline is now a typed decoration primitive (was a FillRect hack),
+        // colored with the link's currentColor (blue).
         var dl = BuildList("<body><a href=\"/next\">go next</a></body>", new Size(400, 300));
 
         dl.Items.OfType<DrawText>().Should().Contain(d => d.Text.Contains("go", StringComparison.Ordinal));
-        dl.Items.OfType<FillRect>().Should().Contain(r =>
-            r.Color.B == 255 && r.Color.R == 0 && r.Color.G == 0 && r.Bounds.Height >= 1 && r.Bounds.Height <= 2);
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            d.Lines.HasFlag(TextDecorationLines.Underline)
+            && d.Color.B == 255 && d.Color.R == 0 && d.Color.G == 0
+            && d.Width > 0);
+    }
+
+    [TestMethod]
+    public void Underline_decoration_no_longer_emitted_as_fill_rect()
+    {
+        // Regression: the old FillRect underline hack is gone. No 1–2px tall
+        // blue fill should be emitted for an underlined link.
+        var dl = BuildList("<body><a href=\"/next\">go next</a></body>", new Size(400, 300));
+
+        dl.Items.OfType<FillRect>().Should().NotContain(r =>
+            r.Color.B == 255 && r.Color.R == 0 && r.Color.G == 0 && r.Bounds.Height <= 2);
+    }
+
+    [TestMethod]
+    public void Line_through_emits_line_through_decoration()
+    {
+        var dl = BuildList(
+            "<body><span style=\"text-decoration: line-through\">struck</span></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            d.Lines.HasFlag(TextDecorationLines.LineThrough));
+    }
+
+    [TestMethod]
+    public void Overline_emits_overline_decoration()
+    {
+        var dl = BuildList(
+            "<body><span style=\"text-decoration: overline\">topped</span></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            d.Lines.HasFlag(TextDecorationLines.Overline));
+    }
+
+    [TestMethod]
+    public void Decoration_color_overrides_text_color()
+    {
+        var dl = BuildList(
+            "<body><span style=\"color: black; text-decoration: underline; text-decoration-color: red\">x</span></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            d.Lines.HasFlag(TextDecorationLines.Underline)
+            && d.Color.R == 255 && d.Color.G == 0 && d.Color.B == 0);
+    }
+
+    [TestMethod]
+    public void Decoration_color_defaults_to_current_color()
+    {
+        var dl = BuildList(
+            "<body><span style=\"color: green; text-decoration: underline\">x</span></body>",
+            new Size(400, 300));
+
+        // green = rgb(0, 128, 0) per CSS named colors.
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            d.Color.R == 0 && d.Color.G == 128 && d.Color.B == 0);
+    }
+
+    [TestMethod]
+    public void Decoration_style_dashed_is_carried_through()
+    {
+        var dl = BuildList(
+            "<body><span style=\"text-decoration: underline dashed\">x</span></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            d.Style == TextDecorationStyleKind.Dashed);
+    }
+
+    [TestMethod]
+    public void Decoration_thickness_is_honored()
+    {
+        var dl = BuildList(
+            "<body><span style=\"text-decoration: underline; text-decoration-thickness: 4px\">x</span></body>",
+            new Size(400, 300));
+
+        dl.Items.OfType<DrawTextDecoration>().Should().Contain(d =>
+            Math.Abs(d.Thickness - 4d) < 0.01);
+    }
+
+    [TestMethod]
+    public void Text_shadow_emits_shadow_layer_beneath_text()
+    {
+        var dl = BuildList(
+            "<body><span style=\"text-shadow: 2px 3px 1px gray\">shadowed</span></body>",
+            new Size(400, 300));
+
+        var items = dl.Items;
+        var shadowIndex = items.ToList().FindIndex(i => i is DrawTextShadow);
+        var textIndex = items.ToList().FindIndex(i => i is DrawText t && t.Text.Contains("shadow", StringComparison.Ordinal));
+
+        shadowIndex.Should().BeGreaterThanOrEqualTo(0);
+        textIndex.Should().BeGreaterThanOrEqualTo(0);
+        // The shadow paints before (beneath) the glyphs.
+        shadowIndex.Should().BeLessThan(textIndex);
+
+        dl.Items.OfType<DrawTextShadow>().Should().Contain(s =>
+            Math.Abs(s.OffsetX - 2d) < 0.01 && Math.Abs(s.OffsetY - 3d) < 0.01 && Math.Abs(s.Blur - 1d) < 0.01);
     }
 }
