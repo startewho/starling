@@ -49,7 +49,7 @@ tests that have started passing — when one does, promote it from
 > gaps by diffing the catalog against the `[Spec]`-tagged tests; the planned
 > `SpecGen report` command (`wp:spec-tooling-bootstrap`) will automate that
 > diff and rebuild the table below. Until then this file is hand-synced —
-> last sync **2026-05-19**.
+> last sync **2026-05-20**.
 >
 > `tests/Starling.Css.Spec.Tests/` still exists for CSS *parsing/cascade*
 > conformance (it only references `Starling.Css`); behavioral layout/paint
@@ -81,9 +81,9 @@ tests that have started passing — when one does, promote it from
 | CSS Color Adjust 1 (`color-scheme`, `forced-colors`) | https://www.w3.org/TR/css-color-adjust-1/ | 🔴 | — | `wp:spec-css-color-adjust-1` |
 | CSS Fonts 4 | https://www.w3.org/TR/css-fonts-4/ | 🟢 | legacy (`FontFaceParserTests`) — gaps in `font-variation-settings`, `font-feature-settings`, `size-adjust` | `wp:spec-css-fonts-4` |
 | CSS Font Loading 3 (`document.fonts`) | https://www.w3.org/TR/css-font-loading-3/ | 🔴 | — | `wp:spec-css-font-loading-3` |
-| CSS Text 3 | https://www.w3.org/TR/css-text-3/ | 🔴 | — | `wp:spec-css-text-3` |
+| CSS Text 3 | https://www.w3.org/TR/css-text-3/ | 🟢 | `Starling.Layout.Tests/CssText3InlineTests`, `Starling.Css.Spec.Tests/CssText3/` — white-space pre*/transform/spacing/indent/tab-size/wrap applied (`wp:M5-css-12`) | `wp:spec-css-text-3` |
 | CSS Text 4 | https://www.w3.org/TR/css-text-4/ | 🚫 | deferred (drafts) | — |
-| CSS Text Decoration 3 | https://www.w3.org/TR/css-text-decor-3/ | 🔴 | — | `wp:spec-css-text-decor-3` |
+| CSS Text Decoration 3 | https://www.w3.org/TR/css-text-decor-3/ | 🟢 | `Starling.Css.Spec.Tests/CssTextDecor3/`, `Starling.Paint.Tests` — line/style/color/thickness + text-shadow painted (`wp:M5-css-15`); skip-ink/underline-position deferred | `wp:spec-css-text-decor-3` |
 | CSS Text Decoration 4 | https://www.w3.org/TR/css-text-decor-4/ | 🔴 | — | `wp:spec-css-text-decor-4` |
 | CSS Inline 3 | https://www.w3.org/TR/css-inline-3/ | 🔴 | — | `wp:spec-css-inline-3` |
 
@@ -112,9 +112,9 @@ tests that have started passing — when one does, promote it from
 
 | Spec | URL | Status | Folder | Tracking WP |
 |---|---|---|---|---|
-| CSS Backgrounds & Borders 3 | https://www.w3.org/TR/css-backgrounds-3/ | 🟡 | `CssBackgrounds3/` | `wp:spec-css-backgrounds-3` |
+| CSS Backgrounds & Borders 3 | https://www.w3.org/TR/css-backgrounds-3/ | 🟢 | `CssBackgrounds3/` (`BorderRadiusTests`, `BoxShadowTests`), `Starling.Paint.Tests/RoundedRectAndShadowTests` — border-radius painted + box-shadow (`wp:M5-css-14`); inset shadow deferred | `wp:spec-css-backgrounds-3` |
 | CSS Backgrounds & Borders 4 | https://www.w3.org/TR/css-backgrounds-4/ | 🔴 | — | `wp:spec-css-backgrounds-4` |
-| CSS Images 3 | https://www.w3.org/TR/css-images-3/ | 🔴 | — | `wp:spec-css-images-3` |
+| CSS Images 3 | https://www.w3.org/TR/css-images-3/ | 🟢 | `CssImages3/`, `Starling.Paint.Tests/GradientPaintTests` — linear/radial gradients parsed + painted (`wp:M5-css-13`); conic + `object-fit` deferred | `wp:spec-css-images-3` |
 | CSS Images 4 (`image-set()`, `cross-fade()`) | https://www.w3.org/TR/css-images-4/ | 🔴 | — | `wp:spec-css-images-4` |
 | CSS Masking 1 | https://www.w3.org/TR/css-masking-1/ | 🔴 | — | `wp:spec-css-masking-1` |
 | CSS Filter Effects 1 | https://www.w3.org/TR/filter-effects-1/ | 🔴 | — | `wp:spec-css-filter-effects-1` |
@@ -134,9 +134,9 @@ tests that have started passing — when one does, promote it from
 |---|---|---|---|---|
 | CSS Basic UI 4 | https://www.w3.org/TR/css-ui-4/ | 🔴 | — | `wp:spec-css-ui-4` |
 | CSS Pseudo 4 | https://www.w3.org/TR/css-pseudo-4/ | 🟢 | `PseudoElementTests` (legacy) — `::backdrop`, `::marker`, `::file-selector-button` untested | `wp:spec-css-pseudo-4` |
-| CSS Lists 3 | https://www.w3.org/TR/css-lists-3/ | 🔴 | — | `wp:spec-css-lists-3` |
+| CSS Lists 3 | https://www.w3.org/TR/css-lists-3/ | 🟢 | `CssLists3/`, `Starling.Layout.Tests/ListMarkerTests` — list-style-type markers (disc/decimal/alpha/roman…) (`wp:M5-css-16`); marker `inside`/image deferred | `wp:spec-css-lists-3` |
 | CSS Counter Styles 3 (`@counter-style`) | https://www.w3.org/TR/css-counter-styles-3/ | 🔴 | — | `wp:spec-css-counter-styles-3` |
-| CSS Generated Content 3 | https://www.w3.org/TR/css-content-3/ | 🔴 | — | `wp:spec-css-content-3` |
+| CSS Generated Content 3 | https://www.w3.org/TR/css-content-3/ | 🟢 | `CssContent3/`, `Starling.Layout.Tests/GeneratedContentLayoutTests` — `content` on `::before`/`::after` (string/attr()) (`wp:M5-css-16`); counters/quotes deferred | `wp:spec-css-content-3` |
 | CSS Speech 1 | https://www.w3.org/TR/css-speech-1/ | 🚫 | not in scope | — |
 | CSS Ruby 1 | https://www.w3.org/TR/css-ruby-1/ | 🚫 | not in scope | — |
 
@@ -185,7 +185,7 @@ tests that have started passing — when one does, promote it from
 |---|---|
 | Specs catalogued | 54 |
 | ✅ Implemented | 3 |
-| 🟢 In progress | 16 |
-| 🟡 Scaffolded only | 3 |
-| 🔴 Not started | 25 |
+| 🟢 In progress | 22 |
+| 🟡 Scaffolded only | 2 |
+| 🔴 Not started | 20 |
 | 🚫 Out of scope | 7 |
