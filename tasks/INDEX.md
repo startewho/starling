@@ -150,6 +150,18 @@ features previously listed as deferred — `:has`, `:nth-*`, `:is`, `:where`,
 | [wp:M5-img-css-sizing](M5/wp-M5-img-css-sizing.md) | 🟢 complete | agent-copilot-claude-opus-4.7 | Starling.Layout |
 | [wp:M5-img-srcset-sizes](M5/wp-M5-img-srcset-sizes.md) | 🟢 complete | agent-copilot-claude-opus-4.7 | Starling.Engine |
 | [wp:M5-img-svg-decode](M5/wp-M5-img-svg-decode.md) | 🟢 complete | agent-claude-cody-svg | Starling.Paint |
+| [wp:M5-css-12-text-3-inline](M5/wp-M5-css-12-text-3-inline.md) | 🟡 claimed | agent-claude-cody-text3 | Starling.Layout |
+| [wp:M5-css-13-gradients](M5/wp-M5-css-13-gradients.md) | 🟡 claimed | agent-claude-cody-gradients | Starling.Paint |
+| [wp:M5-css-14-radius-shadow-paint](M5/wp-M5-css-14-radius-shadow-paint.md) | 🟡 claimed | agent-claude-cody-radshadow | Starling.Paint |
+| [wp:M5-css-15-text-decoration](M5/wp-M5-css-15-text-decoration.md) | 🟡 claimed | agent-claude-cody-textdecor | Starling.Paint |
+| [wp:M5-css-16-generated-content](M5/wp-M5-css-16-generated-content.md) | 🟡 claimed | agent-claude-cody-content | Starling.Layout |
+
+> **M5 CSS rendering-coverage batch (2026-05-20, orchestrated).** Five parallel
+> WPs (12–16) targeting high-impact tedious CSS gaps found by auditing the
+> parse→layout→paint stack: CSS Text 3 inline props, gradients, border-radius +
+> box-shadow paint, Text Decoration 3, and generated content + list markers.
+> 12/16 are layout/CSS-only (disjoint); 13/14/15 share the paint display-list +
+> backend switch and are reconciled on merge by the orchestrator.
 
 ## M12 — Tiled compositor + layer tree
 
