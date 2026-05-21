@@ -383,6 +383,25 @@ public static class StringCtor
 
     private static JsValue Match(JsRealm realm, JsValue thisV, JsValue[] args, bool all)
     {
+        // §22.1.3.13 String.prototype.match / §22.1.3.14 matchAll: if the
+        // argument is neither undefined nor null, delegate to its
+        // [Symbol.match] / [Symbol.matchAll] method when present — the argument
+        // need not be a genuine RegExp. (Only this delegation makes core-js's
+        // DELEGATES_TO_SYMBOL feature-detect pass; without it core-js wraps the
+        // native and recurses.)
+        var regexp = args.Length > 0 ? args[0] : JsValue.Undefined;
+        if (!regexp.IsNullish)
+        {
+            var symbol = all ? SymbolCtor.MatchAll : SymbolCtor.Match;
+            var matcher = AbstractOperations.GetMethod(realm.ActiveVm, regexp, symbol);
+            if (!matcher.IsUndefined)
+            {
+                var sArg = ThisStringValue(realm, thisV);
+                return AbstractOperations.Call(realm.ActiveVm, matcher, regexp,
+                    new[] { JsValue.String(sArg) });
+            }
+        }
+
         var s = ThisStringValue(realm, thisV);
         var re = args.Length > 0 && RegExpCtor.IsRegExp(args[0])
             ? (JsRegExp)args[0].AsObject
