@@ -361,5 +361,15 @@ public enum Opcode : byte
     /// enclosing scope and never emit this; arrows never have an own name.</summary>
     BindCallee,
 
+    /// <summary>§15.1.5 / §10.2.11 IteratorBindingInitialization for a function
+    /// rest parameter (<c>function f(a, ...rest)</c>, <c>(...rest) =&gt; …</c>):
+    /// gather every received argument from index <c>start</c> (u16 operand)
+    /// onward into a fresh dense <see cref="Starling.Js.Runtime.JsArray"/> and
+    /// push it. Reads the frame's received args directly — works in arrow
+    /// functions, which have no <c>arguments</c> object. Emitted once at the
+    /// rest parameter's binding site; the array is then bound like any other
+    /// parameter target (identifier or destructuring pattern).</summary>
+    RestParam,      // [u16 start] push Array of received args[start..argc)
+
     Halt,           // end-of-program sentinel
 }

@@ -2441,9 +2441,14 @@ public sealed partial class JsCompiler
             var param = parameters[i];
             if (param is SpreadElement spread)
             {
+                // §10.2.11 — the rest parameter binds an Array of every argument
+                // from this positional index onward. Declare its binding(s),
+                // gather args[i..argc) via RestParam, then bind the array to the
+                // target (a plain identifier or a destructuring pattern). Rest
+                // is always the last parameter, so `i` is the gather start.
                 DeclarePatternBindings(spread.Argument);
-                // Full rest-parameter collection is a later iterator/Array task;
-                // leave the binding undefined rather than corrupting following args.
+                _b.EmitU16(Opcode.RestParam, i);
+                EmitPatternFromStack(spread.Argument, isDeclaration: true);
                 continue;
             }
 

@@ -1247,6 +1247,19 @@ public sealed class JsVm
                     Push(JsValue.Object(meta));
                     break;
                 }
+                case Opcode.RestParam:
+                {
+                    // §10.2.11 — collect the rest parameter's arguments
+                    // (args[start..argc)) into a real dense array. Works in
+                    // arrows too: reads the frame's `args` directly rather than
+                    // the (arrow-absent) `arguments` object.
+                    var start = ReadU16();
+                    var rest = new JsArray(_runtime.Realm);
+                    for (var i = start; i < args.Length; i++)
+                        rest.Push(args[i]);
+                    Push(JsValue.Object(rest));
+                    break;
+                }
                 case Opcode.MakeArguments:
                 {
                     // §10.4.4 — materialize the callee's `arguments` object from

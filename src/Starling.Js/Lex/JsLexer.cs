@@ -86,10 +86,27 @@ public sealed class JsLexer
     {
         // Called after the parser has confirmed _current == "async" identifier
         // and _peeked == LParen. The lexer's _i pointer therefore sits just
-        // past the peeked '(' character. We need to walk balanced parens to
-        // find the closing ')', then check if it's followed by '=>'.
-        var i = _i;
-        var depth = 1; // already inside the opening (
+        // past the peeked '(' character — the precondition for the shared
+        // balanced-paren scan below.
+        return LookaheadIsArrowFromParen(_i);
+    }
+
+    /// <summary>Disambiguate a parenthesized arrow head from an ordinary
+    /// grouping/sequence expression. Given the source offset just past an
+    /// opening <c>(</c>, walk balanced parens to the matching <c>)</c> and
+    /// report whether <c>=&gt;</c> follows. Pure: reads <c>_src</c> only, no
+    /// state mutation, so the parser can probe before committing to the
+    /// arrow-parameter parse path.</summary>
+    /// <remarks>
+    /// Shares the approximate scan of <see cref="LookaheadIsAsyncArrow"/>:
+    /// strings, templates, and comments are skipped so their inner parens
+    /// don't unbalance the count. Regex literals are not lexed precisely —
+    /// adequate for arrow disambiguation, matching the async variant.
+    /// </remarks>
+    public bool LookaheadIsArrowFromParen(int afterOpenParenOffset)
+    {
+        var i = afterOpenParenOffset;
+        var depth = 1; // caller is positioned just inside the opening (
         for (; i < _src.Length; i++)
         {
             var c = _src[i];
@@ -129,7 +146,7 @@ public sealed class JsLexer
                 if (depth == 0) { i++; break; }
             }
         }
-        // Skip whitespace and comments, check for '=>'.
+        // Skip whitespace between ')' and a possible '=>'.
         while (i < _src.Length)
         {
             var c = _src[i];
