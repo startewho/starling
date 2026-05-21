@@ -145,3 +145,81 @@ public sealed record DrawBoxShadow(
     double Spread,
     CssColor Color,
     bool Inset) : DisplayItem;
+// ---------------------------------------------------------------------------
+// CSS Text Decoration 3 (wp:M5-css-15): real decoration lines + text-shadow.
+// Appended at the end of the file per shared-paint-file etiquette.
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Which decoration lines to draw (CSS Text Decoration 3 §2.1
+/// <c>text-decoration-line</c>). Combinable, so this is a [Flags] set.
+/// </summary>
+[Flags]
+public enum TextDecorationLines
+{
+    None = 0,
+    Underline = 1 << 0,
+    Overline = 1 << 1,
+    LineThrough = 1 << 2,
+}
+
+/// <summary>
+/// Stroke style for a decoration line (CSS Text Decoration 3 §2.2
+/// <c>text-decoration-style</c>).
+/// </summary>
+public enum TextDecorationStyleKind
+{
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
+}
+
+/// <summary>
+/// Paints one or more decoration lines (underline / overline / line-through)
+/// across a single text run (CSS Text Decoration 3 §2). The run is described by
+/// its left edge <paramref name="X"/>, <paramref name="Width"/>, the glyph
+/// baseline <paramref name="BaselineY"/>, and the <paramref name="FontSize"/> so
+/// the backend can resolve exact vertical positions from real font metrics
+/// (ascender / x-height / underline position). <paramref name="Thickness"/> is
+/// the resolved line thickness in CSS px (<c>auto</c> already resolved by the
+/// builder), and <paramref name="UnderlineOffset"/> is the extra
+/// <c>text-underline-offset</c> in px (0 when <c>auto</c>). The font identity is
+/// carried so the backend resolves the same face the glyphs used.
+/// </summary>
+public sealed record DrawTextDecoration(
+    double X,
+    double Width,
+    double BaselineY,
+    double FontSize,
+    CssColor Color,
+    TextDecorationLines Lines,
+    TextDecorationStyleKind Style,
+    double Thickness,
+    double UnderlineOffset,
+    IReadOnlyList<string> FontFamilies,
+    bool Bold,
+    bool Italic) : DisplayItem;
+
+/// <summary>
+/// Paints a single <c>text-shadow</c> layer beneath a glyph run (CSS Text
+/// Decoration 3 §5): the same <paramref name="Text"/> drawn at
+/// (<paramref name="X"/>+OffsetX, <paramref name="Y"/>+OffsetY) in
+/// <paramref name="Color"/>, blurred by <paramref name="Blur"/> px. The builder
+/// emits one of these per layer, back-to-front, before the foreground
+/// <see cref="DrawText"/>.
+/// </summary>
+public sealed record DrawTextShadow(
+    string Text,
+    double X,
+    double Y,
+    double FontSize,
+    CssColor Color,
+    double OffsetX,
+    double OffsetY,
+    double Blur,
+    IReadOnlyList<string> FontFamilies,
+    bool Bold,
+    bool Italic,
+    ShapedRun? Shaped = null) : DisplayItem;
