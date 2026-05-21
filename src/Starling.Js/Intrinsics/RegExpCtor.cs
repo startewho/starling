@@ -204,49 +204,78 @@ public static class RegExpCtor
     // ------------------------------------------------------------------
     //                       Symbol.* protocols
     // ------------------------------------------------------------------
+    // §22.2.6.8 RegExp.prototype [ @@match ] ( string ). Each match MUST be
+    // obtained through RegExpExec(R, S) (§22.2.7.1), which honors the receiver's
+    // (possibly overridden) `exec`; the global/unicode flags are read generically
+    // via Get. The previous implementation re-matched through the internal
+    // engine and ignored a user `exec` — core-js's DELEGATES_TO_EXEC
+    // feature-detect saw that as a broken native and installed a recursing
+    // @@match polyfill (jQuery↔core-js infinite recursion → RangeError).
     private static JsValue SymbolMatch(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var re = RequireRegExp(realm, thisV);
+        // Step 2: `this` must be an Object (need not be a genuine RegExp — a
+        // user object whose `exec`/`global`/`unicode` we read is allowed).
+        if (!thisV.IsObject)
+            throw new JsThrow(realm.NewTypeError("RegExp.prototype[Symbol.match] called on non-object"));
+        var rx = thisV.AsObject;
+        var vm = realm.ActiveVm;
         var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        if ((re.Flags & RegexFlags.Global) == 0)
+
+        // Step 5: global flag.
+        bool global = JsValue.ToBoolean(AbstractOperations.Get(vm, rx, "global"));
+        if (!global)
         {
-            return Exec(realm, thisV, new[] { JsValue.String(s) });
+            // Step 6: non-global — return RegExpExec(rx, S) directly.
+            return RegExpExec(realm, rx, s);
         }
-        // Global: collect every match's [0]; set lastIndex to 0 at end; return
-        // null if no matches found.
-        re.LastIndex = 0;
+
+        // Step 7: global — read the unicode flag, reset lastIndex, then loop
+        // RegExpExec collecting each result's [0].
+        bool fullUnicode = JsValue.ToBoolean(AbstractOperations.Get(vm, rx, "unicode"));
+        AbstractOperations.Set(vm, rx, "lastIndex", JsValue.Number(0));
         var results = new JsArray(realm);
-        int pos = 0;
         while (true)
         {
-            var m = re.Compiled.Exec(s, pos);
-            if (m is null) break;
-            results.Push(JsValue.String(m.Group(0) ?? string.Empty));
-            pos = m.End;
-            if (m.End == m.Start) pos++; // zero-width safety
+            var result = RegExpExec(realm, rx, s);
+            if (result.IsNull) break;
+            var matchStr = JsValue.ToStringValue(
+                AbstractOperations.Get(vm, result.AsObject, "0"));
+            results.Push(JsValue.String(matchStr));
+            // Step 7.g.iv: empty match → advance lastIndex so the loop terminates.
+            if (matchStr.Length == 0)
+            {
+                var li = (int)ToLengthLocal(AbstractOperations.Get(vm, rx, "lastIndex"));
+                AbstractOperations.Set(vm, rx, "lastIndex",
+                    JsValue.Number(AdvanceStringIndex(s, li, fullUnicode)));
+            }
         }
-        re.LastIndex = 0;
         return results.Length == 0 ? JsValue.Null : JsValue.Object(results);
     }
 
+    // §22.2.7.3 AdvanceStringIndex — step over a full code point when the
+    // `unicode` flag is set and `index` sits on a leading surrogate.
+    private static int AdvanceStringIndex(string s, int index, bool unicode)
+    {
+        if (!unicode || index + 1 >= s.Length) return index + 1;
+        var first = s[index];
+        if (first < 0xD800 || first > 0xDBFF) return index + 1;
+        var second = s[index + 1];
+        if (second < 0xDC00 || second > 0xDFFF) return index + 1;
+        return index + 2;
+    }
+
+    // §22.2.6.9 RegExp.prototype [ @@matchAll ] ( string ). Returns a
+    // RegExpStringIterator (the same iterator String.prototype.matchAll
+    // builds), so delegating String#matchAll through this method preserves the
+    // iterator shape (Array.isArray(...) === false) the spec mandates.
     private static JsValue SymbolMatchAll(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var re = RequireRegExp(realm, thisV);
         if ((re.Flags & RegexFlags.Global) == 0)
             throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
         var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        // Iterator protocol lands in B3-2; for now return an array of all matches.
-        var arr = new JsArray(realm);
-        int pos = 0;
-        while (true)
-        {
-            var m = re.Compiled.Exec(s, pos);
-            if (m is null) break;
-            arr.Push(JsValue.Object(BuildMatchArray(realm, re, m)));
-            pos = m.End;
-            if (m.End == m.Start) pos++;
-        }
-        return JsValue.Object(arr);
+        var unicode = (re.Flags & RegexFlags.Unicode) != 0;
+        return JsValue.Object(new JsRegExpStringIterator(realm, re, s, global: true, unicode: unicode));
     }
 
     // §22.2.7.1 RegExpExec ( R, S ): read R.exec; if callable, call it and
