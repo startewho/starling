@@ -186,6 +186,40 @@ public sealed partial class JsParser
             return ParseArrowBody(Array.Empty<Expression>(), start);
         }
 
+        // Parenthesized-params arrow with a rest element, e.g. `(...a) => …` or
+        // `(a, ...b) => …`. A leading `...` is not a valid grouping/sequence
+        // expression, so we cannot rely on the cover-grammar `ParseConditional`
+        // path below — it would throw on the `...` before the `=>` is seen.
+        // Probe ahead (balanced parens then `=>`); if confirmed, parse the
+        // parameter list directly with the same rest-aware logic the async
+        // arrow path and function declarations use (rest → SpreadElement, the
+        // node the compiler's rest-param handling already keys on). This also
+        // covers the no-rest cases uniformly, but we only divert when an arrow
+        // is certain so ordinary groupings/sequences are untouched.
+        if (_current.Kind == JsTokenKind.LParen
+            && _lex.LookaheadIsArrowFromParen(_current.End.Offset))
+        {
+            var start = _current.Start;
+            Advance(); // consume `(`
+            var ps = new List<Expression>();
+            while (!Check(JsTokenKind.RParen))
+            {
+                if (Check(JsTokenKind.Ellipsis))
+                {
+                    var sstart = _current.Start;
+                    Advance();
+                    var inner = ParseBindingTarget();
+                    ps.Add(new SpreadElement(inner, sstart, inner.End));
+                    break; // rest must be the last parameter
+                }
+                ps.Add(ParseParameter());
+                if (!Match(JsTokenKind.Comma)) break;
+            }
+            Expect(JsTokenKind.RParen, "expected ')' in arrow params");
+            Expect(JsTokenKind.Arrow, "expected '=>' after arrow params");
+            return ParseArrowBody(ps, start);
+        }
+
         var left = ParseConditional();
         // Parenthesized-params arrow form: ParseConditional() consumed the
         // `(...)` as either a grouping or a sequence. Either case maps cleanly
