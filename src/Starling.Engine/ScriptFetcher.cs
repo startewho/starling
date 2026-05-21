@@ -42,11 +42,27 @@ internal sealed class ScriptFetcher : IDisposable
     private readonly List<LoadedScript> _scripts = new();
     private readonly List<LoadedScript> _moduleScripts = new();
     private StarlingHttpClient? _sharedHttp;
+    private readonly bool _ownsHttp;
 
     public ScriptFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
     {
         _diag = diag;
         _httpFactory = httpFactory;
+        _ownsHttp = true;
+    }
+
+    /// <summary>
+    /// Use a caller-owned <see cref="StarlingHttpClient"/> so resource fetches
+    /// share one connection pool — same-origin requests reuse the keep-alive
+    /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
+    /// shared client is owned by the caller and is not disposed by this fetcher.
+    /// </summary>
+    public ScriptFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    {
+        _diag = diag;
+        _sharedHttp = sharedHttp;
+        _httpFactory = () => sharedHttp;
+        _ownsHttp = false;
     }
 
     /// <summary>Scripts collected in document order. Inline entries carry the
@@ -348,7 +364,7 @@ internal sealed class ScriptFetcher : IDisposable
         _byUrl.Clear();
         _scripts.Clear();
         _moduleScripts.Clear();
-        _sharedHttp?.Dispose();
+        if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
 }
