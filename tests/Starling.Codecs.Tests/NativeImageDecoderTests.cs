@@ -69,6 +69,24 @@ public sealed class NativeImageDecoderTests
         backend.Should().NotBeNull();
     }
 
+    [TestMethod]
+    public void SvgIsReportedByIsSvg()
+    {
+        NativeImageDecoder.IsSvg("<svg></svg>"u8).Should().BeTrue();
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        NativeImageDecoder.IsSvg(png).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void SvgBytesThrowFromNativePathWithGuidance()
+    {
+        // SVG must not reach the OS-native raster codecs; Decode rejects it with
+        // a message pointing at the managed rasterizer (the engine routes around
+        // this via NativeImageDecoder.IsSvg before calling Decode).
+        var act = () => NativeImageDecoder.Decode("<svg></svg>"u8);
+        act.Should().Throw<ImageDecodeException>().WithMessage("*managed SVG rasterizer*");
+    }
+
     // --- PNG: dot.png is 4x4 with distinct corner pixels -------------------
 
     [TestMethod]

@@ -10,6 +10,14 @@
     <PackageReference Include="MSTest" />
     <PackageReference Include="AwesomeAssertions" />
   </ItemGroup>
+  <!-- Real-world SVG fixtures (McMaster icons + the masthead logo) copied to
+       the test output so the managed SVG decoder tests can decode them. -->
+  <ItemGroup>
+    <Content Include="..\..\testdata\images\svg\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>testdata\images\svg\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Starling.Paint\Starling.Paint.csproj" />
     <ProjectReference Include="..\..\src\Starling.Html\Starling.Html.csproj" />
