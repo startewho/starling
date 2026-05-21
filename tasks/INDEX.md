@@ -157,7 +157,7 @@ features previously listed as deferred — `:has`, `:nth-*`, `:is`, `:where`,
 | [wp:M5-css-13-gradients](M5/wp-M5-css-13-gradients.md) | 🟡 claimed | agent-claude-cody-gradients | Starling.Paint |
 | [wp:M5-css-14-radius-shadow-paint](M5/wp-M5-css-14-radius-shadow-paint.md) | 🟢 complete | agent-claude-cody-radshadow | Starling.Paint |
 | [wp:M5-css-15-text-decoration](M5/wp-M5-css-15-text-decoration.md) | 🟡 claimed | agent-claude-cody-textdecor | Starling.Paint |
-| [wp:M5-css-16-generated-content](M5/wp-M5-css-16-generated-content.md) | 🟡 claimed | agent-claude-cody-content | Starling.Layout |
+| [wp:M5-css-16-generated-content](M5/wp-M5-css-16-generated-content.md) | 🟢 complete | agent-claude-cody-content | Starling.Layout |
 
 > **M5 CSS rendering-coverage batch (2026-05-20, orchestrated).** Five parallel
 > WPs (12–16) targeting high-impact tedious CSS gaps found by auditing the

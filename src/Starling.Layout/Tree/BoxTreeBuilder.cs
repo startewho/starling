@@ -1,5 +1,6 @@
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
+using Starling.Css.Selectors;
 using Starling.Css.Values;
 using Starling.Dom;
 using Starling.Layout.Box;
@@ -92,7 +93,19 @@ internal sealed class BoxTreeBuilder
                         : new BlockBox(elementStyle, element);
                     box.Hints = StackingContextResolver.Resolve(box, elementStyle);
                     parentBox.AppendChild(box);
+
+                    // CSS Lists 3 §3 — a list-item synthesizes a marker box as
+                    // its first in-flow child. Markers paint through the normal
+                    // text path (no dedicated display item), so we prepend a
+                    // TextBox carrying the marker string.
+                    if (display == "list-item")
+                        AppendListMarker(element, elementStyle, box);
+
+                    // CSS Content 3 §2 — synthesize ::before before children.
+                    AppendPseudoElement(element, elementStyle, box, PseudoElement.Before, cache);
                     BuildChildren(element, elementStyle, box, cache);
+                    // ::after after children.
+                    AppendPseudoElement(element, elementStyle, box, PseudoElement.After, cache);
                     // <input> is a void element with no DOM children — synthesize
                     // a TextBox from its value/placeholder so the search box and
                     // submit button labels actually show up. Real intrinsic
@@ -325,6 +338,150 @@ internal sealed class BoxTreeBuilder
         if (!string.IsNullOrEmpty(fallback))
             box.AppendChild(new TextBox(fallback, style));
     }
+
+    /// <summary>
+    /// CSS Content 3 §2 — synthesize a <c>::before</c>/<c>::after</c> box for
+    /// <paramref name="element"/> when an author rule sets a renderable
+    /// <c>content</c>. The pseudo-element box is inline and carries the generated
+    /// text as a child <see cref="TextBox"/> styled by the pseudo's own cascade
+    /// (so e.g. <c>::before { color: red }</c> tints the generated glyph).
+    /// </summary>
+    private void AppendPseudoElement(
+        Element element,
+        ComputedStyle elementStyle,
+        Box.Box box,
+        PseudoElement pseudo,
+        CascadeCache cache)
+    {
+        var pseudoStyle = _style.ComputePseudoElement(element, pseudo, elementStyle);
+        if (pseudoStyle is null) return;
+
+        // `display: none` on the pseudo suppresses it entirely.
+        if (DisplayKeyword(pseudoStyle) == "none") return;
+
+        var text = ContentText(pseudoStyle.Get(PropertyId.Content));
+        if (text is null) return; // none/normal/unrenderable (e.g. counter()).
+
+        // The generated box is an inline box; its text inherits the pseudo's
+        // computed style. Empty strings still generate a (zero-width) box per
+        // spec, but contribute no fragment, so we keep the TextBox.
+        var inline = new InlineBox(pseudoStyle, element: null);
+        inline.AppendChild(new TextBox(text, pseudoStyle));
+        box.AppendChild(inline);
+    }
+
+    /// <summary>
+    /// Extract the rendered string for a computed <c>content</c> value.
+    /// <c>none</c>/<c>normal</c> suppress (return null). A <see cref="CssString"/>
+    /// (including a resolved <c>attr()</c>) renders verbatim; a list concatenates
+    /// its string parts. <c>counter()</c>/<c>counters()</c> and <c>open-quote</c>
+    /// are deferred — they yield null so no box is generated.
+    /// </summary>
+    private static string? ContentText(CssValue content)
+    {
+        switch (content)
+        {
+            case CssKeyword { Name: "none" or "normal" }:
+                return null;
+            case CssString s:
+                return s.Value;
+            case CssValueList list:
+            {
+                var sb = new System.Text.StringBuilder();
+                var any = false;
+                foreach (var part in list.Values)
+                {
+                    switch (part)
+                    {
+                        case CssString ps:
+                            sb.Append(ps.Value);
+                            any = true;
+                            break;
+                        case CssKeyword { Name: "normal" or "none" }:
+                            break;
+                        // counter()/counters()/attr()-already-resolved-string handled above;
+                        // unresolved attr() (absent attribute, no fallback) and
+                        // counter()/quotes are deferred → contribute nothing.
+                        default:
+                            break;
+                    }
+                }
+                return any ? sb.ToString() : null;
+            }
+            // Bare attr() that resolved to nothing, or counter()/url() image
+            // content: deferred / unsupported → no generated text.
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// CSS Lists 3 §3 — prepend a marker box to a <c>display: list-item</c> box.
+    /// The marker text comes from the inherited <c>list-style-type</c> and the
+    /// item's ordinal (its 1-based index among list-item siblings, honoring
+    /// <c>&lt;ol start&gt;</c> and <c>&lt;li value&gt;</c>). <c>list-style-type:
+    /// none</c> suppresses the marker.
+    /// </summary>
+    private static void AppendListMarker(Element element, ComputedStyle style, Box.Box box)
+    {
+        var listType = style.Get(PropertyId.ListStyleType) switch
+        {
+            CssKeyword k => k.Name,
+            CssString => "disc", // custom string symbol → fall back to a bullet for now
+            _ => "disc",
+        };
+
+        var ordinal = ListItemOrdinal(element);
+        var marker = ListMarker.Render(listType, ordinal);
+        if (marker is null) return;
+
+        // The marker is rendered through the normal text path. A trailing space
+        // separates the marker from the item's content for `inside` markers and
+        // mirrors the visual gap browsers leave for `outside`.
+        var markerBox = new TextBox(marker + " ", style);
+        // Prepend so the marker leads the item's content.
+        box.Children.Insert(0, markerBox);
+        markerBox.Parent = box;
+    }
+
+    /// <summary>
+    /// The 1-based ordinal for a list item: its index among preceding
+    /// <c>display: list-item</c> siblings, offset by an <c>&lt;ol start&gt;</c>
+    /// base, and overridden outright by an <c>&lt;li value&gt;</c> attribute.
+    /// </summary>
+    private static int ListItemOrdinal(Element element)
+    {
+        if (TryParseInt(element.GetAttribute("value"), out var explicitValue))
+            return explicitValue;
+
+        var start = 1;
+        if (element.ParentNode is Element parent &&
+            string.Equals(parent.LocalName, "ol", StringComparison.OrdinalIgnoreCase) &&
+            TryParseInt(parent.GetAttribute("start"), out var s))
+        {
+            start = s;
+        }
+
+        var index = 0;
+        for (var sibling = element.ParentNode?.FirstChild; sibling is not null; sibling = sibling.NextSibling)
+        {
+            if (sibling is not Element sib) continue;
+            if (!IsListItem(sib)) continue;
+            // A preceding sibling with its own value attribute resets the count
+            // is a refinement we skip; per the WP, ordinal = sibling index.
+            if (sib == element)
+                return start + index;
+            index++;
+        }
+        return start + index;
+    }
+
+    private static bool IsListItem(Element element)
+        => string.Equals(element.LocalName, "li", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryParseInt(string? raw, out int value)
+        => int.TryParse((raw ?? string.Empty).Trim(), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
 
     private static double? ParseDimensionAttribute(string? raw)
     {
