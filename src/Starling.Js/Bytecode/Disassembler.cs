@@ -69,6 +69,11 @@ public static class Disassembler
                 case Opcode.RefreshLetBinding:
                 case Opcode.MakeArguments:
                 case Opcode.BindCallee:
+                // u16 upvalue-index operand opcodes (upvalue indices are
+                // addressed with a u16 — see ChunkBuilder.EmitUpvalue).
+                case Opcode.LoadUpvalue:
+                case Opcode.StoreUpvalue:
+                case Opcode.LoadUpvalueCell:
                 {
                     var slot = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
                     i += 2;
@@ -76,12 +81,9 @@ public static class Disassembler
                     break;
                 }
                 // u8 operand opcodes
-                case Opcode.StoreUpvalue:
-                case Opcode.LoadUpvalueCell:
                 case Opcode.Call:
                 case Opcode.CallMethod:
                 case Opcode.New:
-                case Opcode.LoadUpvalue:
                 case Opcode.Suspend:
                 {
                     var slot = code[i];
@@ -89,13 +91,13 @@ public static class Disassembler
                     sb.Append(op).Append(' ').Append(slot);
                     break;
                 }
-                // u16 + u8 — MakeClosure [fnIdx][nUpvalues]
+                // u16 + u16 — MakeClosure [fnIdx][nUpvalues]
                 case Opcode.MakeClosure:
                 {
                     var idx = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
                     i += 2;
-                    var n = code[i];
-                    i++;
+                    var n = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
+                    i += 2;
                     sb.Append(op).Append(' ').Append(idx).Append(' ').Append(n);
                     sb.Append("  ; template=").Append(FormatConstant(chunk.Constants[idx]))
                       .Append(" upvalues=").Append(n);

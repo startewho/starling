@@ -462,7 +462,7 @@ public sealed partial class JsCompiler
     {
         if (!_moduleBindingUpvalues!.TryGetValue(name, out var idx))
             throw new InvalidOperationException($"module binding '{name}' not reserved");
-        _b.Emit(Opcode.StoreUpvalue, (byte)idx);
+        _b.EmitUpvalue(Opcode.StoreUpvalue, idx);
     }
 
     private void EmitModuleItem(Statement s)

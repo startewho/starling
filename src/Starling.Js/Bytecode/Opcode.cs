@@ -17,8 +17,8 @@ public enum Opcode : byte
     Nop,
     LoadConst,      // [u16 idx] → push constant pool entry
     LoadFunction,   // [u16 idx] → push JsFunction template (no upvalues) from pool
-    MakeClosure,    // [u16 fnIdx][u8 nUpvalues] pop N values, build closure
-    LoadUpvalue,    // [u8 idx] → push current frame's upvalue at idx
+    MakeClosure,    // [u16 fnIdx][u16 nUpvalues] pop N values, build closure
+    LoadUpvalue,    // [u16 idx] → push current frame's upvalue at idx
     LoadThis,       // → push the current frame's `this` binding
     NewObject,      // → push a fresh empty JsObject
     NewArray,       // → push a fresh empty JsArray (B2-4)
@@ -53,11 +53,11 @@ public enum Opcode : byte
     /// the slot. Emitted at function entry for captured parameters whose
     /// values land in the slot by the VM's argument-copy step.</summary>
     PromoteParamCell,
-    /// <summary>[u8 idx] — pop value, set <c>cell.Value = value</c> on the
+    /// <summary>[u16 idx] — pop value, set <c>cell.Value = value</c> on the
     /// upvalue at <c>idx</c>. Used by inner functions to
     /// write back to a captured outer binding.</summary>
     StoreUpvalue,
-    /// <summary>[u8 idx] — push the upvalue cell itself (as a JsValue) so
+    /// <summary>[u16 idx] — push the upvalue cell itself (as a JsValue) so
     /// it can be re-captured by a further-nested closure or class. The
     /// regular <see cref="LoadUpvalue"/> dereferences through the cell;
     /// this opcode hands the cell off intact.</summary>
