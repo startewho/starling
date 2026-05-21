@@ -2,9 +2,10 @@
 id: "wp:M3-04f-js-computed-class-keys"
 parent: "wp:M3-04-js-vm"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody-classkeys"
 claimed_at: "2026-05-21T01:01:13Z"
+completed_at: "2026-05-21T01:14:54Z"
 branch: "main"
 depends_on:
   - "wp:M3-02c-js-parser-classes-modules"
@@ -91,3 +92,7 @@ Optionally also lift the computed `super[expr]` blocker if cheap.
 
 ## Handoff log
 - 2026-05-21T01:01:13Z — created + claimed for agent-claude-cody-classkeys (orchestrated Wave 1)
+- 2026-05-21T01:14Z — COMPLETE. One new opcode `ToPropertyKey` (§7.1.19); `MethodEntry`/`FieldEntry` gained `IsComputed`; computed keys emitted in source order and consumed in `BuildClass`/`RunFieldInits`; `InstallMethodOrAccessor` overloaded for `JsPropertyKey` (string|symbol); VM-aware `AbstractOperations.ToPropertyKey` honors `Symbol.toPrimitive`. 20 new tests in `ComputedClassKeysTests.cs`. Cherry-picked to main as `0dc6faf`.
+  - **Deferred:** computed `super[expr]` throw left in place (needs new stack-keyed super opcodes — not cheap). Follow-up candidate.
+  - **Known divergence (pre-existing):** AST keeps methods/fields in separate lists, so computed keys evaluate in declaration order *within* methods then *within* fields, not strictly interleaved across the two kinds.
+  - **Pre-existing bug found (NOT introduced here):** class methods returning an object whose method captures a `let` from the method body throw `value is Number, not Object` — reproduces on unmodified main with plain string keys; class-method/`let` closure-capture gap (M3-04c territory). Worth a follow-up WP.

@@ -2,9 +2,10 @@
 id: "wp:M3-04g-js-async-generators"
 parent: "wp:M3-04-js-vm"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody-asyncgen"
 claimed_at: "2026-05-21T01:01:13Z"
+completed_at: "2026-05-21T01:14:54Z"
 branch: "main"
 depends_on:
   - "wp:M3-04b-js-functions"
@@ -99,3 +100,4 @@ both already exist.
 
 ## Handoff log
 - 2026-05-21T01:01:13Z — created + claimed for agent-claude-cody-asyncgen (orchestrated Wave 1)
+- 2026-05-21T01:14Z — COMPLETE. Stub replaced: real `StartAsyncGeneratorBody` + driver (`AsyncGeneratorEnqueue`/`DrainQueue`/`AfterResume`) with a FIFO request queue (`JsAsyncGenerator` in `JsGenerator.cs`); `SuspendedFrame` records yield-vs-await kind; `AsyncGeneratorNext`/`Return`/`Throw` on `%AsyncGeneratorPrototype%` return Promises. `await` inside an async generator now genuinely suspends (verified). `for await…of` did NOT exist — added end to end: parser flag on `ForOfStatement`, 3 new opcodes (`GetAsyncIterator`/`AsyncIteratorNext`/`AsyncIteratorClose`), compiler lowering with awaited close, and sync-iterable fallback (CreateAsyncFromSyncIterator §27.1.4.1). 16 new tests in `AsyncGeneratorTests.cs`. Cherry-picked to main as `d157c52` (git auto-merged the shared `Opcode.cs`/`JsVm.cs`/`JsCompiler.cs` with the computed-class-keys WP — no conflicts).

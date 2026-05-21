@@ -2,9 +2,10 @@
 id: "wp:M3-03a-js-module-destructuring"
 parent: "wp:M3-03-js-compiler"
 milestone: "M3"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody-moddestruct"
 claimed_at: "2026-05-21T01:01:13Z"
+completed_at: "2026-05-21T01:14:54Z"
 branch: "main"
 depends_on:
   - "wp:M3-02d-js-parser-destructuring"
@@ -78,3 +79,4 @@ WP, module-scope destructuring binds the extracted names as live module bindings
 
 ## Handoff log
 - 2026-05-21T01:01:13Z — created + claimed for agent-claude-cody-moddestruct (orchestrated Wave 1)
+- 2026-05-21T01:14Z — COMPLETE. `EmitModuleVarDecl` now lowers patterns via a minimal shared seam `EmitDestructuringFromStack` reusing `EmitPatternFromStack`; leaf stores resolve to module upvalue cells (no shadowing local), so destructured bindings are live + re-exportable. 17 new tests in `ModuleDestructuringTests.cs`. Cherry-picked to main as `a99ff7a`. Full JS suite green (1146).
