@@ -21,6 +21,7 @@ public static class PropertyRegistry
         PropertyId.TextAlign,
         PropertyId.TextAlignLast,
         PropertyId.TextDecoration,
+        PropertyId.TextShadow,
         PropertyId.TextTransform,
         PropertyId.TextIndent,
         PropertyId.TextOrientation,
@@ -115,6 +116,7 @@ public static class PropertyRegistry
             PropertyId.TextDecorationThickness => new CssKeyword("auto"),
             PropertyId.TextUnderlineOffset => new CssKeyword("auto"),
             PropertyId.TextUnderlinePosition => new CssKeyword("auto"),
+            PropertyId.TextShadow => CssTextShadow.None,
             PropertyId.TextTransform => new CssKeyword("none"),
             PropertyId.TextIndent => CssLength.Zero,
             PropertyId.WhiteSpace => new CssKeyword("normal"),
@@ -523,6 +525,11 @@ public static class PropertyRegistry
                     yield return item;
                 break;
 
+            // ---- Text shadow (CSS Text Decoration 3 §5) ----
+            case "text-shadow":
+                yield return new PropertyDeclaration(PropertyId.TextShadow, ParseTextShadow(values), important);
+                break;
+
             // ---- Transition / Animation shorthands (simplified: single layer only) ----
             // TODO(lane-B): Multi-layer comma-separated transition/animation requires CssValueList splitting on top-level commas.
             case "transition":
@@ -832,6 +839,62 @@ public static class PropertyRegistry
             else if (v is CssLength or CssPercentage)
                 yield return new PropertyDeclaration(PropertyId.TextDecorationThickness, v, important);
         }
+    }
+
+    /// <summary>
+    /// Parse the <c>text-shadow</c> value into a typed <see cref="CssTextShadow"/>
+    /// (CSS Text Decoration 3 §5). Grammar per layer:
+    /// <c>none | [ &lt;color&gt;? &amp;&amp; &lt;length&gt;{2,3} ]#</c>. Layers are
+    /// comma separated; within a layer the optional color may lead or trail the
+    /// two/three lengths (offset-x, offset-y, [blur]). Absolute-unit lengths are
+    /// resolved to px; relative units keep their face value (best-effort, no
+    /// computed-style context is available at parse time). Malformed layers are
+    /// dropped.
+    /// </summary>
+    private static CssTextShadow ParseTextShadow(List<CssValue> values)
+    {
+        if (values.Count == 1 && values[0] is CssKeyword { Name: "none" })
+            return CssTextShadow.None;
+
+        var layers = new List<CssTextShadowLayer>();
+        foreach (var layer in SplitTopLevelCommas(values))
+        {
+            CssColor? color = null;
+            var lengths = new List<double>(3);
+            var malformed = false;
+            foreach (var v in layer)
+            {
+                switch (v)
+                {
+                    case CssLength len:
+                        lengths.Add(len.Unit.IsAbsolute() ? len.Unit.AbsoluteToPx(len.Value) : len.Value);
+                        break;
+                    case CssNumber num:
+                        // Tolerate unit-less zero (and other bare numbers) as px.
+                        lengths.Add(num.Value);
+                        break;
+                    case CssColor c:
+                        color = c;
+                        break;
+                    case CssKeyword { Name: "currentColor" or "currentcolor" }:
+                        color = null; // currentColor is the default; the painter substitutes.
+                        break;
+                    default:
+                        malformed = true;
+                        break;
+                }
+            }
+
+            if (malformed || lengths.Count is < 2 or > 3)
+                continue;
+
+            var offsetX = lengths[0];
+            var offsetY = lengths[1];
+            var blur = lengths.Count == 3 ? Math.Max(0, lengths[2]) : 0d;
+            layers.Add(new CssTextShadowLayer(offsetX, offsetY, blur, color));
+        }
+
+        return layers.Count == 0 ? CssTextShadow.None : new CssTextShadow(layers);
     }
 
     private static IEnumerable<PropertyDeclaration> ExpandTransition(List<CssValue> values, bool important)

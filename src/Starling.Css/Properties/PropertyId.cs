@@ -217,6 +217,7 @@ public enum PropertyId
     TextDecorationThickness,
     TextUnderlineOffset,
     TextUnderlinePosition,
+    TextShadow,
     TextAlignLast,
 
     // Text layout

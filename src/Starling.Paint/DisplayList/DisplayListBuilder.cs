@@ -458,6 +458,15 @@ public sealed class DisplayListBuilder
         };
         var spec = FontSpec.FromStyle(style);
 
+        // CSS Text Decoration 3 — resolve the decoration + shadow style once per
+        // text box; both apply uniformly to every fragment in the run.
+        var lines = ResolveDecorationLines(style);
+        var decorationStyle = ResolveDecorationStyle(style);
+        var decorationColor = ResolveDecorationColor(style, color);
+        var thickness = ResolveDecorationThickness(style, fontSize);
+        var underlineOffset = ResolveUnderlineOffset(style, fontSize);
+        var shadow = ResolveTextShadow(style);
+
         foreach (var frag in text.Fragments)
         {
             if (frag.Text.Length == 0 || string.IsNullOrWhiteSpace(frag.Text)) continue;
@@ -470,6 +479,35 @@ public sealed class DisplayListBuilder
                 baselineY - fontSize,
                 frag.Width,
                 fontSize * 1.3d);
+
+            // text-shadow (CSS Text Decoration 3 §5): paint each layer beneath
+            // the foreground glyphs, back-to-front. Per spec the first listed
+            // layer renders on top, so emit the list in reverse.
+            for (var i = shadow.Layers.Count - 1; i >= 0; i--)
+            {
+                var layer = shadow.Layers[i];
+                var layerColor = layer.Color ?? color;
+                if (layerColor.A == 0) continue;
+                var shadowBounds = new Rect(
+                    glyphBounds.X + layer.OffsetX - layer.Blur,
+                    glyphBounds.Y + layer.OffsetY - layer.Blur,
+                    glyphBounds.Width + 2 * layer.Blur,
+                    glyphBounds.Height + 2 * layer.Blur);
+                Emit(list, new DrawTextShadow(
+                    frag.Text,
+                    x + frag.X,
+                    y + frag.Y,
+                    fontSize,
+                    layerColor,
+                    layer.OffsetX,
+                    layer.OffsetY,
+                    layer.Blur,
+                    spec.Families,
+                    spec.Bold,
+                    spec.Italic,
+                    frag.Shaped), shadowBounds, current, cull);
+            }
+
             Emit(list, new DrawText(
                 frag.Text,
                 x + frag.X,
@@ -481,34 +519,112 @@ public sealed class DisplayListBuilder
                 spec.Italic,
                 frag.Shaped), glyphBounds, current, cull);
 
-            if (IsUnderlined(style))
+            if (lines != TextDecorationLines.None && frag.Width > 0)
             {
-                // TODO: Underline position and thickness are font-dependent
-                // as are overline and strikethrough.
-                // Investigate whether browsers actually use the font metric or just eyeball it.
-                var underlineY = baselineY;
-                var underlineHeight = Math.Max(1d, Math.Round(fontSize / 16d));
-                var ul = new Rect(x + frag.X, underlineY, frag.Width, underlineHeight);
-                Emit(list, new FillRect(ul, color, FillRectPixelAlignment.SnapToDevicePixels), ul, current, cull);
+                // Decoration position/thickness depend on real font metrics, so
+                // emit a typed primitive carrying the run geometry + style and
+                // let the backend resolve exact y-offsets from the resolved
+                // face (CSS Text Decoration 3 §2). Cull bounds cover the full
+                // glyph box, which encloses all three line positions.
+                Emit(list, new DrawTextDecoration(
+                    x + frag.X,
+                    frag.Width,
+                    baselineY,
+                    fontSize,
+                    decorationColor,
+                    lines,
+                    decorationStyle,
+                    thickness,
+                    underlineOffset,
+                    spec.Families,
+                    spec.Bold,
+                    spec.Italic), glyphBounds, current, cull);
             }
         }
     }
 
-    private static bool IsUnderlined(ComputedStyle? style)
+    // ---- CSS Text Decoration 3 helpers (wp:M5-css-15) ----
+
+    private static TextDecorationLines ResolveDecorationLines(ComputedStyle? style)
     {
-        if (style is null) return false;
-        // The `text-decoration` shorthand expands to text-decoration-line, so
-        // the underline carrier in cascaded style is normally TextDecorationLine.
-        // Keep TextDecoration as a fallback for direct longhand authors.
-        return IsUnderlineValue(style.Get(PropertyId.TextDecorationLine))
-            || IsUnderlineValue(style.Get(PropertyId.TextDecoration));
+        if (style is null) return TextDecorationLines.None;
+        // The `text-decoration` shorthand expands to text-decoration-line; keep
+        // the legacy `text-decoration` carrier as a fallback for authors that
+        // set the longhand-less shorthand value directly.
+        var lines = LinesFromValue(style.Get(PropertyId.TextDecorationLine));
+        if (lines == TextDecorationLines.None)
+            lines = LinesFromValue(style.Get(PropertyId.TextDecoration));
+        return lines;
     }
 
-    private static bool IsUnderlineValue(CssValue? value) => value switch
+    private static TextDecorationLines LinesFromValue(CssValue? value)
     {
-        CssKeyword { Name: "underline" } => true,
-        CssValueList list => list.Values.OfType<CssKeyword>()
-            .Any(k => k.Name.Equals("underline", StringComparison.OrdinalIgnoreCase)),
-        _ => false,
+        var result = TextDecorationLines.None;
+        switch (value)
+        {
+            case CssKeyword k:
+                result |= LineFromKeyword(k.Name);
+                break;
+            case CssValueList list:
+                foreach (var item in list.Values.OfType<CssKeyword>())
+                    result |= LineFromKeyword(item.Name);
+                break;
+        }
+        return result;
+    }
+
+    private static TextDecorationLines LineFromKeyword(string name) => name.ToLowerInvariant() switch
+    {
+        "underline" => TextDecorationLines.Underline,
+        "overline" => TextDecorationLines.Overline,
+        "line-through" => TextDecorationLines.LineThrough,
+        _ => TextDecorationLines.None,
     };
+
+    private static TextDecorationStyleKind ResolveDecorationStyle(ComputedStyle? style)
+        => (style?.Get(PropertyId.TextDecorationStyle) as CssKeyword)?.Name.ToLowerInvariant() switch
+        {
+            "double" => TextDecorationStyleKind.Double,
+            "dotted" => TextDecorationStyleKind.Dotted,
+            "dashed" => TextDecorationStyleKind.Dashed,
+            "wavy" => TextDecorationStyleKind.Wavy,
+            _ => TextDecorationStyleKind.Solid,
+        };
+
+    private static CssColor ResolveDecorationColor(ComputedStyle? style, CssColor currentColor)
+    {
+        // text-decoration-color defaults to currentColor; only an explicit typed
+        // color overrides it (the keyword `currentColor` stays unresolved).
+        if (style?.Get(PropertyId.TextDecorationColor) is CssColor c) return c;
+        return currentColor;
+    }
+
+    private static double ResolveDecorationThickness(ComputedStyle? style, double fontSize)
+    {
+        switch (style?.Get(PropertyId.TextDecorationThickness))
+        {
+            case CssLength { Unit: CssLengthUnit.Px } px:
+                return Math.Max(0.5, px.Value);
+            case CssLength len:
+                return Math.Max(0.5, Starling.Layout.Block.BlockLayout.ToPx(len));
+            case CssPercentage pct:
+                return Math.Max(0.5, fontSize * pct.Value / 100d);
+            default:
+                // `auto` / `from-font`: ~1px at 16px, scaling with font size; the
+                // backend may refine this from the font's underline thickness.
+                return 0d; // sentinel: backend derives from font metrics.
+        }
+    }
+
+    private static double ResolveUnderlineOffset(ComputedStyle? style, double fontSize)
+        => style?.Get(PropertyId.TextUnderlineOffset) switch
+        {
+            CssLength { Unit: CssLengthUnit.Px } px => px.Value,
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
+            CssPercentage pct => fontSize * pct.Value / 100d,
+            _ => 0d, // auto
+        };
+
+    private static CssTextShadow ResolveTextShadow(ComputedStyle? style)
+        => style?.Get(PropertyId.TextShadow) as CssTextShadow ?? CssTextShadow.None;
 }

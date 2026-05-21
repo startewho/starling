@@ -307,6 +307,14 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 _diag.Counter("paint.draw_text", 1);
                 DrawText(canvas, text);
                 break;
+            case DrawTextShadow shadow:
+                _diag.Counter("paint.draw_text_shadow", 1);
+                DrawTextShadow(canvas, shadow, pendingImageSources);
+                break;
+            case DrawTextDecoration decoration:
+                _diag.Counter("paint.draw_text_decoration", 1);
+                DrawTextDecoration(canvas, decoration);
+                break;
             case DrawImage img:
                 _diag.Counter("paint.draw_image", 1);
                 DrawImage(canvas, img, pendingImageSources);
@@ -333,6 +341,179 @@ internal sealed class ImageSharpBackend : IPaintBackend
             : new TextBlock(text.Text, new TextOptions(font));
 
         canvas.DrawText(textBlock, new PointF(originX, originY), -1, brush, null);
+    }
+
+    // ---- CSS Text Decoration 3 (wp:M5-css-15) ----
+
+    private void DrawTextDecoration(DrawingCanvas canvas, DrawTextDecoration d)
+    {
+        if (d.Width <= 0 || d.Lines == TextDecorationLines.None) return;
+
+        var spec = new FontSpec(d.FontFamilies, d.Bold, d.Italic);
+        var size = (float)d.FontSize;
+        var font = ResolveFont(spec, probeCodepoint: 'x', size);
+        var fm = font.FontMetrics;
+        var unitsScale = fm.UnitsPerEm > 0 ? size / (float)fm.UnitsPerEm : size / 1000f;
+
+        // Real font metrics (design units → CSS px). OpenType underline/strikeout
+        // positions are measured from the baseline, positive = up.
+        var ascender = Math.Abs(fm.HorizontalMetrics.Ascender) * unitsScale;
+        var underlinePosFromBaseline = fm.UnderlinePosition * unitsScale; // typically negative (below)
+        var underlineThickness = fm.UnderlineThickness * unitsScale;
+        var strikeoutPosFromBaseline = fm.StrikeoutPosition * unitsScale; // positive (above baseline)
+
+        // Resolved thickness: 0 sentinel means `auto`/`from-font` — prefer the
+        // font's own underline thickness, falling back to ~1px-at-16px.
+        var thickness = d.Thickness > 0
+            ? d.Thickness
+            : (underlineThickness > 0 ? underlineThickness : Math.Max(1f, size / 16f));
+
+        var baseline = (float)d.BaselineY;
+        var color = ToColor(d.Color);
+        var x0 = (float)d.X;
+        var x1 = (float)(d.X + d.Width);
+        var offset = (float)d.UnderlineOffset;
+
+        if ((d.Lines & TextDecorationLines.Underline) != 0)
+        {
+            // Underline sits just below the baseline. Honor text-underline-offset
+            // (positive moves the line further from the text) on top of the
+            // font's underline position.
+            var yPos = underlinePosFromBaseline != 0
+                ? baseline - (float)underlinePosFromBaseline + offset
+                : baseline + Math.Max(1f, (float)thickness) + offset;
+            DrawDecorationLine(canvas, x0, x1, yPos, (float)thickness, color, d.Style);
+        }
+
+        if ((d.Lines & TextDecorationLines.Overline) != 0)
+        {
+            // Overline rides above the text, at roughly the ascender / cap line.
+            var yPos = baseline - (float)ascender;
+            DrawDecorationLine(canvas, x0, x1, yPos, (float)thickness, color, d.Style);
+        }
+
+        if ((d.Lines & TextDecorationLines.LineThrough) != 0)
+        {
+            // Line-through crosses near the middle of the x-height. Prefer the
+            // font's strikeout position; fall back to ~1/3 of the ascender.
+            var yPos = strikeoutPosFromBaseline != 0
+                ? baseline - (float)strikeoutPosFromBaseline
+                : baseline - (float)ascender / 3f;
+            DrawDecorationLine(canvas, x0, x1, yPos, (float)thickness, color, d.Style);
+        }
+    }
+
+    private static void DrawDecorationLine(DrawingCanvas canvas, float x0, float x1, float y, float thickness, Color color, TextDecorationStyleKind style)
+    {
+        var w = Math.Max(0.5f, thickness);
+        switch (style)
+        {
+            case TextDecorationStyleKind.Wavy:
+                canvas.Draw(Pens.Solid(color, w), BuildWavyPath(x0, x1, y, w));
+                break;
+            case TextDecorationStyleKind.Double:
+                // Two parallel lines separated by a gap of ~thickness.
+                var gap = w + Math.Max(1f, w);
+                canvas.Draw(Pens.Solid(color, w), HorizontalLine(x0, x1, y));
+                canvas.Draw(Pens.Solid(color, w), HorizontalLine(x0, x1, y + gap));
+                break;
+            case TextDecorationStyleKind.Dotted:
+                canvas.Draw(Pens.Dot(color, w), HorizontalLine(x0, x1, y));
+                break;
+            case TextDecorationStyleKind.Dashed:
+                canvas.Draw(Pens.Dash(color, w), HorizontalLine(x0, x1, y));
+                break;
+            default:
+                canvas.Draw(Pens.Solid(color, w), HorizontalLine(x0, x1, y));
+                break;
+        }
+    }
+
+    private static IPath HorizontalLine(float x0, float x1, float y)
+    {
+        var pb = new PathBuilder();
+        pb.AddLine(new PointF(x0, y), new PointF(x1, y));
+        return pb.Build();
+    }
+
+    private static IPath BuildWavyPath(float x0, float x1, float y, float thickness)
+    {
+        // Approximate the wavy underline as a sequence of cubic Bézier humps.
+        // Wavelength scales with thickness so heavier underlines wave wider.
+        var wavelength = Math.Max(4f, thickness * 4f);
+        var amplitude = Math.Max(1f, thickness);
+        var pb = new PathBuilder();
+        pb.StartFigure();
+        var x = x0;
+        pb.MoveTo(new PointF(x, y));
+        var up = true;
+        while (x < x1)
+        {
+            var next = Math.Min(x1, x + wavelength / 2f);
+            var dir = up ? -1f : 1f; // screen y grows downward; alternate humps
+            var c1 = new PointF(x + (next - x) / 2f, y + dir * amplitude);
+            var c2 = new PointF(x + (next - x) / 2f, y + dir * amplitude);
+            pb.AddCubicBezier(new PointF(x, y), c1, c2, new PointF(next, y));
+            x = next;
+            up = !up;
+        }
+        return pb.Build();
+    }
+
+    private void DrawTextShadow(DrawingCanvas canvas, DrawTextShadow s, DisposableBag pendingImageSources)
+    {
+        if (string.IsNullOrEmpty(s.Text)) return;
+
+        var spec = new FontSpec(s.FontFamilies, s.Bold, s.Italic);
+        var size = (float)s.FontSize;
+        var probe = FirstCodepoint(s.Text);
+        var font = ResolveFont(spec, probe, size);
+        var color = ToColor(s.Color);
+        var brush = Brushes.Solid(color);
+
+        var originX = (float)(s.X + s.OffsetX);
+        var originY = (float)(s.Y + s.OffsetY);
+
+        var textBlock = s.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size
+            ? shaped.TextBlock
+            : new TextBlock(s.Text, new TextOptions(font));
+
+        if (s.Blur <= 0)
+        {
+            // Sharp shadow: just an offset copy of the text in the shadow color.
+            canvas.DrawText(textBlock, new PointF(originX, originY), -1, brush, null);
+            return;
+        }
+
+        // Blurred shadow: render the text into an off-screen transparent buffer,
+        // Gaussian-blur it, then composite the result onto the canvas at the
+        // shadow offset. The buffer is sized in CSS px (1:1) with padding for
+        // the blur spread; the canvas transform handles device scaling when the
+        // blurred bitmap is blitted back.
+        var em = font.FontMetrics.UnitsPerEm > 0 ? size / (float)font.FontMetrics.UnitsPerEm : size / 1000f;
+        var ascent = Math.Abs(font.FontMetrics.HorizontalMetrics.Ascender) * em;
+        var descent = Math.Abs(font.FontMetrics.HorizontalMetrics.Descender) * em;
+        var advance = TextMeasurer.MeasureAdvance(s.Text, new TextOptions(font));
+        var pad = (int)Math.Ceiling(s.Blur * 3) + 2;
+        var width = (int)Math.Ceiling(advance.Width) + 2 * pad;
+        var height = (int)Math.Ceiling(ascent + descent) + 2 * pad;
+        if (width <= 0 || height <= 0) return;
+
+        var glyphLayer = new Image<Rgba32>(width, height, new Rgba32(0, 0, 0, 0));
+        // canvas.DrawImage records a command and rasterizes lazily when the
+        // outer Mutate/Paint scope unwinds, so the layer must outlive this call.
+        // Stage it in the bag that is disposed after readback (mirrors DrawImage).
+        pendingImageSources.Add(glyphLayer);
+
+        // The display-list DrawText origin (s.X, s.Y) is the top of the line box;
+        // render the glyph run at (pad, pad) inside the layer so it matches.
+        glyphLayer.Mutate(ctx => ctx.Paint(c =>
+            c.DrawText(new TextBlock(s.Text, new TextOptions(font)), new PointF(pad, pad), -1, brush, null)));
+        glyphLayer.Mutate(ctx => ctx.GaussianBlur((float)s.Blur));
+
+        // Composite at the offset origin minus the padding we added.
+        var destRect = new RectangleF(originX - pad, originY - pad, width, height);
+        canvas.DrawImage(glyphLayer, new Rectangle(0, 0, width, height), destRect, KnownResamplers.Bicubic);
     }
 
     private static void DrawImage(DrawingCanvas canvas, DrawImage item, DisposableBag pendingImageSources)

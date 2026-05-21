@@ -186,6 +186,132 @@ public sealed class ImageSharpBackendTests
             "identity-transform text must produce visible glyphs; an empty canvas would mean the prepared-text path is broken");
     }
 
+    /// <summary>
+    /// A solid red underline must rasterize as red pixels (CSS Text Decoration 3
+    /// §2). The builder emits a typed <see cref="DrawTextDecoration"/>; the
+    /// backend resolves the line position from font metrics and strokes it.
+    /// </summary>
+    [TestMethod]
+    public void Underline_decoration_paints_colored_line()
+    {
+        var list = new PaintList();
+        list.Add(new DrawTextDecoration(
+            X: 10,
+            Width: 120,
+            BaselineY: 40,
+            FontSize: 24,
+            Color: new CssColor(255, 0, 0, 255),
+            Lines: TextDecorationLines.Underline,
+            Style: TextDecorationStyleKind.Solid,
+            Thickness: 3,
+            UnderlineOffset: 0,
+            FontFamilies: new[] { "sans-serif" },
+            Bold: false,
+            Italic: false));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var bmp = backend.Render(list, new LayoutSize(200, 80));
+
+        BitmapPixels.CountExact(bmp, 255, 0, 0).Should().BeGreaterThan(
+            50, "a 3px-thick, 120px-wide underline must paint a band of red pixels");
+    }
+
+    /// <summary>
+    /// Every decoration style (solid/double/dotted/dashed/wavy) must rasterize
+    /// without throwing and leave visible pixels on the canvas.
+    /// </summary>
+    [TestMethod]
+    [DataRow(TextDecorationStyleKind.Solid)]
+    [DataRow(TextDecorationStyleKind.Double)]
+    [DataRow(TextDecorationStyleKind.Dotted)]
+    [DataRow(TextDecorationStyleKind.Dashed)]
+    [DataRow(TextDecorationStyleKind.Wavy)]
+    public void Decoration_styles_paint_without_throwing(TextDecorationStyleKind style)
+    {
+        var list = new PaintList();
+        list.Add(new DrawTextDecoration(
+            X: 10,
+            Width: 120,
+            BaselineY: 40,
+            FontSize: 24,
+            Color: new CssColor(0, 0, 0, 255),
+            Lines: TextDecorationLines.Underline | TextDecorationLines.LineThrough | TextDecorationLines.Overline,
+            Style: style,
+            Thickness: 2,
+            UnderlineOffset: 0,
+            FontFamilies: new[] { "sans-serif" },
+            Bold: false,
+            Italic: false));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        RenderedBitmap? bmp = null;
+        var act = () => bmp = backend.Render(list, new LayoutSize(200, 80));
+        act.Should().NotThrow();
+        using (bmp)
+        {
+            BitmapPixels.CountNonWhite(bmp!).Should().BeGreaterThan(0, $"{style} decoration must paint visible pixels");
+        }
+    }
+
+    /// <summary>
+    /// A sharp (blur 0) text-shadow paints an offset copy of the glyphs in the
+    /// shadow color beneath the foreground text (CSS Text Decoration 3 §5).
+    /// </summary>
+    [TestMethod]
+    public void Sharp_text_shadow_paints_offset_copy()
+    {
+        var list = new PaintList();
+        list.Add(new DrawTextShadow(
+            Text: "shadow",
+            X: 10,
+            Y: 20,
+            FontSize: 24,
+            Color: new CssColor(255, 0, 0, 255),
+            OffsetX: 3,
+            OffsetY: 3,
+            Blur: 0,
+            FontFamilies: new[] { "sans-serif" },
+            Bold: false,
+            Italic: false));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var bmp = backend.Render(list, new LayoutSize(200, 80));
+
+        BitmapPixels.CountExact(bmp, 255, 0, 0).Should().BeGreaterThan(
+            0, "a sharp shadow must paint red glyph pixels");
+    }
+
+    /// <summary>
+    /// A blurred text-shadow renders through the off-screen Gaussian-blur path
+    /// and composites visible (softened) pixels onto the canvas without throwing.
+    /// </summary>
+    [TestMethod]
+    public void Blurred_text_shadow_paints_softened_pixels()
+    {
+        var list = new PaintList();
+        list.Add(new DrawTextShadow(
+            Text: "blur",
+            X: 10,
+            Y: 20,
+            FontSize: 24,
+            Color: new CssColor(0, 0, 0, 255),
+            OffsetX: 2,
+            OffsetY: 2,
+            Blur: 3,
+            FontFamilies: new[] { "sans-serif" },
+            Bold: false,
+            Italic: false));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        RenderedBitmap? bmp = null;
+        var act = () => bmp = backend.Render(list, new LayoutSize(200, 80));
+        act.Should().NotThrow("the blurred-shadow off-screen path must not throw");
+        using (bmp)
+        {
+            BitmapPixels.CountNonWhite(bmp!).Should().BeGreaterThan(0, "a blurred shadow must leave softened pixels");
+        }
+    }
+
     private static void Fill(Span<byte> span, byte r, byte g, byte b, byte a)
     {
         for (var i = 0; i < span.Length; i += 4)
