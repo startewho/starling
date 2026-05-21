@@ -311,7 +311,163 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 _diag.Counter("paint.draw_image", 1);
                 DrawImage(canvas, img, pendingImageSources);
                 break;
+            case FillGradient grad:
+                _diag.Counter("paint.fill_gradient", 1);
+                FillGradient(canvas, grad);
+                break;
         }
+    }
+
+    /// <summary>
+    /// Rasterize a CSS Images 3 gradient by mapping its color stops onto an
+    /// ImageSharp.Drawing gradient brush sized to the fill box. Linear and
+    /// radial gradients (and their <c>repeating-</c> variants) are supported;
+    /// conic gradients have no ImageSharp brush and are filtered out before this
+    /// point, so they never reach the backend.
+    /// </summary>
+    private void FillGradient(DrawingCanvas canvas, FillGradient item)
+    {
+        var bounds = item.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        var gradient = item.Gradient;
+        if (gradient.Stops.Count < 2) return;
+
+        var stops = ResolveColorStops(gradient, Math.Max(bounds.Width, bounds.Height));
+        if (stops.Length < 2) return;
+
+        var repetition = gradient.Repeating
+            ? GradientRepetitionMode.Repeat
+            : GradientRepetitionMode.None;
+
+        var x = (float)bounds.X;
+        var y = (float)bounds.Y;
+        var w = (float)bounds.Width;
+        var h = (float)bounds.Height;
+        var path = ToRectPath(bounds);
+
+        Brush brush;
+        if (gradient.Kind == CssGradientKind.Radial)
+        {
+            var pos = gradient.Position ?? CssGradientPosition.Center;
+            var cx = x + (float)(pos.FractionX * w);
+            var cy = y + (float)(pos.FractionY * h);
+            var radius = RadialRadius(gradient, pos, w, h);
+            if (radius <= 0) return;
+            brush = new RadialGradientBrush(new PointF(cx, cy), radius, repetition, stops);
+        }
+        else
+        {
+            // Linear: map the CSS gradient angle to two endpoints on the box.
+            // CSS measures angle clockwise from "to top" (0deg = up). The
+            // gradient line passes through the box center; endpoints sit where
+            // it meets the box edge, with the start offset so the full color
+            // range covers the projected box extent (CSS Images 3 §3.1).
+            var angleDeg = gradient.Line?.ToDegrees(w, h) ?? 180.0;
+            var rad = angleDeg * Math.PI / 180.0;
+            // Direction the gradient progresses (toward the end color).
+            var dx = Math.Sin(rad);
+            var dy = -Math.Cos(rad);
+            // Length of the projected gradient line: |w·sin| + |h·cos| keeps the
+            // 0%/100% stops anchored to the box corners for the cardinal cases.
+            var lineLen = Math.Abs(w * dx) + Math.Abs(h * dy);
+            var ccx = x + w / 2.0;
+            var ccy = y + h / 2.0;
+            var p0 = new PointF((float)(ccx - dx * lineLen / 2.0), (float)(ccy - dy * lineLen / 2.0));
+            var p1 = new PointF((float)(ccx + dx * lineLen / 2.0), (float)(ccy + dy * lineLen / 2.0));
+            brush = new LinearGradientBrush(p0, p1, repetition, stops);
+        }
+
+        canvas.Fill(brush, path);
+    }
+
+    /// <summary>
+    /// Resolve a gradient's color stops into ImageSharp <see cref="ColorStop"/>s
+    /// with monotonically increasing ratios in 0..1. Stops without an explicit
+    /// position are evenly distributed between their neighbors per CSS Images 3
+    /// §3.4.3.
+    /// </summary>
+    private static ColorStop[] ResolveColorStops(CssGradient gradient, double lineLengthPx)
+    {
+        var src = gradient.Stops;
+        var ratios = new double?[src.Count];
+        for (var i = 0; i < src.Count; i++)
+        {
+            if (src[i].Position is { } p)
+                ratios[i] = Math.Clamp(p.ResolveFraction(lineLengthPx), 0.0, 1.0);
+        }
+
+        // First/last default to 0 / 1.
+        ratios[0] ??= 0.0;
+        ratios[^1] ??= 1.0;
+
+        // Enforce non-decreasing positions (CSS Images 3: a stop's position is
+        // clamped to be >= the previous stop's).
+        var lastKnown = 0.0;
+        for (var i = 0; i < ratios.Length; i++)
+        {
+            if (ratios[i] is { } r)
+            {
+                if (r < lastKnown) r = lastKnown;
+                ratios[i] = r;
+                lastKnown = r;
+            }
+        }
+
+        // Interpolate runs of null positions evenly between their bracketing
+        // known stops.
+        var idx = 0;
+        while (idx < ratios.Length)
+        {
+            if (ratios[idx] is not null) { idx++; continue; }
+            var startKnown = idx - 1;            // always >= 0 because [0] is set
+            var end = idx;
+            while (end < ratios.Length && ratios[end] is null) end++;
+            var endKnown = end;                  // ratios[end] is set (last is set)
+            var startVal = ratios[startKnown]!.Value;
+            var endVal = ratios[endKnown]!.Value;
+            var gap = endKnown - startKnown;
+            for (var k = idx; k < end; k++)
+                ratios[k] = startVal + (endVal - startVal) * (k - startKnown) / gap;
+            idx = end;
+        }
+
+        var result = new ColorStop[src.Count];
+        for (var i = 0; i < src.Count; i++)
+        {
+            var c = src[i].Color.ToSrgb();
+            result[i] = new ColorStop((float)ratios[i]!.Value, Color.FromPixel(new Rgba32(c.R, c.G, c.B, c.A)));
+        }
+        return result;
+    }
+
+    private static float RadialRadius(CssGradient gradient, CssGradientPosition pos, float w, float h)
+    {
+        // Distances from the gradient center to each box edge.
+        var left = pos.FractionX * w;
+        var right = w - left;
+        var top = pos.FractionY * h;
+        var bottom = h - top;
+
+        float closestSide = (float)Math.Min(Math.Min(left, right), Math.Min(top, bottom));
+        float farthestSide = (float)Math.Max(Math.Max(left, right), Math.Max(top, bottom));
+
+        double Corner(Func<double, double, double> pick)
+        {
+            var hx = pick(left, right);
+            var hy = pick(top, bottom);
+            return Math.Sqrt(hx * hx + hy * hy);
+        }
+        float closestCorner = (float)Corner(Math.Min);
+        float farthestCorner = (float)Corner(Math.Max);
+
+        return gradient.Size switch
+        {
+            CssRadialSize.ClosestSide => closestSide,
+            CssRadialSize.ClosestCorner => closestCorner,
+            CssRadialSize.FarthestSide => farthestSide,
+            CssRadialSize.FarthestCorner => farthestCorner,
+            _ => farthestCorner,
+        };
     }
 
     private void DrawText(DrawingCanvas canvas, DrawText text)

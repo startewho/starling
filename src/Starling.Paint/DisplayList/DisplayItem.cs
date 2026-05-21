@@ -65,3 +65,12 @@ public sealed record PopTransform : DisplayItem
 {
     public static PopTransform Instance { get; } = new();
 }
+
+/// <summary>
+/// Fills <paramref name="Bounds"/> with a CSS <c>&lt;gradient&gt;</c>
+/// (<see href="https://www.w3.org/TR/css-images-3/#gradients">CSS Images 3 §3</see>).
+/// The backend maps the gradient's color stops onto an ImageSharp gradient
+/// brush (linear or radial) sized to <paramref name="Bounds"/>. Conic gradients
+/// have no ImageSharp brush and are not emitted as this item.
+/// </summary>
+public sealed record FillGradient(Rect Bounds, CssGradient Gradient) : DisplayItem;
