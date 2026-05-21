@@ -1002,19 +1002,13 @@ public sealed partial class JsParser
         => new(name, @params, body, Generator: false, start, end);
 
     /// <summary>Parse the <c>(params) { body }</c> portion of an object-literal
-    /// method shorthand, having already consumed the property key.</summary>
+    /// method shorthand, having already consumed the property key.
+    /// Delegates to <see cref="ParseParameterList"/> so that a trailing
+    /// <c>...rest</c> element is accepted (wp:M3-27).</summary>
     private (List<Expression> Params, BlockStatement Body, JsPosition End) ParseMethodTail()
     {
         Expect(JsTokenKind.LParen, "expected '(' for method parameters");
-        var parameters = new List<Expression>();
-        if (!Check(JsTokenKind.RParen))
-        {
-            while (true)
-            {
-                parameters.Add(ParseParameter());
-                if (!Match(JsTokenKind.Comma)) break;
-            }
-        }
+        var parameters = ParseParameterList();
         Expect(JsTokenKind.RParen, "expected ')' after method parameters");
         var body = ParseBlock();
         return (parameters, body, body.End);
