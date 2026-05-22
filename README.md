@@ -28,6 +28,16 @@ architecture to make WASM a first-class citizen — hitting the DOM directly, no
 as a guest behind a JS bridge. And part of it, honestly, is just wanting to find
 out whether it can be done.
 
+## Contents
+
+- [Status](#status--high-level-buckets)
+- [Quickstart](#quickstart)
+  - [Six Labors license](#six-labors-license)
+- [Repository layout](#repository-layout)
+- [Interop policy](#interop-policy)
+- [Working on Starling](#working-on-starling)
+- [License](#license)
+
 ## Status — high-level buckets
 
 Legend: ✅ shipped · 🟡 partial / actively iterating · ⚫ not started
