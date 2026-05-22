@@ -4,6 +4,8 @@ Managed-first .NET 10 web browser. Built from primitives, no Chromium / Gecko / 
 Native interop is confined to one vetted seam (image codecs); everything
 else — including paint — is pure-managed.
 
+![Starling rendering netclaw.dev — an Astro + Redux-Toolkit site — in the Avalonia GUI shell](docs/screenshot.png)
+
 ## Status — high-level buckets
 
 Legend: ✅ shipped · 🟡 partial / actively iterating · ⚫ not started
@@ -29,29 +31,60 @@ work-package queue.
 
 ## Quickstart
 
-Requires the [.NET SDK 10.0.100](https://dotnet.microsoft.com/) or newer.
+You'll need:
+
+- The [.NET SDK 10.0.100](https://dotnet.microsoft.com/) or newer.
+- A Six Labors license key for the paint backend — a **free community license**
+  takes a couple of minutes. See [Six Labors license](#six-labors-license) below.
 
 ```bash
 dotnet restore
 dotnet build
 dotnet test
-
-# Render the static 'hello world' fixture (bare path is auto-normalized to file://)
-dotnet run --project src/Starling.Headless -- render testdata/hello.html -o out.png
-# The built CLI binary is named `starling`.
 ```
 
-> **Pure-managed paint.** The engine paints via ImageSharp.Drawing 3 — no
-> native graphics shim to build. The SixLabors stack requires a license key,
-> picked up from the repo-root `sixlabors.lic` automatically.
+**Launch the browser.** `aspire run` brings up the full app — the Avalonia GUI
+shell plus the headless renderer, orchestrated by Aspire (the dashboard URL
+prints on stdout, typically <http://localhost:18888>). This is the desktop
+browser pictured above.
+
+```bash
+aspire run
+```
+
+**Render a live site from the CLI.** The headless renderer fetches and paints a
+real URL straight to a PNG:
+
+```bash
+# The built CLI binary is named `starling`.
+dotnet run --project src/Starling.Headless -- render https://example.com -o example.png
+```
+
+`starling render https://example.com` is exercised in CI, and real-world bundles
+render end-to-end — e.g. netclaw.dev (an Astro + Redux-Toolkit site, pictured
+above). You can also point it at a local fixture for an offline smoke test (bare
+paths are auto-normalized to `file://`):
+
+```bash
+dotnet run --project src/Starling.Headless -- render testdata/hello.html -o out.png
+```
 
 The CLI accepts bare filesystem paths as well as well-formed `file://` URLs.
 `file:///absolute/path` works; `file://relative` does not (per the WHATWG URL
-spec, the segment after `//` is the authority/host, not part of the path).
-
-The CLI's full shape is documented in [`browser-plan/02_PROJECT_SETUP.md`](browser-plan/02_PROJECT_SETUP.md#headless-cli-shape).
-Subcommands beyond `render` and `tokenize` are still incremental and may return a
+spec, the segment after `//` is the authority/host, not part of the path). Its
+full shape is documented in [`browser-plan/02_PROJECT_SETUP.md`](browser-plan/02_PROJECT_SETUP.md#headless-cli-shape);
+subcommands beyond `render` and `tokenize` are still incremental and may return a
 "not yet implemented" message as they light up over the remaining milestones.
+
+### Six Labors license
+
+The engine paints via **ImageSharp.Drawing 3** — pure-managed, no native
+graphics shim to build — which is commercially licensed by Six Labors. The repo
+does **not** ship a license key (`sixlabors.lic` is gitignored), so each
+contributor supplies their own. **Applying for a community license is quick and
+easy: <https://licensing.sixlabors.com/>.** Save the key as `sixlabors.lic` in
+the repository root and the build picks it up automatically (CI uses the
+`SIXLABORS_LICENSE_KEY` secret instead).
 
 ## Repository layout
 
@@ -81,6 +114,10 @@ what the .NET BCL ships. The CI `lint` job greps the engine-project allowlist
 Each subsystem has a focused doc in [`browser-plan/`](browser-plan/). For agent-facing work
 packages with explicit inputs / outputs / acceptance, see
 [`14_AGENT_TASKS.md`](browser-plan/14_AGENT_TASKS.md).
+
+**New here?** Start with the design spec ([`browser-plan/00_INDEX.md`](browser-plan/00_INDEX.md))
+and the engineering conventions in [`AGENTS.md`](AGENTS.md). Bug reports,
+questions, and proposals are welcome via GitHub issues.
 
 **Implementation agents:** start with [`AGENTS.md`](AGENTS.md) and the queue at
 [`tasks/INDEX.md`](tasks/INDEX.md). Multiple agents can work in parallel — claim
