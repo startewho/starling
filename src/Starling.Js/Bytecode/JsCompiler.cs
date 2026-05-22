@@ -1871,6 +1871,16 @@ public sealed partial class JsCompiler
             case ArrowFunctionExpression arrow:
                 EmitArrowFunction(arrow);
                 return;
+            case PrivateInExpression pin:
+            {
+                // §13.10 `#x in obj` — resolve the private name to its mangled
+                // slot key (validates it is declared in an enclosing class),
+                // evaluate the operand, then run the brand check.
+                var mangled = ResolvePrivateName(pin.Name, pin.Start);
+                EmitExpression(pin.Object);
+                _b.EmitU16(Opcode.PrivateIn, _b.AddConstant(mangled));
+                return;
+            }
             case YieldExpression yld:
                 EmitYield(yld);
                 return;
@@ -2556,11 +2566,27 @@ public sealed partial class JsCompiler
 
     private void EmitMemberLoad(MemberExpression m)
     {
-        // Private name: obj.#name
+        // Private name: obj.#name (and the optional form obj?.#name).
         if (!m.Computed && m.Property is PrivateNameExpression pne)
         {
             var mangled = ResolvePrivateName(pne.Name, pne.Start);
-            EmitExpression(m.Object);
+            EmitExpression(m.Object);                 // [obj]
+            if (m.Optional)
+            {
+                // §13.3 OptionalChain — a nullish base short-circuits the chain
+                // to `undefined` without performing the private brand check.
+                _b.Emit(Opcode.Dup);                  // [obj, obj]
+                var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one
+                // base is nullish: drop it and yield undefined.
+                _b.Emit(Opcode.Pop);                  // []
+                _b.Emit(Opcode.LoadUndefined);        // [undefined]
+                var done = _b.EmitJump(Opcode.Jump);
+                _b.PatchJump(notNullish);             // [obj]
+                RecordPos(m);
+                _b.EmitU16(Opcode.PrivateGet, _b.AddConstant(mangled)); // [value]
+                _b.PatchJump(done);
+                return;
+            }
             RecordPos(m);
             _b.EmitU16(Opcode.PrivateGet, _b.AddConstant(mangled));
             return;

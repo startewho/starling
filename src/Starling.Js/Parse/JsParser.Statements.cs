@@ -59,6 +59,7 @@ public sealed partial class JsParser
             if (IsUseStrictDirective(stmt, lexeme))
             {
                 _strict = true;
+                _prologueHadUseStrict = true;
                 if (sawOctalDirective is { } p)
                     throw new JsParseException(
                         "octal escape sequences are not allowed in a strict-mode directive prologue", p);
@@ -604,6 +605,7 @@ public sealed partial class JsParser
             var (body, strict) = ParseFunctionBody();
             // §15.2.1 — the function-name and parameter early errors use the
             // function's OWN strictness (the body may have flipped to strict).
+            CheckUseStrictSimpleParams(parameters, start);
             if (strict && fnName is not null) CheckBindingIdentifier(fnName.Name, fnName.Start);
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);
@@ -634,6 +636,7 @@ public sealed partial class JsParser
             var (body, strict) = ParseFunctionBody();
             // §15.2.1 — name + parameter early errors use the function's own
             // strictness (a "use strict" body directive applies to both).
+            CheckUseStrictSimpleParams(parameters, start);
             if (strict) CheckBindingIdentifier(name.Name, name.Start);
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);

@@ -16,6 +16,14 @@ public sealed partial class JsParser
     /// (possibly nested) class scope.</summary>
     private readonly Stack<HashSet<string>> _classPrivateScopes = new();
 
+    /// <summary>§12.7.2 — the canonical (escape-decoded) name of a
+    /// PrivateIdentifier token. The lexer stores the decoded <c>#name</c> in the
+    /// token's <see cref="JsToken.Value"/>; the raw source slice (which may
+    /// contain <c>\u</c> escapes) lives in <see cref="JsToken.Lexeme"/>. Private
+    /// names are compared by their decoded text, so <c>#\u{6F}</c> and <c>#o</c>
+    /// denote the same name.</summary>
+    private static string PrivateNameOf(JsToken t) => t.Value as string ?? t.Lexeme;
+
     /// <summary>Tracks whether the parser is currently inside a derived
     /// class's constructor body so <c>super(...)</c> calls can be
     /// distinguished from <c>super.x()</c> member calls.</summary>
@@ -90,6 +98,12 @@ public sealed partial class JsParser
         var privateScope = new HashSet<string>(StringComparer.Ordinal);
         _classPrivateScopes.Push(privateScope);
 
+        // §15.7.1 — PrivateBoundNames duplicate check. Track each declared
+        // private name's prior placements so a duplicate is rejected unless it
+        // is exactly one getter + one setter of matching static-ness.
+        var privateDecls = new Dictionary<string, PrivateDecl>(StringComparer.Ordinal);
+        _privateDeclStack.Push(privateDecls);
+
         MethodDefinition? ctor = null;
         var methods = new List<MethodDefinition>();
         var fields = new List<PropertyField>();
@@ -111,9 +125,80 @@ public sealed partial class JsParser
         }
         finally
         {
+            _privateDeclStack.Pop();
             _classPrivateScopes.Pop();
             _strict = savedStrict;
         }
+    }
+
+    /// <summary>§15.7.1 — accumulated placements of one private name in a class
+    /// body, used to enforce the PrivateBoundNames duplicate rule.</summary>
+    private struct PrivateDecl
+    {
+        public bool HasGet, HasSet, HasOther;
+        public bool GetStatic, SetStatic;
+    }
+
+    private readonly Stack<Dictionary<string, PrivateDecl>> _privateDeclStack = new();
+
+    /// <summary>§15.7.1 ClassElementName early errors. Rejects a
+    /// <c>static</c> element named <c>"prototype"</c> (string or identifier key),
+    /// and the private name <c>#constructor</c> in any placement. A non-static
+    /// method named <c>prototype</c> is permitted, so it is not rejected here;
+    /// computed keys are checked at runtime, not statically.</summary>
+    private static void CheckClassElementName(Expression key, bool computed, bool isStatic, bool isField, MethodKind kind, JsPosition pos)
+    {
+        _ = isField; _ = kind;
+        if (key is PrivateNameExpression { Name: "#constructor" })
+            throw new JsParseException(
+                "'#constructor' is a reserved class private name", pos);
+        // A computed `static ['prototype']` is allowed syntactically — the
+        // duplicate is detected at runtime (a TypeError), not at parse time.
+        if (computed || !isStatic) return;
+        var name = key switch
+        {
+            Identifier id => id.Name,
+            StringLiteral sl => sl.Value,
+            _ => null,
+        };
+        if (name == "prototype")
+            throw new JsParseException(
+                "a static class element may not be named 'prototype'", pos);
+    }
+
+    /// <summary>§15.7.1 — record a private element declaration and reject an
+    /// illegal duplicate. The only legal repeat is a getter + setter sharing the
+    /// same name AND the same static placement; every other repeat (method+
+    /// method, field+anything, get+get, get+method, static-mismatched get/set,
+    /// …) is a SyntaxError.</summary>
+    private void RecordPrivateDeclaration(string name, MethodKind kind, bool isField, bool isStatic, JsPosition pos)
+    {
+        var decls = _privateDeclStack.Peek();
+        decls.TryGetValue(name, out var d);
+
+        bool dup;
+        if (isField || kind is MethodKind.Method)
+        {
+            // A field or ordinary/generator/async method must be the SOLE
+            // declaration of this name.
+            dup = d.HasGet || d.HasSet || d.HasOther;
+            d.HasOther = true;
+        }
+        else if (kind == MethodKind.Get)
+        {
+            dup = d.HasGet || d.HasOther || (d.HasSet && d.SetStatic != isStatic);
+            d.HasGet = true; d.GetStatic = isStatic;
+        }
+        else // Set
+        {
+            dup = d.HasSet || d.HasOther || (d.HasGet && d.GetStatic != isStatic);
+            d.HasSet = true; d.SetStatic = isStatic;
+        }
+
+        if (dup)
+            throw new JsParseException(
+                $"duplicate private name '{name}' in class body", pos);
+        decls[name] = d;
     }
 
     private void ParseClassMember(
@@ -130,7 +215,7 @@ public sealed partial class JsParser
         // method named "static"; `static {` is a static block; `static name`
         // is a static member.
         bool isStatic = false;
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "static")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "static")
         {
             var peek = _lex.Peek();
             // `static` followed by `(` or `=` or `;` is a regular member named "static".
@@ -157,7 +242,7 @@ public sealed partial class JsParser
         // `async` is contextual: a method modifier only when followed (same
         // line) by a method-name start; otherwise it is a member named "async".
         bool isGenerator = false, isAsync = false;
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "async")
         {
             var peek = _lex.Peek();
             if (!peek.PrecededByLineTerminator && IsMethodNameStartAfterModifier(peek.Kind))
@@ -172,7 +257,7 @@ public sealed partial class JsParser
         // async/* (those are distinct MethodDefinition productions).
         MethodKind methodKind = MethodKind.Method;
         if (!isAsync && !isGenerator
-            && _current.Kind == JsTokenKind.Identifier
+            && _current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape
             && (_current.Lexeme == "get" || _current.Lexeme == "set"))
         {
             var peek = _lex.Peek();
@@ -196,6 +281,10 @@ public sealed partial class JsParser
         if (methodKind == MethodKind.Method && !isAsync && !isGenerator
             && !Check(JsTokenKind.LParen))
         {
+            // §15.7.1 early errors for a field name.
+            CheckClassElementName(key, computed, isStatic, isField: true, MethodKind.Method, memberStart);
+            if (isPrivate && key is PrivateNameExpression pf)
+                RecordPrivateDeclaration(pf.Name, MethodKind.Method, isField: true, isStatic, memberStart);
             Expression? init = null;
             if (Match(JsTokenKind.Eq))
             {
@@ -221,6 +310,22 @@ public sealed partial class JsParser
             && key is Identifier { Name: "constructor" })
             throw new JsParseException(
                 "class constructor may not be a generator or async method", memberStart);
+        // §15.7.1 — a non-static accessor named "constructor" is a SyntaxError
+        // (`get constructor`/`set constructor`). A non-computed, non-private
+        // method named "constructor" is the constructor itself (isCtor above).
+        if (!isStatic && methodKind is MethodKind.Get or MethodKind.Set
+            && !computed && !isPrivate && key is Identifier { Name: "constructor" })
+            throw new JsParseException(
+                "class constructor may not be an accessor", memberStart);
+
+        // §15.7.1 early errors for the (non-constructor) method element name:
+        // `static prototype`, `#constructor`, etc.
+        if (!isCtor)
+        {
+            CheckClassElementName(key, computed, isStatic, isField: false, methodKind, memberStart);
+            if (isPrivate && key is PrivateNameExpression pm)
+                RecordPrivateDeclaration(pm.Name, methodKind, isField: false, isStatic, memberStart);
+        }
 
         // Track derived-constructor scope so `super(...)` is allowed only
         // when this is a derived class's constructor.
@@ -243,6 +348,7 @@ public sealed partial class JsParser
             // true here; ParseFunctionBody preserves it (no prologue can clear
             // it). Validate params under strict semantics.
             (body, _) = ParseFunctionBody();
+            CheckUseStrictSimpleParams(parameters, memberStart);
             ValidateParameters(parameters, strict: true);
             CheckParamsVsLexicalBody(parameters, body);
             endPos = body.End;
@@ -286,10 +392,13 @@ public sealed partial class JsParser
         if (_current.Kind == JsTokenKind.PrivateIdentifier)
         {
             var t = Advance();
-            // Track in the class's private-name scope so referencing this
-            // slot from inside the class body succeeds.
-            privateScope.Add(t.Lexeme);
-            return (new PrivateNameExpression(t.Lexeme, t.Start, t.End), false, true);
+            // §12.7.2 — a PrivateName's IdentifierName may use \u escapes; the
+            // canonical name is the DECODED text (token Value), so `#\u{6F}` and
+            // `#o` denote the same private name. Track the decoded name in the
+            // class's private-name scope so a later `this.#o` resolves.
+            var name = PrivateNameOf(t);
+            privateScope.Add(name);
+            return (new PrivateNameExpression(name, t.Start, t.End), false, true);
         }
         if (_current.Kind == JsTokenKind.StringLiteral)
         {

@@ -430,7 +430,7 @@ public sealed class JsLexer
     private JsToken ScanIdentifier(JsPosition start, bool precededByLT)
     {
         var sb = new StringBuilder();
-        _ = ScanIdentifierChars(sb, start);
+        var containsEscape = ScanIdentifierChars(sb, start);
         var lex = sb.ToString();
         // The token keeps its keyword kind even when written with a \u escape, so
         // an escaped reserved word stays usable as an IdentifierName (property /
@@ -443,7 +443,8 @@ public sealed class JsLexer
         return MakeToken(kind, lex, start, end, precededByLT,
             kind == JsTokenKind.BooleanLiteral ? lex == "true"
                 : kind == JsTokenKind.NullLiteral ? (object?)null
-                : null);
+                : null,
+            containsEscape: containsEscape);
     }
 
     /// <summary>Consume IdentifierStart followed by IdentifierPart* into
@@ -1146,10 +1147,12 @@ public sealed class JsLexer
 
     private static JsToken MakeToken(
         JsTokenKind kind, string lexeme, JsPosition start, JsPosition end,
-        bool precededByLT, object? value = null, bool legacyOctal = false)
+        bool precededByLT, object? value = null, bool legacyOctal = false,
+        bool containsEscape = false)
         => new(kind, lexeme, start, end, value)
         {
             PrecededByLineTerminator = precededByLT,
             LegacyOctal = legacyOctal,
+            ContainsEscape = containsEscape,
         };
 }
