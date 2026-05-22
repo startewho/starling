@@ -195,12 +195,15 @@ public sealed class JsLexer
 
         var c = _src[_i];
 
-        // Identifier / keyword
-        if (IsIdStart(c))
+        // Identifier / keyword — an identifier may begin with a raw
+        // IdentifierStart char or a \u escape that decodes to one (§12.6).
+        if (IsIdStart(c) || (c == '\\' && StartsIdentifierEscape(_i)))
             return ScanIdentifier(start, precededByLT);
 
-        // Private identifier — #name, only valid in class bodies (parser enforces).
-        if (c == '#' && _i + 1 < _src.Length && IsIdStart(_src[_i + 1]))
+        // Private identifier — #name, only valid in class bodies (parser
+        // enforces). The name part likewise allows a leading \u escape.
+        if (c == '#' && _i + 1 < _src.Length
+            && (IsIdStart(_src[_i + 1]) || (_src[_i + 1] == '\\' && StartsIdentifierEscape(_i + 1))))
             return ScanPrivateIdentifier(start, precededByLT);
 
         // Numeric literal
@@ -352,11 +355,8 @@ public sealed class JsLexer
         var begin = _i;
         Advance(); // '#'
         var sb = new StringBuilder("#");
-        while (_i < _src.Length && IsIdPart(_src[_i]))
-        {
-            sb.Append(_src[_i]);
-            Advance();
-        }
+        // The #-name allows the same \u escapes as a plain identifier (§12.6).
+        ScanIdentifierChars(sb, start);
         var lex = sb.ToString();
         return MakeToken(JsTokenKind.PrivateIdentifier, _src[begin.._i], start, CurrentPos(), precededByLT, lex);
     }
@@ -426,18 +426,55 @@ public sealed class JsLexer
     private JsToken ScanIdentifier(JsPosition start, bool precededByLT)
     {
         var sb = new StringBuilder();
-        while (_i < _src.Length && IsIdPart(_src[_i]))
-        {
-            sb.Append(_src[_i]);
-            Advance();
-        }
+        _ = ScanIdentifierChars(sb, start);
         var lex = sb.ToString();
+        // The token keeps its keyword kind even when written with a \u escape, so
+        // an escaped reserved word stays usable as an IdentifierName (property /
+        // member name — `a.if`, `{ if: 1 }`) while the parser still
+        // rejects a keyword-kind token where a BindingIdentifier / reference is
+        // required (`var if` → SyntaxError), per §12.7.2. A non-reserved
+        // escaped name resolves to a plain Identifier.
         var kind = KeywordLookup(lex);
         var end = CurrentPos();
         return MakeToken(kind, lex, start, end, precededByLT,
             kind == JsTokenKind.BooleanLiteral ? lex == "true"
                 : kind == JsTokenKind.NullLiteral ? (object?)null
                 : null);
+    }
+
+    /// <summary>Consume IdentifierStart followed by IdentifierPart* into
+    /// <paramref name="sb"/>, decoding any <c>\u</c> escapes (§12.6). Returns
+    /// true if at least one escape was used. Stops at the first char that is
+    /// neither a raw IdentifierPart nor a valid identifier escape.</summary>
+    private bool ScanIdentifierChars(StringBuilder sb, JsPosition start)
+    {
+        var hasEscape = false;
+        var first = true;
+        while (_i < _src.Length)
+        {
+            var c = _src[_i];
+            if (c == '\\')
+            {
+                var cp = PeekUnicodeEscape(_i, out var len);
+                if (cp < 0 || (first ? !IsIdStartCp(cp) : !IsIdPartCp(cp)))
+                {
+                    _errors.Report(JsLexError.InvalidUnicodeEscape, start,
+                        "invalid unicode escape in identifier");
+                    break;
+                }
+                sb.Append(char.ConvertFromUtf32(cp));
+                for (var k = 0; k < len; k++) Advance();
+                hasEscape = true;
+            }
+            else if (first ? IsIdStart(c) : IsIdPart(c))
+            {
+                sb.Append(c);
+                Advance();
+            }
+            else break;
+            first = false;
+        }
+        return hasEscape;
     }
 
     private static JsTokenKind KeywordLookup(string s) => s switch
@@ -948,6 +985,74 @@ public sealed class JsLexer
             or UnicodeCategory.SpacingCombiningMark
             or UnicodeCategory.DecimalDigitNumber
             or UnicodeCategory.ConnectorPunctuation;
+    }
+
+    // ----- §12.6 IdentifierName UnicodeEscapeSequence support -----------------
+
+    private static int HexDigit(char c) =>
+        c >= '0' && c <= '9' ? c - '0'
+        : c >= 'a' && c <= 'f' ? c - 'a' + 10
+        : c >= 'A' && c <= 'F' ? c - 'A' + 10
+        : -1;
+
+    /// <summary>Code-point-aware IdentifierStart test (handles astral code
+    /// points produced by a <c>\u{...}</c> escape).</summary>
+    private static bool IsIdStartCp(int cp)
+    {
+        if (cp <= 0xFFFF) return IsIdStart((char)cp);
+        var cat = CharUnicodeInfo.GetUnicodeCategory(char.ConvertFromUtf32(cp), 0);
+        return cat is UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter
+            or UnicodeCategory.TitlecaseLetter or UnicodeCategory.ModifierLetter
+            or UnicodeCategory.OtherLetter or UnicodeCategory.LetterNumber;
+    }
+
+    /// <summary>Code-point-aware IdentifierPart test.</summary>
+    private static bool IsIdPartCp(int cp)
+    {
+        if (cp <= 0xFFFF) return IsIdPart((char)cp);
+        var cat = CharUnicodeInfo.GetUnicodeCategory(char.ConvertFromUtf32(cp), 0);
+        return IsIdStartCp(cp) || cat is UnicodeCategory.NonSpacingMark
+            or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.DecimalDigitNumber
+            or UnicodeCategory.ConnectorPunctuation;
+    }
+
+    /// <summary>Peek a <c>\uXXXX</c> or <c>\u{...}</c> escape starting at
+    /// <paramref name="pos"/> (which must point at the backslash) WITHOUT
+    /// consuming. Returns the decoded code point and sets <paramref name="len"/>
+    /// to the number of source chars it spans; returns -1 when the slice is not
+    /// a well-formed unicode escape.</summary>
+    private int PeekUnicodeEscape(int pos, out int len)
+    {
+        len = 0;
+        if (pos + 1 >= _src.Length || _src[pos] != '\\' || _src[pos + 1] != 'u') return -1;
+        var p = pos + 2;
+        if (p < _src.Length && _src[p] == '{')
+        {
+            p++;
+            int val = 0; var any = false;
+            while (p < _src.Length && _src[p] != '}')
+            {
+                var d = HexDigit(_src[p]); if (d < 0) return -1;
+                val = val * 16 + d; if (val > 0x10FFFF) return -1;
+                any = true; p++;
+            }
+            if (!any || p >= _src.Length || _src[p] != '}') return -1;
+            len = (p - pos) + 1;
+            return val;
+        }
+        if (p + 4 > _src.Length) return -1;
+        int v = 0;
+        for (var k = 0; k < 4; k++) { var d = HexDigit(_src[p + k]); if (d < 0) return -1; v = v * 16 + d; }
+        len = (p + 4) - pos;
+        return v;
+    }
+
+    /// <summary>True when the source at <paramref name="pos"/> begins a
+    /// <c>\u</c> escape whose code point is a valid IdentifierStart.</summary>
+    private bool StartsIdentifierEscape(int pos)
+    {
+        var cp = PeekUnicodeEscape(pos, out _);
+        return cp >= 0 && IsIdStartCp(cp);
     }
 
     private static JsToken MakeToken(
