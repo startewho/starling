@@ -52,6 +52,29 @@ public sealed class Test262Runner
         _timeoutMs = timeoutMs;
     }
 
+    /// <summary>Test262 <c>features</c> tags that fall outside our targeted
+    /// ECMAScript level (ES2024 / ES15): post-ES2024 proposals (ES2025+ and
+    /// Stage-3 proposals) and explicitly out-of-scope subsystems (worker-only
+    /// shared memory, tail calls, ECMA-402 Intl). An ES2024-conformant engine
+    /// is not expected to implement these, so they are skipped rather than
+    /// counted as failures. Kept deliberately conservative — only features that
+    /// are unambiguously beyond ES2024.</summary>
+    private static readonly HashSet<string> OutOfScopeFeatures = new(StringComparer.Ordinal)
+    {
+        // Stage-3 proposals (not in any published edition):
+        "decorators", "explicit-resource-management", "Temporal",
+        "import-attributes", "import-assertions", "source-phase-import",
+        "import-defer", "tail-call-optimization",
+        // Worker-only shared memory (browser-plan: M8+, out of v1 scope):
+        "Atomics", "SharedArrayBuffer",
+        // ES2025+ library proposals:
+        "iterator-helpers", "set-methods", "Float16Array", "uint8array-base64",
+        "regexp-duplicate-named-groups", "promise-try", "regexp-escape",
+        "Array.fromAsync", "json-parse-with-source", "iterator-sequencing",
+        // ECMA-402 (Intl) — out of scope per 09_JS_ENGINE.md:
+        "Intl.DurationFormat", "Intl-enumeration", "Intl.Locale-info",
+    };
+
     public IReadOnlyList<ScenarioResult> RunFile(string path)
     {
         string source;
@@ -64,6 +87,16 @@ public sealed class Test262Runner
         // Module tests need the full loader + relative resolution; deferred.
         if (meta.IsModule)
             return new[] { new ScenarioResult(rel, ScenarioMode.NonStrict, Outcome.Skip, "module") };
+
+        // Skip tests that require a feature outside our targeted spec level
+        // (ES2024 / ES15). These are post-ES2024 proposals or explicitly
+        // out-of-scope subsystems (see browser-plan/09_JS_ENGINE.md "Out"),
+        // analogous to Jint's Test262Harness exclusion list — an ES2024 engine
+        // is not expected to pass them, so counting them would understate
+        // conformance against the targeted surface.
+        foreach (var f in meta.Features)
+            if (OutOfScopeFeatures.Contains(f))
+                return new[] { new ScenarioResult(rel, ScenarioMode.NonStrict, Outcome.Skip, "out-of-scope:" + f) };
 
         var results = new List<ScenarioResult>();
         foreach (var mode in Modes(meta))
