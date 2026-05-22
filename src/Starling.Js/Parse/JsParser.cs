@@ -282,6 +282,7 @@ public sealed partial class JsParser
                 var (block, strict) = ParseFunctionBody();
                 // §15.3.1 — arrow parameter early errors use the arrow's own
                 // strictness; arrow param lists are always checked for dups.
+                CheckUseStrictSimpleParams(@params, start);
                 ValidateParameters(@params, strict);
                 CheckParamsVsLexicalBody(@params, block);
                 return new ArrowFunctionExpression(@params, block, IsExpression: false,
@@ -466,6 +467,18 @@ public sealed partial class JsParser
 
     private Expression ParseRelational()
     {
+        // §13.10.1 RelationalExpression : PrivateIdentifier `in` ShiftExpression
+        // — the ergonomic-brand-check form `#x in obj`. A PrivateIdentifier here
+        // is ONLY legal as the left operand of `in`; any other use is an error.
+        if (_current.Kind == JsTokenKind.PrivateIdentifier
+            && _lex.Peek().Kind == JsTokenKind.In && _disallowInDepth == 0)
+        {
+            var pt = Advance();          // PrivateIdentifier
+            var name = PrivateNameOf(pt);
+            Advance();                   // 'in'
+            var right = ParseShift();
+            return new PrivateInExpression(name, right, pt.Start, right.End);
+        }
         return ParseRelationalTail(ParseShift());
     }
 
@@ -691,7 +704,7 @@ public sealed partial class JsParser
                 {
                     var pt = Advance();
                     node = new MemberExpression(node,
-                        new PrivateNameExpression(pt.Lexeme, pt.Start, pt.End),
+                        new PrivateNameExpression(PrivateNameOf(pt), pt.Start, pt.End),
                         Computed: false, Optional: false, node.Start, pt.End);
                     continue;
                 }
@@ -726,6 +739,14 @@ public sealed partial class JsParser
                     Expect(JsTokenKind.RBracket, "expected ']' after optional computed access");
                     node = new MemberExpression(node, idx,
                         Computed: true, Optional: true, node.Start, end);
+                }
+                else if (_current.Kind == JsTokenKind.PrivateIdentifier)
+                {
+                    // §13.3 — `obj?.#priv`: optional private-member access.
+                    var pt = Advance();
+                    node = new MemberExpression(node,
+                        new PrivateNameExpression(PrivateNameOf(pt), pt.Start, pt.End),
+                        Computed: false, Optional: true, node.Start, pt.End);
                 }
                 else
                 {
@@ -1014,7 +1035,7 @@ public sealed partial class JsParser
         // followed (on the same line) by a property-name start. Otherwise it is
         // an ordinary key — `{ async }`, `{ async: 1 }`, `{ async() {} }`.
         bool mGenerator = false, mAsync = false;
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "async")
         {
             var peek = _lex.Peek();
             if (!peek.PrecededByLineTerminator && IsMethodNameStartAfterModifier(peek.Kind))
@@ -1040,8 +1061,10 @@ public sealed partial class JsParser
         // (identifier / reserved word / string / number / computed `[`).
         // Otherwise they are an ordinary key: `{ get: 1 }` (data property
         // named "get") or `{ get(){} }` (method named "get"). Mirrors the
-        // class-body disambiguation in ParseClassMember.
-        if (_current.Kind == JsTokenKind.Identifier
+        // class-body disambiguation in ParseClassMember. An ESCAPED `get`/`set`
+        // (`get x(){}`) is NOT the contextual accessor keyword (§12.7.2), so
+        // it never introduces an accessor — `get`/`set` here must be unescaped.
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape
             && (_current.Lexeme == "get" || _current.Lexeme == "set"))
         {
             var peek = _lex.Peek();
@@ -1062,6 +1085,11 @@ public sealed partial class JsParser
             }
         }
 
+        // Snapshot the key token so the shorthand forms below can tell a plain
+        // IdentifierReference from a reserved word used as an IdentifierName
+        // (e.g. `{ if }`): the latter is a legal property KEY but never a legal
+        // shorthand VALUE / assignment-pattern target (§13.2.5.1 / §13.15.1).
+        var keyToken = _current;
         var (key, computed) = ParsePropertyKey();
 
         // Method shorthand: { foo() { … }, [bar](x) { … } }
@@ -1090,6 +1118,7 @@ public sealed partial class JsParser
         // assignment and binding-pattern parsing single-pass.
         if (!computed && key is Identifier id && Match(JsTokenKind.Eq))
         {
+            CheckShorthandIdentifier(keyToken);
             var fallback = ParseAssignment();
             var target = new AssignmentExpression("=", id, fallback, id.Start, fallback.End);
             return new ObjectProperty(key, target,
@@ -1098,6 +1127,7 @@ public sealed partial class JsParser
         // Shorthand: { foo } where foo is an identifier.
         if (!computed && key is Identifier id2)
         {
+            CheckShorthandIdentifier(keyToken);
             return new ObjectProperty(key, id2,
                 Shorthand: true, Computed: false, start, key.End);
         }
@@ -1194,7 +1224,9 @@ public sealed partial class JsParser
             Expect(JsTokenKind.LParen, "expected '(' for method parameters");
             var parameters = ParseParameterList();
             Expect(JsTokenKind.RParen, "expected ')' after method parameters");
+            var bodyStart = _current.Start;
             var (body, strict) = ParseFunctionBody();
+            CheckUseStrictSimpleParams(parameters, bodyStart);
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);
             return (parameters, body, body.End, strict);
@@ -1236,6 +1268,40 @@ public sealed partial class JsParser
             or JsTokenKind.Typeof or JsTokenKind.Var or JsTokenKind.Void
             or JsTokenKind.While or JsTokenKind.With or JsTokenKind.Yield
             or JsTokenKind.BooleanLiteral or JsTokenKind.NullLiteral;
+    }
+
+    /// <summary>§13.2.5.1 / §13.15.1 — a shorthand property's value
+    /// (<c>{ x }</c>) and an assignment-pattern shorthand target are an
+    /// IdentifierReference, which must NOT be a ReservedWord. A reserved word
+    /// is therefore a legal property KEY but an illegal shorthand. An escaped
+    /// reserved word (<c>{ if }</c>) is likewise illegal — the escape
+    /// does not make the word usable as an IdentifierReference (§12.7.2). The
+    /// contextual keyword <c>yield</c> is permitted by the cover grammar here
+    /// (sloppy-mode IdentifierReference); strict / generator contexts reject it
+    /// elsewhere. Throws a SyntaxError when the snapshot key token is illegal.</summary>
+    private void CheckShorthandIdentifier(JsToken keyToken)
+    {
+        // A genuine reserved-keyword token (other than the contextually-allowed
+        // `yield`) is never a valid IdentifierReference.
+        if (keyToken.Kind != JsTokenKind.Identifier
+            && keyToken.Kind != JsTokenKind.Yield
+            && IsReservedNameAllowedAsPropertyName(keyToken.Kind))
+            throw new JsParseException(
+                $"'{keyToken.Lexeme}' is a reserved word and cannot be used as a shorthand property", keyToken.Start);
+        // An escaped reserved word cannot serve as an IdentifierReference even
+        // though it keeps its keyword kind for IdentifierName positions.
+        if (keyToken.ContainsEscape && keyToken.Kind != JsTokenKind.Identifier)
+            throw new JsParseException(
+                $"escaped reserved word '{keyToken.Lexeme}' cannot be used as a shorthand property", keyToken.Start);
+        // §12.7.2 — in strict code the strict FutureReservedWords are reserved,
+        // so an escaped one (`let`, `static`, …) is likewise an
+        // illegal IdentifierReference. (A non-escaped strict reserved word as a
+        // shorthand binding target is caught by the later binding-name checks.)
+        if (_strict && keyToken.ContainsEscape
+            && keyToken.Kind == JsTokenKind.Identifier
+            && IsStrictReservedWord(keyToken.Lexeme))
+            throw new JsParseException(
+                $"escaped reserved word '{keyToken.Lexeme}' cannot be used as a shorthand property in strict mode", keyToken.Start);
     }
 
     // -----------------------------------------------------------------------

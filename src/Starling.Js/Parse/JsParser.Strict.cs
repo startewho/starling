@@ -122,9 +122,30 @@ public sealed partial class JsParser
     private void CheckAssignmentTarget(Expression target, JsPosition pos)
     {
         if (!_strict) return;
-        if (target is Identifier { Name: "eval" or "arguments" } id)
-            throw new JsParseException(
-                $"'{id.Name}' may not be assigned in strict mode", pos);
+        switch (target)
+        {
+            case Identifier { Name: "eval" or "arguments" } id:
+                throw new JsParseException(
+                    $"'{id.Name}' may not be assigned in strict mode", pos);
+            // §13.15.1 — assignment-pattern targets are SimpleAssignmentTargets
+            // too, so a strict `eval`/`arguments` anywhere inside the pattern
+            // (`{ eval } = …`, `[arguments] = …`, `{ x = 0, eval } = …`) is the
+            // same early SyntaxError. Recurse over the reinterpreted pattern.
+            case AssignmentPattern ap:
+                CheckAssignmentTarget(ap.Target, ap.Target.Start);
+                break;
+            case ArrayPattern arr:
+                foreach (var el in arr.Elements)
+                {
+                    if (el is ArrayPatternBindingElement be) CheckAssignmentTarget(be.Target, be.Target.Start);
+                    else if (el is ArrayPatternRestElement re) CheckAssignmentTarget(re.Target, re.Target.Start);
+                }
+                break;
+            case ObjectPattern obj:
+                foreach (var prop in obj.Properties) CheckAssignmentTarget(prop.Target, prop.Target.Start);
+                if (obj.Rest is not null) CheckAssignmentTarget(obj.Rest.Argument, obj.Rest.Argument.Start);
+                break;
+        }
     }
 
     /// <summary>§15.2.1 / §15.3.1 / §14.1.2 — validate a function's formal
@@ -208,12 +229,22 @@ public sealed partial class JsParser
     /// around its whole parse (including the parameter list, whose early errors
     /// use the resulting strictness per §15.2.1 — the directive prologue's
     /// effect applies to the entire function definition).</summary>
+    /// <summary>§15.2.1 — true when the most recently parsed FunctionBody's
+    /// directive prologue literally contained a <c>"use strict"</c> directive
+    /// (ContainsUseStrict). Read by callers right after
+    /// <see cref="ParseFunctionBody"/> to enforce the simple-parameter-list
+    /// rule, independent of any inherited strictness.</summary>
+    private bool _lastBodyContainsUseStrict;
+    private bool _prologueHadUseStrict;
+
     private (BlockStatement Body, bool Strict) ParseFunctionBody()
     {
         var start = _current.Start;
         Expect(JsTokenKind.LBrace, "{ expected");
         var savedNoIn = _disallowInDepth;
         _disallowInDepth = 0;
+        var savedPrologueUseStrict = _prologueHadUseStrict;
+        _prologueHadUseStrict = false;
         // An ordinary function body provides a `new.target` binding (§13.3.12).
         _functionDepth++;
         try
@@ -227,12 +258,25 @@ public sealed partial class JsParser
             Expect(JsTokenKind.RBrace, "expected '}' to close block");
             // §15.2.1 — the FunctionBody's own lexical/var early errors.
             CheckScopeEarlyErrors(body, ScopeKind.TopLevel);
+            _lastBodyContainsUseStrict = _prologueHadUseStrict;
             return (new BlockStatement(body, start, end), _strict);
         }
         finally
         {
             _disallowInDepth = savedNoIn;
             _functionDepth--;
+            _prologueHadUseStrict = savedPrologueUseStrict;
         }
+    }
+
+    /// <summary>§15.2.1 / §15.3.1 / §15.5.1 / §15.7.1 — a function whose body
+    /// has a <c>"use strict"</c> directive may not have a non-simple parameter
+    /// list. Call right after <see cref="ParseFunctionBody"/> (which sets
+    /// <see cref="_lastBodyContainsUseStrict"/>).</summary>
+    private void CheckUseStrictSimpleParams(IReadOnlyList<Expression> @params, JsPosition pos)
+    {
+        if (_lastBodyContainsUseStrict && !AreSimpleParams(@params))
+            throw new JsParseException(
+                "a function with a non-simple parameter list may not declare \"use strict\"", pos);
     }
 }
