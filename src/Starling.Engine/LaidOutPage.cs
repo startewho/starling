@@ -3,6 +3,7 @@ using Starling.Dom;
 using Starling.Layout;
 using Starling.Layout.Box;
 using Starling.Layout.Tree;
+using Starling.Net;
 using Starling.Net.Http;
 using Starling.Paint;
 
@@ -31,6 +32,12 @@ public sealed class LaidOutPage : IDisposable
     private readonly ImageFetcher _images;
     private readonly StylesheetFetcher _stylesheets;
     private readonly FontFaceRegistry _webFonts;
+    // Shared HTTP client backing the fetchers above (one pool / H2 manager / DNS
+    // cache for the whole page). The fetchers don't own it, so the page disposes
+    // it here — keeping it alive lets late/lazy resource fetches (e.g. images
+    // pulled in by a paint host) reuse the page's warm connections. Null for
+    // pages whose resources were transferred to a relayout successor.
+    private readonly StarlingHttpClient? _http;
     private bool _disposed;
     private bool _resourcesTransferred;
 
@@ -45,7 +52,8 @@ public sealed class LaidOutPage : IDisposable
         StylesheetFetcher stylesheets,
         FontFaceRegistry webFonts,
         float? defaultFontSize,
-        ConnectionSecurity? security = null)
+        ConnectionSecurity? security = null,
+        StarlingHttpClient? http = null)
     {
         Root = root;
         Document = document;
@@ -57,6 +65,7 @@ public sealed class LaidOutPage : IDisposable
         _images = images;
         _stylesheets = stylesheets;
         _webFonts = webFonts;
+        _http = http;
         DefaultFontSize = defaultFontSize;
         DisplayListVersion = System.Threading.Interlocked.Increment(ref _nextVersion);
     }
@@ -129,7 +138,7 @@ public sealed class LaidOutPage : IDisposable
         _resourcesTransferred = true;
         return new LaidOutPage(
             root, Document, style, viewport, Url, Title,
-            _images, _stylesheets, _webFonts, DefaultFontSize, Security);
+            _images, _stylesheets, _webFonts, DefaultFontSize, Security, _http);
     }
 
     public void Dispose()
@@ -142,5 +151,9 @@ public sealed class LaidOutPage : IDisposable
         _images.Dispose();
         _stylesheets.Dispose();
         _webFonts.Dispose();
+        // Disposed last: the fetchers may flush in-flight work on dispose, and
+        // they share this client. A relayout successor took ownership instead
+        // (transferred above), so this only fires for the terminal page.
+        _http?.Dispose();
     }
 }
