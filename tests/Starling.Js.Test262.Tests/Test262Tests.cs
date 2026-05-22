@@ -55,6 +55,7 @@ public class Test262Tests
         int pass = 0, fail = 0, timeoutN = 0, skip = 0;
         var byCat = new SortedDictionary<string, (int pass, int total)>(StringComparer.Ordinal);
         var failSamples = new List<string>();
+        var allFails = new List<string>();
         var sw = Stopwatch.StartNew();
         var fileCount = 0;
 
@@ -71,7 +72,7 @@ public class Test262Tests
                 switch (r.Outcome)
                 {
                     case Outcome.Pass: pass++; cur = (cur.Item1 + 1, cur.Item2 + 1); break;
-                    case Outcome.Fail: fail++; cur = (cur.Item1, cur.Item2 + 1); RecordSample(failSamples, r); break;
+                    case Outcome.Fail: fail++; cur = (cur.Item1, cur.Item2 + 1); RecordSample(failSamples, r); allFails.Add($"[{r.Mode}] {r.File} :: {r.Detail}"); break;
                     case Outcome.Timeout: timeoutN++; cur = (cur.Item1, cur.Item2 + 1); break;
                     case Outcome.Skip: skip++; break; // not counted in denominator
                 }
@@ -100,6 +101,8 @@ public class Test262Tests
         Directory.CreateDirectory(resultsDir);
         var reportPath = Path.Combine(resultsDir, "summary.txt");
         File.WriteAllText(reportPath, report.ToString());
+        // Full failure dump (every failing scenario) for offline triage.
+        File.WriteAllLines(Path.Combine(resultsDir, "failures.txt"), allFails);
 
         TestContext.WriteLine(report.ToString());
         TestContext.WriteLine("report: " + reportPath);
