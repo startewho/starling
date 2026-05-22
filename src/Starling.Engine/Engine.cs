@@ -147,6 +147,19 @@ public sealed class StarlingEngine
 
         using var images = new ImageFetcher(_diag, http);
         using var stylesheets = new StylesheetFetcher(_diag, http);
+        using var scripts = new ScriptFetcher(_diag, http);
+
+        // Start downloading external scripts now, concurrently with the
+        // stylesheet/image fetch below (and the font fetch that follows).
+        // Scripts have no data dependency on stylesheets or fonts being
+        // *downloaded* — only script *execution* must wait for stylesheets to
+        // apply, which is enforced where scripts run below — so serializing the
+        // downloads only inflates the critical path. FetchAllAsync enumerates
+        // the <script> elements synchronously before its first await, so this
+        // reads the DOM before any concurrent fetch can touch it. The task is
+        // awaited just before scripts execute.
+        var scriptsFetch = scripts.FetchAllAsync(doc, baseUrl: u, ct);
+
         using (_diag.Span("engine", "fetch_resources"))
         {
             await Task.WhenAll(
@@ -178,11 +191,13 @@ public sealed class StarlingEngine
         // nulled when a late resource invalidates the tree, and reuse is
         // additionally gated on HasLayout + an unchanged mutation version below.
         BoxLayoutHost? jsLayoutHost = null;
-        using (var scripts = new ScriptFetcher(_diag, http))
         {
+            // The script downloads were kicked off above and have been running
+            // concurrently with the stylesheet/font fetch; await their
+            // completion now, before any script executes.
             using (_diag.Span("engine", "fetch_scripts"))
             {
-                await scripts.FetchAllAsync(doc, baseUrl: u, ct).ConfigureAwait(false);
+                await scriptsFetch.ConfigureAwait(false);
             }
             if (scripts.Scripts.Count > 0 || scripts.ModuleScripts.Count > 0)
             {
@@ -363,111 +378,142 @@ public sealed class StarlingEngine
             return Result<LaidOutPage, RenderError>.Err(new RenderError($"URL parse failed: {parsed.Error}"));
 
         var u = parsed.Value;
-        string html;
-        Starling.Net.Http.ConnectionSecurity? security = null;
+
+        // One HTTP client (one connection pool / H2 manager / DNS cache) for the
+        // whole page load: the document fetch and every resource fetch
+        // (css/js/fonts/images) share it, so same-origin requests reuse a live
+        // HTTP/2 connection (or keep-alive H1 transport) instead of re-doing
+        // DNS+TCP+TLS per resource. Ownership transfers to the returned
+        // LaidOutPage (which disposes it, and hands it to a relayout successor);
+        // the finally below disposes it on every path that doesn't hand it over.
+        var http = _httpFactory();
+        var httpTransferred = false;
         try
         {
-            if (u.IsFile)
+            string html;
+            Starling.Net.Http.ConnectionSecurity? security = null;
+            try
             {
-                var path = u.ToFileSystemPath();
-                if (!File.Exists(path))
-                    return Result<LaidOutPage, RenderError>.Err(new RenderError($"File not found: {path}"));
-                html = File.ReadAllText(path);
-            }
-            else if (u.IsHttp || u.IsHttps)
-            {
-                // GUI layout path: the document fetch uses a throwaway client,
-                // and the resource fetchers below keep their own clients. Tying
-                // one shared pool to this path needs the client's lifetime bound
-                // to the returned LaidOutPage (which owns the fetchers); that is
-                // a follow-up. RenderAsync already shares one pool per page.
-                Result<(string Html, StarlingUrl FinalUrl, Starling.Net.Http.ConnectionSecurity? Security), RenderError> fetched;
-                using (var htmlHttp = _httpFactory())
-                    fetched = await FetchHtmlAsync(u, htmlHttp, ct).ConfigureAwait(false);
-                if (fetched.IsErr)
-                    return Result<LaidOutPage, RenderError>.Err(fetched.Error);
-                html = fetched.Value.Html;
-                security = fetched.Value.Security;
-                // Use the post-redirect URL as the base for relative resource
-                // resolution. See FetchHtmlAsync docstring.
-                u = fetched.Value.FinalUrl;
-            }
-            else
-            {
-                return Result<LaidOutPage, RenderError>.Err(new RenderError($"Unsupported scheme '{u.Scheme}'."));
-            }
-        }
-        catch (IOException ex)
-        {
-            return Result<LaidOutPage, RenderError>.Err(new RenderError(ex.Message));
-        }
-
-        // Scripting flag ENABLED — the engine executes page JS, so <noscript>
-        // contents must parse as inert raw text (WHATWG HTML §13.2.6.4.4).
-        var doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
-
-        // Page resources outlive this method — the caller's LaidOutPage owns
-        // and disposes them. On any path that doesn't return Ok we dispose
-        // here so callers don't have to.
-        var images = new ImageFetcher(_diag, _httpFactory);
-        var stylesheets = new StylesheetFetcher(_diag, _httpFactory);
-        var webFonts = new FontFaceRegistry();
-        try
-        {
-            await Task.WhenAll(
-                images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
-                stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
-            ).ConfigureAwait(false);
-
-            using (var fontFaceFetcher = new FontFaceFetcher(_diag, _httpFactory))
-            {
-                await fontFaceFetcher
-                    .FetchAllAsync(EnumerateAuthorSheets(doc, u, stylesheets), webFonts, ct)
-                    .ConfigureAwait(false);
-            }
-
-            using (var scripts = new ScriptFetcher(_diag, _httpFactory))
-            {
-                await scripts.FetchAllAsync(doc, baseUrl: u, ct).ConfigureAwait(false);
-                if (scripts.Scripts.Count > 0 || scripts.ModuleScripts.Count > 0)
+                if (u.IsFile)
                 {
-                    var preViewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
-                    // Lazy pre-script layout — see RenderAsync for rationale.
-                    (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Relayout()
-                    {
-                        using (_diag.Span("engine", "prelayout_for_js"))
-                            return _painter.LayoutDocumentWithStyle(
-                                doc, preViewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                                colorScheme: options.PreferredColorScheme);
-                    }
-                    var layoutHost = new BoxLayoutHost(doc, Relayout);
-                    await RunScriptsAsync(doc, u, scripts, layoutHost, ct).ConfigureAwait(false);
+                    var path = u.ToFileSystemPath();
+                    if (!File.Exists(path))
+                        return Result<LaidOutPage, RenderError>.Err(new RenderError($"File not found: {path}"));
+                    html = File.ReadAllText(path);
+                }
+                else if (u.IsHttp || u.IsHttps)
+                {
+                    Result<(string Html, StarlingUrl FinalUrl, Starling.Net.Http.ConnectionSecurity? Security), RenderError> fetched;
+                    fetched = await FetchHtmlAsync(u, http, ct).ConfigureAwait(false);
+                    if (fetched.IsErr)
+                        return Result<LaidOutPage, RenderError>.Err(fetched.Error);
+                    html = fetched.Value.Html;
+                    security = fetched.Value.Security;
+                    // Use the post-redirect URL as the base for relative resource
+                    // resolution. See FetchHtmlAsync docstring.
+                    u = fetched.Value.FinalUrl;
+                }
+                else
+                {
+                    return Result<LaidOutPage, RenderError>.Err(new RenderError($"Unsupported scheme '{u.Scheme}'."));
+                }
+            }
+            catch (IOException ex)
+            {
+                return Result<LaidOutPage, RenderError>.Err(new RenderError(ex.Message));
+            }
+
+            // Scripting flag ENABLED — the engine executes page JS, so <noscript>
+            // contents must parse as inert raw text (WHATWG HTML §13.2.6.4.4).
+            var doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
+
+            // Page resources outlive this method — the caller's LaidOutPage owns
+            // and disposes them (and the shared http client). On any path that
+            // doesn't return Ok we dispose here so callers don't have to.
+            var images = new ImageFetcher(_diag, http);
+            var stylesheets = new StylesheetFetcher(_diag, http);
+            var webFonts = new FontFaceRegistry();
+            try
+            {
+                using (var scripts = new ScriptFetcher(_diag, http))
+                {
+                    // Start external script downloads now, concurrently with the
+                    // stylesheet/image fetch below (and the font fetch that
+                    // follows). Scripts have no data dependency on stylesheets or
+                    // fonts being *downloaded* — only script *execution* must wait
+                    // for stylesheets to apply, which is enforced where scripts run
+                    // below — so serializing the downloads only inflates the
+                    // critical path. FetchAllAsync enumerates the <script> elements
+                    // synchronously before its first await, so this reads the DOM
+                    // before any concurrent fetch can touch it. The task is awaited
+                    // just before scripts execute. (Mirrors RenderAsync.)
+                    var scriptsFetch = scripts.FetchAllAsync(doc, baseUrl: u, ct);
+
                     await Task.WhenAll(
                         images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
                         stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
                     ).ConfigureAwait(false);
+
+                    using (var fontFaceFetcher = new FontFaceFetcher(_diag, http))
+                    {
+                        await fontFaceFetcher
+                            .FetchAllAsync(EnumerateAuthorSheets(doc, u, stylesheets), webFonts, ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    // The script downloads were kicked off above and have been
+                    // running concurrently with the stylesheet/font fetch; await
+                    // their completion now, before any script executes.
+                    await scriptsFetch.ConfigureAwait(false);
+                    if (scripts.Scripts.Count > 0 || scripts.ModuleScripts.Count > 0)
+                    {
+                        var preViewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
+                        // Lazy pre-script layout — see RenderAsync for rationale.
+                        (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Relayout()
+                        {
+                            using (_diag.Span("engine", "prelayout_for_js"))
+                                return _painter.LayoutDocumentWithStyle(
+                                    doc, preViewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                    colorScheme: options.PreferredColorScheme);
+                        }
+                        var layoutHost = new BoxLayoutHost(doc, Relayout);
+                        await RunScriptsAsync(doc, u, scripts, layoutHost, ct).ConfigureAwait(false);
+                        await Task.WhenAll(
+                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
+                            stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
+                        ).ConfigureAwait(false);
+                    }
                 }
+
+                await images
+                    .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
+                    .ConfigureAwait(false);
+
+                var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
+                var (root, style) = _painter.LayoutDocumentWithStyle(
+                    doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                    colorScheme: options.PreferredColorScheme);
+
+                var title = ExtractTitle(doc);
+                var page = new LaidOutPage(
+                    root, doc, style, viewport, url, title, images, stylesheets, webFonts,
+                    options.FontSize, security, http);
+                httpTransferred = true;
+                return Result<LaidOutPage, RenderError>.Ok(page);
             }
-
-            await images
-                .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
-                .ConfigureAwait(false);
-
-            var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
-            var (root, style) = _painter.LayoutDocumentWithStyle(
-                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                colorScheme: options.PreferredColorScheme);
-
-            var title = ExtractTitle(doc);
-            return Result<LaidOutPage, RenderError>.Ok(
-                new LaidOutPage(root, doc, style, viewport, url, title, images, stylesheets, webFonts, options.FontSize, security));
+            catch
+            {
+                images.Dispose();
+                stylesheets.Dispose();
+                webFonts.Dispose();
+                throw;
+            }
         }
-        catch
+        finally
         {
-            images.Dispose();
-            stylesheets.Dispose();
-            webFonts.Dispose();
-            throw;
+            // Disposed unless ownership was handed to the returned LaidOutPage.
+            if (!httpTransferred)
+                http.Dispose();
         }
     }
 
