@@ -91,4 +91,4 @@ via `./tasks/lib/claim.sh complete <wp-id>`. The full workflow is in
 
 ## License
 
-TBD (set before public release).
+BSD 2-Clause License. See [`LICENSE`](LICENSE) for details.
