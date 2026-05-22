@@ -290,6 +290,18 @@ public sealed record PrivateNameExpression(
     : Expression(Start, End);
 
 /// <summary>
+/// §13.10 ergonomic brand check — <c>#name in object</c>. Evaluates to a
+/// boolean: whether <see cref="Object"/> carries the private element named
+/// <see cref="Name"/> declared by the enclosing class. The left operand is a
+/// bare PrivateIdentifier (not a member access on a receiver), so it is its own
+/// AST node rather than a <see cref="BinaryExpression"/>.
+/// </summary>
+public sealed record PrivateInExpression(
+    string Name, Expression Object,
+    JsPosition Start, JsPosition End)
+    : Expression(Start, End);
+
+/// <summary>
 /// <c>class [Name] [extends Base] { body }</c> as an expression.
 /// <see cref="Name"/> is optional; when present it's bound inside the body
 /// only (the rest of the program does not see it).

@@ -288,6 +288,7 @@ internal static class CaptureAnalysis
             case NullLiteral: case BigIntLiteral: case RegExpLiteral:
             case ThisExpression: case PrivateNameExpression:
                 return;
+            case PrivateInExpression pin: WalkExpressionInOuter(pin.Object, captured); return;
             case BinaryExpression bin: WalkExpressionInOuter(bin.Left, captured); WalkExpressionInOuter(bin.Right, captured); return;
             case LogicalExpression log: WalkExpressionInOuter(log.Left, captured); WalkExpressionInOuter(log.Right, captured); return;
             case UnaryExpression u: WalkExpressionInOuter(u.Argument, captured); return;
@@ -659,6 +660,7 @@ internal static class CaptureAnalysis
             case NullLiteral: case BigIntLiteral: case RegExpLiteral:
             case ThisExpression: case PrivateNameExpression:
                 return;
+            case PrivateInExpression pin: InnerExpression(pin.Object, scopes, outerCaptured); return;
             case BinaryExpression bin: InnerExpression(bin.Left, scopes, outerCaptured); InnerExpression(bin.Right, scopes, outerCaptured); return;
             case LogicalExpression log: InnerExpression(log.Left, scopes, outerCaptured); InnerExpression(log.Right, scopes, outerCaptured); return;
             case UnaryExpression u: InnerExpression(u.Argument, scopes, outerCaptured); return;

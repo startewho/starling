@@ -164,6 +164,12 @@ public sealed partial class JsParser
                 ReinterpretAssignmentTarget(assignment.Target), assignment.Value, assignment.Start, assignment.End),
             AssignmentPattern assignment => new AssignmentPattern(
                 ReinterpretAssignmentTarget(assignment.Target), assignment.Default, assignment.Start, assignment.End),
+            // §13.15.1 — a destructuring target's MemberExpression must be a
+            // valid SimpleAssignmentTarget, which an OptionalChain
+            // (`[x?.y] = …`) is not (its CoverParenthesizedExpression cannot be
+            // an AssignmentTarget). Reject any optional link in the chain.
+            MemberExpression me when ChainHasOptional(me)
+                => throw new JsParseException("optional chain is not a valid assignment target", me.Start),
             // wp:M3-04h — `super[expr]` (and `super.name`) are valid
             // SimpleAssignmentTargets per §13.15.1; the compiler lowers the
             // write to StoreSuperComputed / StoreSuperProperty.
@@ -171,6 +177,19 @@ public sealed partial class JsParser
             BindingPattern => expr,
             _ => throw new JsParseException("invalid destructuring assignment target", expr.Start),
         };
+
+    /// <summary>§13.15.1 — true when a MemberExpression contains any optional
+    /// (<c>?.</c>) link anywhere along its object chain. Such a reference is an
+    /// OptionalChain, which is not a valid SimpleAssignmentTarget.</summary>
+    private static bool ChainHasOptional(Expression expr)
+    {
+        while (expr is MemberExpression me)
+        {
+            if (me.Optional) return true;
+            expr = me.Object;
+        }
+        return false;
+    }
 
     private static Expression ReinterpretBindingParameter(Expression expr)
         => expr switch
@@ -207,6 +226,11 @@ public sealed partial class JsParser
             {
                 if (i != array.Elements.Count - 1)
                     throw new JsParseException("array rest binding must be last", spread.Start);
+                // §13.15.5.1 — a rest element's AssignmentRestElement is a bare
+                // DestructuringAssignmentTarget; it may NOT carry an Initializer
+                // (`[...x = 1] = …` is a SyntaxError).
+                if (spread.Argument is AssignmentExpression { Op: "=" } or AssignmentPattern)
+                    throw new JsParseException("rest element may not have a default value", spread.Start);
                 elements.Add(new ArrayPatternRestElement(ReinterpretAssignmentTarget(spread.Argument), spread.Start, spread.End));
                 continue;
             }
