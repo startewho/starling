@@ -1667,11 +1667,25 @@ public sealed class JsVm
                         throw new JsThrow(_runtime.Realm.NewTypeError(
                             "Cannot read private member from an object whose class did not declare it"));
                     }
-                    // Walk the chain via Has/Get so private methods installed on
-                    // the class prototype are reachable through the brand check.
-                    // Private fields, by contrast, always land as own properties
-                    // (defined via DefinePrivateField) so the lookup short-circuits.
-                    Push(receiver.AsObject.Get(name));
+                    // §13.3.4.2 PrivateGet — a private accessor's getter must be
+                    // invoked with `this` = receiver; a private method or field
+                    // yields its value directly. Routing through the AO walks the
+                    // chain (private methods/accessors live on the prototype) and
+                    // invokes any getter; a §13.3.4 get on a set-only accessor is
+                    // a TypeError.
+                    var obj = receiver.AsObject;
+                    var (getDesc, _) = FindPrivateDescriptor(obj, name);
+                    if (getDesc is { IsAccessor: true } ga)
+                    {
+                        if (ga.Getter is null)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                $"'{name}' was defined without a getter"));
+                        Push(AbstractOperations.Call(this, JsValue.Object(ga.Getter), receiver, Array.Empty<JsValue>()));
+                    }
+                    else
+                    {
+                        Push(getDesc?.Value ?? obj.Get(name));
+                    }
                     break;
                 }
                 case Opcode.PrivateSet:
@@ -1685,7 +1699,30 @@ public sealed class JsVm
                         throw new JsThrow(_runtime.Realm.NewTypeError(
                             "Cannot write private member from an object whose class did not declare it"));
                     }
-                    receiver.AsObject.Set(name, value);
+                    // §13.3.4.3 PrivateSet — invoke a private accessor's setter
+                    // with `this` = receiver; writing a get-only accessor or a
+                    // private method is a TypeError. A private field writes its
+                    // own slot directly.
+                    var sobj = receiver.AsObject;
+                    var (setDesc, ownsField) = FindPrivateDescriptor(sobj, name);
+                    if (setDesc is { IsAccessor: true } sa)
+                    {
+                        if (sa.Setter is null)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                $"'{name}' was defined without a setter"));
+                        AbstractOperations.Call(this, JsValue.Object(sa.Setter), receiver, new[] { value });
+                    }
+                    else if (setDesc is { IsAccessor: false } && !ownsField)
+                    {
+                        // A private *method* (data descriptor on the prototype) is
+                        // not writable (§13.3.4.3 step "if entry.[[Kind]] is method").
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            $"private method '{name}' is not writable"));
+                    }
+                    else
+                    {
+                        sobj.Set(name, value);
+                    }
                     Push(value);
                     break;
                 }
@@ -1702,6 +1739,23 @@ public sealed class JsVm
                             "Cannot initialize the same private member twice on the same object"));
                     receiver.AsObject.DefineOwnProperty(name,
                         PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: false));
+                    break;
+                }
+                case Opcode.PrivateIn:
+                {
+                    var idx = ReadU16();
+                    var name = (string)constants[idx]!;
+                    var operand = Pop();
+                    // §13.10.1 step 4 — a non-object right operand is a TypeError
+                    // (not `false`).
+                    if (!operand.IsObject)
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot use 'in' operator to search for a private name in a non-object"));
+                    // The brand check is true only when the object carries the
+                    // private element. A private field lives as an own property on
+                    // the instance; a private method/accessor is installed on the
+                    // class prototype, so consult the chain.
+                    Push(JsValue.Boolean(FindPrivateDescriptor(operand.AsObject, name).Desc is not null));
                     break;
                 }
                 case Opcode.LoadCallerArgs:
@@ -2460,6 +2514,25 @@ public sealed class JsVm
         }
 
         return JsValue.Object(ctorInstance);
+    }
+
+    /// <summary>Locate a private member's descriptor for a mangled name: a
+    /// private field lives as an OWN property on the instance (defined via
+    /// <see cref="Opcode.DefinePrivateField"/>); a private method/accessor lives
+    /// on the class prototype (or the constructor, for statics). Returns the
+    /// descriptor and whether it was found as an own property of
+    /// <paramref name="obj"/> (i.e. a field, which the caller may write
+    /// directly).</summary>
+    private static (PropertyDescriptor? Desc, bool Own) FindPrivateDescriptor(JsObject obj, string name)
+    {
+        var own = obj.GetOwnPropertyDescriptor(name);
+        if (own is not null) return (own, true);
+        for (var o = obj.Prototype; o is not null; o = o.Prototype)
+        {
+            var d = o.GetOwnPropertyDescriptor(name);
+            if (d is not null) return (d, false);
+        }
+        return (null, false);
     }
 
     private static void InstallMethodOrAccessor(JsObject owner, string key, Starling.Js.Bytecode.ClassMethodKind kind, JsFunction fn)

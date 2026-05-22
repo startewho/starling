@@ -257,6 +257,11 @@ public enum Opcode : byte
     /// private slot on the receiver. Throws TypeError if the slot already
     /// exists. Pushes nothing (consumes both operands).</summary>
     DefinePrivateField,
+    /// <summary>[u16 mangledNameIdx] — §13.10 ergonomic brand check
+    /// (<c>#x in obj</c>): pop the operand; push <c>true</c> when it is an
+    /// object carrying the named private element, else <c>false</c>. Never
+    /// throws for a non-object operand (unlike PrivateGet).</summary>
+    PrivateIn,
     /// <summary>[u16 templateIdx] — consult the <see cref="ClassTemplate"/>
     /// constant; if the template has <c>HasExtends</c>, pop the base-class
     /// value from the stack. Allocate the class constructor + prototype,

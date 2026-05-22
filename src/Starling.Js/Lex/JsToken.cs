@@ -27,6 +27,15 @@ public readonly record struct JsToken(
     /// the token appears in a strict scope.</summary>
     public bool LegacyOctal { get; init; }
 
+    /// <summary>True when an identifier / keyword token contained at least one
+    /// <c>\u</c> Unicode escape in its source (§12.7.2). An escaped reserved
+    /// word keeps its keyword <see cref="Kind"/> so it can still serve as an
+    /// IdentifierName (property / member name), but the parser must reject it
+    /// wherever a literal reserved word would itself be illegal — e.g. as a
+    /// BindingIdentifier or as an IdentifierReference in an assignment pattern
+    /// (<c>{ if } = …</c> is a SyntaxError).</summary>
+    public bool ContainsEscape { get; init; }
+
     public override string ToString() =>
         $"{Kind} \"{Lexeme}\" at {Start}";
 }
