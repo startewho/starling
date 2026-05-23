@@ -1,13 +1,47 @@
+using Jint.Native;
+using Starling.Common.Diagnostics;
+
 namespace Starling.Bindings.Jint;
 
-// J3d — document.cookie.
-// Mirrors Starling.Bindings/CookieBinding.cs.
-// Wave-2 agent J3d: install the document.cookie accessor over the session's
-// CookieJar. Must run after NodeBindings (needs DocumentPrototype).
+/// <summary>
+/// J3d — HTML §6.7.3 <c>document.cookie</c> on the Jint backend.
+/// Mirrors <c>Starling.Bindings/CookieBinding.cs</c>.
+/// </summary>
+/// <remarks>
+/// <see cref="Starling.Js.Hosting.ScriptSessionOptions"/> does not yet expose a
+/// CookieJar to bindings (cookies live in <c>StarlingHttpClient</c> for now).
+/// This binding therefore installs a graceful no-op accessor: the getter
+/// returns <c>""</c>; the setter logs a debug diagnostic and discards the
+/// value. When a session-scoped CookieJar lands, this is the only file to
+/// teach about it.
+/// </remarks>
 internal static class CookieBinding
 {
     public static void Install(JintBackendContext ctx)
     {
-        // TODO J3d
+        ArgumentNullException.ThrowIfNull(ctx);
+        var engine = ctx.Engine;
+        var documentProto = ctx.Wrappers.DocumentPrototype;
+        if (documentProto is null)
+        {
+            // J2b NodeBindings hasn't installed a Document prototype slot.
+            // Without it we have nowhere idempotent to attach the accessor.
+            ctx.Diag?.Log(DiagLevel.Debug, "jint.cookie",
+                "DocumentPrototype is null; document.cookie accessor not installed.");
+            return;
+        }
+
+        JintInterop.DefineAccessor(engine, documentProto, "cookie",
+            (_, _) => JintInterop.Str(""),
+            (_, args) =>
+            {
+                var value = args.Length > 0 ? args[0].ToString() : "";
+                ctx.Diag?.Log(DiagLevel.Debug, "jint.cookie",
+                    $"document.cookie= ignored (no CookieJar wired): {Truncate(value)}");
+                return JsValue.Undefined;
+            });
     }
+
+    private static string Truncate(string s, int max = 120)
+        => s.Length <= max ? s : s[..max] + "…";
 }

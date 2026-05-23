@@ -170,11 +170,20 @@ internal sealed class JintScriptSession : IScriptSession
     {
         try
         {
-            // Both DOMContentLoaded and load are dispatched on the document here;
-            // J2d/J3a route window-targeted listeners once the Window surface
-            // exists. (onWindow is kept in the signature for that wiring.)
-            _ = onWindow;
-            _ctx.Document.DispatchEvent(new Starling.Dom.Events.Event(type));
+            // DOMContentLoaded targets the document and bubbles through the DOM
+            // tree; load targets the window only. Both also dispatch on the
+            // separate window host EventTarget (bound by J2d's WindowBinding via
+            // JintDomWrapper.BindExisting on engine.Global) because the window
+            // is not in the DOM parent chain that EventDispatcher walks.
+            if (!onWindow)
+            {
+                _ctx.Document.DispatchEvent(new Starling.Dom.Events.Event(type,
+                    new Starling.Dom.Events.EventInit(Bubbles: true, Cancelable: false)));
+            }
+            if (_ctx.Wrappers.Unwrap(_engine.Global) is Starling.Dom.Events.EventTarget windowHost)
+            {
+                windowHost.DispatchEvent(new Starling.Dom.Events.Event(type));
+            }
             _engine.Advanced.ProcessTasks();
         }
         catch (JavaScriptException ex)

@@ -92,6 +92,22 @@ public sealed class JintDomWrapper
         return wrapper;
     }
 
+    /// <summary>Bind an existing <paramref name="wrapper"/> (e.g. the realm's
+    /// <c>globalThis</c>) to a host <paramref name="backing"/>, so that
+    /// <see cref="Unwrap(JsValue)"/> recovers it just like a freshly minted
+    /// wrapper. Used by J2d's WindowBinding to make <c>window.addEventListener</c>
+    /// route through the same EventTarget plumbing as DOM nodes. Idempotent: if
+    /// either side is already bound the call is a no-op.</summary>
+    public void BindExisting(EventTarget backing, ObjectInstance wrapper)
+    {
+        ArgumentNullException.ThrowIfNull(backing);
+        ArgumentNullException.ThrowIfNull(wrapper);
+        if (_wrappers.TryGetValue(backing, out _)) return;
+        if (_backing.TryGetValue(wrapper, out _)) return;
+        _wrappers.Add(backing, wrapper);
+        _backing.Add(wrapper, backing);
+    }
+
     /// <summary>Recover the backing CLR object from a wrapper, or <c>null</c> if
     /// the value is not one of this engine's DOM wrappers.</summary>
     public object? Unwrap(JsValue value)
