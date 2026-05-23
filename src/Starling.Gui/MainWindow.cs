@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Chrome;
@@ -8,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Starling.Gui.Chrome;
 using Starling.Gui.Controls;
 using Starling.Gui.DevTools;
@@ -18,6 +20,7 @@ using Starling.Common.Diagnostics;
 using Starling.Css.Media;
 using Starling.Engine;
 using Starling.Gui;
+using Starling.Html;
 using Starling.Telemetry;
 using EngineSize = SixLabors.ImageSharp.Size;
 using RenderOptions = Starling.Engine.RenderOptions;
@@ -728,14 +731,92 @@ public sealed class MainWindow : Window, IBrowserController
         return Snapshot(success: true);
     }
 
-    private BrowserControlResult Snapshot(bool success, string? error = null)
+    private BrowserControlResult Snapshot(bool success, string? error = null, string? detail = null)
     {
         var url = _session.History.Current;
         var title = string.IsNullOrEmpty(Title) ? null : Title;
         return success
-            ? BrowserControlResult.Success(url, title, _session.History.CanGoBack, _session.History.CanGoForward, _busy)
+            ? BrowserControlResult.Success(url, title, _session.History.CanGoBack, _session.History.CanGoForward, _busy, detail)
             : BrowserControlResult.Failure(error ?? "Unknown error", url, title,
                 _session.History.CanGoBack, _session.History.CanGoForward, _busy);
+    }
+
+    public Task<BrowserControlResult> ScreenshotFromToolAsync(string path, CancellationToken ct)
+    {
+        if (_lastShownPage is null)
+            return Task.FromResult(Snapshot(success: false, error: "No page is loaded to screenshot."));
+        try
+        {
+            var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-screenshot.png" : path);
+            var outcome = _session.CaptureToPng(_lastShownPage, full, _webview.LiveElapsedMs, fullPage: true);
+            return Task.FromResult(Snapshot(success: true,
+                detail: $"wrote {outcome.OutputPath} ({outcome.Width}x{outcome.Height})"));
+        }
+        catch (Exception ex)
+        {
+            _diag.Log(DiagLevel.Warn, "gui", $"screenshot failed: {ex.Message}");
+            return Task.FromResult(Snapshot(success: false, error: $"screenshot failed: {ex.Message}"));
+        }
+    }
+
+    public Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct)
+    {
+        try
+        {
+            var page = _lastShownPage;
+            var url = _session.History.Current;
+
+            var logs = _telemetry.Logs.Snapshot();
+            var jsLogs = logs.Where(r => r.Category.Contains("engine.js", StringComparison.Ordinal)).ToArray();
+            var errors = jsLogs.Count(r => r.Level >= LogLevel.Error);
+            var warns = jsLogs.Count(r => r.Level == LogLevel.Warning);
+
+            var html = page?.Document.DocumentElement is { } de ? HtmlSerializer.SerializeNode(de) : null;
+
+            var sb = new StringBuilder();
+            sb.Append("url: ").AppendLine(url ?? "(none)");
+            sb.Append("title: ").AppendLine(string.IsNullOrEmpty(Title) ? "(none)" : Title);
+            sb.Append("busy(loading): ").Append(_busy).AppendLine();
+            sb.Append("liveScripting: ").Append(page?.Scripting is not null).AppendLine();
+            sb.Append("documentHeightPx: ").Append(page is null ? 0 : (int)page.DocumentHeight).AppendLine();
+            sb.Append("outerHtmlBytes: ").Append(html?.Length ?? 0).AppendLine();
+            sb.Append("jsConsole: ").Append(jsLogs.Length).Append(" entries, ")
+              .Append(errors).Append(" errors, ").Append(warns).AppendLine(" warnings");
+
+            sb.AppendLine("--- recent JS console (warn+error, last 40) ---");
+            foreach (var r in jsLogs.Where(r => r.Level >= LogLevel.Warning).TakeLast(40))
+                sb.Append('[').Append(r.Level).Append("] ").AppendLine(r.Message);
+
+            if (!string.IsNullOrWhiteSpace(logPath))
+            {
+                var full = Path.GetFullPath(logPath);
+                var report = new StringBuilder();
+                report.AppendLine(sb.ToString());
+                report.AppendLine("=== ALL TELEMETRY LOGS ===");
+                foreach (var r in logs)
+                    report.Append(r.TimestampUtc.ToString("HH:mm:ss.fff")).Append(" [").Append(r.Level)
+                          .Append("] ").Append(r.Category).Append(": ").AppendLine(r.Message);
+                report.AppendLine().AppendLine("=== DOCUMENT outerHTML ===");
+                report.AppendLine(html ?? "(no document)");
+                var dir = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(full, report.ToString());
+                sb.Append("wrote full report to: ").AppendLine(full);
+            }
+
+            if (includeHtml && html is not null)
+            {
+                sb.AppendLine("--- outerHTML (truncated 100k) ---");
+                sb.AppendLine(html.Length > 100_000 ? html[..100_000] + "\n…(truncated)" : html);
+            }
+
+            return Task.FromResult(Snapshot(success: true, detail: sb.ToString()));
+        }
+        catch (Exception ex)
+        {
+            _diag.Log(DiagLevel.Warn, "gui", $"inspect failed: {ex.Message}");
+            return Task.FromResult(Snapshot(success: false, error: $"inspect failed: {ex.Message}"));
+        }
     }
 
     protected override void OnClosed(EventArgs e)

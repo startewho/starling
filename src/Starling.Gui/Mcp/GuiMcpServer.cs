@@ -178,6 +178,12 @@ public sealed class GuiMcpServer : IAsyncDisposable
             "browser_back" => await _tools.BrowserBack(ct).ConfigureAwait(false),
             "browser_forward" => await _tools.BrowserForward(ct).ConfigureAwait(false),
             "browser_refresh" => await _tools.BrowserRefresh(ct).ConfigureAwait(false),
+            "browser_screenshot" => await _tools.BrowserScreenshot(
+                ReadStringArgument(arguments, "path"), ct).ConfigureAwait(false),
+            "browser_inspect" => await _tools.BrowserInspect(
+                ReadBoolArgument(arguments, "includeHtml"),
+                ReadOptionalStringArgument(arguments, "logPath"),
+                ct).ConfigureAwait(false),
             _ => BrowserControlResult.Failure(
                 $"Unknown browser tool: {name}",
                 null,
@@ -200,6 +206,26 @@ public sealed class GuiMcpServer : IAsyncDisposable
 
         return string.Empty;
     }
+
+    private static string ReadStringArgument(JsonElement arguments, string name)
+        => ReadOptionalStringArgument(arguments, name) ?? string.Empty;
+
+    private static string? ReadOptionalStringArgument(JsonElement arguments, string name)
+    {
+        if (arguments.ValueKind == JsonValueKind.Object &&
+            arguments.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString();
+        }
+
+        return null;
+    }
+
+    private static bool ReadBoolArgument(JsonElement arguments, string name)
+        => arguments.ValueKind == JsonValueKind.Object &&
+           arguments.TryGetProperty(name, out var value) &&
+           value.ValueKind == JsonValueKind.True;
 
     private static JsonNode InitializeResult(JsonElement request)
     {
@@ -270,6 +296,36 @@ public sealed class GuiMcpServer : IAsyncDisposable
               "name": "browser_refresh",
               "description": "Reload the current page in the visible Starling browser window.",
               "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+              "name": "browser_screenshot",
+              "description": "Capture the current page in the visible Starling browser window to a PNG file (full scroll extent). The written path is returned in `detail`.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Output PNG path. Relative paths resolve against the GUI's working directory. Defaults to starling-screenshot.png."
+                  }
+                }
+              }
+            },
+            {
+              "name": "browser_inspect",
+              "description": "Inspect the current page: URL, title, live-scripting state, and recent JS console warnings/errors, returned in `detail`. Optionally include the serialized outerHTML and/or dump a full telemetry+HTML report to a logfile.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "includeHtml": {
+                    "type": "boolean",
+                    "description": "Include the page's serialized outerHTML in the response (truncated to 100 KB)."
+                  },
+                  "logPath": {
+                    "type": "string",
+                    "description": "If set, write a full report (all telemetry logs + complete outerHTML) to this file path."
+                  }
+                }
+              }
             }
           ]
         }
@@ -306,6 +362,7 @@ public sealed class GuiMcpServer : IAsyncDisposable
         ["canGoForward"] = result.CanGoForward,
         ["isBusy"] = result.IsBusy,
         ["error"] = result.Error,
+        ["detail"] = result.Detail,
     };
 
     private static JsonNode JsonRpcResult(JsonElement? id, JsonNode result) => new JsonObject

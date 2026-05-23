@@ -736,6 +736,43 @@ public sealed class StarlingEngine
     }
 
     /// <summary>
+    /// Repaint <paramref name="page"/> to a PNG at <paramref name="outputPath"/>
+    /// for out-of-band capture (the GUI's <c>browser_screenshot</c> tool). Like
+    /// <see cref="RenderFrame"/> it ticks the page's animation/transition clocks
+    /// to <paramref name="nowMs"/> and repaints the current live DOM, but when
+    /// <paramref name="fullPage"/> is set it renders at the full laid-out document
+    /// height (clamped) rather than the window viewport, so the whole scroll
+    /// extent lands in the image. The PNG encode reuses the same ImageSharp wrap
+    /// as <see cref="RenderAsync"/>.
+    /// </summary>
+    public RenderOutcome CaptureToPng(
+        LaidOutPage page, string outputPath, long nowMs = 0, bool fullPage = true)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(outputPath);
+
+        using var _ = _diag.Span("engine", $"capture_png {page.Url} -> {outputPath}");
+
+        var height = fullPage
+            ? Math.Clamp(Math.Ceiling(page.DocumentHeight), page.Viewport.Height, 30000)
+            : page.Viewport.Height;
+        var viewport = new LayoutSize(page.Viewport.Width, height);
+
+        page.Style.AnimationEngine.Tick(nowMs);
+        page.Style.TransitionEngine.Tick(nowMs);
+
+        using var bitmap = _painter.RenderWithStyle(
+            page.Document, page.Style, viewport, page.Images, page.WebFonts, nowMs: (double)nowMs);
+
+        EnsureOutputDirectory(outputPath);
+        using var image = Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+            bitmap.Rgba, bitmap.Width, bitmap.Height);
+        image.SaveAsPng(outputPath);
+
+        return new RenderOutcome(outputPath, bitmap.Width, bitmap.Height, DisplayText: string.Empty);
+    }
+
+    /// <summary>
     /// Stand up the active JS backend session, run every collected script
     /// against the shared <paramref name="document"/>, then drain microtasks and
     /// fire <c>DOMContentLoaded</c> + <c>load</c>. Script errors are logged

@@ -85,11 +85,44 @@ public sealed class FontFaceRegistry : IDisposable
 
         foreach (var faces in _byFamily.Values)
         {
-            foreach (var face in faces)
+            foreach (var face in SelectRepresentativeFaces(faces))
             {
                 using var stream = new MemoryStream(face.FontBytes, writable: false);
                 collection.Add(stream);
             }
+        }
+    }
+
+    // SixLabors' FontCollection keys faces by the font's own (family, style)
+    // name from its `name` table and has no unicode-range awareness: adding
+    // several same-named subset faces — exactly what Google Fonts' unicode-range
+    // splitting produces (one @font-face per script: latin, latin-ext, cyrillic,
+    // greek, …) — leaves a later resolve picking an arbitrary subset, frequently
+    // a non-Latin one that lacks ASCII glyphs, so ordinary text rasterises as
+    // .notdef tofu. Fold in at most one face per (bold, italic): the one whose
+    // unicode-range covers Basic Latin (or that carries no range at all), so a
+    // registered family always resolves to a face that actually holds its glyphs.
+    // A (bold, italic) bucket containing only non-Latin subsets is dropped, which
+    // lets the cascade's font-family fallback take over (e.g. → monospace) rather
+    // than rendering tofu. Non-Latin codepoints fall back through the system font
+    // stack the same way.
+    private static IEnumerable<RegisteredFace> SelectRepresentativeFaces(List<RegisteredFace> faces)
+    {
+        // 'A' (U+0041) is a stable Basic-Latin probe: Google's "latin" subset
+        // (U+0000–00FF) covers it; every other script subset excludes it.
+        const int LatinProbe = 'A';
+
+        foreach (var group in faces.GroupBy(f => (f.Bold, f.Italic)))
+        {
+            RegisteredFace? unrestricted = null;
+            RegisteredFace? latin = null;
+            foreach (var f in group)
+            {
+                if (f.UnicodeRange is null) { unrestricted = f; break; }
+                if (latin is null && f.UnicodeRange.Contains(LatinProbe)) latin = f;
+            }
+
+            if ((unrestricted ?? latin) is { } pick) yield return pick;
         }
     }
 
