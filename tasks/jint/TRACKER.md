@@ -34,7 +34,7 @@ starts only after the previous wave builds green.
 | J2b | 🟢 | Starling.Bindings.Jint | Node / Element / Document | `NodeBindings.cs`, `DomWrappers.cs`, `QuerySelectorEngine.cs` | `NodeBindings.cs` |
 | J2c | 🟢 | Starling.Bindings.Jint | EventTarget / Event dispatch | `EventTargetBinding.cs` | `EventTargetBinding.cs` |
 | J2d | 🟢 | Starling.Bindings.Jint | Window/global, Storage, History, Performance | `WindowBinding.cs`, `StorageBinding.cs`, `HistoryBinding.cs`, `PerformanceBinding.cs` | `WindowBinding.cs` + `StorageBinding.cs`/`HistoryBinding.cs`/`PerformanceBinding.cs` |
-| J3a | 🔵 | Starling.Bindings.Jint | Timers, rAF, event-loop pump | `TimersBinding.cs`, `AnimationFrameBinding.cs` | `TimersBinding.cs`/`AnimationFrameBinding.cs` (+ a dynamic-script runner; see note) |
+| J3a | 🟢 | Starling.Bindings.Jint | Timers, rAF, event-loop pump | `TimersBinding.cs`, `AnimationFrameBinding.cs` | `TimersBinding.cs`/`AnimationFrameBinding.cs` (+ a dynamic-script runner; see note) |
 | J3b | 🟢 | Starling.Bindings.Jint | fetch | `FetchBinding.cs` | `FetchBinding.cs` |
 | J3c | 🟢 | Starling.Bindings.Jint | XMLHttpRequest | `XhrBinding.cs` | `XhrBinding.cs` |
 | J3d | 🟢 | Starling.Bindings.Jint | Observers, crypto, cookies | `Observers/`, `CryptoBinding.cs`, `CookieBinding.cs` | `ObserversBinding.cs`/`CryptoBinding.cs`/`CookieBinding.cs` |
@@ -98,3 +98,38 @@ starts only after the previous wave builds green.
       `ScriptThrow("…not yet implemented (J4)")`; replace it via `ModuleLoader.cs`
       using `ctx.Engine.Modules` + `ctx.Fetch`.
 - 2026-05-22 — J2d + J3d picked up (agent-claude-coordinator) alongside in-flight J2b/J2c/J3b/J3c worktrees.
+- 2026-05-22 — **J3a complete** (agent-claude-cody, main tree). Implemented:
+  - `TimersBinding.cs` — `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval`
+    /`setImmediate`/`clearImmediate` over `ctx.Loop` (extra args forwarded,
+    stable integer ids, interval reschedule-chain map, microtask drain after each
+    callback, errors → `ctx.Diag`).
+  - `AnimationFrameBinding.cs` — `requestAnimationFrame`/`cancelAnimationFrame`
+    over `ctx.Loop`'s frame mechanism (callback gets a `DOMHighResTimeStamp`).
+  - **Additive contract:** `JintBackendContext.Post` (thread-safe post-to-JS-thread
+    hook) + default queue with `DrainPosted()`/`HasPosted` for bare contexts.
+    Documented in DESIGN.md (J2a `JintBackendContext` bullet + Event-loop section).
+  - `JintScriptSession.PumpOnce` rewritten: runs promise jobs, drains the
+    cross-thread post queue on the JS thread, advances `ctx.Loop`, and reports
+    not-idle while any of {timers, rAF, loop microtasks, post queue, in-flight
+    dynamic-script fetch} is pending. `OnScriptElementConnected`/`MarkScriptStarted`
+    wired to the new runner.
+  - `JintDynamicScriptRunner.cs` (new) — dynamic `<script src>` runner mirroring
+    `StarlingDynamicScriptRunner`: fetches via `ctx.Fetch` on a background task,
+    runs on the JS thread via `ctx.Post` + the session's `RunClassicScript`, fires
+    `load`/`error`, honours the "already started" flag.
+  - **Refactored fetch + XHR** to use `ctx.Post` instead of their 0ms self-re-arming
+    timer / poll trampolines (FetchBinding dropped `_completions`/`ArmPump`/`PumpTick`;
+    XhrBinding dropped `XhrState.Pending`/`ArmPoll`). Cleaner and still green.
+  - Tests: new `TimersAnimationPumpTests.cs` (11 tests). **All Jint backend tests
+    green: 67 (56 prior + 11 new).** Default path unchanged: Starling.Engine 151
+    green. Backend build clean (0 warnings, warnings-as-errors).
+  - **Remaining gap for J4/Wave-3:** the Jint `NodeBindings.setAttribute` / `.src`
+    IDL setter does NOT notify the dynamic runner when JS sets `src` on an existing
+    not-yet-started `<script>` (the "loader copies data-src → src on
+    DOMContentLoaded" pattern). The Starling backend handles this via
+    `ScriptSrcHook` registered on the realm; the Jint `NodeBindings` has no
+    equivalent hook and editing it was out of J3a's "edit only these files" scope.
+    The runner is fully wired for the script-inserted/connected external path
+    (`OnScriptElementConnected`) and the "already started" flag
+    (`MarkScriptStarted`). A small follow-up should add a src-set notification in
+    `NodeBindings` that calls into the session's runner.

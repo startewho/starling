@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Jint;
@@ -27,31 +26,13 @@ namespace Starling.Bindings.Jint;
 // -----------------------------------
 // The actual HTTP request runs on a thread-pool thread (ctx.Http.SendAsync). The
 // completion MUST be marshalled back onto the JS thread before any handler runs
-// (Jint.Engine is single-threaded). The only JS-thread re-entry point the host
-// drives repeatedly is JintScriptSession.PumpOnce, which:
-//   * drains Jint promise jobs (engine.Advanced.ProcessTasks), then
-//   * advances ctx.Loop by 50ms IFF Loop.PendingTimerCount > 0 ||
-//     Loop.PendingAnimationFrameCount > 0.
-// PumpOnce does NOT inspect Loop.PendingMicrotaskCount, so a bare
-// Loop.QueueMicrotask completion would never be observed and PumpOnce would
-// report idle while a request is still outstanding.
-//
-// We therefore settle through a TIMER: send() arms a poll timer on ctx.Loop
-// (PendingTimerCount > 0 ⇒ PumpOnce stays "busy" and keeps advancing the loop).
-// The background request stashes its outcome in a thread-safe slot. When the
-// poll timer fires (on the JS thread, inside AdvanceBy) it either runs the
-// completion state machine, or — if the outcome hasn't arrived yet — re-arms
-// itself with a small positive delay so it lands on a LATER pump frame (never the
-// same RunUntilIdle pass, which would busy-spin). WebEventLoop is touched only on
-// the JS thread; the only cross-thread hand-off is the ConcurrentQueue.
-//
-// FLAG (contract gap): a first-class "post a JS-thread job that keeps PumpOnce
-// busy" primitive is missing from the J2a/J3a seam. The timer-poll above is a
-// self-contained workaround living entirely in this file. The clean fix is for
-// JintScriptSession.PumpOnce to also drain Loop microtasks (treat
-// Loop.PendingMicrotaskCount as pending work) and/or expose a thread-safe
-// "enqueue JS-thread callback" hook on the session/loop; that belongs to J3a's
-// event-loop work, not here, so JintScriptSession is left untouched.
+// (Jint.Engine is single-threaded). It is marshalled via ctx.Post(...) — the J3a
+// "post to JS thread" hook: the background request posts its completion (the XHR
+// state machine + event dispatch) onto the JS thread, where
+// JintScriptSession.PumpOnce drains and runs it. PumpOnce reports "not idle"
+// while the post queue is non-empty, so the pump keeps turning until the request
+// settles. WebEventLoop is touched only on the JS thread; the only cross-thread
+// hand-off is ctx.Post's internal thread-safe queue.
 //
 // FLAG (EventTarget): if ctx.Wrappers.EventTargetPrototype (J2c) is present we
 // chain XMLHttpRequest.prototype to it so addEventListener is inherited and
@@ -346,16 +327,15 @@ internal static class XhrBinding
 
         // data: URLs resolve locally — the Starling HTTP client only speaks
         // http/https. This is also browser-correct (XHR supports data:) and gives
-        // the test suite a fully-offline path.
+        // the test suite a fully-offline path. Posted (not run inline) so the
+        // completion lands on a later pump turn, matching async XHR semantics.
         if (requestUrl.IsData)
         {
-            if (global::Starling.Url.DataUrl.TryDecode(requestUrl, out var payload))
-                x.Pending.Enqueue(XhrOutcome.Success(200, "OK",
-                    new List<(string, string)> { ("content-type", payload.MediaType) },
-                    payload.Bytes));
-            else
-                x.Pending.Enqueue(XhrOutcome.Error());
-            ArmPoll(ctx, thisVal, x, firstArm: true);
+            var outcome = global::Starling.Url.DataUrl.TryDecode(requestUrl, out var payload)
+                ? XhrOutcome.Success(200, "OK",
+                    new List<(string, string)> { ("content-type", payload.MediaType) }, payload.Bytes)
+                : XhrOutcome.Error();
+            ctx.Post(() => Complete(ctx, thisVal, x, outcome));
             return;
         }
 
@@ -367,52 +347,30 @@ internal static class XhrBinding
         var token = x.Cts.Token;
         _ = Task.Run(async () =>
         {
+            XhrOutcome outcome;
             try
             {
                 var result = await ctx.Http.SendAsync(wire, token).ConfigureAwait(false);
                 if (result.IsErr)
                 {
-                    x.Pending.Enqueue(XhrOutcome.Error());
+                    outcome = XhrOutcome.Error();
                 }
                 else
                 {
                     var resp = result.Value;
                     var hdrs = new List<(string, string)>();
                     foreach (var kv in resp.Headers) hdrs.Add((kv.Key, kv.Value));
-                    x.Pending.Enqueue(XhrOutcome.Success(
-                        resp.StatusCode, resp.ReasonPhrase ?? "", hdrs, resp.Body.ToArray()));
+                    outcome = XhrOutcome.Success(
+                        resp.StatusCode, resp.ReasonPhrase ?? "", hdrs, resp.Body.ToArray());
                 }
             }
             catch (Exception)
             {
-                x.Pending.Enqueue(XhrOutcome.Error());
+                outcome = XhrOutcome.Error();
             }
+            // Marshal the completion onto the JS thread; PumpOnce drains and runs it.
+            ctx.Post(() => Complete(ctx, thisVal, x, outcome));
         }, token);
-
-        // Arm the JS-thread poll so PumpOnce keeps advancing and observes the
-        // completion the moment it lands in x.Pending.
-        ArmPoll(ctx, thisVal, x, firstArm: true);
-    }
-
-    // Schedules a JS-thread timer that drains x.Pending. Runs on ctx.Loop, which
-    // PumpOnce advances; re-arms itself (with a small positive delay so it never
-    // re-fires within the same RunUntilIdle pass) until an outcome arrives or the
-    // request is aborted.
-    private static void ArmPoll(JintBackendContext ctx, JsValue thisVal, XhrState x, bool firstArm)
-    {
-        // firstArm uses 0ms so an already-ready outcome (data: URL) settles on the
-        // very next pump; subsequent polls use 10ms to avoid busy-spinning.
-        ctx.Loop.SetTimeout(() =>
-        {
-            if (x.Aborted) return;
-            if (x.Pending.TryDequeue(out var outcome))
-            {
-                Complete(ctx, thisVal, x, outcome);
-                return;
-            }
-            // Not ready yet — keep the loop "busy" so PumpOnce stays non-idle.
-            ArmPoll(ctx, thisVal, x, firstArm: false);
-        }, firstArm ? 0 : 10);
     }
 
     private static void Complete(JintBackendContext ctx, JsValue thisVal, XhrState x, XhrOutcome outcome)
@@ -580,17 +538,11 @@ internal sealed class XhrState
     // type → listeners (local fallback for the EventTarget surface; see file FLAG).
     public Dictionary<string, List<Function>> Listeners { get; } = new(StringComparer.Ordinal);
 
-    // Cross-thread hand-off: background HTTP completion enqueues here; the JS-thread
-    // poll timer dequeues. Concurrent so the producer (thread pool) and consumer
-    // (JS thread) never corrupt it.
-    public ConcurrentQueue<XhrOutcome> Pending { get; } = new();
-
     public void Reset()
     {
         RequestHeaders.Clear();
         Status = 0; StatusText = ""; ResponseText = ""; ResponseBytes = Array.Empty<byte>();
         ResponseHeaders.Clear(); ResponseUrl = ""; Aborted = false;
-        while (Pending.TryDequeue(out _)) { }
     }
 }
 

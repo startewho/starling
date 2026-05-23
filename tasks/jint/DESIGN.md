@@ -105,6 +105,21 @@ J2a creates these; Wave-2 agents call them and must not change their shape:
   `WebEventLoop Loop`, `object? LayoutHost`,
   `Func<StarlingUrl,CancellationToken,Task<string?>> Fetch`, and the wrapper
   registry `JintDomWrapper Wrappers`.
+  - **`Action<Action> Post` (J3a additive contract).** A thread-safe "post to the
+    JS thread" hook. Binding families that finish async work on a background
+    thread (fetch/XHR HTTP completions, dynamic-script fetches) call
+    `ctx.Post(action)` from any thread; the action is drained and invoked on the
+    JS thread, and keeps the pump reporting "not idle" while anything is queued.
+    `JintScriptSession` installs its own hook at construction (before
+    `JintBindings.InstallAll`, so families can capture it) that feeds the session
+    pump — `JintScriptSession.PumpOnce` drains the queue on the JS thread, runs
+    each callback, then re-runs Jint promise jobs so reactions settle the same
+    iteration. The **default** (a bare `JintBackendContext` with no session, e.g.
+    a unit test) enqueues onto an internal thread-safe queue exposed via
+    `bool DrainPosted()` / `bool HasPosted` — so completions still defer to a
+    later turn (matching async semantics) rather than running inline on the
+    background thread. This replaces the old fetch/XHR "0ms self-re-arming timer
+    trampoline"; both families now route completions through `ctx.Post`.
 - `JintDomWrapper` (public) — per-engine identity map
   (`ConditionalWeakTable<object, ObjectInstance>` + a wrapper→backing side table);
   `JsValue Wrap(EventTarget?)`, `ObjectInstance GetOrCreate(EventTarget)`,
@@ -158,6 +173,16 @@ where cheap (e.g. selector matching via `Starling.Css`, fetch/XHR HTTP logic via
 Drive Jint's promise-job queue (`engine.Advanced.ProcessTasks()`) and timers/rAF
 onto the existing `Starling.Loop.WebEventLoop`, exposed through
 `IScriptSession.PumpOnce()` so `Engine.cs`'s existing pump loop is unchanged.
+
+**J3a — `JintScriptSession.PumpOnce()` (complete).** One iteration: (1) run Jint
+promise jobs; (2) drain the cross-thread `Post` queue on the JS thread, then
+re-run promise jobs; (3) advance `ctx.Loop` by one simulated step so due timers +
+one rAF frame fire. It returns **true** ("not idle") while ANY of these is
+pending — `Loop.PendingTimerCount`, `Loop.PendingAnimationFrameCount`,
+`Loop.PendingMicrotaskCount`, the post queue non-empty, or an in-flight
+dynamic-script fetch — and **false** only when fully quiescent. Timers/rAF/
+setImmediate ride `ctx.Loop`; async HTTP completions and dynamic `<script src>`
+runs marshal back via `ctx.Post` (see the J3a `Post` hook above).
 
 ## Conventions
 - Central package versions (`Directory.Packages.props`); add `Jint` there.
