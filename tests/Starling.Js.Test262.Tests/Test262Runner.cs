@@ -59,7 +59,7 @@ public sealed class Test262Runner
     /// is not expected to implement these, so they are skipped rather than
     /// counted as failures. Kept deliberately conservative — only features that
     /// are unambiguously beyond ES2024.</summary>
-    private static readonly HashSet<string> OutOfScopeFeatures = new(StringComparer.Ordinal)
+    internal static readonly HashSet<string> OutOfScopeFeatures = new(StringComparer.Ordinal)
     {
         // Stage-3 proposals (not in any published edition):
         "decorators", "explicit-resource-management", "Temporal",
