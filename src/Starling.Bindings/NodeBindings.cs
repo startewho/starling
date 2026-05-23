@@ -204,6 +204,34 @@ public static class NodeBindings
                     e.SetAttribute("class", args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
                 return JsValue.Undefined;
             });
+        // HTMLInputElement / HTMLTextAreaElement `value` IDL attribute. Reads
+        // the live value (typed text or a prior assignment), falling back to the
+        // `value` content attribute as the initial value. Writing updates the
+        // live value so layout re-renders the field with the new text.
+        EventTargetBinding.DefineAccessor(realm, elProto, "value",
+            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e
+                ? JsValue.String(e.InputValue ?? e.GetAttribute("value") ?? "") : JsValue.String(""),
+            (thisV, args) =>
+            {
+                if (DomWrappers.UnwrapElement(thisV) is { } e)
+                    e.InputValue = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                return JsValue.Undefined;
+            });
+        // HTMLElement.focus() / .blur() — move the document focus. The shell
+        // reads document.FocusedElement to drive the caret and :focus styling.
+        EventTargetBinding.DefineMethod(realm, elProto, "focus", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is { } e && e.OwnerDocument is { } d)
+                d.FocusedElement = e;
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "blur", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is { } e && e.OwnerDocument is { } d
+                && ReferenceEquals(d.FocusedElement, e))
+                d.FocusedElement = null;
+            return JsValue.Undefined;
+        }, length: 0);
         EventTargetBinding.DefineAccessor(realm, elProto, "innerHTML",
             (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e
                 ? JsValue.String(HtmlSerializer.SerializeChildren(e)) : JsValue.String(""),
@@ -683,6 +711,15 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "head", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.Head is { } h
                 ? JsValue.Object(DomWrappers.Wrap(realm, h)) : JsValue.Null);
+        // HTML document.activeElement — the focused element, or <body> when
+        // nothing has focus (never null for a rendered document), matching the
+        // spec's fallback so scripts that read activeElement.tagName don't throw.
+        EventTargetBinding.DefineAccessor(realm, docProto, "activeElement", (thisV, _) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Null;
+            var el = d.FocusedElement ?? d.Body;
+            return el is { } ? JsValue.Object(DomWrappers.Wrap(realm, el)) : JsValue.Null;
+        });
         EventTargetBinding.DefineAccessor(realm, docProto, "title", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.String("");

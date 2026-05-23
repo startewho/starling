@@ -21,6 +21,15 @@ public sealed class Document : Node
     internal void BumpMutationVersion() => MutationVersion++;
 
     /// <summary>
+    /// The element with keyboard focus — HTML's <c>document.activeElement</c>.
+    /// Set by the shell when the user clicks a focusable control and by
+    /// <c>element.focus()</c>/<c>.blur()</c>; read by the <c>:focus</c> cascade,
+    /// the text-editing pipeline, and the <c>activeElement</c> JS accessor.
+    /// Null when nothing is focused.
+    /// </summary>
+    public Element? FocusedElement { get; set; }
+
+    /// <summary>
     /// Host hook fired when a node is connected into this document's tree (via
     /// <see cref="Node.InsertBefore"/>). The engine subscribes to this so that
     /// <c>&lt;script&gt;</c> elements created and appended at runtime by JS are

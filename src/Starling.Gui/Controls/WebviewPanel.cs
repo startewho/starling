@@ -74,6 +74,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private bool _selecting;
     private string _selectionText = string.Empty;
 
+    // Text-input editing state. _focusedInput is the <input>/<textarea> element
+    // currently receiving keystrokes; _caretIndex is the insertion point within
+    // its value; _caretOverlay is the blinking caret drawn over the page bitmap.
+    private DomElement? _focusedInput;
+    private int _caretIndex;
+    private Border? _caretOverlay;
+    private bool _caretOn;
+    private readonly DispatcherTimer _caretBlinkTimer;
+
     public WebviewPanel(
         ThemeManager tm,
         IDiagnostics diag,
@@ -124,13 +133,30 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             Padding = new Thickness(24),
         };
 
-        _pageCanvas = new Canvas();
+        _pageCanvas = new Canvas
+        {
+            // Focusable so the page surface can receive keyboard/text input once
+            // an editable field is focused (links/selection only need pointers).
+            Focusable = true,
+        };
         _pageCanvas.Children.Add(_pageImage);
         _pageCanvas.PointerMoved += OnPointerMoved;
         _pageCanvas.PointerExited += OnPointerExited;
         _pageCanvas.PointerPressed += OnPointerPressed;
         _pageCanvas.PointerReleased += OnPointerReleased;
         _pageCanvas.PointerCaptureLost += (_, _) => EndSelectionDrag(cancel: true);
+        _pageCanvas.KeyDown += OnPageKeyDown;
+        _pageCanvas.TextInput += OnPageTextInput;
+
+        // Caret blink — toggles the overlay's visibility on a fixed cadence
+        // while a field is focused; stopped (and the overlay removed) on blur.
+        _caretBlinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
+        _caretBlinkTimer.Tick += (_, _) =>
+        {
+            if (_caretOverlay is null) return;
+            _caretOn = !_caretOn;
+            _caretOverlay.IsVisible = _caretOn;
+        };
 
         _scroll = new ScrollViewer
         {
@@ -219,6 +245,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // user doesn't jump to the top; a fresh navigation resets to the top.
         var prevOffset = _scroll.Offset;
 
+        // A relayout of the same document (resize / edit) keeps the focused
+        // field; a fresh navigation produces a new document whose
+        // FocusedElement is null, so the caret is dropped below.
+        var keepFocus = _focusedInput is not null
+            && ReferenceEquals(page.Document.FocusedElement, _focusedInput);
+
         _currentPage?.Dispose();
         _currentPage = page;
 
@@ -258,6 +290,22 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         using (_diag.Span("gui", "show_page.hit_index"))
             _fragments = BoxHitTester.CollectFragments(page.Root);
         RebuildFindIndex();
+
+        // Re-establish (or drop) the text caret against the new box tree. The
+        // caret overlay belongs to the prior layout's positions, so it is always
+        // rebuilt here.
+        RemoveCaretOverlay();
+        if (keepFocus)
+        {
+            _pageCanvas.Focus();
+            RenderCaret();
+        }
+        else
+        {
+            _focusedInput = null;
+            _caretIndex = 0;
+            _caretBlinkTimer.Stop();
+        }
     }
 
     /// <summary>
@@ -441,6 +489,17 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (doc is null) return;
 
         var hit = BoxHitTester.HitTest(_currentPage.Root, doc.Value.X, doc.Value.Y);
+
+        // A click on an editable text field focuses it (placing the caret at the
+        // clicked character); a click anywhere else blurs the current field.
+        if (FindFocusableInput(hit.Box) is { } field)
+        {
+            e.Handled = true;
+            FocusInput(field, doc.Value);
+            return;
+        }
+        BlurInput();
+
         if (hit.LinkAnchor is null) return;
 
         var href = hit.LinkAnchor.GetAttribute("href");
@@ -458,6 +517,281 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         _selecting = false;
         if (cancel) _selectAnchor = null;
+    }
+
+    // ---- Text input editing -------------------------------------------
+    //
+    // Click-to-focus + type for <input>/<textarea>. The value lives on the DOM
+    // element (Element.InputValue); each edit mutates it, re-lays-out the page
+    // (so the synthesized label text refreshes), and repositions a blinking
+    // caret drawn as a page overlay. document.FocusedElement is kept in sync so
+    // :focus CSS and the JS activeElement/.value accessors agree. Firing DOM
+    // input/keydown events into page scripts is a deliberate follow-up.
+
+    private const double CaretWidth = 1.0;
+
+    /// <summary>
+    /// The editable <c>&lt;input&gt;</c>/<c>&lt;textarea&gt;</c> enclosing
+    /// <paramref name="box"/> in the box/DOM tree, or null when the hit isn't a
+    /// text-entry control. Non-text inputs (button, checkbox, …) are excluded.
+    /// </summary>
+    private static DomElement? FindFocusableInput(LayoutBox? box)
+    {
+        for (var b = box; b is not null; b = b.Parent)
+        {
+            if (b.Element is not DomElement el) continue;
+            switch (el.LocalName)
+            {
+                case "textarea":
+                    return el;
+                case "input":
+                    var type = (el.GetAttribute("type") ?? "text").Trim().ToLowerInvariant();
+                    return type is "text" or "search" or "email" or "url" or "tel"
+                            or "password" or "number" or ""
+                        ? el : null;
+            }
+        }
+        return null;
+    }
+
+    private string CurrentValue()
+        => _focusedInput is null ? string.Empty
+            : _focusedInput.InputValue ?? _focusedInput.GetAttribute("value") ?? string.Empty;
+
+    /// <summary>
+    /// Focuses <paramref name="input"/>: records document focus (so <c>:focus</c>
+    /// and <c>activeElement</c> see it), re-lays-out so a focused empty field
+    /// drops its placeholder, then places the caret at the clicked character.
+    /// </summary>
+    private void FocusInput(DomElement input, (double X, double Y) clickDoc)
+    {
+        if (_currentPage is null) return;
+
+        _focusedInput = input;
+        _currentPage.Document.FocusedElement = input;
+        _caretIndex = CurrentValue().Length;
+        _pageCanvas.Focus();
+
+        RefreshFocusedLayout();
+        _caretIndex = CaretIndexFromClick(clickDoc);
+        RenderCaret();
+    }
+
+    /// <summary>Clears the current field focus (caret removed, placeholder
+    /// restored), if any. A no-op when nothing is focused.</summary>
+    private void BlurInput()
+    {
+        if (_focusedInput is null) return;
+        var was = _focusedInput;
+        _focusedInput = null;
+        _caretBlinkTimer.Stop();
+        RemoveCaretOverlay();
+        if (_currentPage is not null && ReferenceEquals(_currentPage.Document.FocusedElement, was))
+        {
+            _currentPage.Document.FocusedElement = null;
+            RefreshFocusedLayout(); // placeholder returns on the now-blurred field
+        }
+    }
+
+    private void OnPageTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (_focusedInput is null || string.IsNullOrEmpty(e.Text)) return;
+        // Drop control characters — Enter/Tab arrive via OnPageKeyDown, and some
+        // platforms also surface them here.
+        var text = new string(e.Text.Where(c => !char.IsControl(c)).ToArray());
+        if (text.Length == 0) return;
+
+        e.Handled = true;
+        var val = CurrentValue();
+        var idx = Math.Clamp(_caretIndex, 0, val.Length);
+        CommitValue(val.Insert(idx, text), idx + text.Length);
+    }
+
+    private void OnPageKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_focusedInput is null) return;
+        var val = CurrentValue();
+        var idx = Math.Clamp(_caretIndex, 0, val.Length);
+        switch (e.Key)
+        {
+            case Key.Back:
+                if (idx > 0) CommitValue(val.Remove(idx - 1, 1), idx - 1);
+                e.Handled = true;
+                break;
+            case Key.Delete:
+                if (idx < val.Length) CommitValue(val.Remove(idx, 1), idx);
+                e.Handled = true;
+                break;
+            case Key.Left: MoveCaret(idx - 1); e.Handled = true; break;
+            case Key.Right: MoveCaret(idx + 1); e.Handled = true; break;
+            case Key.Home: MoveCaret(0); e.Handled = true; break;
+            case Key.End: MoveCaret(val.Length); e.Handled = true; break;
+            case Key.Escape: BlurInput(); e.Handled = true; break;
+        }
+    }
+
+    /// <summary>Writes the field's new value + caret position, then re-lays-out
+    /// so the rendered label text matches.</summary>
+    private void CommitValue(string next, int newCaret)
+    {
+        if (_focusedInput is null) return;
+        _focusedInput.InputValue = next;
+        _caretIndex = Math.Clamp(newCaret, 0, next.Length);
+        RefreshFocusedLayout();
+    }
+
+    private void MoveCaret(int index)
+    {
+        _caretIndex = Math.Clamp(index, 0, CurrentValue().Length);
+        RenderCaret(); // value unchanged — no re-layout needed
+    }
+
+    /// <summary>Re-lays-out the current page (reusing its document/resources) so
+    /// the focused field's text and placeholder reflect the latest state, then
+    /// reshows it preserving scroll. Falls back to repositioning the caret in
+    /// place when no relayout hook is wired.</summary>
+    private void RefreshFocusedLayout()
+    {
+        if (_currentPage is null || _relayout is null) { RenderCaret(); return; }
+        var relaid = _relayout(_currentPage, CurrentViewportSize());
+        if (relaid is not null)
+            ShowPage(relaid, preserveScroll: true); // re-renders caret if still focused
+        else
+            RenderCaret();
+    }
+
+    /// <summary>(Re)draws the caret overlay at the current insertion point and
+    /// (re)starts the blink. Removes the caret when nothing is focused.</summary>
+    private void RenderCaret()
+    {
+        RemoveCaretOverlay();
+        if (_focusedInput is null || _currentPage is null) return;
+        if (ComputeCaretRect(_currentPage.Root, _focusedInput, _caretIndex) is not { } c) return;
+
+        _caretOverlay = MakeOverlay(new SolidColorBrush(c.Color), c.X, c.Y, CaretWidth, c.H);
+        _pageCanvas.Children.Add(_caretOverlay);
+        _caretOn = true;
+        _caretBlinkTimer.Stop();
+        _caretBlinkTimer.Start(); // solid immediately after a change, then blinks
+    }
+
+    private void RemoveCaretOverlay()
+    {
+        if (_caretOverlay is null) return;
+        _pageCanvas.Children.Remove(_caretOverlay);
+        _caretOverlay = null;
+    }
+
+    /// <summary>
+    /// Document-space caret rectangle (and colour) for <paramref name="caretIndex"/>
+    /// inside <paramref name="input"/>'s value, or null if the field's box can't
+    /// be located. Derives X from the shaped glyph pen positions of the value
+    /// text fragment; an empty field gets a caret spanning the content box.
+    /// </summary>
+    private static (double X, double Y, double H, AvColor Color)? ComputeCaretRect(
+        Starling.Layout.Box.BlockBox root, DomElement input, int caretIndex)
+    {
+        if (FindBoxAbs(root, 0, 0, b => ReferenceEquals(b.Element, input)) is not { } found)
+            return null;
+
+        var inputBox = found.Box;
+        var color = ResolveCaretColor(inputBox);
+        var cx = found.X + inputBox.Border.Left + inputBox.Padding.Left;
+        var cy = found.Y + inputBox.Border.Top + inputBox.Padding.Top;
+
+        var tb = FindValueTextBox(inputBox, cx, cy);
+        if (tb is { } th)
+        {
+            var t = (Starling.Layout.Box.TextBox)th.Box;
+            var frag = t.Fragments[0];
+            return (th.X + frag.X + XOffsetInFragment(frag, caretIndex),
+                    th.Y + frag.Y, frag.Height, color);
+        }
+
+        // Empty field: caret at the content origin, spanning the content box.
+        var contentH = inputBox.Frame.Height
+            - inputBox.Border.Top - inputBox.Border.Bottom
+            - inputBox.Padding.Top - inputBox.Padding.Bottom;
+        return (cx, cy, contentH > 2 ? contentH : 14, color);
+    }
+
+    private int CaretIndexFromClick((double X, double Y) clickDoc)
+    {
+        var val = CurrentValue();
+        if (_focusedInput is null || _currentPage is null || val.Length == 0) return val.Length;
+        if (FindBoxAbs(_currentPage.Root, 0, 0, b => ReferenceEquals(b.Element, _focusedInput)) is not { } found)
+            return val.Length;
+
+        var inputBox = found.Box;
+        var cx = found.X + inputBox.Border.Left + inputBox.Padding.Left;
+        var cy = found.Y + inputBox.Border.Top + inputBox.Padding.Top;
+        if (FindValueTextBox(inputBox, cx, cy) is not { } th) return val.Length;
+
+        var frag = ((Starling.Layout.Box.TextBox)th.Box).Fragments[0];
+        var localX = clickDoc.X - (th.X + frag.X);
+        if (localX <= 0) return 0;
+
+        if (frag.Shaped is { } sh && sh.Glyphs.Length == frag.Text.Length)
+        {
+            for (var i = 0; i < sh.Glyphs.Length; i++)
+            {
+                var left = sh.Glyphs[i].X;
+                var right = i + 1 < sh.Glyphs.Length ? sh.Glyphs[i + 1].X : frag.Width;
+                if (localX < (left + right) / 2) return i;
+            }
+            return frag.Text.Length;
+        }
+
+        var approx = (int)Math.Round(localX / Math.Max(1, frag.Width) * frag.Text.Length);
+        return Math.Clamp(approx, 0, frag.Text.Length);
+    }
+
+    /// <summary>First non-empty text fragment box under <paramref name="inputBox"/>,
+    /// with its absolute origin (the rendered value text).</summary>
+    private static (LayoutBox Box, double X, double Y)? FindValueTextBox(
+        LayoutBox inputBox, double contentX, double contentY)
+    {
+        foreach (var child in inputBox.Children)
+        {
+            if (FindBoxAbs(child, contentX, contentY,
+                    b => b is Starling.Layout.Box.TextBox { Fragments.Count: > 0 }) is { } r)
+                return r;
+        }
+        return null;
+    }
+
+    /// <summary>Finds the first box matching <paramref name="pred"/>, returning it
+    /// with its absolute (document-space) border-box origin. Mirrors the
+    /// origin accumulation used by <see cref="BoxHitTester"/>.</summary>
+    private static (LayoutBox Box, double X, double Y)? FindBoxAbs(
+        LayoutBox box, double originX, double originY, Func<LayoutBox, bool> pred)
+    {
+        var fx = originX + box.Frame.X;
+        var fy = originY + box.Frame.Y;
+        if (pred(box)) return (box, fx, fy);
+        if (box is Starling.Layout.Box.TextBox) return null;
+
+        var cx = fx + box.Border.Left + box.Padding.Left;
+        var cy = fy + box.Border.Top + box.Padding.Top;
+        foreach (var child in box.Children)
+            if (FindBoxAbs(child, cx, cy, pred) is { } r) return r;
+        return null;
+    }
+
+    private static double XOffsetInFragment(Starling.Layout.Box.TextFragment frag, int caretIndex)
+    {
+        var n = Math.Clamp(caretIndex, 0, frag.Text.Length);
+        if (n == 0) return 0;
+        if (frag.Shaped is { } sh && sh.Glyphs.Length == frag.Text.Length)
+            return n < sh.Glyphs.Length ? sh.Glyphs[n].X : frag.Width;
+        return frag.Text.Length == 0 ? 0 : frag.Width * n / frag.Text.Length;
+    }
+
+    private static AvColor ResolveCaretColor(LayoutBox box)
+    {
+        var c = box.Style?.GetColor(PropertyId.Color);
+        if (c is null) return AvColor.FromArgb(255, 0, 0, 0);
+        return AvColor.FromArgb(c.A == 0 ? (byte)255 : c.A, c.R, c.G, c.B);
     }
 
     // ---- Cursor --------------------------------------------------------
@@ -796,6 +1130,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     public void Dispose()
     {
         _relayoutTimer.Stop();
+        _caretBlinkTimer.Stop();
         _renderer.Dispose();
         _currentPage?.Dispose();
         (_pageImage.Source as IDisposable)?.Dispose();

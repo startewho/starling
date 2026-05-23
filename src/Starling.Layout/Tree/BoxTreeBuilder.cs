@@ -366,12 +366,19 @@ internal sealed class BoxTreeBuilder
         if (type is "checkbox" or "radio" or "file" or "image" or "hidden" or "color" or "range")
             return;
 
-        var value = input.GetAttribute("value");
+        // The live IDL value (typed text / scripted assignment) shadows the
+        // `value` content attribute once the field has been edited; until then
+        // the attribute supplies the initial value.
+        var value = input.InputValue ?? input.GetAttribute("value");
         if (!string.IsNullOrEmpty(value))
         {
             box.AppendChild(new TextBox(value, style));
             return;
         }
+
+        // An empty focused field renders no placeholder so the caret sits alone
+        // in the control while the user types (and after they clear it).
+        var focused = ReferenceEquals(input.OwnerDocument?.FocusedElement, input);
 
         // Default labels for submit/reset buttons match what browsers show
         // when `value` is omitted — per HTML spec localised defaults.
@@ -380,7 +387,7 @@ internal sealed class BoxTreeBuilder
             "submit" => "Submit",
             "reset" => "Reset",
             "button" => "",
-            _ => input.GetAttribute("placeholder") ?? "",
+            _ => focused ? "" : (input.GetAttribute("placeholder") ?? ""),
         };
         if (!string.IsNullOrEmpty(fallback))
             box.AppendChild(new TextBox(fallback, style));
