@@ -13,6 +13,10 @@
     <ProjectReference Include="..\Starling.Common\Starling.Common.csproj" />
     <ProjectReference Include="..\Starling.Css\Starling.Css.csproj" />
     <ProjectReference Include="..\Starling.Dom\Starling.Dom.csproj" />
+    <!-- J2b needs the real HTML fragment parser + serializer for innerHTML /
+         outerHTML / insertAdjacentHTML. Starling.Html depends only on
+         Common/Dom/Url, none of which reference this project, so no cycle. -->
+    <ProjectReference Include="..\Starling.Html\Starling.Html.csproj" />
     <ProjectReference Include="..\Starling.Js.Hosting\Starling.Js.Hosting.csproj" />
     <ProjectReference Include="..\Starling.Net\Starling.Net.csproj" />
     <ProjectReference Include="..\Starling.Url\Starling.Url.csproj" />
