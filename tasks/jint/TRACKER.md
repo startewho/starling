@@ -48,7 +48,7 @@ starts only after the previous wave builds green.
 | J6b | 🟢 | Starling.Bindings.Jint | Run `<script>` whose `src` is set from JS (dynamic/deferred loader). Added `ctx.OnScriptSrcSet` hook (Jint analogue of `ScriptSrcHook`); `NodeBindings` `setAttribute('src',…)` + new `.src`/`.async` IDL props notify it; session routes into `JintDynamicScriptRunner.OnSrcSet` (fetch + run + fire load/error, honouring the already-started flag). |
 | J7 | 🟢 | Starling.Js.Hosting | Cleanup: moved `ILayoutHost`/`LayoutRect`/`OffsetMetrics` from `Starling.Bindings` into the engine-neutral `Starling.Js.Hosting` seam (kept `Starling.Bindings` namespace → no consumer churn); `ScriptSessionOptions.LayoutHost` + `JintBackendContext.LayoutHost` now strongly typed `ILayoutHost?` (casts gone). **Dropped the J6a `Starling.Bindings` project ref from `Starling.Bindings.Jint`**, so the Jint backend no longer pulls `Starling.Js` transitively — "deletable in one step, no `Starling.Js`" restored. |
 | J5a | ⚫ | CI | E2E + Jint binding tests under `STARLING_JS_ENGINE=jint`; netclaw.dev golden render under Jint. |
-| J5b | ⚫ | tests | Run test262 harness against Jint as a compat-delta baseline (informational). |
+| J5b | 🟢 | tests | Run test262 harness against Jint as a compat-delta baseline (informational). `JintTest262Runner` + `JintTest262Tests.Jint_conformance_pass_rate` reuse the shared corpus enumeration/frontmatter/skip-set (`Test262Corpus`, `Test262Runner.ParseMetadata`/`OutOfScopeFeatures`); report-only (FLOOR defaults 0). **Measured (pinned SHA `c42f56d`, dirs=language): Jint 99.58% (38120→38415/38578) vs Starling.Js 80.91% (34249/42330).** NB: the in-house engine has climbed well past the ~41% the brief cited — the gap Jint buys is now ~19pts, not ~59. |
 | J5c | ⚫ | docs | README env-var note + `browser-plan/09_JS_ENGINE.md` section + removal checklist. |
 
 ## Acceptance (overall)
@@ -297,3 +297,33 @@ starts only after the previous wave builds green.
     `STARLING_JS_ENGINE=jint` **151**; Engine default **151**; Starling backend
     bindings **204**. Pure refactor → no new `DllImport`/`LibraryImport`, CI
     interop-seam policy still satisfied.
+- 2026-05-22 — **J5b complete (test262 vs Jint, informational baseline)**
+  (agent-claude-cody). Added a Jint package ref to
+  `tests/Starling.Js.Test262.Tests`; new `JintTest262Runner` +
+  `JintTest262Tests.Jint_conformance_pass_rate`. Factored the shared corpus
+  discovery/enumeration/env-var config into `Test262Corpus` (the Starling.Js
+  `Test262Tests` now delegates to it — behavior byte-identical); the Jint runner
+  reuses `Test262Runner.ParseMetadata` (frontmatter) and the same
+  `Test262Runner.OutOfScopeFeatures` skip-set (made `internal`), so both engines
+  measure the IDENTICAL file set with IDENTICAL skips. Same Pass/Fail/Timeout/Skip
+  classification, strict+non-strict scenarios, raw/async (`print` +
+  `doneprintHandle.js` `$DONE`), negative parse/runtime phase, per-scenario
+  timeout (background thread + Join). Modules + dynamic `import()` run through a
+  filesystem `IModuleLoader` rooted at the test file's dir (module loading is
+  enabled unconditionally so `import()` in non-`module` tests resolves).
+  Report-only: `STARLING_TEST262_FLOOR` defaults 0 → NEVER a CI gate; goes
+  Inconclusive when the corpus is absent (CI without it stays green). Writes
+  `results/jint-summary.txt` + `jint-failures.txt`; prints a `COMPAT-DELTA` line
+  to TestContext. Runnable independently of the Starling.Js test.
+  - **Measured (corpus fetched at pinned SHA `c42f56d`, `STARLING_TEST262_DIRS=language`):**
+    - **Jint: 99.58%** (38415/38578 scenarios; 163 fail, 0 timeout, 792 skip).
+    - **Starling.Js: 80.91%** (34249/42330; 8073 fail, 8 timeout, 1453 skip).
+    - The brief's "~41% language" Starling baseline is **stale** — the in-house
+      engine has climbed to ~81%, so the web-compat delta Jint buys is now ~19pts.
+  - Build green (`-c Debug`, 0 warnings, warnings-as-errors). Starling.Js test262
+    test unchanged (still runs, same numbers). Jint failure residue is mostly
+    parity gaps shared with the Starling runner (`$262.createRealm` not stubbed;
+    `return`-at-global-scope parse-vs-runtime classification) plus a small set of
+    dynamic-`import()` rejections that leak as host `ModuleResolutionException`
+    instead of a rejected promise (~60 scenarios) — left as genuine, not papered
+    over.
