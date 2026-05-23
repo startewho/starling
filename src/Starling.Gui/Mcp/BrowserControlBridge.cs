@@ -38,6 +38,12 @@ public sealed class BrowserControlBridge
     public Task<BrowserControlResult> ReloadAsync(CancellationToken ct)
         => InvokeAsync(controller => controller.ReloadFromToolAsync(ct), ct);
 
+    public Task<BrowserControlResult> ScreenshotAsync(string path, CancellationToken ct)
+        => InvokeAsync(controller => controller.ScreenshotFromToolAsync(path, ct), ct);
+
+    public Task<BrowserControlResult> InspectAsync(bool includeHtml, string? logPath, CancellationToken ct)
+        => InvokeAsync(controller => controller.InspectFromToolAsync(includeHtml, logPath, ct), ct);
+
     private async Task<BrowserControlResult> InvokeAsync(
         Func<IBrowserController, Task<BrowserControlResult>> action,
         CancellationToken ct)

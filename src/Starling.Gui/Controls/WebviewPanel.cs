@@ -856,6 +856,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// wall-clock baseline resets only when the context object changes, so a
     /// relayout of the same page keeps timer due-times monotonic.
     /// </summary>
+    /// <summary>Wall-clock ms the live-page pump has been driving the current JS
+    /// context — the timestamp to render a screenshot at so any CSS animations
+    /// sample the same frame that's on screen. Zero when no live context is bound.</summary>
+    public long LiveElapsedMs => _boundScripting is null ? 0 : _liveStopwatch.ElapsedMilliseconds;
+
     public void BindLiveScripting()
     {
         var scripting = _currentPage?.Scripting;

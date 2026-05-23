@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using SixLabors.Fonts;
+using Starling.Css.FontFace;
 using Starling.Layout.Text;
 namespace Starling.Paint.Tests;
 
@@ -196,6 +197,88 @@ public sealed class ImageSharpFontLookupTests
         var collection = ImageSharpFontLookup.LoadCollection(registry);
         collection.TryGet("Open Sans", out _).Should().BeTrue(
             "the registry-fed font identifies itself as 'Open Sans' via its name table, so LoadCollection must surface it");
+    }
+
+    /// <summary>
+    /// Regression (netclaw.dev terminal rendered as .notdef tofu): Google Fonts
+    /// splits a family into one <c>@font-face</c> per script subset, each with a
+    /// <c>unicode-range</c> but the same internal family name. SixLabors' font
+    /// collection is name-keyed and unicode-range-blind, so folding in a subset
+    /// that can't serve Basic Latin lets it shadow the Latin face and ASCII text
+    /// rasterises as tofu. <see cref="FontFaceRegistry.AddTo"/> must drop such a
+    /// face so the cascade's font-family fallback (e.g. → <c>monospace</c>) takes
+    /// over instead. (Bytes here are full OpenSans; the registry's
+    /// <c>unicode-range</c> metadata — straight from the CSS — is what marks the
+    /// face as a non-Latin subset.)
+    /// </summary>
+    [TestMethod]
+    public void AddTo_drops_webfont_subset_that_excludes_basic_latin()
+    {
+        var bytes = BundledOpenSansBytes();
+        using var registry = new FontFaceRegistry();
+        var cyrillicOnly = new UnicodeRangeSet([(0x0400, 0x04FF)]);
+        registry.TryAdd("Probe", bold: false, italic: false, bytes, cyrillicOnly)
+            .Should().BeTrue("the bytes are valid OpenSans; the subset face registers");
+
+        var collection = new FontCollection();
+        registry.AddTo(collection);
+
+        collection.Families.Should().BeEmpty(
+            "a subset face that can't serve Basic Latin must not be folded into the paint collection — otherwise it shadows the Latin face and ASCII renders as tofu");
+    }
+
+    /// <summary>
+    /// The complement of <see cref="AddTo_drops_webfont_subset_that_excludes_basic_latin"/>:
+    /// the Latin-covering subset is the representative face and must be folded in.
+    /// </summary>
+    [TestMethod]
+    public void AddTo_keeps_webfont_subset_that_covers_basic_latin()
+    {
+        var bytes = BundledOpenSansBytes();
+        using var registry = new FontFaceRegistry();
+        var latin = new UnicodeRangeSet([(0x0000, 0x00FF)]);
+        registry.TryAdd("Probe", bold: false, italic: false, bytes, latin).Should().BeTrue();
+
+        var collection = new FontCollection();
+        registry.AddTo(collection);
+
+        collection.Families.Should().Contain(
+            f => f.Name.Contains("Open Sans", StringComparison.OrdinalIgnoreCase),
+            "the Latin-covering subset must be folded in so ASCII text resolves to a real face");
+    }
+
+    /// <summary>
+    /// Mirrors Google Fonts' document order — non-Latin subsets first, the Latin
+    /// subset last. The Latin representative must still win regardless of order,
+    /// and ASCII must shape to real glyphs (not .notdef).
+    /// </summary>
+    [TestMethod]
+    public void AddTo_prefers_latin_face_when_a_non_latin_subset_is_registered_first()
+    {
+        var bytes = BundledOpenSansBytes();
+        using var registry = new FontFaceRegistry();
+        registry.TryAdd("Probe", false, false, bytes, new UnicodeRangeSet([(0x0400, 0x04FF)]));
+        registry.TryAdd("Probe", false, false, bytes, new UnicodeRangeSet([(0x0000, 0x00FF)]));
+
+        var collection = new FontCollection();
+        registry.AddTo(collection);
+
+        collection.Families.Should().Contain(
+            f => f.Name.Contains("Open Sans", StringComparison.OrdinalIgnoreCase));
+        var font = ImageSharpFontLookup.CreateFont(collection, new FontSpec(["Open Sans"], false, false), Size);
+        TextMeasurer.MeasureAdvance("netclaw init", new TextOptions(font)).Width
+            .Should().BeGreaterThan(0, "ASCII must shape to real glyphs once the Latin face is the representative");
+    }
+
+    private static byte[] BundledOpenSansBytes()
+    {
+        var asm = typeof(ImageSharpFontLookup).Assembly;
+        var res = asm.GetManifestResourceNames()
+            .First(n => n.EndsWith("OpenSans-Regular.ttf", StringComparison.OrdinalIgnoreCase));
+        using var stream = asm.GetManifestResourceStream(res)!;
+        var bytes = new byte[stream.Length];
+        stream.ReadExactly(bytes);
+        return bytes;
     }
 
     /// <summary>

@@ -6,4 +6,6 @@ public interface IBrowserController
     Task<BrowserControlResult> BackFromToolAsync(CancellationToken ct);
     Task<BrowserControlResult> ForwardFromToolAsync(CancellationToken ct);
     Task<BrowserControlResult> ReloadFromToolAsync(CancellationToken ct);
+    Task<BrowserControlResult> ScreenshotFromToolAsync(string path, CancellationToken ct);
+    Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct);
 }
