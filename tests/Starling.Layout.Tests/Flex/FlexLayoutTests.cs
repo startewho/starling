@@ -263,6 +263,32 @@ public sealed class FlexLayoutTests
             .Should().BeGreaterThanOrEqualTo(10);
     }
 
+    [TestMethod]
+    public void Anonymous_flex_item_wrapping_inline_run_does_not_inherit_container_width()
+    {
+        // Regression: mcmaster's .category-tile is `display:flex; width:100%`
+        // holding an inline <img>/text run + a sibling. The anonymous box that
+        // wraps the inline run used to inherit the container's ComputedStyle —
+        // including its `width` — so flex read that as the wrapper's flex-basis,
+        // ballooning it to (nearly) the whole row and shoving the sibling to the
+        // far right edge. The wrapper must instead shrink to its content width.
+        var root = Layout("""
+            <body><div id="c" style="display:flex; width:300px; height:40px">
+              x<div style="width:100px; height:40px"></div>
+            </div></body>
+            """, new Size(800, 600));
+
+        var container = FindBox(root, b => b.Element?.GetAttribute("id") == "c")!;
+        var anon = container.Children.First(c => c.Kind == BoxKind.AnonymousBlock);
+        var sized = container.Children.OfType<BlockBox>().First();
+
+        // The wrapper hugs its tiny text content, nowhere near the 300px row.
+        anon.Frame.Width.Should().BeLessThan(100);
+        // The sized sibling therefore sits right after it, not pushed rightward.
+        sized.Frame.X.Should().BeLessThan(100);
+        sized.Frame.Width.Should().BeApproximately(100, 0.5);
+    }
+
     // ---------- helpers ----------
 
     private static List<Box.Box> FlexChildren(Box.Box root)

@@ -47,6 +47,28 @@ public sealed class ComputedStyle
         return new ComputedStyle(merged, CustomProperties);
     }
 
+    /// <summary>
+    /// Builds the computed style for an anonymous box generated inside the
+    /// element this style belongs to. Per CSS 2.1 §9.2.1.1 (and CSS Flexbox 1
+    /// §4): an anonymous box inherits the <em>inherited</em> properties from its
+    /// parent and takes the <em>initial</em> value for every non-inherited
+    /// property. Copying the parent style wholesale instead would leak the
+    /// parent's <c>width</c>/<c>flex-*</c>/<c>background</c>/box-model onto the
+    /// wrapper — e.g. an anonymous flex item picking up a container's
+    /// <c>width:100%</c> as its flex-basis and ballooning, shoving its siblings
+    /// aside. Text-affecting properties (font, color, white-space, …) survive so
+    /// the wrapped inline run still renders with the parent's typography.
+    /// </summary>
+    public ComputedStyle ForAnonymousChild()
+    {
+        var values = new Dictionary<PropertyId, CssValue>(_values.Count);
+        foreach (var kv in _values)
+            values[kv.Key] = PropertyRegistry.Inherits(kv.Key)
+                ? kv.Value
+                : PropertyRegistry.InitialValue(kv.Key);
+        return new ComputedStyle(values, CustomProperties);
+    }
+
     /// <summary>Layout-time used-value resolution. Resolves any remaining
     /// percentages or symbolic units (e.g. percentages, container units when
     /// a container basis is supplied) using <paramref name="ctx"/>.</summary>

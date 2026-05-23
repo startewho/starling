@@ -186,7 +186,12 @@ internal sealed class BoxTreeBuilder
             var isInline = child.Kind is BoxKind.Inline or BoxKind.Text or BoxKind.Replaced;
             if (isInline)
             {
-                bucket ??= new AnonymousBlockBox(parent.Style);
+                // An anonymous wrapper inherits only inherited (text) properties
+                // from its parent; non-inherited props reset to initial. Passing
+                // the parent style verbatim would leak width/flex/box-model onto
+                // the wrapper — e.g. a flex container's width:100% becoming the
+                // anonymous item's flex-basis, ballooning it (CSS 2.1 §9.2.1.1).
+                bucket ??= new AnonymousBlockBox(parent.Style?.ForAnonymousChild());
                 child.Parent = bucket;
                 bucket.Children.Add(child);
             }
