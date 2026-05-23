@@ -43,6 +43,17 @@ public class Element : Node
 
     public DomTokenList ClassList { get; }
 
+    /// <summary>
+    /// The live IDL value of a form control (<c>&lt;input&gt;</c> /
+    /// <c>&lt;textarea&gt;</c>) — the text the user has typed or that a script
+    /// assigned via <c>element.value = …</c>. Null until the field is first
+    /// edited; while null the <c>value</c> content attribute supplies the
+    /// initial value. Layout (the synthesized label text) and the JS
+    /// <c>.value</c> accessor read this in preference to the attribute so typed
+    /// text and scripted assignments are reflected. Non-form elements ignore it.
+    /// </summary>
+    public string? InputValue { get; set; }
+
     public string? GetAttribute(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
