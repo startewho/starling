@@ -358,6 +358,23 @@ public static class NodeBindings
             return CallInherited(realm, thisV, args, realm.NodePrototype!, "appendChild");
         }, length: 1);
 
+        // HTMLCanvasElement.getContext — minimal "2d" context. Real raster
+        // canvas isn't implemented, but libraries (e.g. @tanstack/table) call
+        // canvas.getContext("2d") only to measure text for column sizing
+        // (set ctx.font, read ctx.measureText(s).width). We return a context
+        // object that supports that path with an approximate metric; other
+        // context types and non-canvas elements return null (spec: getContext
+        // is a HTMLCanvasElement member that returns null for unknown ids).
+        EventTargetBinding.DefineMethod(realm, elProto, "getContext", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is not { } e
+                || !string.Equals(e.LocalName, "canvas", StringComparison.OrdinalIgnoreCase))
+                return JsValue.Null;
+            var kind = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+            if (kind != "2d") return JsValue.Null;
+            return JsValue.Object(BuildCanvas2dContext(realm));
+        }, length: 1);
+
         EventTargetBinding.DefineMethod(realm, elProto, "querySelector", (thisV, args) =>
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length == 0) return JsValue.Null;
@@ -878,6 +895,54 @@ public static class NodeBindings
         o.Set("bottom", JsValue.Number(rect.Bottom));
         o.Set("left", JsValue.Number(rect.Left));
         return o;
+    }
+
+    /// <summary>A minimal CanvasRenderingContext2D supporting the text-metrics
+    /// path (<c>font</c> + <c>measureText</c>) plus no-op drawing methods so
+    /// code that grabs a 2d context doesn't crash. <c>measureText</c> width is
+    /// an approximation: average glyph advance ≈ 0.5em of the font's px size,
+    /// which is enough for column auto-sizing not to throw or collapse.</summary>
+    private static JsObject BuildCanvas2dContext(JsRealm realm)
+    {
+        var ctx = new JsObject(realm.ObjectPrototype);
+        ctx.DefineOwnProperty("font",
+            PropertyDescriptor.Data(JsValue.String("10px sans-serif"),
+                writable: true, enumerable: true, configurable: true));
+
+        EventTargetBinding.DefineMethod(realm, ctx, "measureText", (thisV, args) =>
+        {
+            var text = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+            var fontPx = 10.0;
+            if (thisV.IsObject && thisV.AsObject.Get("font") is { IsString: true } f)
+                fontPx = ParseFontPx(f.AsString) ?? 10.0;
+            var metrics = new JsObject(realm.ObjectPrototype);
+            metrics.Set("width", JsValue.Number(text.Length * fontPx * 0.5));
+            return JsValue.Object(metrics);
+        }, length: 1);
+
+        // No-op drawing surface: enough for feature-detection / incidental calls.
+        foreach (var noop in new[]
+        {
+            "save", "restore", "beginPath", "closePath", "moveTo", "lineTo",
+            "fill", "stroke", "fillRect", "clearRect", "strokeRect", "rect",
+            "scale", "rotate", "translate", "setTransform", "fillText", "strokeText",
+            "drawImage", "arc", "clip",
+        })
+            EventTargetBinding.DefineMethod(realm, ctx, noop, (_, _) => JsValue.Undefined, length: 0);
+
+        return ctx;
+    }
+
+    /// <summary>Pull the px size out of a CSS <c>font</c> shorthand
+    /// (e.g. <c>"normal 12px Arial"</c> → 12). Returns null if absent.</summary>
+    private static double? ParseFontPx(string font)
+    {
+        var idx = font.IndexOf("px", StringComparison.OrdinalIgnoreCase);
+        if (idx <= 0) return null;
+        var start = idx;
+        while (start > 0 && (char.IsDigit(font[start - 1]) || font[start - 1] == '.')) start--;
+        return double.TryParse(font.AsSpan(start, idx - start),
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
     }
 
     private static JsValue ReadOffsetMetric(JsRealm realm, JsValue thisV, Func<OffsetMetrics, double> select)
