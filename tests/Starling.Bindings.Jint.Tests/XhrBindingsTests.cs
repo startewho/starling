@@ -230,16 +230,19 @@ public sealed class XhrBindingsTests
 
     // ---- helpers ----
 
-    // Mirrors JintScriptSession.PumpOnce: advance the loop while any timer work is
-    // pending (the XHR completion settles through a Loop timer; see XhrBinding).
+    // Mirrors JintScriptSession.PumpOnce: drain promise jobs + the posted
+    // completion queue, advance the loop while any timer work is pending. The XHR
+    // completion settles through ctx.Post (drained here via DrainPosted).
     private static void PumpUntilDone(JintBackendContext ctx)
     {
         for (var i = 0; i < 50; i++)
         {
             ctx.Engine.Advanced.ProcessTasks();
-            if (ctx.Loop.PendingTimerCount == 0 && ctx.Loop.PendingAnimationFrameCount == 0)
+            if (ctx.DrainPosted()) ctx.Engine.Advanced.ProcessTasks();
+            if (ctx.Loop.PendingTimerCount == 0 && ctx.Loop.PendingAnimationFrameCount == 0 && !ctx.HasPosted)
                 break;
-            ctx.Loop.AdvanceBy(50);
+            if (ctx.Loop.PendingTimerCount > 0 || ctx.Loop.PendingAnimationFrameCount > 0)
+                ctx.Loop.AdvanceBy(50);
         }
     }
 

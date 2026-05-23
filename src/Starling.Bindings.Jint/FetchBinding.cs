@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using Jint; // JsValueExtensions (IsObject/AsObject/IsString/…)
 using Jint.Native;
@@ -25,18 +24,14 @@ namespace Starling.Bindings.Jint;
 // Web-IDL `new X()` / prototype / instanceof semantics correct while the heavy
 // lifting (HTTP, header model, body decoding) stays in C# over Starling.Net.
 //
-// === Cross-thread promise / pump integration (the tricky part) ===
+// === Cross-thread promise / pump integration ===
 // fetch() returns a Jint ManualPromise (Engine.Advanced.RegisterPromise()). The
 // HTTP send runs on a thread-pool Task; its continuation MUST NOT touch Jint
-// from the background thread. Instead completions are pushed onto a thread-safe
-// queue (_completions) and a self-re-arming 0ms timer is scheduled on ctx.Loop.
-// JintScriptSession.PumpOnce() already advances ctx.Loop while
-// PendingTimerCount > 0, so the timer fires ON THE JS THREAD, drains ready
-// completions (invoking resolve/reject), and re-arms itself while any fetch is
-// still in flight — keeping the pump non-idle until every promise settles. This
-// needs NO change to JintScriptSession. See the FLAG in the report for the one
-// nicety a dedicated session hook (IScriptSession.Post(Action)) would add over
-// the timer trampoline.
+// from the background thread. Instead each completion is marshalled back onto the
+// JS thread via ctx.Post(...) (the J3a "post to JS thread" hook):
+// JintScriptSession.PumpOnce() drains the post queue on the JS thread, invoking
+// resolve/reject there, and reports "not idle" while the queue is non-empty — so
+// the pump keeps turning until every fetch promise settles.
 internal static class FetchBinding
 {
     public static void Install(JintBackendContext ctx)
@@ -264,11 +259,6 @@ internal sealed class FetchState
     // collide in the Bodies alias table.
     private int _nextFacade = 1;
 
-    // Cross-thread completion plumbing.
-    private readonly ConcurrentQueue<Action> _completions = new();
-    private int _inFlight;     // Interlocked: number of unsettled fetches
-    private bool _pumpArmed;   // guards a single re-arming timer (JS-thread only)
-
     public FetchState(JintBackendContext ctx)
     {
         _ctx = ctx;
@@ -446,9 +436,6 @@ internal sealed class FetchState
             return promise;
         }
 
-        Interlocked.Increment(ref _inFlight);
-        ArmPump();
-
         _ = Task.Run(async () =>
         {
             try
@@ -457,13 +444,13 @@ internal sealed class FetchState
                 if (result.IsErr)
                 {
                     var err = result.Error;
-                    EnqueueCompletion(() => reject(MakeError("TypeError", $"Failed to fetch: {err}")));
+                    _ctx.Post(() => reject(MakeError("TypeError", $"Failed to fetch: {err}")));
                 }
                 else
                 {
                     var resp = result.Value;
                     var finalUrl = wire.Url.ToString();
-                    EnqueueCompletion(() =>
+                    _ctx.Post(() =>
                     {
                         var id = RegisterResponseFromWire(resp, finalUrl);
                         resolve(MakeResponseJs(id));
@@ -472,7 +459,7 @@ internal sealed class FetchState
             }
             catch (Exception ex)
             {
-                EnqueueCompletion(() => reject(MakeError("TypeError", $"Failed to fetch: {ex.Message}")));
+                _ctx.Post(() => reject(MakeError("TypeError", $"Failed to fetch: {ex.Message}")));
             }
         });
 
@@ -481,11 +468,9 @@ internal sealed class FetchState
 
     private void CompleteWithDataUrl(StarlingUrl url, Action<JsValue> resolve, Action<JsValue> reject)
     {
-        // Route data: completion through the pump too, so .then() callbacks run on
-        // a later turn (matching real fetch's async contract).
-        Interlocked.Increment(ref _inFlight);
-        ArmPump();
-        EnqueueCompletion(() =>
+        // Route data: completion through the post queue too, so .then() callbacks
+        // run on a later turn (matching real fetch's async contract).
+        _ctx.Post(() =>
         {
             if (global::Starling.Url.DataUrl.TryDecode(url, out var payload))
             {
@@ -514,38 +499,6 @@ internal sealed class FetchState
         // The bootstrap exposed __mkResponse(handle) → a Response facade.
         var mk = _ctx.Engine.Global.Get("__mkResponse");
         return _ctx.Engine.Invoke(mk, JintInterop.Num(id));
-    }
-
-    // ---------------- cross-thread pump ----------------
-
-    private void EnqueueCompletion(Action completion)
-    {
-        // Decrement in-flight exactly once even if the completion throws.
-        _completions.Enqueue(() =>
-        {
-            try { completion(); }
-            finally { Interlocked.Decrement(ref _inFlight); }
-        });
-    }
-
-    // Schedule (idempotently) a self-re-arming 0ms timer on the loop the session
-    // pump advances. Runs ONLY on the JS thread (from Fetch, called synchronously
-    // by the JS engine, and from the timer callback itself).
-    private void ArmPump()
-    {
-        if (_pumpArmed) return;
-        _pumpArmed = true;
-        _ctx.Loop.SetTimeout(PumpTick, 0);
-    }
-
-    private void PumpTick()
-    {
-        _pumpArmed = false;
-        // Drain everything ready now (resolve/reject run here, on the JS thread).
-        while (_completions.TryDequeue(out var c)) c();
-        // Re-arm while any fetch is still in flight so PumpOnce stays non-idle.
-        if (Volatile.Read(ref _inFlight) > 0)
-            ArmPump();
     }
 
     // ---------------- shared helpers ----------------

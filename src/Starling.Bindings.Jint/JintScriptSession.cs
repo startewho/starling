@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Jint;
 using Jint.Native;
 using Jint.Runtime;
@@ -31,7 +32,14 @@ internal sealed class JintScriptSession : IScriptSession
     private readonly global::Jint.Engine _engine;
     private readonly JintBackendContext _ctx;
     private readonly WebEventLoop _loop;
+    private readonly JintDynamicScriptRunner _dynamicRunner;
     private bool _disposed;
+
+    // Thread-safe "post to the JS thread" queue. Background work (fetch/XHR HTTP
+    // completions, dynamic-script fetches) enqueues a callback here via
+    // ctx.Post(...); PumpOnce drains and runs them on the JS thread. A queued job
+    // keeps PumpOnce reporting "not idle".
+    private readonly ConcurrentQueue<Action> _postQueue = new();
 
     private Action<ConsoleLevel, string> _consoleSink = static (_, _) => { };
 
@@ -58,6 +66,19 @@ internal sealed class JintScriptSession : IScriptSession
             layoutHost: options.LayoutHost,
             fetch: options.Fetcher.Invoke);
 
+        // Install the cross-thread "post to JS thread" hook BEFORE the binding
+        // families so fetch/XHR/dynamic-script work can capture it. Calls are
+        // safe from any thread; PumpOnce drains the queue on the JS thread.
+        _ctx.Post = Post;
+
+        // Dynamic <script src=…> path (HTML §4.12.1 "prepare a script"). Fetches
+        // through the session's fetch delegate and runs on the JS thread via the
+        // post queue.
+        _dynamicRunner = new JintDynamicScriptRunner(
+            options.Diag, options.BaseUrl,
+            (url, token) => options.Fetcher(url, token),
+            RunClassicScript, Post);
+
         // Minimal console so console.* works before J2d's full Window surface.
         // J2d may redefine these against the same sink without changing behavior.
         InstallConsole();
@@ -65,6 +86,14 @@ internal sealed class JintScriptSession : IScriptSession
         // Install every Web-API binding family (no-ops until each Wave-2 file is
         // implemented; the dispatcher order is the frozen J2a contract).
         JintBindings.InstallAll(_ctx);
+    }
+
+    /// <summary>Thread-safe enqueue of a JS-thread callback. Drained by
+    /// <see cref="PumpOnce"/>. See <see cref="JintBackendContext.Post"/>.</summary>
+    private void Post(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        _postQueue.Enqueue(action);
     }
 
     public Action<ConsoleLevel, string> ConsoleSink
@@ -111,21 +140,55 @@ internal sealed class JintScriptSession : IScriptSession
 
     public bool PumpOnce()
     {
-        // Mirror the Starling backend's single-iteration pump: drain promise
-        // jobs, else advance the simulated clock so due timers + one rAF frame
-        // fire (J3a routes them onto _loop). Returns true while any front has
-        // pending work. Microtask pending-count isn't directly observable on the
-        // Jint engine, so a quiet ProcessTasks plus an idle loop is treated as
-        // "no in-process work".
+        // One pump iteration:
+        //   1) run Jint promise jobs (engine.Advanced.ProcessTasks);
+        //   2) drain the cross-thread post queue ON THE JS THREAD (fetch/XHR HTTP
+        //      completions, dynamic-script runs) — then re-run promise jobs so any
+        //      reactions they queued settle this iteration;
+        //   3) advance the simulated clock so due timers + one rAF frame fire.
+        // Reports "not idle" (true) while ANY of these still has pending work:
+        // loop timers, rAF callbacks, loop microtasks, the post queue, or an
+        // in-flight dynamic-script fetch. Returns false only when fully quiescent.
+        const int SimulatedStepMs = 50;
+
         DrainMicrotasks();
 
-        if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
-        {
-            _loop.AdvanceBy(50);
-            return true;
-        }
+        if (DrainPostQueue())
+            DrainMicrotasks();
 
-        return false;
+        if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
+            _loop.AdvanceBy(SimulatedStepMs);
+
+        return _loop.PendingTimerCount > 0
+            || _loop.PendingAnimationFrameCount > 0
+            || _loop.PendingMicrotaskCount > 0
+            || !_postQueue.IsEmpty
+            || _dynamicRunner.HasPending;
+    }
+
+    /// <summary>Drain every callback the post queue holds <i>now</i>, on the JS
+    /// thread. A drained callback may enqueue further work; that lands on a later
+    /// PumpOnce. Returns true if any callback ran.</summary>
+    private bool DrainPostQueue()
+    {
+        var ran = false;
+        while (_postQueue.TryDequeue(out var action))
+        {
+            ran = true;
+            try
+            {
+                action();
+            }
+            catch (JavaScriptException ex)
+            {
+                ReportUncaught(ex);
+            }
+            catch (Exception ex)
+            {
+                _ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Posted callback threw: {ex.Message}");
+            }
+        }
+        return ran;
     }
 
     public void OnScriptElementConnected(Node scriptEl)
@@ -133,12 +196,19 @@ internal sealed class JintScriptSession : IScriptSession
         ArgumentNullException.ThrowIfNull(scriptEl);
         if (scriptEl is not Element { LocalName: "script" } script) return;
 
-        // Inline non-async injected scripts run synchronously on insertion;
-        // external/async scripts are deferred (J3a/dynamic-runner territory —
-        // not yet wired on the Jint backend, so they are ignored for now).
+        // Script-inserted external scripts (and any async-flagged script) are
+        // async by default — route them to the dynamic-script runner
+        // (HTML §4.12.1) rather than running them inline. EnqueueInjectedExternal
+        // is idempotent and honours the "already started" flag.
         var hasSrc = !string.IsNullOrWhiteSpace(script.GetAttribute("src"));
-        if (hasSrc || script.HasAttribute("async")) return;
+        if (hasSrc || script.HasAttribute("async"))
+        {
+            if (hasSrc) _dynamicRunner.EnqueueInjectedExternal(script);
+            return;
+        }
 
+        // Inline non-async injected script: run synchronously on insertion so its
+        // side effects are visible to the code that appended it.
         var inline = script.TextContent;
         if (string.IsNullOrWhiteSpace(inline)) return;
         try
@@ -153,8 +223,10 @@ internal sealed class JintScriptSession : IScriptSession
 
     public void MarkScriptStarted(Node scriptEl)
     {
-        // The Jint backend's dynamic-script runner lands with J3a; until then
-        // there is no separate started-flag bookkeeping to update. No-op.
+        ArgumentNullException.ThrowIfNull(scriptEl);
+        // Flag a parser-batch script "already started" so a later JS `src` write
+        // never re-runs it (HTML §4.12.1).
+        if (scriptEl is Element script) _dynamicRunner.MarkStarted(script);
     }
 
     public void Dispose()

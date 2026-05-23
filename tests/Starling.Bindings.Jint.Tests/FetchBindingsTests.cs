@@ -232,18 +232,19 @@ public sealed class FetchBindingsTests
         return v.IsBoolean() && v.AsBoolean();
     }
 
-    /// <summary>Mirror JintScriptSession.PumpOnce: drain promise jobs, then
-    /// advance the loop while timers/rAF are pending, until <paramref name="done"/>
-    /// or a safety bound is hit.</summary>
+    /// <summary>Mirror JintScriptSession.PumpOnce: drain promise jobs + the posted
+    /// completion queue (ctx.DrainPosted), then advance the loop while timers/rAF
+    /// are pending, until <paramref name="done"/> or a safety bound is hit.</summary>
     private static void PumpUntil(JintBackendContext ctx, Func<bool> done)
     {
         for (var i = 0; i < 1000; i++)
         {
             ctx.Engine.Advanced.ProcessTasks();
+            if (ctx.DrainPosted()) ctx.Engine.Advanced.ProcessTasks();
             if (done()) return;
             if (ctx.Loop.PendingTimerCount > 0 || ctx.Loop.PendingAnimationFrameCount > 0)
                 ctx.Loop.AdvanceBy(1);
-            else
+            else if (!ctx.HasPosted)
                 System.Threading.Thread.Sleep(1); // wait for the background HTTP/data task
         }
         ctx.Engine.Advanced.ProcessTasks();

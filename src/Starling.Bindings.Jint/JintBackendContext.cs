@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Starling.Common.Diagnostics;
 using Starling.Dom;
 using Starling.Loop;
@@ -51,6 +52,43 @@ public sealed class JintBackendContext
     /// module loader (J4).</summary>
     public Func<StarlingUrl, CancellationToken, Task<string?>> Fetch { get; }
 
+    // Default thread-safe post queue, used when no session installs its own Post
+    // hook (e.g. a bare context in a unit test). Drained on the JS thread by
+    // DrainPosted().
+    private readonly ConcurrentQueue<Action> _defaultPostQueue = new();
+
+    /// <summary>
+    /// Thread-safe "post to the JS thread" hook (J3a additive contract). Binding
+    /// families that complete async work on a background thread (fetch/XHR HTTP
+    /// completions, dynamic-script fetches) call <c>Post(action)</c> to enqueue
+    /// the action for execution on the JS thread; the action is then drained and
+    /// invoked on the JS thread, keeping the pump reporting "not idle" while
+    /// anything is queued. Calls are safe from any thread.
+    /// <para><see cref="JintScriptSession"/> installs its own hook that feeds the
+    /// session pump (<see cref="JintScriptSession.PumpOnce"/>). The default
+    /// enqueues onto an internal thread-safe queue drained by
+    /// <see cref="DrainPosted"/> — so a bare context (no session) still defers
+    /// completions to a later turn rather than running them inline, matching real
+    /// async semantics.</para>
+    /// </summary>
+    public Action<Action> Post { get; set; }
+
+    /// <summary>Drain and run every action posted to the default queue, on the
+    /// calling (JS) thread. No-op once a session has installed its own
+    /// <see cref="Post"/> hook (those actions go to the session pump). Returns
+    /// true if any action ran. A drained action may post more work; that lands on
+    /// the next drain.</summary>
+    public bool DrainPosted()
+    {
+        var ran = false;
+        while (_defaultPostQueue.TryDequeue(out var action)) { ran = true; action(); }
+        return ran;
+    }
+
+    /// <summary>True while the default post queue has undrained work (a bare
+    /// context's "not idle" signal). Always false once a session owns Post.</summary>
+    public bool HasPosted => !_defaultPostQueue.IsEmpty;
+
     public JintBackendContext(
         global::Jint.Engine engine,
         Document document,
@@ -70,5 +108,6 @@ public sealed class JintBackendContext
         LayoutHost = layoutHost;
         Fetch = fetch;
         Wrappers = new JintDomWrapper(this);
+        Post = _defaultPostQueue.Enqueue;
     }
 }
