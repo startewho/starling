@@ -77,7 +77,11 @@ internal sealed class JintScriptSession : IScriptSession
             diag: options.Diag,
             loop: _loop,
             layoutHost: options.LayoutHost,
-            fetch: options.Fetcher.Invoke);
+            fetch: options.Fetcher.Invoke)
+        {
+            ViewportWidth = options.ViewportWidth,
+            ViewportHeight = options.ViewportHeight,
+        };
 
         // Install the cross-thread "post to JS thread" hook BEFORE the binding
         // families so fetch/XHR/dynamic-script work can capture it. Calls are

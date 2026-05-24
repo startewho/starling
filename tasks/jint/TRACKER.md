@@ -58,6 +58,40 @@ starts only after the previous wave builds green.
   `Jint` package + one selector arm; `Starling.Js.Hosting` seam stays.
 
 ## Handoff log
+- 2026-05-23 — **McMaster.com end-to-end render under Jint** (agent-claude-cody).
+  Drove `/products/screws/` + `/` (homepage) to real, dynamic content under the
+  Jint backend (both were blank before — the React app never booted). Fixes, all
+  with tests green (Jint bindings 85, Net 182, Engine 151 default & jint):
+  - **Networking (benefits both backends):**
+    - `H1RequestWriter` / `H2Connection`: send `Content-Length` (incl. `0`) for
+      empty-body POST/PUT/PATCH — bodyless POSTs were 411'ing (McMaster
+      `tokenauthorization.aspx`), which cascaded to 403s on gated endpoints.
+    - `StarlingEngine` default `_httpFactory` now shares one `CookieJar` (+ wires
+      diagnostics) across all clients it creates, so `Set-Cookie` from the token
+      handshake is carried to later XHRs — `ProdPageWebPart.aspx` went 403 → 200
+      (2.5 MB of product HTML).
+  - **Jint Web-API surface (the React app's boot path):**
+    `document.implementation.createHTMLDocument`; `document.location`/`URL`/
+    `documentURI`/`defaultView` (location shared with `window.location`);
+    canvas `getContext('2d')` with a width-estimating `measureText`;
+    `window.innerWidth/innerHeight/outerWidth/outerHeight` + `window.screen`
+    (fed by a new `ScriptSessionOptions.Viewport{Width,Height}` plumbed from the
+    engine → `JintBackendContext`); `window.top/parent/frames/frameElement/length`;
+    `performance.timing`/`navigation` + timeline no-ops; `queueMicrotask`,
+    `requestIdleCallback`/`cancelIdleCallback`; **`IntersectionObserver` now fires**
+    an intersecting record per `observe()` (one-shot full-viewport semantics) so
+    lazy-mounted content renders; ~70 DOM/HTML/SVG/Event/File **interface globals**
+    for `instanceof`/feature-detection (the blocker was React focus code doing
+    `el instanceof window.HTMLIFrameElement`, plus a className helper's
+    `n instanceof SVGAnimatedString`); constructible Event subclasses
+    (`MouseEvent`, `TouchEvent`, …).
+  - **Engine:** `PumpToQuiescenceAsync` wall-clock cap is now overridable via
+    `STARLING_PUMP_MAX_MS` (default 8 s still loads both pages; perpetual
+    socket.io long-polling means heavy SPAs never go idle and run to the cap).
+  - **Known remaining (layout/paint, not JS):** product-image URLs resolve to
+    `?ver=ImageNotFound` (image version-map gap), and a font-measurement pangram
+    element ("quick brown fox…") paints visibly instead of off-screen. The DOM
+    content (spec-search filters, homepage category grid) is fully populated.
 - 2026-05-22 — tracker + DESIGN created (agent-claude-cody); baseline build green; Wave 1 launching.
 - 2026-05-22 — **Wave 1 complete (J0+J1+J2a)** (agent-claude-cody). Full solution
   builds green (`dotnet build Starling.slnx -c Debug`); tests green:

@@ -588,6 +588,88 @@ internal static class NodeBindings
         // the setters are accepted no-ops so assignment doesn't throw.
         Accessor(ctx, proto, "scrollTop", (_, _) => JintInterop.Num(0), (_, _) => JsValue.Undefined);
         Accessor(ctx, proto, "scrollLeft", (_, _) => JintInterop.Num(0), (_, _) => JsValue.Undefined);
+
+        // HTMLCanvasElement.getContext — canvas-only. We have no real raster
+        // surface behind the JS seam, but real pages (e.g. McMaster) use a
+        // throwaway 2D context purely to measure text widths for layout sizing.
+        // Return a stub 2D context (cached per canvas) with a settable `font`
+        // and a `measureText` that estimates width from the font size; all the
+        // drawing operations are accepted no-ops. Non-canvas elements and
+        // unsupported context types return null (spec-correct).
+        Method(ctx, proto, "getContext", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is not { } e ||
+                !e.LocalName.Equals("canvas", StringComparison.OrdinalIgnoreCase))
+                return JsValue.Null;
+            var type = args.Length > 0 ? Str(args[0]) : "";
+            if (!type.Equals("2d", StringComparison.OrdinalIgnoreCase)) return JsValue.Null;
+            if (t is not ObjectInstance wrapper) return JsValue.Null;
+            return Cached(wrapper, "__ctx2d__", () => BuildCanvas2dContext(engine, wrapper));
+        }, 1);
+    }
+
+    /// <summary>Build a stub <c>CanvasRenderingContext2D</c>. There is no raster
+    /// surface behind the JS seam, so drawing ops are no-ops; the one method that
+    /// must return a meaningful value is <c>measureText</c>, which pages use to
+    /// size text. We estimate the advance width from the px size parsed out of
+    /// the current <c>font</c> (≈0.5em per character — a serviceable mean for
+    /// proportional fonts). <paramref name="canvas"/> is exposed via the
+    /// <c>canvas</c> back-reference per spec.</summary>
+    private static JsObject BuildCanvas2dContext(global::Jint.Engine engine, ObjectInstance canvas)
+    {
+        var c2d = new JsObject(engine);
+        JintInterop.DefineDataProp(c2d, "canvas", canvas, writable: false, enumerable: true, configurable: true);
+        // Settable state the measurement path reads/writes.
+        foreach (var (name, def) in new (string, string)[]
+        {
+            ("font", "10px sans-serif"), ("textAlign", "start"), ("textBaseline", "alphabetic"),
+            ("fillStyle", "#000000"), ("strokeStyle", "#000000"), ("lineCap", "butt"), ("lineJoin", "miter"),
+        })
+        {
+            JintInterop.DefineDataProp(c2d, name, JintInterop.Str(def), writable: true, enumerable: true, configurable: true);
+        }
+        JintInterop.DefineDataProp(c2d, "lineWidth", JintInterop.Num(1), writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(c2d, "globalAlpha", JintInterop.Num(1), writable: true, enumerable: true, configurable: true);
+
+        JintInterop.DefineMethod(engine, c2d, "measureText", (self, a) =>
+        {
+            var text = a.Length > 0 ? Str(a[0]) : "";
+            var px = 10.0;
+            if (self is ObjectInstance o && o.Get("font") is { } f && !f.IsUndefined())
+                px = ParseFontPx(f.ToString());
+            var width = text.Length * px * 0.5;
+            var metrics = new JsObject(engine);
+            JintInterop.DefineDataProp(metrics, "width", JintInterop.Num(width));
+            // A couple of TextMetrics fields some scripts read; conservative values.
+            JintInterop.DefineDataProp(metrics, "actualBoundingBoxAscent", JintInterop.Num(px * 0.8));
+            JintInterop.DefineDataProp(metrics, "actualBoundingBoxDescent", JintInterop.Num(px * 0.2));
+            return metrics;
+        }, 1);
+
+        // Drawing / state ops — accepted no-ops so canvas code never throws.
+        foreach (var name in new[]
+        {
+            "fillRect", "clearRect", "strokeRect", "fillText", "strokeText", "beginPath", "closePath",
+            "moveTo", "lineTo", "rect", "arc", "fill", "stroke", "save", "restore", "scale", "rotate",
+            "translate", "transform", "setTransform", "drawImage", "clip", "setLineDash",
+        })
+        {
+            JintInterop.DefineMethod(engine, c2d, name, (_, _) => JsValue.Undefined, 0);
+        }
+        return c2d;
+    }
+
+    /// <summary>Pull the pixel size out of a CSS shorthand <c>font</c> string
+    /// (e.g. <c>"normal 12px Arial"</c> → 12). Defaults to 10 when absent.</summary>
+    private static double ParseFontPx(string font)
+    {
+        var idx = font.IndexOf("px", StringComparison.OrdinalIgnoreCase);
+        if (idx <= 0) return 10.0;
+        var start = idx;
+        while (start > 0 && (char.IsDigit(font[start - 1]) || font[start - 1] == '.')) start--;
+        return double.TryParse(font.AsSpan(start, idx - start),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var px)
+            ? px : 10.0;
     }
 
     // =====================================================================
@@ -635,8 +717,27 @@ internal static class NodeBindings
                 : JintInterop.Str("CSS1Compat"));
         Accessor(ctx, proto, "hidden", (_, _) => JsBoolean.False);
         Accessor(ctx, proto, "visibilityState", (_, _) => JintInterop.Str("visible"));
+
+        // DOM §4.5 — document.implementation returns a DOMImplementation object.
+        // Cached per-document on the wrapper (hidden slot) so identity is stable.
+        Accessor(ctx, proto, "implementation", (t, _) =>
+        {
+            if (t is not ObjectInstance wrapper) return JsValue.Null;
+            return Cached(wrapper, "__domImpl__", () => BuildDomImplementation(ctx));
+        });
         Accessor(ctx, proto, "characterSet", (_, _) => JintInterop.Str("UTF-8"));
         Accessor(ctx, proto, "contentType", (_, _) => JintInterop.Str("text/html"));
+
+        // document.location / URL / documentURI — mirror the Starling backend.
+        // document.location shares the same object as window.location.
+        Accessor(ctx, proto, "location",
+            (t, _) => w.UnwrapDocument(t) is null ? JsValue.Null : WindowBinding.LocationObjectFor(ctx));
+        Accessor(ctx, proto, "URL",
+            (t, _) => w.UnwrapDocument(t) is null ? JintInterop.Str("") : JintInterop.Str(WindowBinding.UrlFor(ctx)));
+        Accessor(ctx, proto, "documentURI",
+            (t, _) => w.UnwrapDocument(t) is null ? JintInterop.Str("") : JintInterop.Str(WindowBinding.UrlFor(ctx)));
+        Accessor(ctx, proto, "defaultView",
+            (t, _) => w.UnwrapDocument(t) is null ? JsValue.Null : engine.Global);
 
         Method(ctx, proto, "getElementById", (t, args) =>
         {
@@ -754,6 +855,52 @@ internal static class NodeBindings
         Global(engine, "CharacterData", charDataCtor);
         Global(engine, "Text", textCtor);
         Global(engine, "HTMLElement", htmlElementCtor);
+
+        // HTMLDocument is a legacy alias of Document; share its prototype so
+        // `document instanceof HTMLDocument` resolves.
+        Global(engine, "HTMLDocument", MakeCtor(engine, "HTMLDocument", documentProto));
+
+        // Marker constructors for DOM interfaces real pages name in
+        // `instanceof` / `typeof X !== 'undefined'` feature tests. We model the
+        // collections as plain snapshot arrays (so instanceof is false), but the
+        // global names must at least exist so the references don't throw
+        // ReferenceError. Non-element interfaces get a plain prototype; element
+        // subclasses chain off Element.prototype.
+        foreach (var name in new[]
+        {
+            "HTMLCollection", "NodeList", "DOMTokenList", "NamedNodeMap", "DOMStringMap",
+            "CSSStyleDeclaration", "DOMRect", "DOMRectReadOnly", "DOMException",
+            // File API + misc interfaces used in `instanceof` / feature tests.
+            "Blob", "File", "FileList", "FileReader", "FormData", "DataTransfer",
+            "Comment", "DocumentType", "ShadowRoot", "MediaQueryList",
+            // SVG interfaces named in `instanceof` checks. Notably SVGAnimatedString:
+            // an SVG element's `className` is an SVGAnimatedString (not a string), so
+            // className helpers branch on `n instanceof SVGAnimatedString`. Our
+            // elements use string classNames, so the test is correctly false — the
+            // global just has to exist so the reference doesn't throw.
+            "SVGAnimatedString", "SVGElement", "SVGSVGElement", "SVGAnimatedLength",
+        })
+        {
+            Global(engine, name, MakeCtor(engine, name, NewProto(engine, null)));
+        }
+        foreach (var name in new[]
+        {
+            "HTMLInputElement", "HTMLAnchorElement", "HTMLImageElement", "HTMLFormElement",
+            "HTMLButtonElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLScriptElement",
+            "HTMLCanvasElement", "HTMLDivElement", "HTMLSpanElement", "HTMLUListElement",
+            "HTMLLIElement", "HTMLParagraphElement", "HTMLHeadingElement", "HTMLTableElement",
+            // React's focus management does `node instanceof window.HTMLIFrameElement`
+            // while walking the active-element chain — a missing global throws.
+            "HTMLIFrameElement", "HTMLLabelElement", "HTMLOptionElement", "HTMLBodyElement",
+            "HTMLHtmlElement", "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
+            "HTMLPreElement", "HTMLBRElement", "HTMLHRElement", "HTMLTableRowElement",
+            "HTMLTableCellElement", "HTMLTableSectionElement", "HTMLFieldSetElement",
+            "HTMLLegendElement", "HTMLPictureElement", "HTMLSourceElement", "HTMLVideoElement",
+            "HTMLAudioElement", "HTMLMediaElement", "HTMLOptGroupElement", "HTMLDataListElement",
+        })
+        {
+            Global(engine, name, MakeCtor(engine, name, NewProto(engine, htmlElementProto)));
+        }
     }
 
     // =====================================================================
@@ -1099,6 +1246,32 @@ internal static class NodeBindings
         // Hidden cache slot: non-enumerable so it doesn't leak into for-in.
         JintInterop.DefineDataProp(wrapper, key, obj, writable: true, enumerable: false, configurable: true);
         return obj;
+    }
+
+    /// <summary>Build a DOMImplementation JS object (DOM §4.5). Exposes
+    /// <c>createHTMLDocument([title])</c>, <c>createDocumentFragment()</c>, and
+    /// <c>hasFeature()</c> (always true). The returned document is wrapped with
+    /// the Document prototype so all Document methods work on it. Mirrors the
+    /// Starling backend's <c>NodeBindings.BuildDomImplementation</c>.</summary>
+    private static JsObject BuildDomImplementation(JintBackendContext ctx)
+    {
+        var engine = ctx.Engine;
+        var w = ctx.Wrappers;
+        var impl = new JsObject(engine);
+
+        JintInterop.DefineMethod(engine, impl, "createHTMLDocument", (_, args) =>
+        {
+            // title arg: absent → null (no <title>); present (even "") → create one.
+            string? title = args.Length > 0 && !args[0].IsUndefined() ? Str(args[0]) : null;
+            return w.Wrap(Document.CreateHtmlDocument(title));
+        }, 1);
+
+        JintInterop.DefineMethod(engine, impl, "createDocumentFragment",
+            (_, _) => w.Wrap(new Document().CreateDocumentFragment()), 0);
+
+        JintInterop.DefineMethod(engine, impl, "hasFeature", (_, _) => JsBoolean.True, 0);
+
+        return impl;
     }
 
     private static JsArray Array(global::Jint.Engine engine, IReadOnlyList<JsValue> items)

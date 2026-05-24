@@ -77,7 +77,12 @@ public sealed class H1RequestWriter
         AppendDefaultHeader(sb, req.Headers, "Accept-Encoding", AcceptEncodingHeader);
         AppendDefaultHeader(sb, req.Headers, "Connection", ConnectionHeader);
 
-        if (!req.Body.IsEmpty
+        // Emit Content-Length when there is a body, OR when the method is one
+        // that carries a request body (POST/PUT/PATCH) even if that body is
+        // empty. An empty-body POST with no Content-Length is rejected by many
+        // servers with 411 Length Required — XHR/fetch always send "0" here, so
+        // we must too (e.g. McMaster's token-authorization POST).
+        if ((!req.Body.IsEmpty || MethodCarriesBody(req.Method))
             && !req.Headers.Contains("Content-Length")
             && !req.Headers.Contains("Transfer-Encoding"))
         {
@@ -100,6 +105,13 @@ public sealed class H1RequestWriter
         var written = Encoding.ASCII.GetBytes(s, scratch);
         return new ReadOnlyMemory<byte>(scratch, 0, written);
     }
+
+    /// <summary>True for request methods that carry a body (so an empty body
+    /// still warrants <c>Content-Length: 0</c>). GET/HEAD/OPTIONS/etc. do not.</summary>
+    internal static bool MethodCarriesBody(string method) =>
+        method.Equals("POST", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("PUT", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("PATCH", StringComparison.OrdinalIgnoreCase);
 
     private static void AppendDefaultHeader(StringBuilder sb, HttpHeaders user, string name, string value)
     {

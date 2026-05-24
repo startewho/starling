@@ -66,6 +66,16 @@ if (!string.IsNullOrWhiteSpace(rustLog))
     gui.WithEnvironment("RUST_LOG", rustLog);
 }
 
+// JS engine selection (STARLING_JS_ENGINE=starling|jint) is read by
+// Starling.Engine/JsEngineSelector at runtime. Like the blocks above, Aspire
+// won't auto-propagate it, so forward the host value to both resources when set.
+var jsEngine = Environment.GetEnvironmentVariable("STARLING_JS_ENGINE");
+if (!string.IsNullOrWhiteSpace(jsEngine))
+{
+    headless.WithEnvironment("STARLING_JS_ENGINE", jsEngine);
+    gui.WithEnvironment("STARLING_JS_ENGINE", jsEngine);
+}
+
 builder.Build().Run();
 
 // Walk up from this binary's location until we find Starling.slnx. AppContext.

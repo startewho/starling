@@ -49,7 +49,18 @@ public sealed class StarlingEngine
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _painter = painter ?? new Painter(diag: _diag);
-        _httpFactory = httpFactory ?? (() => new StarlingHttpClient());
+        // Default factory: share one CookieJar across every client this engine
+        // creates (main document fetch + per-session XHR/fetch + images/fonts) so
+        // Set-Cookie from one request is carried to the next. Real sites gate
+        // content on session cookies set during a token/auth handshake (e.g.
+        // McMaster's tokenauthorization.aspx → ProdPageWebPart.aspx), which 403s
+        // without the cookie. Also forward diagnostics so net spans/logs surface.
+        var sharedCookies = new Starling.Net.Http.Cookies.CookieJar();
+        _httpFactory = httpFactory ?? (() => new StarlingHttpClient(new StarlingHttpClientOptions
+        {
+            CookieJar = sharedCookies,
+            Diagnostics = _diag,
+        }));
     }
 
     /// <summary>
@@ -229,7 +240,7 @@ public sealed class StarlingEngine
 
                 using (_diag.Span("engine", "run_scripts"))
                 {
-                    await RunScriptsAsync(doc, u, scripts, jsLayoutHost, ct).ConfigureAwait(false);
+                    await RunScriptsAsync(doc, u, scripts, jsLayoutHost, viewport, ct).ConfigureAwait(false);
                 }
 
                 // Snapshot how many images/stylesheets were loaded before the
@@ -550,7 +561,7 @@ public sealed class StarlingEngine
                 // changed the DOM. Used by the interactive shell. ----
                 if (onFirstPaint is not null && hasScripts)
                 {
-                    var session = BeginScripts(doc, u, scripts, new BoxLayoutHost(doc, Prelayout), ct);
+                    var session = BeginScripts(doc, u, scripts, new BoxLayoutHost(doc, Prelayout), viewport, ct);
                     var sessionEnded = false;
                     void EndSessionOnce() { if (!sessionEnded) { sessionEnded = true; EndScripts(session); } }
                     try
@@ -610,7 +621,7 @@ public sealed class StarlingEngine
                 // single returned page (snapshot semantics / no callback). ----
                 if (hasScripts)
                 {
-                    await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout), ct).ConfigureAwait(false);
+                    await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout), viewport, ct).ConfigureAwait(false);
                     DisposeScripts();
                     await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
                 }
@@ -726,7 +737,7 @@ public sealed class StarlingEngine
     /// </remarks>
     private async Task RunScriptsAsync(
         Document document, StarlingUrl baseUrl, ScriptFetcher scriptFetcher,
-        ILayoutHost? layoutHost, CancellationToken ct)
+        ILayoutHost? layoutHost, LayoutSize viewport, CancellationToken ct)
     {
         // One span over the whole execution phase — compile + run, the
         // DOMContentLoaded/load events, and the microtask/timer/dynamic-script
@@ -742,7 +753,7 @@ public sealed class StarlingEngine
         Activity.Current?.SetTag("script.count", scriptFetcher.Scripts.Count);
         Activity.Current?.SetTag("script.module_count", scriptFetcher.ModuleScripts.Count);
 
-        var session = BeginScripts(document, baseUrl, scriptFetcher, layoutHost, ct);
+        var session = BeginScripts(document, baseUrl, scriptFetcher, layoutHost, viewport, ct);
         try
         {
             RunCriticalScripts(session, deferAsync: false, ct);
@@ -782,7 +793,7 @@ public sealed class StarlingEngine
     /// </summary>
     private ScriptSession BeginScripts(
         Document document, StarlingUrl baseUrl, ScriptFetcher scriptFetcher,
-        ILayoutHost? layoutHost, CancellationToken ct)
+        ILayoutHost? layoutHost, LayoutSize viewport, CancellationToken ct)
     {
         var http = _httpFactory();
 
@@ -799,7 +810,11 @@ public sealed class StarlingEngine
             Fetcher: (url, token) => scriptFetcher.FetchSourceAsync(url, token),
             Http: http,
             LayoutHost: layoutHost,
-            Diag: _diag));
+            Diag: _diag)
+        {
+            ViewportWidth = (int)viewport.Width,
+            ViewportHeight = (int)viewport.Height,
+        });
 
         var session = new ScriptSession
         {
@@ -1030,7 +1045,12 @@ public sealed class StarlingEngine
     /// </summary>
     private async Task PumpToQuiescenceAsync(ScriptSession s, CancellationToken ct)
     {
-        const int MaxMs = 8000;   // hard wall-clock cap for the whole settle
+        // Hard wall-clock cap for the whole settle. Overridable via
+        // STARLING_PUMP_MAX_MS for content-heavy SPAs whose data XHRs (e.g.
+        // McMaster's multi-MB ProdPageWebPart) need longer than the default.
+        var MaxMs = 8000;
+        if (int.TryParse(Environment.GetEnvironmentVariable("STARLING_PUMP_MAX_MS"), out var capOverride) && capOverride > 0)
+            MaxMs = capOverride;
         const int IdleMs = 60;    // consecutive idle window before declaring done
         var wall = System.Diagnostics.Stopwatch.StartNew();
         var idle = System.Diagnostics.Stopwatch.StartNew();

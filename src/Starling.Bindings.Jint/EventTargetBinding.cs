@@ -104,6 +104,36 @@ internal static class EventTargetBinding
         // is what makes `CustomEvent.AT_TARGET` etc. resolve through the chain).
         customCtor.Prototype = evCtor;
         DefineGlobal(engine, "CustomEvent", customCtor);
+
+        // ----- Event subclass interfaces (UIEvent, MouseEvent, …) -------------
+        // Real pages and frameworks both construct these (`new MouseEvent(...)`)
+        // and branch on them (`e instanceof MouseEvent`). A missing global makes
+        // `x instanceof MouseEvent` throw "Right-hand side of 'instanceof' is not
+        // an object", which aborts e.g. React's event plumbing. We model each as
+        // a constructible Event subclass: its prototype chains off Event.prototype
+        // and the constructor chains off Event (Web-IDL inheritance), so the phase
+        // constants and base accessors resolve. The init dictionary's extra
+        // members (clientX, key, …) aren't reflected back yet — construction and
+        // instanceof are what these call sites need.
+        foreach (var sub in new[]
+        {
+            "UIEvent", "MouseEvent", "KeyboardEvent", "TouchEvent", "PointerEvent",
+            "DragEvent", "WheelEvent", "FocusEvent", "InputEvent", "CompositionEvent",
+            "ClipboardEvent", "AnimationEvent", "TransitionEvent", "PopStateEvent",
+            "HashChangeEvent", "MessageEvent", "ProgressEvent", "ErrorEvent",
+        })
+        {
+            var subProto = new JsObject(engine) { Prototype = evProto };
+            var name = sub;
+            var subCtor = new NativeConstructor(engine, name, 1, (args, _) =>
+            {
+                var (type, init) = ParseEventArgs(engine, args, name);
+                return state.WrapNativeEvent(new DomEvent(type, init), subProto);
+            });
+            WireConstructor(subCtor, subProto, length: 1);
+            subCtor.Prototype = evCtor;
+            DefineGlobal(engine, name, subCtor);
+        }
     }
 
     // ---- addEventListener / removeEventListener / dispatchEvent --------------

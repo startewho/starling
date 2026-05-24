@@ -108,6 +108,33 @@ public class H1RequestWriterTests
     }
 
     [TestMethod]
+    public void Adds_content_length_zero_for_empty_body_post()
+    {
+        // An empty-body POST must still carry Content-Length: 0 — servers reject
+        // a bodyless POST without it (411 Length Required). Regression for the
+        // McMaster token-authorization POST that 411'd before this fix.
+        var url = ParseUrl("https://example.com/tokenauthorization.aspx");
+        var req = new HttpRequest("POST", url, headers: null, body: default);
+
+        var writer = new H1RequestWriter();
+        var text = Encoding.ASCII.GetString(writer.SerializeHead(req));
+
+        text.Should().Contain("Content-Length: 0\r\n");
+    }
+
+    [TestMethod]
+    public void Omits_content_length_for_empty_body_get()
+    {
+        // GET/HEAD carry no body, so no Content-Length is emitted for an empty one.
+        var req = HttpRequest.Get(ParseUrl("https://example.com/"));
+
+        var writer = new H1RequestWriter();
+        var text = Encoding.ASCII.GetString(writer.SerializeHead(req));
+
+        text.Should().NotContain("Content-Length:");
+    }
+
+    [TestMethod]
     public void Omits_content_length_when_caller_specified_transfer_encoding()
     {
         var url = ParseUrl("https://example.com/post");
