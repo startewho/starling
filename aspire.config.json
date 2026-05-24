@@ -1,6 +1,6 @@
 {
   "appHost": {
     "language": "csharp",
-    "path": "Starling.AppHost/Starling.AppHost.csproj"
+    "path": "src/Starling.AppHost/Starling.AppHost.csproj"
   }
 }
