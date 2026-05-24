@@ -85,6 +85,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private string _valueAtFocus = string.Empty;
     private readonly DispatcherTimer _caretBlinkTimer;
 
+    // The element a synthetic mouse-move (MoveTo) last hovered, so the next move
+    // can fire mouseout on it / mouseover on the new target. Only the programmatic
+    // MoveTo path tracks this — real pointer moves drive CSS :hover via _hoverAnchor.
+    private DomElement? _mouseTarget;
+
     // Live-page event loop: while the current page carries a live JS context
     // (Starling.Engine.PageScripting), this timer pumps its microtasks / timers /
     // rAF / fetch completions against wall-clock time and re-renders any DOM the
@@ -316,6 +321,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // Re-establish (or drop) the text caret against the new box tree. The
         // caret overlay belongs to the prior layout's positions, so it is always
         // rebuilt here.
+        CaretLog($"ShowPage: keepFocus={keepFocus} idx={_caretIndex} foc={_focusedInput?.LocalName} " +
+            $"docFoc={page.Document.FocusedElement?.LocalName} vp={page.Viewport.Width}x{page.Viewport.Height} preserveScroll={preserveScroll}");
         RemoveCaretOverlay();
         if (keepFocus)
         {
@@ -418,6 +425,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             size.Height == (int)Math.Round(page.Viewport.Height))
             return;
 
+        CaretLog($"RelayoutToViewport: {(int)page.Viewport.Width}x{(int)page.Viewport.Height} -> {size.Width}x{size.Height}");
         var relaid = _relayout(page, size);
         if (relaid is not null)
             ShowPage(relaid, preserveScroll: true);
@@ -452,7 +460,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             return;
         }
 
-        var hit = BoxHitTester.HitTest(_currentPage.Root, doc.Value.X, doc.Value.Y);
+        UpdateHover(BoxHitTester.HitTest(_currentPage.Root, doc.Value.X, doc.Value.Y));
+    }
+
+    /// <summary>Applies the cursor and CSS <c>:hover</c> state for a hit, and
+    /// surfaces a hovered link's href in the status bar. Shared by the real
+    /// pointer-move handler and the synthetic <see cref="MoveTo"/> entry point.</summary>
+    private void UpdateHover(BoxHitTester.HitResult hit)
+    {
         ApplyCursor(hit);
 
         var anchorEl = hit.LinkAnchor;
@@ -512,30 +527,52 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var doc = PointerToDocSpace(e);
         if (doc is null) return;
 
-        var hit = BoxHitTester.HitTest(_currentPage.Root, doc.Value.X, doc.Value.Y);
+        if (PerformClick(doc.Value).Handled)
+            e.Handled = true;
+    }
 
-        // A click on an editable text field focuses it (placing the caret at the
-        // clicked character); a click anywhere else blurs the current field.
+    /// <summary>
+    /// Runs the click decision tree at a document-space point, mirroring a real
+    /// left-click release: a hit on an editable text field focuses it (caret at
+    /// the clicked character); otherwise a DOM <c>click</c> is dispatched into the
+    /// page (JS handlers, checkbox toggle, form submit) and, if the page consumed
+    /// it, field focus is kept; otherwise the current field is blurred and a hit
+    /// link is followed. <paramref name="Handled"/> reports whether anything
+    /// consumed the click (so the pointer handler can mark the event handled);
+    /// <paramref name="Detail"/> is a short human-readable outcome for tooling.
+    /// </summary>
+    private (bool Handled, string Detail) PerformClick((double X, double Y) doc)
+    {
+        var hit = BoxHitTester.HitTest(_currentPage!.Root, doc.X, doc.Y);
+
         if (FindFocusableInput(hit.Box) is { } field)
         {
-            e.Handled = true;
-            FocusInput(field, doc.Value);
-            return;
+            FocusInput(field, doc);
+            return (true, $"focused <{field.LocalName}>");
         }
+
+        if (DispatchClick(hit, doc))
+            return (true, $"clicked <{DescribeHit(hit)}> (page handled)");
+
+        // Not consumed by the page: a click elsewhere blurs the current field and
+        // then follows a link if one was hit.
         BlurInput();
 
-        if (hit.LinkAnchor is null) return;
-
-        var href = hit.LinkAnchor.GetAttribute("href");
-        if (string.IsNullOrEmpty(href)) return;
-
-        var resolved = ResolveLink(href!);
-        if (!string.IsNullOrEmpty(resolved))
+        if (hit.LinkAnchor is { } anchorEl)
         {
-            e.Handled = true;
-            _onLinkActivated(resolved);
+            var href = anchorEl.GetAttribute("href");
+            if (!string.IsNullOrEmpty(href) && ResolveLink(href!) is { Length: > 0 } resolved)
+            {
+                _onLinkActivated(resolved);
+                return (true, $"followed link to {resolved}");
+            }
         }
+
+        return (false, hit.Box is null ? "clicked empty area" : $"clicked <{DescribeHit(hit)}> (no action)");
     }
+
+    private static string DescribeHit(BoxHitTester.HitResult hit)
+        => FindClickTarget(hit.Box)?.LocalName ?? "unknown";
 
     private void EndSelectionDrag(bool cancel)
     {
@@ -639,6 +676,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         e.Handled = true;
         var val = CurrentValue();
         var idx = Math.Clamp(_caretIndex, 0, val.Length);
+        CaretLog($"TextInput: '{text}' at idx={idx} (caretIdx={_caretIndex}) val='{val}'");
         CommitValue(val.Insert(idx, text), idx + text.Length);
     }
 
@@ -669,6 +707,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             case Key.Home: MoveCaret(0); e.Handled = true; break;
             case Key.End: MoveCaret(val.Length); e.Handled = true; break;
             case Key.Escape: BlurInput(); e.Handled = true; break;
+            case Key.Enter:
+                // Implicit form submission: Enter in a text field submits its
+                // owning form (the keydown was already dispatched above).
+                e.Handled = true;
+                if (_focusedInput.LocalName == "input" && NearestForm(_focusedInput) is { } form
+                    && DispatchDom(form, new Event("submit", new EventInit(Bubbles: true, Cancelable: true))))
+                    RefreshLiveLayout();
+                break;
         }
     }
 
@@ -706,14 +752,29 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             RenderCaret();
     }
 
+    // TEMP caret diagnostics — gated behind STARLING_CARET_DEBUG=1.
+    private static readonly bool _caretDebug =
+        Environment.GetEnvironmentVariable("STARLING_CARET_DEBUG") == "1";
+    private static void CaretLog(string msg)
+    {
+        if (!_caretDebug) return;
+        try { System.IO.File.AppendAllText("/tmp/starling-caret.log", $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); }
+        catch { }
+    }
+
     /// <summary>(Re)draws the caret overlay at the current insertion point and
     /// (re)starts the blink. Removes the caret when nothing is focused.</summary>
     private void RenderCaret()
     {
         RemoveCaretOverlay();
-        if (_focusedInput is null || _currentPage is null) return;
-        if (ComputeCaretRect(_currentPage.Root, _focusedInput, _caretIndex) is not { } c) return;
+        if (_focusedInput is null || _currentPage is null) { CaretLog("RenderCaret: no focus/page"); return; }
+        if (ComputeCaretRect(_currentPage.Root, _focusedInput, _caretIndex) is not { } c)
+        {
+            CaretLog($"RenderCaret: ComputeCaretRect NULL idx={_caretIndex} val='{CurrentValue()}'");
+            return;
+        }
 
+        CaretLog($"RenderCaret: idx={_caretIndex} X={c.X:F1} val='{CurrentValue()}'");
         _caretOverlay = MakeOverlay(new SolidColorBrush(c.Color), c.X, c.Y, CaretWidth, c.H);
         _pageCanvas.Children.Add(_caretOverlay);
         _caretOn = true;
@@ -890,7 +951,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _diag.Log(DiagLevel.Warn, "gui", $"live JS pump failed: {ex.Message}");
             return;
         }
-        if (mutated) RefreshLiveLayout();
+        if (mutated) { CaretLog("LiveTick: pump mutated -> RefreshLiveLayout"); RefreshLiveLayout(); }
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,
@@ -904,14 +965,241 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     /// <summary>Dispatch a DOM event into the page's JS listeners (a no-op for
     /// pages without a live JS context), then ensure the live pump is running so
-    /// any async work the listener scheduled (timers, fetch) gets serviced.</summary>
-    private void DispatchDom(DomElement target, Event evt)
+    /// any async work the listener scheduled (timers, fetch) gets serviced.
+    /// Returns true when the dispatch synchronously mutated the DOM.</summary>
+    private bool DispatchDom(DomElement target, Event evt)
     {
         var scripting = _currentPage?.Scripting;
-        if (scripting is null) return;
-        try { scripting.DispatchEvent(target, evt); }
+        if (scripting is null) return false;
+        bool mutated = false;
+        try { mutated = scripting.DispatchEvent(target, evt); }
         catch (Exception ex) { _diag.Log(DiagLevel.Warn, "gui", $"DOM event dispatch failed: {ex.Message}"); }
         if (!_liveTimer.IsEnabled) BindLiveScripting();
+        return mutated;
+    }
+
+    /// <summary>
+    /// Dispatches a DOM <c>click</c> at the hit element into the page's JS, then
+    /// runs the click's default action for form controls — toggling a
+    /// checkbox/radio (firing <c>input</c>+<c>change</c>) and submitting the
+    /// owning form for a submit button (firing a cancelable <c>submit</c>). The
+    /// page is re-laid-out if any of this mutated the DOM. Returns true when a
+    /// live page consumed the click — the JS cancelled it, we activated a control,
+    /// or the DOM changed — so the caller skips chrome handling (blur, link nav).
+    /// </summary>
+    private bool DispatchClick(BoxHitTester.HitResult hit, (double X, double Y) doc)
+    {
+        if (_currentPage?.Scripting is null) return false;
+        if (FindClickTarget(hit.Box) is not { } target) return false;
+
+        var click = new MouseEvent("click", new EventInit(Bubbles: true, Cancelable: true))
+        {
+            Button = 0,
+            ClientX = doc.X - _scroll.Offset.X,
+            ClientY = doc.Y - _scroll.Offset.Y,
+        };
+        var mutated = DispatchDom(target, click);
+
+        var actioned = false;
+        if (!click.DefaultPrevented)
+            mutated |= RunClickDefault(target, out actioned);
+
+        if (mutated) RefreshLiveLayout();
+        return click.DefaultPrevented || actioned || mutated;
+    }
+
+    /// <summary>Runs the activation behaviour of a click on <paramref name="clicked"/>
+    /// (or its nearest enclosing control): checkbox/radio toggle, or implicit form
+    /// submission for a submit button. <paramref name="actioned"/> reports whether
+    /// a control was activated; the return value reports whether the DOM mutated.</summary>
+    private bool RunClickDefault(DomElement clicked, out bool actioned)
+    {
+        actioned = false;
+        if (NearestControl(clicked) is not { } control) return false;
+
+        switch (control.LocalName)
+        {
+            case "input":
+                var type = (control.GetAttribute("type") ?? "text").Trim().ToLowerInvariant();
+                if (type is "checkbox" or "radio")
+                {
+                    actioned = true;
+                    var m = DispatchDom(control, new InputEvent("input", new EventInit(Bubbles: true)));
+                    m |= DispatchDom(control, new Event("change", new EventInit(Bubbles: true)));
+                    return m;
+                }
+                if (type is "submit" or "image")
+                    return SubmitOwningForm(control, ref actioned);
+                return false;
+
+            case "button":
+                var btnType = (control.GetAttribute("type") ?? "submit").Trim().ToLowerInvariant();
+                if (btnType == "submit")
+                    return SubmitOwningForm(control, ref actioned);
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Fires a cancelable <c>submit</c> at <paramref name="control"/>'s
+    /// owning &lt;form&gt; (implicit form submission). Sets <paramref name="actioned"/>
+    /// when a form was found; returns whether the submit handler mutated the DOM.
+    /// Actual form navigation when the event isn't cancelled is not yet wired —
+    /// the SPA/todo pattern preventDefaults and handles submission in JS.</summary>
+    private bool SubmitOwningForm(DomElement control, ref bool actioned)
+    {
+        if (NearestForm(control) is not { } form) return false;
+        actioned = true;
+        return DispatchDom(form, new Event("submit", new EventInit(Bubbles: true, Cancelable: true)));
+    }
+
+    /// <summary>Nearest DOM element enclosing <paramref name="box"/> (the click's
+    /// event target), or null for a hit with no element ancestor.</summary>
+    private static DomElement? FindClickTarget(LayoutBox? box)
+    {
+        for (var b = box; b is not null; b = b.Parent)
+            if (b.Element is DomElement el) return el;
+        return null;
+    }
+
+    /// <summary>Nearest &lt;button&gt;/&lt;input&gt; control at or above
+    /// <paramref name="el"/> (a click on a button's inner text activates the
+    /// button), or null.</summary>
+    private static DomElement? NearestControl(DomElement el)
+    {
+        for (DomNode? n = el; n is not null; n = n.ParentNode)
+            if (n is DomElement { LocalName: "button" or "input" } c) return c;
+        return null;
+    }
+
+    private static DomElement? NearestForm(DomElement el)
+    {
+        for (DomNode? n = el; n is not null; n = n.ParentNode)
+            if (n is DomElement { LocalName: "form" } f) return f;
+        return null;
+    }
+
+    // ---- Programmatic input (MCP automation) --------------------------
+    //
+    // ClickAt / MoveTo / TypeText let an out-of-process driver (the MCP server)
+    // synthesize input without a real device. Coordinates are document-space CSS
+    // px from the page's top-left — the same space browser_screenshot captures
+    // (full scroll extent) — so a driver can click/move where it sees a target in
+    // a screenshot. These reuse the very same paths the pointer/keyboard handlers
+    // drive, so synthetic and real input behave identically.
+
+    /// <summary>True once a page is laid out and ready to receive synthetic input.</summary>
+    public bool HasPage => _currentPage is not null;
+
+    /// <summary>Synthesizes a left click at a document-space point. See
+    /// <see cref="PerformClick"/> for the decision tree. Fails only when no page
+    /// is loaded; the returned detail describes what the click did.</summary>
+    public InputResult ClickAt(double x, double y)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        return new InputResult(true, PerformClick((x, y)).Detail);
+    }
+
+    /// <summary>Moves the synthetic mouse to a document-space point: updates the
+    /// cursor + CSS <c>:hover</c> exactly as a real move would, and dispatches DOM
+    /// <c>mouseover</c>/<c>mousemove</c> (plus <c>mouseout</c> on the previously
+    /// hovered element) so JS hover handlers run. Fails only when no page is
+    /// loaded.</summary>
+    public InputResult MoveTo(double x, double y)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+
+        var hit = BoxHitTester.HitTest(_currentPage.Root, x, y);
+        UpdateHover(hit);
+        DispatchMouseMove((x, y), FindClickTarget(hit.Box));
+
+        if (hit.Box is null) return new InputResult(true, "moved over empty area");
+        var link = hit.LinkAnchor?.GetAttribute("href") is { Length: > 0 } href ? $" → {href}" : string.Empty;
+        return new InputResult(true, $"moved over <{DescribeHit(hit)}>{link}");
+    }
+
+    /// <summary>Types literal text into the currently focused text field (focus one
+    /// first via <see cref="ClickAt"/>). Control characters are dropped; the text
+    /// is inserted at the caret and a DOM <c>input</c> event fires (so
+    /// search-as-you-type / form handlers run). When <paramref name="submit"/> is
+    /// set, Enter is pressed afterward to submit the owning form. Fails when no
+    /// page is loaded or no text field is focused.</summary>
+    public InputResult TypeText(string text, bool submit = false)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        if (_focusedInput is null)
+            return new InputResult(false, "no focused text field — click an input first");
+
+        var clean = new string((text ?? string.Empty).Where(c => !char.IsControl(c)).ToArray());
+        if (clean.Length > 0)
+        {
+            var val = CurrentValue();
+            var idx = Math.Clamp(_caretIndex, 0, val.Length);
+            CommitValue(val.Insert(idx, clean), idx + clean.Length);
+        }
+
+        if (submit)
+        {
+            var fired = PressEnterOnFocused();
+            return new InputResult(true,
+                $"typed \"{clean}\"; submit {(fired ? "fired" : "no-op")}; value=\"{CurrentValue()}\"");
+        }
+
+        return new InputResult(true, clean.Length == 0
+            ? "nothing to type (text was empty or control-only)"
+            : $"typed \"{clean}\"; value=\"{CurrentValue()}\"");
+    }
+
+    /// <summary>Dispatches DOM mouse-move events for a synthetic move to
+    /// <paramref name="target"/>: <c>mouseout</c>/<c>mouseover</c> across a target
+    /// change (with the other element as relatedTarget), then <c>mousemove</c>.
+    /// Client coordinates are viewport-relative (document minus scroll), matching
+    /// <see cref="DispatchClick"/>. Tracks <see cref="_mouseTarget"/> and re-lays
+    /// out if a handler mutated the DOM. A no-op without a live JS context.</summary>
+    private void DispatchMouseMove((double X, double Y) doc, DomElement? target)
+    {
+        if (_currentPage?.Scripting is null) { _mouseTarget = target; return; }
+
+        var clientX = doc.X - _scroll.Offset.X;
+        var clientY = doc.Y - _scroll.Offset.Y;
+        MouseEvent Make(string type, DomElement? related) =>
+            new(type, new EventInit(Bubbles: true, Cancelable: true))
+            {
+                Button = 0,
+                ClientX = clientX,
+                ClientY = clientY,
+                RelatedTarget = related,
+            };
+
+        var mutated = false;
+        if (!ReferenceEquals(target, _mouseTarget))
+        {
+            if (_mouseTarget is { } prev) mutated |= DispatchDom(prev, Make("mouseout", target));
+            if (target is { } cur) mutated |= DispatchDom(cur, Make("mouseover", _mouseTarget));
+            _mouseTarget = target;
+        }
+        if (target is not null) mutated |= DispatchDom(target, Make("mousemove", null));
+        if (mutated) RefreshLiveLayout();
+    }
+
+    /// <summary>Synthesizes an Enter keypress on the focused field: dispatches
+    /// <c>keydown</c>, submits the owning form (for a text <c>&lt;input&gt;</c>,
+    /// implicit submission), then <c>keyup</c> — mirroring the Enter branch of
+    /// <see cref="OnPageKeyDown"/>. Returns whether any of it mutated the DOM.</summary>
+    private bool PressEnterOnFocused()
+    {
+        if (_focusedInput is null) return false;
+        var target = _focusedInput;
+        var down = new KeyboardEvent("keydown", new EventInit(Bubbles: true, Cancelable: true)) { Key = "Enter", Code = "Enter" };
+        var mutated = DispatchDom(target, down);
+        if (target.LocalName == "input" && NearestForm(target) is { } form)
+            mutated |= DispatchDom(form, new Event("submit", new EventInit(Bubbles: true, Cancelable: true)));
+        var up = new KeyboardEvent("keyup", new EventInit(Bubbles: true, Cancelable: true)) { Key = "Enter", Code = "Enter" };
+        mutated |= DispatchDom(target, up);
+        if (mutated) RefreshLiveLayout();
+        return mutated;
     }
 
     private static KeyboardEvent MakeKeyboardEvent(string type, KeyEventArgs e) =>
@@ -1282,3 +1570,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         (_pageImage.Source as IDisposable)?.Dispose();
     }
 }
+
+/// <summary>Outcome of a synthetic-input call (<see cref="WebviewPanel.ClickAt"/>,
+/// <see cref="WebviewPanel.MoveTo"/>, <see cref="WebviewPanel.TypeText"/>):
+/// <paramref name="Ok"/> is false only for precondition failures (no page / no
+/// focused field); <paramref name="Detail"/> is a short human-readable summary.</summary>
+internal readonly record struct InputResult(bool Ok, string Detail);

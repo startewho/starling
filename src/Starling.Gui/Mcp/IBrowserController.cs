@@ -8,4 +8,7 @@ public interface IBrowserController
     Task<BrowserControlResult> ReloadFromToolAsync(CancellationToken ct);
     Task<BrowserControlResult> ScreenshotFromToolAsync(string path, CancellationToken ct);
     Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct);
+    Task<BrowserControlResult> ClickFromToolAsync(double x, double y, CancellationToken ct);
+    Task<BrowserControlResult> MoveMouseFromToolAsync(double x, double y, CancellationToken ct);
+    Task<BrowserControlResult> TypeTextFromToolAsync(string text, bool submit, CancellationToken ct);
 }
