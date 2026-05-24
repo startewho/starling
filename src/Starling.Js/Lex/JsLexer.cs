@@ -554,28 +554,50 @@ public sealed class JsLexer
         }
 
         // Decimal: digits [. digits] [eE [+-]? digits] [n]?
-        while (_i < _src.Length && IsAsciiDigit(_src[_i])) Advance();
+        // §12.9.3 NumericLiteralSeparator — `_` is allowed between two decimal
+        // digits; the same rules apply to every digit-run in this literal.
+        ScanDecimalDigits(start, allowSeparator: true);
         var isInteger = true;
         if (_i < _src.Length && _src[_i] == '.')
         {
             isInteger = false;
             Advance();
-            while (_i < _src.Length && IsAsciiDigit(_src[_i])) Advance();
+            // `_` immediately after `.` is a SyntaxError (no leading separator).
+            if (_i < _src.Length && _src[_i] == '_')
+            {
+                _errors.Report(JsLexError.InvalidNumericLiteral, start,
+                    "numeric separator cannot appear immediately after decimal point");
+                Advance(); // consume to avoid treating it as a valid inter-digit sep
+            }
+            ScanDecimalDigits(start, allowSeparator: true);
         }
         if (_i < _src.Length && (_src[_i] == 'e' || _src[_i] == 'E'))
         {
             isInteger = false;
+            // `_` immediately before the exponent letter is rejected by the
+            // fact that ScanDecimalDigits already banned a trailing separator.
             Advance();
             if (_i < _src.Length && (_src[_i] == '+' || _src[_i] == '-')) Advance();
             if (_i >= _src.Length || !IsAsciiDigit(_src[_i]))
                 _errors.Report(JsLexError.InvalidNumericLiteral, start, "exponent has no digits");
-            while (_i < _src.Length && IsAsciiDigit(_src[_i])) Advance();
+            // `_` immediately after exponent sign / letter is a SyntaxError:
+            // no leading separator in the exponent digit-run.
+            if (_i < _src.Length && _src[_i] == '_')
+            {
+                _errors.Report(JsLexError.InvalidNumericLiteral, start,
+                    "numeric separator cannot appear immediately after exponent marker");
+                Advance(); // consume to avoid treating it as a valid inter-digit sep
+            }
+            ScanDecimalDigits(start, allowSeparator: true);
         }
 
         // BigInt suffix `n` only legal on pure integers.
         if (isInteger && _i < _src.Length && _src[_i] == 'n')
         {
-            var digitsBi = _src[begin.._i];
+            var rawBi = _src[begin.._i];
+            // ScanDecimalDigits already reports a trailing `_` as a separator
+            // error; no second report needed here.
+            var digitsBi = rawBi.Replace("_", "");
             // §12.9.3 — `LegacyOctalIntegerLiteral` / `NonOctalDecimalIntegerLiteral`
             // (a leading `0` immediately followed by a decimal digit) cannot carry
             // a BigInt suffix: `00n`, `01n`, `08n` are SyntaxErrors.
@@ -589,7 +611,9 @@ public sealed class JsLexer
         }
 
         var lex = _src[begin.._i];
-        if (!double.TryParse(lex, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+        // Strip separators before numeric conversion so `1_000` parses as 1000.
+        var lexNoSep = lex.Contains('_') ? lex.Replace("_", "") : lex;
+        if (!double.TryParse(lexNoSep, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
         {
             _errors.Report(JsLexError.InvalidNumericLiteral, start, lex);
             value = double.NaN;
@@ -600,17 +624,63 @@ public sealed class JsLexer
         // SyntaxErrors. Tag the token so the parser can raise the error when the
         // surrounding scope is strict. A leading-zero literal with a `.` or `e`
         // (e.g. `0.5`, `0e3`) is an ordinary DecimalLiteral and not tagged.
-        var legacyOctal = isInteger && lex.Length >= 2 && lex[0] == '0' && IsAsciiDigit(lex[1]);
+        var legacyOctal = isInteger && lexNoSep.Length >= 2 && lexNoSep[0] == '0' && IsAsciiDigit(lexNoSep[1]);
+        // §12.9.3 — LegacyOctalIntegerLiteral / NonOctalDecimalIntegerLiteral do
+        // not permit numeric separators. If the raw lexeme contains `_` and the
+        // stripped form qualifies as a legacy-leading-zero literal, report it.
+        if (legacyOctal && lex.Contains('_'))
+            _errors.Report(JsLexError.InvalidNumericLiteral, start,
+                "numeric separator is not allowed in legacy octal / non-octal decimal literals");
         // Legacy octal literals (`010`) denote a base-8 value; .NET parses the
         // lexeme as decimal above (`010` → 10). Recompute octal-style when every
         // digit is 0-7 so the runtime sees the spec value in sloppy mode.
-        if (legacyOctal && AllOctalDigits(lex))
+        if (legacyOctal && AllOctalDigits(lexNoSep))
         {
             value = 0;
-            for (var k = 0; k < lex.Length; k++) value = value * 8 + (lex[k] - '0');
+            for (var k = 0; k < lexNoSep.Length; k++) value = value * 8 + (lexNoSep[k] - '0');
         }
         CheckNoIdentifierAfterNumber(start);
         return MakeToken(JsTokenKind.NumericLiteral, lex, start, CurrentPos(), precededByLT, value, legacyOctal);
+    }
+
+    /// <summary>Consume a run of decimal digits, allowing a single <c>_</c>
+    /// separator between any two consecutive digits (§12.9.3
+    /// NumericLiteralSeparator). Reports a lexical error for a leading or
+    /// doubled separator; a <em>trailing</em> separator (digit <c>_</c> not
+    /// followed by a digit) is also rejected because the characters after the
+    /// run (decimal point, exponent letter, BigInt <c>n</c>, or end of token)
+    /// are not digits.
+    /// <para>Precondition: the caller has already verified the <em>first</em>
+    /// character is a decimal digit (so this method never sees a leading
+    /// separator on entry).</para></summary>
+    private void ScanDecimalDigits(JsPosition start, bool allowSeparator)
+    {
+        var prevWasSep = false;
+        while (_i < _src.Length)
+        {
+            var c = _src[_i];
+            if (IsAsciiDigit(c)) { prevWasSep = false; Advance(); continue; }
+            if (allowSeparator && c == '_')
+            {
+                // `_` is only valid between two digits: the previous char must
+                // have been a digit (not another `_`) and the next char must
+                // be a digit too.
+                var nextIsDigit = _i + 1 < _src.Length && IsAsciiDigit(_src[_i + 1]);
+                if (prevWasSep || !nextIsDigit)
+                {
+                    // Doubled (`1__0`) or trailing (`1_`) separator.
+                    _errors.Report(JsLexError.InvalidNumericLiteral, start,
+                        "numeric separator must be between two digits");
+                    Advance(); // consume the bad `_` so lexing can continue
+                    prevWasSep = true;
+                    continue;
+                }
+                prevWasSep = true;
+                Advance(); // consume `_`
+                continue;
+            }
+            break;
+        }
     }
 
     /// <summary>§12.9.3 — the SourceCharacter immediately following a
@@ -636,20 +706,34 @@ public sealed class JsLexer
     {
         Advance(); Advance(); // 0x / 0b / 0o
         var digitStart = _i;
-        while (_i < _src.Length && IsDigitInRadix(_src[_i], radix)) Advance();
+        // §12.9.3 NumericLiteralSeparator — `_` between two radix digits is
+        // allowed, but NOT immediately after the radix prefix (`0x_1` is an
+        // early error). Consume and report, then continue so the remaining
+        // digits are still scanned and the token boundary is clean.
+        if (_i < _src.Length && _src[_i] == '_')
+        {
+            _errors.Report(JsLexError.InvalidNumericLiteral, start,
+                "numeric separator cannot appear immediately after radix prefix");
+            Advance(); // consume the bad leading `_`
+        }
+        ScanRadixDigits(start, radix);
         if (_i == digitStart)
             _errors.Report(JsLexError.InvalidNumericLiteral, start, "radix literal has no digits");
         var isInteger = true; // always for these prefixes
+        _ = isInteger; // silence unused
         // BigInt suffix permitted on integer radix forms too.
         if (_i < _src.Length && _src[_i] == 'n')
         {
-            var digitsBi = _src[digitStart.._i];
+            var rawBi = _src[digitStart.._i];
+            // ScanRadixDigits already reports a trailing `_`; no second report.
+            var digitsBi = rawBi.Replace("_", "");
             Advance();
             CheckNoIdentifierAfterNumber(start);
             return MakeToken(JsTokenKind.BigIntLiteral, _src[begin.._i],
                 start, CurrentPos(), precededByLT, digitsBi);
         }
-        var digits = _src[digitStart.._i];
+        var rawDigits = _src[digitStart.._i];
+        var digits = rawDigits.Contains('_') ? rawDigits.Replace("_", "") : rawDigits;
         double value;
         try
         {
@@ -660,10 +744,42 @@ public sealed class JsLexer
             _errors.Report(JsLexError.InvalidNumericLiteral, start, _src[begin.._i]);
             value = double.NaN;
         }
-        _ = isInteger; // silence unused
         CheckNoIdentifierAfterNumber(start);
         return MakeToken(JsTokenKind.NumericLiteral, _src[begin.._i],
             start, CurrentPos(), precededByLT, value);
+    }
+
+    /// <summary>Consume radix digits for <paramref name="radix"/> (2, 8, or 16),
+    /// allowing a single <c>_</c> separator between two valid digits. A leading,
+    /// trailing, or doubled separator is flagged as a lexical error.
+    /// <para>Precondition: the caller has already verified that if the very first
+    /// character is <c>_</c> it is a leading-separator error (so this method is
+    /// called only when the cursor is either at a valid radix digit or at a
+    /// known-bad leading <c>_</c> that was already reported).</para></summary>
+    private void ScanRadixDigits(JsPosition start, int radix)
+    {
+        var prevWasSep = false;
+        while (_i < _src.Length)
+        {
+            var c = _src[_i];
+            if (IsDigitInRadix(c, radix)) { prevWasSep = false; Advance(); continue; }
+            if (c == '_')
+            {
+                var nextIsDigit = _i + 1 < _src.Length && IsDigitInRadix(_src[_i + 1], radix);
+                if (prevWasSep || !nextIsDigit)
+                {
+                    _errors.Report(JsLexError.InvalidNumericLiteral, start,
+                        "numeric separator must be between two digits");
+                    Advance();
+                    prevWasSep = true;
+                    continue;
+                }
+                prevWasSep = true;
+                Advance(); // consume `_`
+                continue;
+            }
+            break;
+        }
     }
 
     /// <summary>
