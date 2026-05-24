@@ -156,7 +156,7 @@ internal static class Program
         if (args.Length == 0)
         {
             Console.Error.WriteLine("error: `render` requires a URL or file path.");
-            Console.Error.WriteLine("usage: starling render <url-or-file> [-o out.png] [--viewport WxH] [--font-size N]");
+            Console.Error.WriteLine("usage: starling render <url-or-file> [-o out.png] [--viewport WxH] [--font-size N] [--dump-layout]");
             return 1;
         }
 
@@ -166,6 +166,7 @@ internal static class Program
         var fontSize = 32f;
         var frames = 1;
         var frameStepMs = 16L;
+        var dumpLayout = false;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -173,6 +174,9 @@ internal static class Program
             {
                 case "-o" when i + 1 < args.Length:
                     output = args[++i];
+                    break;
+                case "--dump-layout":
+                    dumpLayout = true;
                     break;
                 case "--viewport" when i + 1 < args.Length:
                     if (!TryParseViewport(args[++i], out viewport))
@@ -218,6 +222,12 @@ internal static class Program
         if (frames > 1)
         {
             return RenderFrameSequence(engine, url, new RenderOptions(viewport, fontSize), output, frames, frameStepMs);
+        }
+
+        if (dumpLayout)
+        {
+            var page = engine.LayoutPageAsync(url, new RenderOptions(viewport, fontSize)).GetAwaiter().GetResult();
+            page.Match(p => { using (p) { DumpLayout(p.Root, 0); } return 0; }, _ => 1);
         }
 
         var result = engine.Render(url, new RenderOptions(viewport, fontSize), output);
@@ -307,6 +317,36 @@ internal static class Program
         return true;
     }
 
+    /// <summary>
+    /// Pretty-prints the laid-out box tree to stderr — one indented line per box
+    /// with its element tag/classes/id and computed <c>Frame</c> (x/y/w/h in the
+    /// page coordinate space). Text boxes also report their line-fragment count
+    /// and summed fragment width, which is the actual measured text extent
+    /// (a <see cref="Starling.Layout.Box.TextBox"/>'s own <c>Frame</c> stays
+    /// zero — its geometry lives on the fragments). Enabled by
+    /// <c>render --dump-layout</c>; invaluable for diagnosing layout/centering
+    /// bugs without a screenshot.
+    /// </summary>
+    private static void DumpLayout(Starling.Layout.Box.Box box, int depth)
+    {
+        var el = box.Element;
+        var tag = el?.TagName ?? box.Kind.ToString();
+        var cls = el is null ? "" : string.Join(".", el.ClassList);
+        var label = string.IsNullOrEmpty(cls) ? tag : $"{tag}.{cls}";
+        if (!string.IsNullOrEmpty(el?.Id)) label += $"#{el!.Id}";
+        var txt = "";
+        if (box is Starling.Layout.Box.TextBox t)
+        {
+            var fw = 0d;
+            foreach (var fr in t.Fragments) fw += fr.Width;
+            var preview = t.Text.Length > 30 ? t.Text[..30] : t.Text;
+            txt = $" \"{preview}\" frags={t.Fragments.Count} fw={fw:F0}";
+        }
+        var f = box.Frame;
+        Console.Error.WriteLine($"{new string(' ', depth * 2)}{label}{txt}  [x={f.X:F0} y={f.Y:F0} w={f.Width:F0} h={f.Height:F0}]");
+        foreach (var c in box.Children) DumpLayout(c, depth + 1);
+    }
+
     private static int StubSubcommand(string name)
     {
         Console.Error.WriteLine(
@@ -333,7 +373,7 @@ internal static class Program
             "starling — headless browser CLI\n" +
             "\n" +
             "usage:\n" +
-            "  starling render <url-or-file> [-o out.png] [--viewport WxH] [--font-size N]\n" +
+            "  starling render <url-or-file> [-o out.png] [--viewport WxH] [--font-size N] [--dump-layout]\n" +
             "  starling tokenize <file>      (M1; partial — Data/tag/RCDATA/RAWTEXT/PLAINTEXT)\n" +
             "  starling parse    <file>      (M1)\n" +
             "  starling style    <file>      (M1)\n" +

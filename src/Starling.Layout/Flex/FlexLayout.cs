@@ -87,12 +87,18 @@ internal sealed class FlexLayout
             ResolveBoxModel(child, containerWidth);
             var itemProps = FlexParser.ParseItem(child.Style);
             var basis = ResolveBasis(child, itemProps.Basis, props, containerWidth, explicitHeight);
+            var minMain = ResolveMinMainSize(child, props, containerWidth, explicitHeight, basis);
             items[i] = new Item
             {
                 Box = child,
                 Props = itemProps,
                 Basis = basis,
-                MainSize = basis,
+                // Hypothetical main size = flex base size clamped up to the
+                // minimum (CSS Flexbox §9.7.3). Free-space distribution below
+                // works from this, so an item with `min-width` larger than its
+                // content doesn't get over-grown neighbours and overflow the row.
+                MainSize = Math.Max(basis, minMain),
+                MinMain = minMain,
                 MainPad = props.IsRow
                     ? child.Padding.Horizontal + child.Border.Horizontal
                     : child.Padding.Vertical + child.Border.Vertical,
@@ -127,8 +133,17 @@ internal sealed class FlexLayout
             for (var i = 0; i < items.Length; i++) totalShrink += items[i].Props.Shrink;
             if (totalShrink > 0)
                 for (var i = 0; i < items.Length; i++)
-                    items[i].MainSize = Math.Max(0, items[i].MainSize + free * (items[i].Props.Shrink / totalShrink));
+                    items[i].MainSize = items[i].MainSize + free * (items[i].Props.Shrink / totalShrink);
         }
+
+        // CSS Flexbox §7.5 / §4.5 — clamp each item's used main size to its
+        // minimum. A flex item never shrinks below its minimum main size: an
+        // explicit `min-width`/`min-height`, or — when that is `auto` — its
+        // automatic (content-based) minimum. Without this, items overflowing a
+        // too-narrow flex container collapse toward 0 and their text overlaps
+        // (e.g. Google's footer link groups, which carry `min-width: 30%`).
+        for (var i = 0; i < items.Length; i++)
+            items[i].MainSize = Math.Max(0, Math.Max(items[i].MainSize, items[i].MinMain));
 
         // ---- step 3: measure each item's cross size (content-box) ----
         var maxCrossOuter = 0d;
@@ -201,6 +216,9 @@ internal sealed class FlexLayout
         public FlexItemProps Props;
         public double Basis;
         public double MainSize;
+        /// <summary>Used minimum main size: explicit min-width/height, else the
+        /// automatic content-based minimum. The item never shrinks below this.</summary>
+        public double MinMain;
         public double CrossSize;
         /// <summary>Main-axis padding + border (both edges), in px.</summary>
         public double MainPad;
@@ -228,6 +246,47 @@ internal sealed class FlexLayout
 
         // auto + no explicit width/height: use content size.
         return MeasureContentMainSize(child, props, containerWidth);
+    }
+
+    /// <summary>
+    /// The item's used minimum main size (CSS Flexbox §4.5). An explicit
+    /// <c>min-width</c>/<c>min-height</c> (length or percentage) wins; when it is
+    /// <c>auto</c> the automatic minimum applies — the content-based minimum,
+    /// capped at the flex base size so it never forces an item larger than its
+    /// preferred size. Anonymous items (bare text runs) get no minimum.
+    /// </summary>
+    private double ResolveMinMainSize(Box.Box child, FlexContainerProps props, double containerWidth, double? containerHeight, double basis)
+    {
+        if (child.Kind == BoxKind.AnonymousBlock || child.Style is null) return 0;
+
+        var minProp = props.IsRow ? PropertyId.MinWidth : PropertyId.MinHeight;
+        if (child.Style.Get(minProp) is not CssKeyword { Name: "auto" })
+        {
+            var basisPx = props.IsRow ? containerWidth : (containerHeight ?? _viewport.Height);
+            var explicitMin = BlockLayout.ResolveLength(child.Style, minProp, basisPx, _viewport);
+            if (explicitMin is { } m) return Math.Max(0, m);
+        }
+
+        // min-*: auto → automatic (content-based) minimum, capped at the base
+        // size (min-content is always <= max-content/basis, so this is mostly a
+        // guard against pathological measurements).
+        return Math.Min(basis, MeasureContentMinSize(child, props, containerWidth));
+    }
+
+    /// <summary>
+    /// Approximate the child's min-content main size: for row direction, lay it
+    /// out at zero available width so soft-wrap opportunities all break, leaving
+    /// the widest unbreakable run (or the full run under <c>white-space: nowrap</c>);
+    /// for column, the natural content height at the container width.
+    /// </summary>
+    private double MeasureContentMinSize(Box.Box child, FlexContainerProps props, double containerWidth)
+    {
+        if (props.IsRow)
+        {
+            _block.LayoutItem(child, 0d, null, measure: true);
+            return UsedMainWidth(child);
+        }
+        return _block.LayoutItem(child, containerWidth, null, measure: true);
     }
 
     /// <summary>
