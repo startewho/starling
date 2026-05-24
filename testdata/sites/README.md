@@ -1,16 +1,19 @@
-# sites/
+# testdata/sites/
 
 Local, build-free test sites served at stable `localhost` paths so the Starling
-engine (and a real browser) can load them over plain HTTP.
+engine (and a real browser) can load them over plain HTTP. This directory also
+holds captured full-page HTML fixtures (e.g. `google-home.html`); those are
+reachable at their file path too once the server is up.
 
 ## Convention
 
 Each subdirectory is one site, served at a path matching its folder name:
 
 ```
-sites/
+testdata/sites/
   index.html        ->  http://localhost:8088/
   todo/index.html   ->  http://localhost:8088/todo/
+  words/index.html  ->  http://localhost:8088/words/
 ```
 
 Drop a new folder with an `index.html` in it and it's available at
@@ -35,6 +38,3 @@ dotnet run --project Starling.AppHost
 
 Then open the `sites` endpoint from the Aspire dashboard, or hit the fixed host
 port directly (`http://localhost:8088/`).
-
-> Note: this is distinct from `testdata/sites/`, which holds captured full-page
-> HTML fixtures used by tests. `sites/` is for interactive, hand-written demos.
