@@ -1,8 +1,8 @@
 <Project Sdk="Aspire.AppHost.Sdk/13.3.5">
 
   <ItemGroup>
-    <ProjectReference Include="..\src\Starling.Headless\Starling.Headless.csproj" />
-    <ProjectReference Include="..\src\Starling.Gui\Starling.Gui.csproj" />
+    <ProjectReference Include="..\Starling.Headless\Starling.Headless.csproj" />
+    <ProjectReference Include="..\Starling.Gui\Starling.Gui.csproj" />
   </ItemGroup>
 
   <ItemGroup>

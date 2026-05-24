@@ -20,7 +20,7 @@ internal static class Program
     public static int Main(string[] args)
     {
         // Wire OTel before we do anything observable. When launched by Aspire
-        // (`dotnet run --project Starling.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
+        // (`dotnet run --project src/Starling.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
         // is set and traces/metrics/logs flow to the Aspire dashboard. When
         // run directly, the providers are still wired but the exporter is a
         // no-op. We tee the OTel-backed IDiagnostics with ConsoleDiagnostics

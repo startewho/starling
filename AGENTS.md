@@ -66,8 +66,8 @@ starling/
 │   ├── lib/claim.sh           ← atomic claim/release helper
 │   └── M<n>/wp-*.md           ← one file per work package
 ├── src/                       ← engine + Headless CLI + Avalonia Gui (win/mac/linux)
-├── Starling.AppHost/          ← Aspire AppHost (orchestrates Gui + Headless)
-├── Starling.ServiceDefaults/  ← Aspire OTel + health-check shared bootstrap
+│   ├── Starling.AppHost/          ← Aspire AppHost (orchestrates Gui + Headless)
+│   └── Starling.ServiceDefaults/  ← Aspire OTel + health-check shared bootstrap
 ├── tests/                     ← one xUnit project per src/ module + E2E
 ├── bench/Starling.Bench/      ← BenchmarkDotNet
 └── testdata/                  ← fixtures + golden PNGs + WPT subsets
@@ -91,7 +91,7 @@ only — CI runs without the flag.
 When you need to debug runtime behavior — a slow request, a failing fetch, an
 unexpected span — pull traces from the Aspire dashboard's telemetry API instead
 of adding `Console.WriteLine`. **This only works while the AppHost is running**
-(`aspire run` against `Starling.AppHost`, or via the `aspire` skill); the
+(`aspire run` against `src/Starling.AppHost`, or via the `aspire` skill); the
 telemetry API is served by that running dashboard.
 
 There are three ways in, listed in the order you should reach for them.

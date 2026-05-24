@@ -23,7 +23,7 @@ changes, no rebuild.
 ## How it's served
 
 The Aspire AppHost adds a YARP resource with static-file serving pointed at this
-directory (see `Starling.AppHost/AppHost.cs`, the `"sites"` resource). The YARP
+directory (see `src/Starling.AppHost/AppHost.cs`, the `"sites"` resource). The YARP
 integration runs as a container and **copies this folder into the container when
 it starts** — it is not a live bind-mount. So adding a site, or editing existing
 HTML/CSS/JS, requires restarting the AppHost (or just the `sites` resource from
@@ -32,7 +32,7 @@ the Aspire dashboard) for the change to be served.
 Run it with:
 
 ```bash
-dotnet run --project Starling.AppHost
+dotnet run --project src/Starling.AppHost
 # or: aspire run
 ```
 

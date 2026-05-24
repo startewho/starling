@@ -34,8 +34,8 @@
   <Project Path="src/Starling.Net/Starling.Net.csproj" />
   <Project Path="src/Starling.Paint/Starling.Paint.csproj" />
   <Project Path="src/Starling.Url/Starling.Url.csproj" />
-  <Project Path="Starling.AppHost/Starling.AppHost.csproj" />
-  <Project Path="Starling.ServiceDefaults/Starling.ServiceDefaults.csproj" />
+  <Project Path="src/Starling.AppHost/Starling.AppHost.csproj" />
+  <Project Path="src/Starling.ServiceDefaults/Starling.ServiceDefaults.csproj" />
   <Project Path="tests/Starling.Bindings.Tests/Starling.Bindings.Tests.csproj" />
   <Project Path="tests/Starling.Bindings.Jint.Tests/Starling.Bindings.Jint.Tests.csproj" />
   <Project Path="tests/Starling.Common.Tests/Starling.Common.Tests.csproj" />

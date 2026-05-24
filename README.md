@@ -127,8 +127,8 @@ the repository root and the build picks it up automatically (CI uses the
 starling/
 ├── browser-plan/             # The entire design spec. Read 00_INDEX.md first.
 ├── src/                      # 14 engine modules + Headless CLI + Avalonia Gui (win/mac/linux)
-├── Starling.AppHost/         # Aspire AppHost orchestrating Gui + Headless
-├── Starling.ServiceDefaults/ # Shared OTel + health-check bootstrap for future services
+│   ├── Starling.AppHost/         # Aspire AppHost orchestrating Gui + Headless
+│   └── Starling.ServiceDefaults/ # Shared OTel + health-check bootstrap for future services
 ├── tests/                    # One xUnit project per src/ module + an E2E project
 ├── bench/                    # BenchmarkDotNet harness
 ├── testdata/                 # Fixtures (HTML, golden PNGs, WPT subsets)
