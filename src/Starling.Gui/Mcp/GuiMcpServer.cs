@@ -184,6 +184,18 @@ public sealed class GuiMcpServer : IAsyncDisposable
                 ReadBoolArgument(arguments, "includeHtml"),
                 ReadOptionalStringArgument(arguments, "logPath"),
                 ct).ConfigureAwait(false),
+            "browser_click" => await _tools.BrowserClick(
+                ReadDoubleArgument(arguments, "x"),
+                ReadDoubleArgument(arguments, "y"),
+                ct).ConfigureAwait(false),
+            "browser_move" => await _tools.BrowserMove(
+                ReadDoubleArgument(arguments, "x"),
+                ReadDoubleArgument(arguments, "y"),
+                ct).ConfigureAwait(false),
+            "browser_type" => await _tools.BrowserType(
+                ReadStringArgument(arguments, "text"),
+                ReadBoolArgument(arguments, "submit"),
+                ct).ConfigureAwait(false),
             _ => BrowserControlResult.Failure(
                 $"Unknown browser tool: {name}",
                 null,
@@ -226,6 +238,14 @@ public sealed class GuiMcpServer : IAsyncDisposable
         => arguments.ValueKind == JsonValueKind.Object &&
            arguments.TryGetProperty(name, out var value) &&
            value.ValueKind == JsonValueKind.True;
+
+    private static double ReadDoubleArgument(JsonElement arguments, string name)
+        => arguments.ValueKind == JsonValueKind.Object &&
+           arguments.TryGetProperty(name, out var value) &&
+           value.ValueKind == JsonValueKind.Number &&
+           value.TryGetDouble(out var d)
+               ? d
+               : 0;
 
     private static JsonNode InitializeResult(JsonElement request)
     {
@@ -325,6 +345,42 @@ public sealed class GuiMcpServer : IAsyncDisposable
                     "description": "If set, write a full report (all telemetry logs + complete outerHTML) to this file path."
                   }
                 }
+              }
+            },
+            {
+              "name": "browser_click",
+              "description": "Left-click a point on the current page. Coordinates are page pixels from the document's top-left (same space browser_screenshot captures, full scroll extent). Clicking a text field focuses it (follow with browser_type); a link/button/checkbox is activated. The outcome is returned in `detail`.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "x": { "type": "number", "description": "X coordinate in page pixels from the document's left edge." },
+                  "y": { "type": "number", "description": "Y coordinate in page pixels from the document's top edge." }
+                },
+                "required": ["x", "y"]
+              }
+            },
+            {
+              "name": "browser_move",
+              "description": "Move the mouse to a point on the current page, updating hover/cursor state and dispatching DOM mouseover/mousemove/mouseout so JS hover handlers run. Coordinates are page pixels from the document's top-left (same space as browser_screenshot). What is under the cursor is returned in `detail`.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "x": { "type": "number", "description": "X coordinate in page pixels from the document's left edge." },
+                  "y": { "type": "number", "description": "Y coordinate in page pixels from the document's top edge." }
+                },
+                "required": ["x", "y"]
+              }
+            },
+            {
+              "name": "browser_type",
+              "description": "Type text into the currently focused text field (focus one first with browser_click). Fires a DOM input event so search-as-you-type and form handlers run. Set submit=true to press Enter afterward, submitting the owning form. The field's new value is returned in `detail`.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "text": { "type": "string", "description": "The literal text to type. Control characters are ignored." },
+                  "submit": { "type": "boolean", "description": "Press Enter after typing to submit the owning form. Defaults to false." }
+                },
+                "required": ["text"]
               }
             }
           ]

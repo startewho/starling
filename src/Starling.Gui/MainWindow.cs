@@ -820,6 +820,37 @@ public sealed class MainWindow : Window, IBrowserController
         }
     }
 
+    public Task<BrowserControlResult> ClickFromToolAsync(double x, double y, CancellationToken ct)
+        => InputTool("click", () => _webview.ClickAt(x, y));
+
+    public Task<BrowserControlResult> MoveMouseFromToolAsync(double x, double y, CancellationToken ct)
+        => InputTool("move", () => _webview.MoveTo(x, y));
+
+    public Task<BrowserControlResult> TypeTextFromToolAsync(string text, bool submit, CancellationToken ct)
+        => InputTool("type", () => _webview.TypeText(text, submit));
+
+    // Shared shell for the synthetic-input tools: guards page presence, runs the
+    // panel action on the (already UI-thread) call, and maps its InputResult onto
+    // a navigation-state snapshot (effect string in detail, precondition failure
+    // in error).
+    private Task<BrowserControlResult> InputTool(string name, Func<Controls.InputResult> action)
+    {
+        if (_lastShownPage is null)
+            return Task.FromResult(Snapshot(success: false, error: $"No page is loaded to {name}."));
+        try
+        {
+            var r = action();
+            return Task.FromResult(r.Ok
+                ? Snapshot(success: true, detail: r.Detail)
+                : Snapshot(success: false, error: r.Detail));
+        }
+        catch (Exception ex)
+        {
+            _diag.Log(DiagLevel.Warn, "gui", $"{name} failed: {ex.Message}");
+            return Task.FromResult(Snapshot(success: false, error: $"{name} failed: {ex.Message}"));
+        }
+    }
+
     protected override void OnClosed(EventArgs e)
     {
         _navCts?.Cancel();

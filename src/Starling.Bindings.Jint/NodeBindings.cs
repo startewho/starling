@@ -233,18 +233,44 @@ internal static class NodeBindings
             (t, _) =>
             {
                 if (w.UnwrapElement(t) is not { } e || !IsFormControl(e)) return JsValue.Undefined;
-                return JintInterop.Str(IsTextArea(e) ? e.TextContent : e.GetAttribute("value") ?? "");
+                // Read the live IDL value: InputValue (what the user typed / a
+                // script assigned) in preference to the `value` content attribute,
+                // matching BoxTreeBuilder's painted text and the GUI editor. A
+                // textarea's value is its text content.
+                return JintInterop.Str(IsTextArea(e)
+                    ? e.TextContent
+                    : e.InputValue ?? e.GetAttribute("value") ?? "");
             },
             (t, args) =>
             {
                 if (w.UnwrapElement(t) is { } e && IsFormControl(e))
                 {
                     var v = args.Length > 0 ? Str(args[0]) : "";
+                    // Write the live IDL value (not the content attribute) so
+                    // `el.value = …` round-trips through layout and the GUI caret,
+                    // and `getAttribute("value")` still reports the initial value.
                     if (IsTextArea(e)) e.TextContent = v;
-                    else e.SetAttribute("value", v);
+                    else e.InputValue = v;
                 }
                 return JsValue.Undefined;
             });
+        // focus()/blur() drive Document.FocusedElement — the same focus model the
+        // GUI caret and `:focus` styling read, and what `document.activeElement`
+        // reports. A field that scripts re-focus after a form submit (the classic
+        // todo pattern) thus keeps the GUI caret.
+        Method(ctx, proto, "focus", (t, _) =>
+        {
+            if (w.UnwrapElement(t) is { OwnerDocument: { } d } e) d.FocusedElement = e;
+            return JsValue.Undefined;
+        }, 0);
+        Method(ctx, proto, "blur", (t, _) =>
+        {
+            if (w.UnwrapElement(t) is { OwnerDocument: { } d } e
+                && ReferenceEquals(d.FocusedElement, e))
+                d.FocusedElement = null;
+            return JsValue.Undefined;
+        }, 0);
+
         Accessor(ctx, proto, "innerHTML",
             (t, _) => w.UnwrapElement(t) is { } e ? JintInterop.Str(HtmlSerializer.SerializeChildren(e)) : JintInterop.Str(""),
             (t, args) =>
@@ -735,6 +761,14 @@ internal static class NodeBindings
                 titleEl.TextContent = value;
                 return JsValue.Undefined;
             });
+        // The focused element, falling back to <body> per the HTML spec so
+        // `document.activeElement.tagName` never throws on an unfocused page.
+        Accessor(ctx, proto, "activeElement", (t, _) =>
+        {
+            if (w.UnwrapDocument(t) is not { } d) return JsValue.Null;
+            var el = d.FocusedElement ?? (Element?)d.Body;
+            return el is null ? JsValue.Null : w.Wrap(el);
+        });
         Accessor(ctx, proto, "readyState", (_, _) => JintInterop.Str("complete"));
         Accessor(ctx, proto, "compatMode",
             (t, _) => w.UnwrapDocument(t) is { } d

@@ -44,6 +44,15 @@ public sealed class BrowserControlBridge
     public Task<BrowserControlResult> InspectAsync(bool includeHtml, string? logPath, CancellationToken ct)
         => InvokeAsync(controller => controller.InspectFromToolAsync(includeHtml, logPath, ct), ct);
 
+    public Task<BrowserControlResult> ClickAsync(double x, double y, CancellationToken ct)
+        => InvokeAsync(controller => controller.ClickFromToolAsync(x, y, ct), ct);
+
+    public Task<BrowserControlResult> MoveMouseAsync(double x, double y, CancellationToken ct)
+        => InvokeAsync(controller => controller.MoveMouseFromToolAsync(x, y, ct), ct);
+
+    public Task<BrowserControlResult> TypeTextAsync(string text, bool submit, CancellationToken ct)
+        => InvokeAsync(controller => controller.TypeTextFromToolAsync(text, submit, ct), ct);
+
     private async Task<BrowserControlResult> InvokeAsync(
         Func<IBrowserController, Task<BrowserControlResult>> action,
         CancellationToken ct)
