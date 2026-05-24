@@ -484,6 +484,196 @@ public class JsLexerTests
         Tokens("1..toString()")[0].Value.Should().Be(1.0);
     }
 
+    // ----- Numeric separators (§12.9.3 NumericLiteralSeparator) -------------
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_decimal_integer()
+    {
+        var t = First("1_000");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(1000.0);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_decimal_fraction()
+    {
+        var t = First("1_000.000_1");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(1000.0001);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_exponent()
+    {
+        var t = First("1e1_0");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(1e10);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_hex()
+    {
+        var t = First("0xFF_FF");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(0xFFFF);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_octal()
+    {
+        var t = First("0o7_7");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(63.0);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_binary()
+    {
+        var t = First("0b10_10");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(10.0);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_bigint_decimal()
+    {
+        var t = First("1_000n");
+        t.Kind.Should().Be(JsTokenKind.BigIntLiteral);
+        t.Value.Should().Be("1000");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_bigint_hex()
+    {
+        var t = First("0xA_Bn");
+        t.Kind.Should().Be(JsTokenKind.BigIntLiteral);
+        t.Value.Should().Be("AB");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_multiple_groups()
+    {
+        // 1_000_000 = one million
+        var t = First("1_000_000");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(1_000_000.0);
+    }
+
+    // ----- Numeric separator early errors ----------------------------------
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_trailing_is_error()
+    {
+        var sink = new RecordingSink();
+        new JsLexer("1_", sink).Drain();
+        sink.Errors.Should().ContainSingle()
+            .Which.code.Should().Be(JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_doubled_is_error()
+    {
+        var sink = new RecordingSink();
+        new JsLexer("1__0", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_after_dot_is_error()
+    {
+        var sink = new RecordingSink();
+        new JsLexer("1._0", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_after_hex_prefix_is_error()
+    {
+        var sink = new RecordingSink();
+        new JsLexer("0x_1", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_after_binary_prefix_is_error()
+    {
+        var sink = new RecordingSink();
+        new JsLexer("0b_1", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_after_octal_prefix_is_error()
+    {
+        var sink = new RecordingSink();
+        new JsLexer("0o_1", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_before_exponent_letter_is_error()
+    {
+        // `1_e1` — the trailing `_` after `1` is invalid (no digit follows; `e` is not a digit)
+        var sink = new RecordingSink();
+        new JsLexer("1_e1", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_after_exponent_marker_is_error()
+    {
+        // `1e_1` — `_` immediately after `e` is invalid
+        var sink = new RecordingSink();
+        new JsLexer("1e_1", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_before_bigint_suffix_is_error()
+    {
+        // `1_n` — trailing `_` immediately before `n` is invalid
+        var sink = new RecordingSink();
+        new JsLexer("1_n", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Numeric_separator_in_legacy_octal_is_error()
+    {
+        // `0_10` — legacy octal / non-octal-decimal literals do not allow separators
+        var sink = new RecordingSink();
+        new JsLexer("0_10", sink).Drain();
+        sink.Errors.Should().NotBeEmpty()
+            .And.Contain(e => e.code == JsLexError.InvalidNumericLiteral);
+    }
+
     // ----- Helpers --------------------------------------------------------
 
     private static List<JsToken> Tokens(string s) => new JsLexer(s).Drain();
