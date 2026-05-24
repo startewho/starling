@@ -117,10 +117,6 @@ public sealed class Test262Runner
         var meta = ParseMetadata(source);
         var rel = Path.GetRelativePath(_root, path);
 
-        // Module tests need the full loader + relative resolution; deferred.
-        if (meta.IsModule)
-            return new[] { new ScenarioResult(rel, ScenarioMode.NonStrict, Outcome.Skip, "module") };
-
         // Skip tests that require a feature outside our targeted spec level
         // (ES2024 / ES15). These are post-ES2024 proposals or explicitly
         // out-of-scope subsystems (see browser-plan/09_JS_ENGINE.md "Out"),
@@ -140,6 +136,10 @@ public sealed class Test262Runner
     private static IEnumerable<ScenarioMode> Modes(Test262Metadata meta)
     {
         if (meta.IsRaw) { yield return ScenarioMode.Raw; yield break; }
+        // Module code is always strict (§11.2.2) and is parsed/run as-is by the
+        // loader — there is no non-strict variant and we must not inject a
+        // "use strict" prologue. Run a single scenario.
+        if (meta.IsModule) { yield return ScenarioMode.NonStrict; yield break; }
         if (!meta.OnlyStrict) yield return ScenarioMode.NonStrict;
         if (!meta.NoStrict) yield return ScenarioMode.Strict;
     }
@@ -170,7 +170,12 @@ public sealed class Test262Runner
             try
             {
                 var prog = new JsParser(WithStrict(source, mode)).ParseProgram();
-                _ = JsCompiler.Compile(prog, "<test262>");
+                // Module code has its own early-error pass (CompileModule); a
+                // classic script uses the script compiler. Routing each to its
+                // own compiler keeps module-only syntax (import/export at top
+                // level, top-level await) classified correctly.
+                if (meta.IsModule) _ = JsCompiler.CompileModule(prog, "<test262>");
+                else _ = JsCompiler.Compile(prog, "<test262>");
                 return (Outcome.Fail, "expected parse error, parsed OK");
             }
             catch (JsParseException) { return (Outcome.Pass, null); }
@@ -189,15 +194,21 @@ public sealed class Test262Runner
         });
         var vm = new JsVm(runtime);
 
-        // Wire a filesystem module loader so dynamic import() in a script
-        // resolves the test's fixture modules relative to the test file. The
-        // referrer is the test body's chunk name (its absolute path), set below.
-        _ = new Starling.Js.Modules.ModuleLoader(runtime, new FsModuleHost());
+        // Wire a filesystem module loader so dynamic import() in a script AND
+        // static import in a [module] test resolve the test's fixture modules
+        // relative to the test file. The loader publishes itself on the realm so
+        // the VM can reach it; we also keep the reference to drive module
+        // evaluation for [module] tests below. The referrer for the entry is the
+        // test body's absolute path (passed to LoadAndEvaluate / set as the
+        // script chunk name) so specifiers resolve against the test file's dir.
+        var loader = new Starling.Js.Modules.ModuleLoader(runtime, new FsModuleHost());
 
         try
         {
-            // Minimal $262 host object (INTERPRETING.md §"Host-Defined Functions").
-            RunSource(vm, "var $262 = { global: globalThis, detachArrayBuffer: function(){}, gc: function(){} };", "<host>");
+            // Minimal $262 host object (INTERPRETING.md §"Host-Defined Functions"),
+            // now with createRealm()/evalScript()/detachArrayBuffer() so the
+            // createRealm cluster runs instead of failing on a missing host fn.
+            InstallHost262(runtime, vm);
 
             if (!meta.IsRaw)
             {
@@ -213,11 +224,20 @@ public sealed class Test262Runner
         }
 
         // ---- Run the test body. ----
-        // Name the chunk with the test's absolute path so dynamic import()
-        // resolves its specifier relative to the test file.
+        // For [module] tests, evaluate the test file through the module loader so
+        // its static imports/exports resolve + link against on-disk fixtures and
+        // top-level await drains the microtask/event loop (LoadAndEvaluate does
+        // the resolve→link→evaluate→drain and rethrows the evaluation error). The
+        // harness globals installed above (assert/$DONE/…) are shared on the same
+        // realm, so the module body sees them. For classic scripts, name the chunk
+        // with the test's absolute path so dynamic import() resolves relative to
+        // the test file.
         try
         {
-            RunSource(vm, WithStrict(source, mode), absPath);
+            if (meta.IsModule)
+                runtime.WithActiveVm(() => loader.LoadAndEvaluate(absPath));
+            else
+                RunSource(vm, WithStrict(source, mode), absPath);
         }
         catch (JsThrow jt)
         {
@@ -268,6 +288,68 @@ public sealed class Test262Runner
     {
         var chunk = JsCompiler.Compile(new JsParser(source).ParseProgram(), name);
         vm.Run(chunk);
+    }
+
+    /// <summary>Install the Test262 <c>$262</c> host object on a realm's global
+    /// (INTERPRETING.md §"Host-Defined Functions"). Beyond the previous
+    /// <c>global</c>/<c>detachArrayBuffer</c>/<c>gc</c> stubs this adds the two
+    /// members the createRealm cluster needs:
+    /// <list type="bullet">
+    ///   <item><c>createRealm()</c> — returns the <c>$262</c> of a brand-new
+    ///   realm (fresh global, intrinsics, module loader), so cross-realm identity
+    ///   tests have a second realm to probe.</item>
+    ///   <item><c>evalScript(src)</c> — evaluates its <c>src</c> argument as a
+    ///   classic (sloppy) script in <em>this</em> realm and returns the
+    ///   completion value.</item>
+    /// </list>
+    /// <c>detachArrayBuffer</c> stays a no-op stub: the engine has no
+    /// ArrayBuffer-detach machinery (that is engine work, not harness wiring), so
+    /// tests that observe detachment still fail — but the common cluster that only
+    /// needs the function to <em>exist</em> (and createRealm/evalScript) runs.</summary>
+    private static void InstallHost262(JsRuntime runtime, JsVm vm)
+    {
+        var realm = runtime.Realm;
+        var host = realm.NewOrdinaryObject();
+
+        // $262.global — the realm's global object.
+        host.Set("global", JsValue.Object(realm.GlobalObject));
+
+        // $262.evalScript(src) — classic-script eval in this realm. Surfaces
+        // parse/runtime errors as a JsThrow so a test that catches them works and
+        // an uncaught one fails the scenario like any other throw.
+        host.Set("evalScript", JsValue.Object(new JsNativeFunction(realm, "evalScript", length: 1,
+            (_, args) =>
+            {
+                var src = args.Length > 0 && args[0].IsString ? args[0].AsString : Stringify(args.Length > 0 ? args[0] : JsValue.Undefined);
+                Chunk chunk;
+                // CompileForEval (the path the global `eval` builtin uses) so a
+                // top-level `var` creates a persistent global binding — the
+                // ScriptEvaluation contract $262.evalScript requires.
+                try { chunk = JsCompiler.CompileForEval(new JsParser(src).ParseProgram(), "<evalScript>"); }
+                catch (JsParseException ex) { throw new JsThrow(realm.NewSyntaxError(ex.Message)); }
+                return vm.RunEval(chunk);
+            }, isConstructor: false)));
+
+        // $262.createRealm() — spin up an independent realm and return its $262.
+        host.Set("createRealm", JsValue.Object(new JsNativeFunction(realm, "createRealm", length: 0,
+            (_, _) =>
+            {
+                var child = new JsRuntime();
+                // The child realm needs the same host surface a freshly-run test
+                // would have: print (for any harness it evalScripts) + $262.
+                child.RegisterGlobal("print", _ => JsValue.Undefined);
+                _ = new Starling.Js.Modules.ModuleLoader(child, new FsModuleHost());
+                InstallHost262(child, new JsVm(child));
+                return child.GetGlobal("$262");
+            }, isConstructor: false)));
+
+        // No-op stubs (engine has no detach/gc hooks).
+        host.Set("detachArrayBuffer", JsValue.Object(new JsNativeFunction(realm, "detachArrayBuffer", length: 1,
+            (_, _) => JsValue.Undefined, isConstructor: false)));
+        host.Set("gc", JsValue.Object(new JsNativeFunction(realm, "gc", length: 0,
+            (_, _) => JsValue.Undefined, isConstructor: false)));
+
+        realm.GlobalObject.Set("$262", JsValue.Object(host));
     }
 
     private static string WithStrict(string source, ScenarioMode mode) =>
