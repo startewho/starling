@@ -87,6 +87,31 @@ browser pictured above.
 aspire run
 ```
 
+**Choosing engines / backends.** Pass selection flags after `aspire run --`; the
+AppHost parses them and forwards the choice to both the `gui` and `headless`
+resources. Plain `aspire run` uses the defaults (`--starling --imagesharp-gpu`):
+
+```bash
+aspire run -- --jint                  # Jint JS backend (higher Test262 compat)
+aspire run -- --jint --imagesharp     # Jint + CPU paint backend
+aspire run -- --starling --gpu        # spell out the defaults explicitly
+```
+
+| Flag | Default | What it controls |
+|---|---|---|
+| `--starling` / `--jint` | `--starling` | JS engine: Starling's native VM (≈81% Test262 `language`) or the [Jint](browser-plan/09_JS_ENGINE.md#alternative-engine-backend-jint) backend (≈99.6%, a temporary high-compat crutch). |
+| `--imagesharp` / `--imagesharp-gpu` | `--imagesharp-gpu` | Paint rasterizer: pure-CPU or WebGPU-accelerated (Metal/Vulkan/D3D12). Aliases: `--cpu`, `--gpu` (and `--imagesharp-webgpu`). |
+
+The equivalent env vars (`STARLING_JS_ENGINE`, `STARLING_PAINT_BACKEND`) still
+work — a flag just overrides the env var, which overrides the default. Selecting
+the CPU `imagesharp` backend additionally requires the build to compile it in —
+build with `/p:EnableImageSharpDrawing3=true` (auto-on when a `sixlabors.lic` is
+present; see below). For the headless CLI directly, use the env var, e.g.
+`STARLING_JS_ENGINE=jint dotnet run --project src/Starling.Headless -- render …`.
+
+`RUST_LOG` is also forwarded when set — `RUST_LOG=trace aspire run` dumps
+wgpu-native's WebGPU adapter selection and init failures to stderr.
+
 **Render a live site from the CLI.** The headless renderer fetches and paints a
 real URL straight to a PNG:
 
