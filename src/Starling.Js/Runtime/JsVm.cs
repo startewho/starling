@@ -510,6 +510,23 @@ public sealed class JsVm
                     Push(AbstractOperations.Get(this, globalObj, name, JsValue.Object(globalObj)));
                     break;
                 }
+                case Opcode.LoadGlobalChecked:
+                {
+                    // §6.2.5.5 GetValue — an unresolvable Reference throws a
+                    // ReferenceError. Plain LoadGlobal yields undefined for a
+                    // missing global; this variant (emitted for computed
+                    // property keys that are bare free identifiers) makes the
+                    // key's GetValue fire its ReferenceError so an unresolvable
+                    // key aborts the class/object definition.
+                    var idx = ReadU16();
+                    var name = (string)constants[idx]!;
+                    _lastLoadName = name;
+                    var globalObj = _runtime.Realm.GlobalObject;
+                    if (!globalObj.Has(name))
+                        throw new JsThrow(_runtime.Realm.NewReferenceError(name + " is not defined"));
+                    Push(AbstractOperations.Get(this, globalObj, name, JsValue.Object(globalObj)));
+                    break;
+                }
                 case Opcode.StoreGlobal:
                 {
                     var idx = ReadU16();

@@ -110,6 +110,17 @@ public enum Opcode : byte
 
     // ----- Globals (for free identifiers / Test262 host bindings) -----
     LoadGlobal,     // [u16 nameIdx] → push global by name
+    /// <summary>[u16 nameIdx] — like <see cref="LoadGlobal"/> but throws a
+    /// ReferenceError when the global binding is unresolvable (the global
+    /// object has no such property anywhere on its prototype chain), per
+    /// §6.2.5.5 GetValue on an unresolvable Reference. Plain
+    /// <see cref="LoadGlobal"/> returns <c>undefined</c> for missing globals
+    /// (so host-binding probes / <c>typeof</c> don't throw); this checked
+    /// variant is emitted where the spec requires GetValue to fire its
+    /// ReferenceError — currently computed property keys whose key expression
+    /// is a bare free identifier (e.g. <c>class { [unresolved]() {} }</c>),
+    /// so the key's evaluation aborts the whole class/object definition.</summary>
+    LoadGlobalChecked, // [u16 nameIdx] → push global by name, throw ReferenceError if absent
     StoreGlobal,    // [u16 nameIdx] → pop value, store global
     /// <summary>[u16 nameIdx] — gap:script-top-var-not-global. Idempotent
     /// CreateGlobalVarBinding (§16.1.7 / §9.1.1.4.16): if the global object
