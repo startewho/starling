@@ -46,7 +46,18 @@ public sealed record ScriptSessionOptions(
     ScriptFetcherDelegate Fetcher,
     StarlingHttpClient Http,
     ILayoutHost? LayoutHost,
-    Starling.Common.Diagnostics.IDiagnostics Diag);
+    Starling.Common.Diagnostics.IDiagnostics Diag)
+{
+    /// <summary>Layout viewport size in CSS px. Backends expose this through
+    /// <c>window.innerWidth</c>/<c>innerHeight</c> and <c>window.screen</c>.
+    /// Defaults to 0 — a "no viewport hint" signal — when the host doesn't
+    /// supply one (e.g. bare unit tests). Real pages branch on these (responsive
+    /// grids, column-fit math), so the render path passes the real viewport.</summary>
+    public int ViewportWidth { get; init; }
+
+    /// <inheritdoc cref="ViewportWidth"/>
+    public int ViewportHeight { get; init; }
+}
 
 /// <summary>
 /// Engine-neutral handle to one page's live JS execution context. The engine

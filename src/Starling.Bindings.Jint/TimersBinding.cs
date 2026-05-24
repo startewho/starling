@@ -117,6 +117,42 @@ internal static class TimersBinding
             if (TryCoerceId(args, out var id)) loop.ClearTimeout(id);
             return JsValue.Undefined;
         }, 1);
+
+        // ---- queueMicrotask(callback) -------------------------------------
+        // HTML §8.6. Runs the callback as a microtask (before the next task).
+        // Modern frameworks use it directly as a scheduler primitive (e.g.
+        // React's "tick" scheduler: `type==="tick" ? queueMicrotask : …`), so a
+        // missing global silently breaks deferred rendering rather than throwing.
+        JintInterop.DefineMethod(engine, engine.Global, "queueMicrotask", (_, args) =>
+        {
+            var handler = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (!IsCallable(handler))
+                throw new JavaScriptException(engine.Intrinsics.TypeError, "queueMicrotask handler is not callable");
+            loop.QueueMicrotask(() => InvokeHandler(ctx, handler, Array.Empty<JsValue>()));
+            return JsValue.Undefined;
+        }, 1);
+
+        // ---- requestIdleCallback / cancelIdleCallback ---------------------
+        // No real idle periods in a one-shot render, so we schedule on the timer
+        // loop and hand the callback an IdleDeadline that always reports time
+        // remaining (didTimeout:false). Shares the timer id space.
+        JintInterop.DefineMethod(engine, engine.Global, "requestIdleCallback", (_, args) =>
+        {
+            var handler = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (!IsCallable(handler))
+                throw new JavaScriptException(engine.Intrinsics.TypeError, "requestIdleCallback handler is not callable");
+            var deadline = new JsObject(engine);
+            JintInterop.DefineDataProp(deadline, "didTimeout", JsBoolean.False);
+            JintInterop.DefineMethod(engine, deadline, "timeRemaining", (_, _) => JintInterop.Num(50), 0);
+            var id = loop.SetTimeout(() => InvokeHandler(ctx, handler, new JsValue[] { deadline }), 1);
+            return JintInterop.Num(id);
+        }, 1);
+
+        JintInterop.DefineMethod(engine, engine.Global, "cancelIdleCallback", (_, args) =>
+        {
+            if (TryCoerceId(args, out var id)) loop.ClearTimeout(id);
+            return JsValue.Undefined;
+        }, 1);
     }
 
     private static (JsValue Handler, int Delay, JsValue[] Args) ParseTimerArgs(global::Jint.Engine engine, JsValue[] args)

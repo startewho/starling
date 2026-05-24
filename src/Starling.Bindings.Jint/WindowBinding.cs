@@ -49,14 +49,31 @@ internal static class WindowBinding
         // 3) Window-shaped own properties on the global.
         JintInterop.DefineDataProp(global, "window", global, writable: true, enumerable: true, configurable: true);
         JintInterop.DefineDataProp(global, "self", global, writable: true, enumerable: true, configurable: true);
+        // No frame tree behind the seam: top/parent are the window itself,
+        // frameElement is null, and frames is the window (length 0). Scripts that
+        // feature-detect framing (`if (window.top !== window.self)`) take the
+        // top-level branch, which is correct for a standalone document.
+        JintInterop.DefineDataProp(global, "top", global, writable: false, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "parent", global, writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "frames", global, writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "frameElement", JsValue.Null, writable: false, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "length", new JsNumber(0), writable: true, enumerable: true, configurable: true);
         // globalThis is already provided by Jint per ECMA.
 
         var docWrapper = ctx.Wrappers.Wrap(doc);
         JintInterop.DefineDataProp(global, "document", docWrapper, writable: true, enumerable: true, configurable: true);
 
         JintInterop.DefineDataProp(global, "name", new JsString(""), writable: true, enumerable: true, configurable: true);
-        JintInterop.DefineDataProp(global, "innerWidth", new JsNumber(0), writable: true, enumerable: true, configurable: true);
-        JintInterop.DefineDataProp(global, "innerHeight", new JsNumber(0), writable: true, enumerable: true, configurable: true);
+        // innerWidth/innerHeight reflect the layout viewport supplied by the
+        // engine. Real pages branch on these (responsive grids, column-fit math),
+        // so 0 — the old default — silently broke content sizing.
+        var vw = ctx.ViewportWidth;
+        var vh = ctx.ViewportHeight;
+        JintInterop.DefineDataProp(global, "innerWidth", new JsNumber(vw), writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "innerHeight", new JsNumber(vh), writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "outerWidth", new JsNumber(vw), writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "outerHeight", new JsNumber(vh), writable: true, enumerable: true, configurable: true);
+        JintInterop.DefineDataProp(global, "screen", BuildScreen(engine, vw, vh), writable: true, enumerable: true, configurable: true);
         JintInterop.DefineDataProp(global, "devicePixelRatio", new JsNumber(1), writable: true, enumerable: true, configurable: true);
         JintInterop.DefineDataProp(global, "scrollX", new JsNumber(0), writable: true, enumerable: true, configurable: true);
         JintInterop.DefineDataProp(global, "scrollY", new JsNumber(0), writable: true, enumerable: true, configurable: true);
@@ -67,8 +84,9 @@ internal static class WindowBinding
         JintInterop.DefineDataProp(global, "navigator", BuildNavigator(engine), writable: true, enumerable: true, configurable: true);
 
         // location is an accessor so subsequent history.pushState reads are
-        // reflected (HistoryBinding overrides via UrlFor).
-        var locationObj = BuildLocation(ctx);
+        // reflected (HistoryBinding overrides via UrlFor). Shared with
+        // document.location so `window.location === document.location` holds.
+        var locationObj = LocationObjectFor(ctx);
         JintInterop.DefineAccessor(engine, global, "location",
             (_, _) => locationObj,
             (_, args) =>
@@ -96,6 +114,31 @@ internal static class WindowBinding
         }, length: 1);
     }
 
+    /// <summary>Build a <c>window.screen</c> object. We have no display device
+    /// behind the seam, so screen dimensions track the layout viewport (pages
+    /// read <c>screen.availHeight</c>/<c>availWidth</c>/<c>width</c>/<c>height</c>
+    /// for sizing). When no viewport was supplied (0), fall back to a common
+    /// desktop size so the math stays non-degenerate.</summary>
+    private static JsObject BuildScreen(global::Jint.Engine engine, int vw, int vh)
+    {
+        var w = vw > 0 ? vw : 1280;
+        var h = vh > 0 ? vh : 1024;
+        var screen = new JsObject(engine);
+        JintInterop.DefineAccessor(engine, screen, "width", (_, _) => JintInterop.Num(w));
+        JintInterop.DefineAccessor(engine, screen, "height", (_, _) => JintInterop.Num(h));
+        JintInterop.DefineAccessor(engine, screen, "availWidth", (_, _) => JintInterop.Num(w));
+        JintInterop.DefineAccessor(engine, screen, "availHeight", (_, _) => JintInterop.Num(h));
+        JintInterop.DefineAccessor(engine, screen, "availLeft", (_, _) => JintInterop.Num(0));
+        JintInterop.DefineAccessor(engine, screen, "availTop", (_, _) => JintInterop.Num(0));
+        JintInterop.DefineAccessor(engine, screen, "colorDepth", (_, _) => JintInterop.Num(24));
+        JintInterop.DefineAccessor(engine, screen, "pixelDepth", (_, _) => JintInterop.Num(24));
+        var orientation = new JsObject(engine);
+        JintInterop.DefineAccessor(engine, orientation, "type", (_, _) => JintInterop.Str("landscape-primary"));
+        JintInterop.DefineAccessor(engine, orientation, "angle", (_, _) => JintInterop.Num(0));
+        JintInterop.DefineDataProp(screen, "orientation", orientation, writable: true, enumerable: true, configurable: true);
+        return screen;
+    }
+
     private static JsObject BuildNavigator(global::Jint.Engine engine)
     {
         var nav = new JsObject(engine);
@@ -113,6 +156,17 @@ internal static class WindowBinding
         JintInterop.DefineMethod(engine, nav, "sendBeacon", (_, _) => JsBoolean.False, length: 2);
         return nav;
     }
+
+    // One Location object per context, shared between window.location and
+    // document.location so identity comparisons hold.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JintBackendContext, JsObject> s_locationCache = new();
+
+    /// <summary>Return the (cached) Location object for this context. Used by
+    /// both <c>window.location</c> and <c>document.location</c> so they are the
+    /// same object. Mirrors the Starling backend's
+    /// <c>WindowBinding.LocationObjectFor</c>.</summary>
+    internal static JsObject LocationObjectFor(JintBackendContext ctx)
+        => s_locationCache.GetValue(ctx, BuildLocation);
 
     private static JsObject BuildLocation(JintBackendContext ctx)
     {

@@ -231,6 +231,7 @@ internal sealed class H2Connection : IAsyncDisposable
         var hasUserAgent = false;
         var hasAccept = false;
         var hasAcceptEncoding = false;
+        var hasContentLength = false;
 
         foreach (var kv in request.Headers)
         {
@@ -246,6 +247,7 @@ internal sealed class H2Connection : IAsyncDisposable
             if (lower == "user-agent") hasUserAgent = true;
             else if (lower == "accept") hasAccept = true;
             else if (lower == "accept-encoding") hasAcceptEncoding = true;
+            else if (lower == "content-length") hasContentLength = true;
 
             fields.Add((lower, kv.Value));
         }
@@ -253,6 +255,15 @@ internal sealed class H2Connection : IAsyncDisposable
         if (!hasUserAgent) fields.Add(("user-agent", DefaultUserAgent));
         if (!hasAccept) fields.Add(("accept", DefaultAccept));
         if (!hasAcceptEncoding) fields.Add(("accept-encoding", DefaultAcceptEncoding));
+        // Send content-length for body-bearing methods even with an empty body.
+        // END_STREAM already signals "no DATA", but some origins/WAFs reject an
+        // empty POST that lacks content-length (411). Browsers always send "0".
+        if (!hasContentLength &&
+            (!request.Body.IsEmpty || H1.H1RequestWriter.MethodCarriesBody(request.Method)))
+        {
+            fields.Add(("content-length",
+                request.Body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
 
         return fields;
     }

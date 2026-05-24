@@ -49,6 +49,16 @@ public sealed class JintBackendContext
     /// referencing Starling.Bindings (J7).</summary>
     public ILayoutHost? LayoutHost { get; }
 
+    /// <summary>Layout viewport in CSS px, as supplied by the engine via
+    /// <see cref="Starling.Js.Hosting.ScriptSessionOptions.ViewportWidth"/>.
+    /// Surfaced to JS through <c>window.innerWidth</c>/<c>innerHeight</c> and
+    /// <c>window.screen</c>. 0 means "no viewport hint" (bare unit-test
+    /// contexts).</summary>
+    public int ViewportWidth { get; init; }
+
+    /// <inheritdoc cref="ViewportWidth"/>
+    public int ViewportHeight { get; init; }
+
     /// <summary>Fetch script/module source through the session's shared fetch
     /// path (file/data/http). Used by the dynamic-script runner (J3a) and the
     /// module loader (J4).</summary>
