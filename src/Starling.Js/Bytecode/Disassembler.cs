@@ -34,6 +34,7 @@ public static class Disassembler
                 case Opcode.LoadConst:
                 case Opcode.LoadFunction:
                 case Opcode.LoadGlobal:
+                case Opcode.LoadGlobalChecked:
                 case Opcode.StoreGlobal:
                 case Opcode.DeclareGlobalVar:
                 case Opcode.SetFunctionName:

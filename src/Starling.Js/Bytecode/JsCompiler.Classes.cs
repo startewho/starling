@@ -117,7 +117,7 @@ public sealed partial class JsCompiler
                 // upvalues first, then the key.
                 if (md.Computed)
                 {
-                    EmitExpression(md.Key);
+                    EmitComputedKey(md.Key);
                     _b.Emit(Opcode.ToPropertyKey);
                 }
                 EmitUpvaluePushes(methodUps);
@@ -135,7 +135,7 @@ public sealed partial class JsCompiler
                 // upvalues for BuildClass to consume.
                 if (f.Computed)
                 {
-                    EmitExpression(f.Key);
+                    EmitComputedKey(f.Key);
                     _b.Emit(Opcode.ToPropertyKey);
                 }
                 EmitUpvaluePushes(fieldUps);

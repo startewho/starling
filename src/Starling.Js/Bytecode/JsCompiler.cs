@@ -2248,6 +2248,26 @@ public sealed partial class JsCompiler
         _b.EmitU16(Opcode.LoadGlobal, _b.AddConstant(name));
     }
 
+    /// <summary>Emit a computed property-key expression (class/object member
+    /// <c>[expr]</c>). Per §6.2.5.5 GetValue, evaluating the key reference
+    /// must throw a ReferenceError when it is unresolvable, so a key that is a
+    /// bare free identifier resolving to a missing global uses the checked
+    /// global-load opcode instead of the silent <see cref="Opcode.LoadGlobal"/>
+    /// (which returns <c>undefined</c>). All other key shapes evaluate through
+    /// the ordinary expression path — their own sub-reads already throw where
+    /// the spec requires (e.g. <c>[a.b]</c> reading a missing <c>a</c>).</summary>
+    private void EmitComputedKey(Expression key)
+    {
+        if (key is Identifier id
+            && !TryResolveLocal(id.Name, out _)
+            && !TryResolveUpvalue(id.Name, out _))
+        {
+            _b.EmitU16(Opcode.LoadGlobalChecked, _b.AddConstant(id.Name));
+            return;
+        }
+        EmitExpression(key);
+    }
+
     private bool TryResolveLocal(string name, out int slot)
     {
         for (var i = _scopes.Count - 1; i >= 0; i--)
@@ -3184,7 +3204,7 @@ public sealed partial class JsCompiler
                 // the next property — no Dup/Pop bracketing needed here.
                 if (prop.Computed)
                 {
-                    EmitExpression(prop.Key);   // [obj, key]
+                    EmitComputedKey(prop.Key);  // [obj, key]
                     EmitExpression(prop.Value); // [obj, key, fn]
                     _b.Emit(prop.Kind == MethodKind.Get
                         ? Opcode.DefineGetterComputed : Opcode.DefineSetterComputed); // [obj]
@@ -3212,7 +3232,7 @@ public sealed partial class JsCompiler
             // accessor on the key (so `{ get x(){…}, x: v }` ends as data `v`).
             if (prop.Computed)
             {
-                EmitExpression(prop.Key);            // [obj, key]
+                EmitComputedKey(prop.Key);           // [obj, key]
                 EmitExpression(prop.Value);          // [obj, key, value]
                 _b.Emit(Opcode.DefineDataComputed);  // [obj]
             }
