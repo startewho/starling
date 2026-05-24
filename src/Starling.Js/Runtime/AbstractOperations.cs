@@ -108,7 +108,10 @@ public static class AbstractOperations
     /// "no implicit Number↔BigInt coercion" rule has a single seam.</summary>
     public static JsValue ToNumeric(JsRealm realm, JsValue value)
     {
-        var prim = ToPrimitive(value, "number");
+        // Thread the realm's active VM so an object operand's user-defined JS
+        // valueOf/toString can be dispatched (else OrdinaryToPrimitive's Call
+        // throws "VM required"). Covers compound-assignment / ++ / -- / unary.
+        var prim = ToPrimitive(realm.ActiveVm, value, "number");
         if (prim.IsBigInt) return prim;
         return JsValue.Number(JsValue.ToNumber(prim));
     }

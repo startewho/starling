@@ -819,7 +819,7 @@ public sealed class JsVm
                 {
                     var key = Pop();
                     var obj = Pop();
-                    var propertyKey = AbstractOperations.ToPropertyKey(key);
+                    var propertyKey = AbstractOperations.ToPropertyKey(this, key);
                     if (obj.IsObject) Push(AbstractOperations.Get(this, obj.AsObject, propertyKey));
                     else if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), propertyKey, obj));
                     else Push(JsValue.Undefined);
@@ -832,7 +832,7 @@ public sealed class JsVm
                     var obj = Pop();
                     if (obj.IsObject)
                     {
-                        var pk = AbstractOperations.ToPropertyKey(key);
+                        var pk = AbstractOperations.ToPropertyKey(this, key);
                         var ok = AbstractOperations.Set(this, obj.AsObject, pk, value);
                         if (!ok && frameStrict)
                             throw new JsThrow(_runtime.Realm.NewTypeError(
@@ -863,7 +863,7 @@ public sealed class JsVm
                     var fnVal = Pop();
                     var key = Pop();
                     var obj = Pop();
-                    InstallObjectAccessor(obj.AsObject, AbstractOperations.ToPropertyKey(key),
+                    InstallObjectAccessor(obj.AsObject, AbstractOperations.ToPropertyKey(this, key),
                         isGetter: op == Opcode.DefineGetterComputed, (JsFunction)fnVal.AsObject);
                     Push(obj);
                     break;
@@ -887,7 +887,7 @@ public sealed class JsVm
                     var value = Pop();
                     var key = Pop();
                     var obj = Pop();
-                    obj.AsObject.DefineOwnProperty(AbstractOperations.ToPropertyKey(key),
+                    obj.AsObject.DefineOwnProperty(AbstractOperations.ToPropertyKey(this, key),
                         PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
                     Push(obj);
                     break;
@@ -1171,7 +1171,7 @@ public sealed class JsVm
                             "Cannot use 'in' operator to search for '"
                             + JsValue.ToStringValue(key) + "' in "
                             + JsValue.ToStringValue(rhs)));
-                    var pk = AbstractOperations.ToPropertyKey(key);
+                    var pk = AbstractOperations.ToPropertyKey(this, key);
                     Push(JsValue.Boolean(AbstractOperations.HasProperty(rhs.AsObject, pk)));
                     break;
                 }
@@ -1189,10 +1189,10 @@ public sealed class JsVm
                             throw new JsThrow(_runtime.Realm.NewTypeError(
                                 "Cannot convert undefined or null to object"));
                         var boxed = AbstractOperations.ToObject(_runtime.Realm, receiver);
-                        Push(JsValue.Boolean(boxed.Delete(AbstractOperations.ToPropertyKey(key))));
+                        Push(JsValue.Boolean(boxed.Delete(AbstractOperations.ToPropertyKey(this, key))));
                         break;
                     }
-                    var delKey = AbstractOperations.ToPropertyKey(key);
+                    var delKey = AbstractOperations.ToPropertyKey(this, key);
                     var deleted = receiver.AsObject.Delete(delKey);
                     // §13.5.1.2 — in strict code, `delete` of a non-configurable
                     // own property is a TypeError (sloppy returns false instead).
@@ -1523,7 +1523,7 @@ public sealed class JsVm
                     var excluded = new HashSet<string>(StringComparer.Ordinal);
                     for (var i = 0; i < excludedCount; i++)
                     {
-                        var key = AbstractOperations.ToPropertyKey(Pop());
+                        var key = AbstractOperations.ToPropertyKey(this, Pop());
                         if (!key.IsSymbol) excluded.Add(key.AsString);
                     }
                     var src = Pop();
@@ -2645,7 +2645,7 @@ public sealed class JsVm
             if (m.IsComputed)
             {
                 // wp:M3-04f — coerced key value (Symbol or String) off the stack.
-                var keyPk = AbstractOperations.ToPropertyKey(methodComputedKeys[i]);
+                var keyPk = AbstractOperations.ToPropertyKey(this, methodComputedKeys[i]);
                 StampMethodName(fnInstance, keyPk, m.Kind);
                 InstallMethodOrAccessor(owner, keyPk, m.Kind, fnInstance);
             }
@@ -2679,7 +2679,7 @@ public sealed class JsVm
             var f = template.Fields[i];
             // wp:M3-04f — computed key resolved at class-definition time.
             JsPropertyKey? computedKey = f.IsComputed
-                ? AbstractOperations.ToPropertyKey(fieldComputedKeys[i])
+                ? AbstractOperations.ToPropertyKey(this, fieldComputedKeys[i])
                 : (JsPropertyKey?)null;
             if (f.IsStatic)
             {
