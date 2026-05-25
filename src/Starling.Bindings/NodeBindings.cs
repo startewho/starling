@@ -165,6 +165,66 @@ public static class NodeBindings
             return JsValue.False;
         }, length: 1);
 
+        // ---- ChildNode + ParentNode mixins (DOM §4.2.1). Defined on Node.prototype
+        // so Element/CharacterData/etc. inherit them; node-or-string args coerce to
+        // Text nodes. Built on the host insert/remove primitives.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "before", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { ParentNode: { } parent } node)
+                foreach (var n in CoerceNodes(realm, node, args)) parent.InsertBefore(n, node);
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "after", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { ParentNode: { } parent } node)
+            {
+                var refNode = node.NextSibling;
+                foreach (var n in CoerceNodes(realm, node, args)) parent.InsertBefore(n, refNode);
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "replaceWith", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { ParentNode: { } parent } node)
+            {
+                var refNode = node.NextSibling;
+                var nodes = CoerceNodes(realm, node, args);
+                node.RemoveFromParent();
+                foreach (var n in nodes) parent.InsertBefore(n, refNode);
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "remove", (thisV, _) =>
+        {
+            DomWrappers.UnwrapNode(thisV)?.RemoveFromParent();
+            return JsValue.Undefined;
+        }, length: 0);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "append", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { } node)
+                foreach (var n in CoerceNodes(realm, node, args)) node.AppendChild(n);
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "prepend", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { } node)
+            {
+                var refNode = node.FirstChild;
+                foreach (var n in CoerceNodes(realm, node, args)) node.InsertBefore(n, refNode);
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "replaceChildren", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is { } node)
+            {
+                var nodes = CoerceNodes(realm, node, args);
+                while (node.FirstChild is { } c) c.RemoveFromParent();
+                foreach (var n in nodes) node.AppendChild(n);
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+
         var nodeCtor = new JsNativeFunction(realm, "Node", 0, (_, _) =>
             throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
         nodeCtor.DefineOwnProperty("prototype",
@@ -882,6 +942,13 @@ public static class NodeBindings
             var t = d.CreateTextNode(args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
             return JsValue.Object(DomWrappers.Wrap(realm, t));
         }, length: 1);
+        EventTargetBinding.DefineMethod(realm, docProto, "createProcessingInstruction", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length < 2)
+                throw new JsThrow(realm.NewTypeError("createProcessingInstruction requires (target, data)"));
+            return JsValue.Object(DomWrappers.Wrap(realm,
+                d.CreateProcessingInstruction(JsValue.ToStringValue(args[0]), JsValue.ToStringValue(args[1]))));
+        }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "createComment", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d)
@@ -984,6 +1051,17 @@ public static class NodeBindings
     // NameChars (+digit/-/.). Sufficient for the WPT create*Element error cases.
     private const string XmlNamespace = "http://www.w3.org/XML/1998/namespace";
     private const string XmlnsNamespace = "http://www.w3.org/2000/xmlns/";
+
+    /// <summary>Coerce ChildNode/ParentNode varargs to host nodes: a node arg
+    /// passes through; anything else becomes a Text node (DOM §4.2.1).</summary>
+    private static List<Node> CoerceNodes(JsRealm realm, Node context, JsValue[] args)
+    {
+        var doc = context.OwnerDocument ?? context as Document ?? new Document();
+        var list = new List<Node>(args.Length);
+        foreach (var a in args)
+            list.Add(DomWrappers.UnwrapNode(a) is { } n ? n : doc.CreateTextNode(JsValue.ToStringValue(a)));
+        return list;
+    }
 
     private static bool IsNameStart(char c) => char.IsLetter(c) || c == '_' || c == ':';
     private static bool IsNameChar(char c) => IsNameStart(c) || char.IsAsciiDigit(c) || c == '-' || c == '.';
