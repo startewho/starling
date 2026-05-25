@@ -823,6 +823,12 @@ public static class NodeBindings
             var elt = d.CreateElement(JsValue.ToStringValue(args[1]), ns);
             return JsValue.Object(DomWrappers.Wrap(realm, elt));
         }, length: 2);
+        EventTargetBinding.DefineMethod(realm, docProto, "createEvent", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is null)
+                throw new JsThrow(realm.NewTypeError("createEvent called on non-Document"));
+            return EventTargetBinding.CreateLegacyEvent(realm, args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
+        }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "createTextNode", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d)
