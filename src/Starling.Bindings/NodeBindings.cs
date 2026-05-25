@@ -225,6 +225,23 @@ public static class NodeBindings
             return JsValue.Undefined;
         }, length: 1);
 
+        EventTargetBinding.DefineMethod(realm, nodeProto, "lookupNamespaceURI", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not { } n) return JsValue.Null;
+            var r = n.LookupNamespaceURI(args.Length > 0 && !args[0].IsNullish ? JsValue.ToStringValue(args[0]) : null);
+            return r is null ? JsValue.Null : JsValue.String(r);
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "isDefaultNamespace", (thisV, args) =>
+            DomWrappers.UnwrapNode(thisV) is { } n
+                ? JsValue.Boolean(n.IsDefaultNamespace(args.Length > 0 && !args[0].IsNullish ? JsValue.ToStringValue(args[0]) : null))
+                : JsValue.False, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "lookupPrefix", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not { } n) return JsValue.Null;
+            var r = n.LookupPrefix(args.Length > 0 && !args[0].IsNullish ? JsValue.ToStringValue(args[0]) : null);
+            return r is null ? JsValue.Null : JsValue.String(r);
+        }, length: 1);
+
         var nodeCtor = new JsNativeFunction(realm, "Node", 0, (_, _) =>
             throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
         nodeCtor.DefineOwnProperty("prototype",
@@ -927,7 +944,7 @@ public static class NodeBindings
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
             var qname = args[1].IsNullish ? "" : JsValue.ToStringValue(args[1]);
             ValidateQualifiedName(realm, ns, qname); // throws InvalidCharacterError / NamespaceError
-            return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElement(qname, ns)));
+            return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElementNS(ns, qname)));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "createEvent", (thisV, args) =>
         {
@@ -1014,7 +1031,7 @@ public static class NodeBindings
             if (args.Length > 2 && DomWrappers.UnwrapAs<DocumentType>(args[2]) is { } dt)
                 doc.AppendChild(dt);
             if (!string.IsNullOrEmpty(qname))
-                doc.AppendChild(doc.CreateElement(qname, ns));
+                doc.AppendChild(doc.CreateElementNS(ns, qname));
             return JsValue.Object(DomWrappers.Wrap(realm, doc));
         }, length: 3);
 
@@ -1262,10 +1279,14 @@ public static class NodeBindings
 
     private static Element CloneElement(Document doc, Element el)
     {
-        var clone = doc.CreateElement(el.TagName, el.Namespace);
-        // Copy attributes.
+        // Preserve case + prefix for namespaced elements; HTML elements keep the
+        // lowercasing path.
+        var clone = el.Prefix is not null || el.Namespace != Element.HtmlNamespace
+            ? doc.CreateElementNS(el.Namespace, el.Prefix is null ? el.LocalName : el.Prefix + ":" + el.LocalName)
+            : doc.CreateElement(el.LocalName);
+        // Copy attributes, preserving any namespace/qualified name.
         foreach (var attr in el.Attributes)
-            clone.SetAttribute(attr.Name, attr.Value ?? "");
+            clone.Attributes.SetNamedItemNS(attr);
         return clone;
     }
 

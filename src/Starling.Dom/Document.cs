@@ -58,6 +58,15 @@ public sealed class Document : Node
     public Element CreateElement(string tagName, string? @namespace = null)
         => new(tagName, @namespace) { OwnerDocument = this };
 
+    /// <summary>DOM §4.5 createElementNS — preserves the qualified name's case and
+    /// splits the prefix (unlike <see cref="CreateElement(string,string?)"/>).</summary>
+    public Element CreateElementNS(string? @namespace, string qualifiedName)
+    {
+        var e = Element.CreateNamespaced(@namespace, qualifiedName);
+        e.OwnerDocument = this;
+        return e;
+    }
+
     public Text CreateText(string data) => CreateTextNode(data);
 
     public Text CreateTextNode(string data)
