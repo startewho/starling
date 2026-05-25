@@ -20,6 +20,34 @@ public class Element : Node
             value => SetAttribute("class", value));
     }
 
+    // Namespace-aware construction (createElementNS / createDocument): unlike the
+    // HTML ctor above it preserves the qualified name's case and splits the
+    // prefix, so prefix/localName/tagName and namespace lookups are correct.
+    private Element(string qualifiedName, string localName, string? prefix, string @namespace)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(qualifiedName);
+        TagName = qualifiedName;
+        LocalName = localName;
+        Prefix = prefix;
+        Namespace = @namespace;
+        Attributes = new NamedNodeMap(this);
+        ClassList = new DomTokenList(
+            () => GetAttribute("class") ?? string.Empty,
+            value => SetAttribute("class", value));
+    }
+
+    /// <summary>DOM §4.5 createElementNS construction: parse <paramref name="qualifiedName"/>
+    /// into prefix + local name (case preserved). A null/empty namespace maps to
+    /// the HTML namespace (this engine models Namespace as non-null).</summary>
+    public static Element CreateNamespaced(string? @namespace, string qualifiedName)
+    {
+        ArgumentNullException.ThrowIfNull(qualifiedName);
+        var i = qualifiedName.IndexOf(':', StringComparison.Ordinal);
+        var prefix = i >= 0 ? qualifiedName[..i] : null;
+        var local = i >= 0 ? qualifiedName[(i + 1)..] : qualifiedName;
+        return new Element(qualifiedName, local, prefix, string.IsNullOrEmpty(@namespace) ? HtmlNamespace : @namespace);
+    }
+
     public override NodeKind Kind => NodeKind.Element;
 
     public override string NodeName => TagName;
