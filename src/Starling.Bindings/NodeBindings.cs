@@ -379,6 +379,39 @@ public static class NodeBindings
                 e.RemoveAttribute(JsValue.ToStringValue(args[0]));
             return JsValue.Undefined;
         }, length: 1);
+        // ---- Namespace-aware attribute methods (DOM §4.9).
+        EventTargetBinding.DefineMethod(realm, elProto, "getAttributeNS", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length < 2) return JsValue.Null;
+            var v = e.GetAttributeNS(args[0].IsNullish ? null : JsValue.ToStringValue(args[0]), JsValue.ToStringValue(args[1]));
+            return v is null ? JsValue.Null : JsValue.String(v);
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, elProto, "setAttributeNS", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is { } e && args.Length >= 3)
+                e.SetAttributeNS(args[0].IsNullish ? null : JsValue.ToStringValue(args[0]),
+                    JsValue.ToStringValue(args[1]), JsValue.ToStringValue(args[2]));
+            return JsValue.Undefined;
+        }, length: 3);
+        EventTargetBinding.DefineMethod(realm, elProto, "hasAttributeNS", (thisV, args) =>
+            DomWrappers.UnwrapElement(thisV) is { } e && args.Length >= 2
+                ? JsValue.Boolean(e.HasAttributeNS(args[0].IsNullish ? null : JsValue.ToStringValue(args[0]), JsValue.ToStringValue(args[1])))
+                : JsValue.False, length: 2);
+        EventTargetBinding.DefineMethod(realm, elProto, "removeAttributeNS", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is { } e && args.Length >= 2)
+                e.RemoveAttributeNS(args[0].IsNullish ? null : JsValue.ToStringValue(args[0]), JsValue.ToStringValue(args[1]));
+            return JsValue.Undefined;
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, elProto, "getElementsByTagNameNS", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length < 2) return MakeArray(realm, Array.Empty<JsValue>());
+            var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
+            var items = new List<JsValue>();
+            foreach (var d in e.GetElementsByTagNameNS(ns, JsValue.ToStringValue(args[1])))
+                items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
+            return MakeArray(realm, items);
+        }, length: 2);
         EventTargetBinding.DefineMethod(realm, elProto, "appendChild", (thisV, args) =>
         {
             // Inherits from Node — re-stamped here so JS-level instanceof tests
@@ -786,6 +819,15 @@ public static class NodeBindings
                 items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
             return MakeArray(realm, items);
         }, length: 1);
+        EventTargetBinding.DefineMethod(realm, docProto, "getElementsByTagNameNS", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length < 2) return MakeArray(realm, Array.Empty<JsValue>());
+            var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
+            var items = new List<JsValue>();
+            foreach (var e in d.GetElementsByTagNameNS(ns, JsValue.ToStringValue(args[1])))
+                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
+            return MakeArray(realm, items);
+        }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByClassName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());

@@ -129,7 +129,20 @@ hand-rolled CSS `[Spec]` stub backlog where WPT now covers it.
   14.54%→15.58%, timeouts 915→171 (genuine), no-result 52→50 (stable).** The
   phantom-timeout bucket collapsed, so `causes.txt` now reflects the true backlog
   (assert_equals 1256 is the real #1; createEvent 253, setAttributeNS 176, …).
-- _Next: Phase 2 — mechanical clusters in impact order, starting with the events
-  cluster (createEvent + MouseEvent/UIEvent/KeyboardEvent ctors). Note: 171
-  residual timeouts (genuinely hung tests) and the `missing-method:call` 120
-  bucket (likely a `.call`/`.apply` heuristic artifact — investigate) remain._
+- 2026-05-25: **Phase 2 in progress — mechanical clusters (predict→verify→commit).**
+  - Events (`de4ccf6`): `document.createEvent` + legacy `initEvent`/`initCustomEvent`
+    (mutable `Event`). pass 820→895 (+75), 15.58%→16.98%.
+  - Namespaces: `setAttributeNS`/`getAttributeNS`/`hasAttributeNS`/`removeAttributeNS`
+    + `getElementsByTagNameNS` (DOM §4.9; `Attr` already carried namespace, so no
+    risky `Element`-ctor change). pass 895→1005 (+110), 16.98%→**18.89%**. Regressions
+    none (Dom 37, Bindings 212, html5lib 7162).
+  - De-noised the backlog: `missing-method:call` (120) is NOT a missing method —
+    it's `assert_throws_dom` misrouting because `DOMException` is undefined
+    (testharness.js:2303). `instanceof RHS not an object` (43) = missing interface
+    objects. Both fold into the DOMException/interface-objects cluster.
+- _Next Phase-2 clusters (impact order): DOMException type + createElement(NS) name
+  validation (createElement(NS) family is biggest but needs an `Element`-ctor change
+  for prefix/localName + iframe for 2/3 of cases); CSSOM stylesheet rules
+  (`styleSheets[].cssRules[].style.setProperty`, 101); DOMImplementation
+  (`createDocument`/`createDocumentType`/`createHTMLDocument`); Ranges
+  (`createRange`). Then Phase 3 (assert_equals 1249, semantic)._
