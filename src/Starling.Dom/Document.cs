@@ -131,6 +131,17 @@ public sealed class Document : Node
             classes.Length > 0 && classes.All(element.ClassList.Contains));
     }
 
+    public IReadOnlyList<Element> GetElementsByTagNameNS(string? @namespace, string localName)
+    {
+        ArgumentNullException.ThrowIfNull(localName);
+        var anyNs = @namespace == "*";
+        var anyLocal = localName == "*";
+        var ns = string.IsNullOrEmpty(@namespace) ? null : @namespace;
+        return new LiveElementCollection(this, element =>
+            (anyNs || string.Equals(element.Namespace, ns, StringComparison.Ordinal))
+            && (anyLocal || element.LocalName.Equals(localName, StringComparison.Ordinal)));
+    }
+
     /// <summary>
     /// DOM §4.5.1 — create and initialize a new Document with a minimal HTML
     /// skeleton: a doctype, an &lt;html&gt; root, a &lt;head&gt; (optionally with

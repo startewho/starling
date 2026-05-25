@@ -79,6 +79,50 @@ public class Element : Node
         Attributes.RemoveNamedItem(name);
     }
 
+    // ---- Namespace-aware attributes (DOM §4.9). setAttributeNS preserves the
+    // qualified name's case (unlike HTML setAttribute, which lower-cases).
+
+    public string? GetAttributeNS(string? @namespace, string localName)
+    {
+        ArgumentNullException.ThrowIfNull(localName);
+        return Attributes.GetNamedItemNS(@namespace, localName)?.Value;
+    }
+
+    public void SetAttributeNS(string? @namespace, string qualifiedName, string value)
+    {
+        ArgumentNullException.ThrowIfNull(qualifiedName);
+        ArgumentNullException.ThrowIfNull(value);
+        Attributes.SetNamedItemNS(new Attr(qualifiedName, value, string.IsNullOrEmpty(@namespace) ? null : @namespace));
+    }
+
+    public bool HasAttributeNS(string? @namespace, string localName)
+    {
+        ArgumentNullException.ThrowIfNull(localName);
+        return Attributes.GetNamedItemNS(@namespace, localName) is not null;
+    }
+
+    public void RemoveAttributeNS(string? @namespace, string localName)
+    {
+        ArgumentNullException.ThrowIfNull(localName);
+        Attributes.RemoveNamedItemNS(@namespace, localName);
+    }
+
+    /// <summary>DOM §4.9 getElementsByTagNameNS over this element's descendants.
+    /// "*" matches any namespace / any local name.</summary>
+    public IEnumerable<Element> GetElementsByTagNameNS(string? @namespace, string localName)
+    {
+        ArgumentNullException.ThrowIfNull(localName);
+        var anyNs = @namespace == "*";
+        var anyLocal = localName == "*";
+        var ns = string.IsNullOrEmpty(@namespace) ? null : @namespace;
+        foreach (var d in DescendantElements())
+        {
+            if (!anyNs && !string.Equals(d.Namespace, ns, StringComparison.Ordinal)) continue;
+            if (!anyLocal && !d.LocalName.Equals(localName, StringComparison.Ordinal)) continue;
+            yield return d;
+        }
+    }
+
     public override string ToString() => $"<{TagName}>";
 
     internal void OnAttributeMutated() => OnTreeMutated();
