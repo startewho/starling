@@ -153,7 +153,19 @@ hand-rolled CSS `[Spec]` stub backlog where WPT now covers it.
   - Integrated `js-262` RegExp early-errors (`a0e9c63` + cherry-pick). Merged tree
     re-verified (Js.Tests 1629 pass; only pre-existing `Captured_lexical` fails).
 
-**Session result so far: 754→1150 passing subtests (+396), 14.54%→21.76%.** Cheap
+  - ChildNode/ParentNode mixins + createProcessingInstruction (`8a2d2b0`):
+    before/after/replaceWith/remove/append/prepend/replaceChildren. pass
+    1150→1230 (+80), 21.76%→23.30%.
+  - Namespace lookups + createElementNS prefix/local-name (`ab947c0`):
+    lookupNamespaceURI/isDefaultNamespace/lookupPrefix + a case-preserving
+    Element.CreateNamespaced path (the HTML createElement ctor still lowercases;
+    parser untouched). Caught+fixed a stack-overflow I'd introduced
+    (documentElement<->Document locate recursion). pass 1230→1289 (+59),
+    23.30%→**24.42%**.
+  - Integrated `js-262` private brand-checks (`1a716a1` + cherry-pick), alongside
+    the earlier super + regexp fixes.
+
+**Session result: 754→1289 passing subtests (+535, +71%), 14.54%→24.42%.** Cheap
 mechanical wins are now exhausted — every remaining high-impact cluster is a
 large *absent subsystem* or the semantic tail. Confirmed by exploration:
 
