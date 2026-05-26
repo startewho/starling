@@ -76,6 +76,234 @@ internal static class CaptureAnalysis
     /// boundaries). Used to enforce the class-field-initializer early error.</summary>
     public static bool ContainsArguments(Expression? e) => ArgRefExpr(e);
 
+    /// <summary>wp:M3-81 — §sec-performeval-rules-in-initializer: ContainsArguments
+    /// of a StatementList (an eval ScriptBody). Returns true when the list contains
+    /// ANY IdentifierReference OR BindingIdentifier whose StringValue is
+    /// <c>arguments</c> — recursing through arrow functions (which inherit
+    /// <c>arguments</c> lexically) but NOT through ordinary function / class-method
+    /// boundaries (which establish their own <c>arguments</c>). Unlike
+    /// <see cref="ReferencesArguments"/>, this also matches DECLARATIONS that bind
+    /// the name (e.g. <c>var arguments</c>, <c>let arguments</c>,
+    /// <c>function arguments() {}</c>, <c>class arguments {}</c>, catch
+    /// <c>arguments</c>, destructuring <c>{ arguments }</c>) per the spec
+    /// ContainsArguments static-semantics — which is exactly what is needed for the
+    /// eval-inside-initializer early error in PerformEval.</summary>
+    public static bool ContainsArgumentsInEvalBody(IReadOnlyList<Statement> statements)
+    {
+        foreach (var s in statements)
+            if (EvalCAStmt(s)) return true;
+        return false;
+    }
+
+    private static bool EvalCAStmt(Statement? s)
+    {
+        if (s is null) return false;
+        switch (s)
+        {
+            case BlockStatement b: return b.Body.Any(EvalCAStmt);
+            case ExpressionStatement es: return EvalCAExpr(es.Expression);
+            case ReturnStatement r: return EvalCAExpr(r.Argument);
+            case ThrowStatement t: return EvalCAExpr(t.Argument);
+            case IfStatement i:
+                return EvalCAExpr(i.Test) || EvalCAStmt(i.Consequent) || EvalCAStmt(i.Alternate);
+            case WhileStatement w: return EvalCAExpr(w.Test) || EvalCAStmt(w.Body);
+            case DoWhileStatement dw: return EvalCAStmt(dw.Body) || EvalCAExpr(dw.Test);
+            case ForStatement f:
+                if (f.Init is Statement fis && EvalCAStmt(fis)) return true;
+                if (f.Init is Expression fie && EvalCAExpr(fie)) return true;
+                return EvalCAExpr(f.Test) || EvalCAExpr(f.Update) || EvalCAStmt(f.Body);
+            case ForInStatement fi:
+                if (fi.Left is Statement fil && EvalCAStmt(fil)) return true;
+                if (fi.Left is Expression file && EvalCAExpr(file)) return true;
+                return EvalCAExpr(fi.Right) || EvalCAStmt(fi.Body);
+            case ForOfStatement fo:
+                if (fo.Left is Statement fol && EvalCAStmt(fol)) return true;
+                if (fo.Left is Expression foe && EvalCAExpr(foe)) return true;
+                return EvalCAExpr(fo.Right) || EvalCAStmt(fo.Body);
+            case SwitchStatement sw:
+                if (EvalCAExpr(sw.Discriminant)) return true;
+                foreach (var c in sw.Cases)
+                {
+                    if (EvalCAExpr(c.Test)) return true;
+                    if (c.Consequent.Any(EvalCAStmt)) return true;
+                }
+                return false;
+            case TryStatement tr:
+                if (EvalCAStmt(tr.Block)) return true;
+                if (tr.Handler is not null)
+                {
+                    // Catch binding: the catch parameter is a BindingIdentifier (or
+                    // pattern containing one) — `catch (arguments)` counts.
+                    if (tr.Handler.Param is not null && EvalCABindingTarget(tr.Handler.Param)) return true;
+                    if (tr.Handler.Body.Body.Any(EvalCAStmt)) return true;
+                }
+                return tr.Finalizer is not null && EvalCAStmt(tr.Finalizer);
+            case LabeledStatement ls: return EvalCAStmt(ls.Body);
+            case WithStatement ws: return EvalCAExpr(ws.Object) || EvalCAStmt(ws.Body);
+            case VariableDeclaration vd:
+                // BindingIdentifiers in the declaration list count.
+                foreach (var d in vd.Declarations)
+                {
+                    if (EvalCABindingTarget(d.Id)) return true;
+                    if (EvalCAExpr(d.Init)) return true;
+                }
+                return false;
+            // §15.7.1 — a nested ORDINARY function declaration establishes its own
+            // `arguments`; do not descend into its parameters / body. The function
+            // name BindingIdentifier itself, however, still counts.
+            case FunctionDeclaration fd:
+                return fd.Name.Name == "arguments";
+            case ClassDeclaration cd:
+                if (cd.Name.Name == "arguments") return true;
+                if (EvalCAExpr(cd.BaseClass)) return true;
+                // Class body methods are non-arrow and have their own `arguments`,
+                // so do NOT descend into method params/bodies. Class field
+                // initializers run with no own `arguments` and arrow propagation,
+                // but a class declaration sitting inside an eval body is itself a
+                // BindingIdentifier site — recursing further is not required for
+                // the early-error rule (and would be a spec edge case).
+                return false;
+            case EmptyStatement: case BreakStatement: case ContinueStatement: case DebuggerStatement:
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private static bool EvalCAExpr(Expression? e)
+    {
+        if (e is null) return false;
+        switch (e)
+        {
+            // IdentifierReference at this position.
+            case Identifier id: return id.Name == "arguments";
+            case BinaryExpression bin: return EvalCAExpr(bin.Left) || EvalCAExpr(bin.Right);
+            case LogicalExpression log: return EvalCAExpr(log.Left) || EvalCAExpr(log.Right);
+            case UnaryExpression u: return EvalCAExpr(u.Argument);
+            case UpdateExpression up: return EvalCAExpr(up.Argument);
+            case AssignmentExpression a: return EvalCAExpr(a.Target) || EvalCAExpr(a.Value);
+            case AssignmentPattern ap: return EvalCAExpr(ap.Target) || EvalCAExpr(ap.Default);
+            case RestElement rest: return EvalCAExpr(rest.Argument);
+            case ConditionalExpression c:
+                return EvalCAExpr(c.Test) || EvalCAExpr(c.Consequent) || EvalCAExpr(c.Alternate);
+            case MemberExpression m:
+                // Non-computed property names are IdentifierName (not a reference),
+                // so only the object (and computed property) participate.
+                return EvalCAExpr(m.Object) || (m.Computed && EvalCAExpr(m.Property));
+            case CallExpression call:
+                return EvalCAExpr(call.Callee) || call.Arguments.Any(EvalCAExpr);
+            case NewExpression ne:
+                return EvalCAExpr(ne.Callee) || ne.Arguments.Any(EvalCAExpr);
+            case ArrayExpression aex: return aex.Elements.Any(EvalCAExpr);
+            case ObjectExpression oe:
+                foreach (var prop in oe.Properties)
+                {
+                    // Only a COMPUTED key is an expression that might reference
+                    // `arguments`; a non-computed key is a PropertyName, not a
+                    // reference, so do not descend.
+                    if (prop.Computed && EvalCAExpr(prop.Key)) return true;
+                    if (EvalCAExpr(prop.Value)) return true;
+                }
+                return false;
+            case SequenceExpression seq: return seq.Expressions.Any(EvalCAExpr);
+            case TemplateLiteral tpl: return tpl.Expressions.Any(EvalCAExpr);
+            case TaggedTemplateExpression tte: return EvalCAExpr(tte.Tag) || EvalCAExpr(tte.Quasi);
+            case SpreadElement sp: return EvalCAExpr(sp.Argument);
+            // Arrows inherit `arguments` lexically — descend through them. Their
+            // params can also introduce BindingIdentifiers named `arguments`.
+            case ArrowFunctionExpression arrow:
+                foreach (var p in arrow.Params)
+                    if (EvalCABindingTarget(p) || EvalCAExpr(p)) return true;
+                return arrow.Body switch
+                {
+                    BlockStatement block => block.Body.Any(EvalCAStmt),
+                    Expression expr => EvalCAExpr(expr),
+                    _ => false,
+                };
+            // §15.7.1 — a nested ORDINARY function expression establishes its own
+            // `arguments`; do not descend into its parameters / body. A NAMED
+            // function expression's name binding (e.g. `function arguments() {}`
+            // as an expression) is itself a BindingIdentifier site and counts.
+            case FunctionExpression fe:
+                return fe.Name is { Name: "arguments" };
+            case ClassExpression cls:
+                if (cls.Name is { Name: "arguments" }) return true;
+                return EvalCAExpr(cls.BaseClass);
+            // Binding patterns appearing in expression position (e.g. destructuring
+            // assignment targets) — descend through both targets (which may be
+            // BindingIdentifiers) and defaults.
+            case ArrayPattern arrp:
+                foreach (var el in arrp.Elements)
+                {
+                    switch (el)
+                    {
+                        case ArrayPatternBindingElement binding:
+                            if (EvalCABindingTarget(binding.Target)) return true;
+                            if (EvalCAExpr(binding.Target)) return true;
+                            if (EvalCAExpr(binding.Default)) return true;
+                            break;
+                        case ArrayPatternRestElement r:
+                            if (EvalCABindingTarget(r.Target)) return true;
+                            if (EvalCAExpr(r.Target)) return true;
+                            break;
+                    }
+                }
+                return false;
+            case ObjectPattern op:
+                foreach (var prop in op.Properties)
+                {
+                    if (prop.Computed && EvalCAExpr(prop.Key)) return true;
+                    if (EvalCABindingTarget(prop.Target)) return true;
+                    if (EvalCAExpr(prop.Target)) return true;
+                    if (EvalCAExpr(prop.Default)) return true;
+                }
+                if (op.Rest is not null)
+                {
+                    if (EvalCABindingTarget(op.Rest.Argument)) return true;
+                    if (EvalCAExpr(op.Rest.Argument)) return true;
+                }
+                return false;
+            case SuperPropertyExpression sp2: return sp2.Computed && EvalCAExpr(sp2.Property);
+            case SuperCallExpression scx: return scx.Arguments.Any(EvalCAExpr);
+            default: return false;
+        }
+    }
+
+    // True when a binding pattern (declaration target) introduces a
+    // BindingIdentifier named "arguments" anywhere within it.
+    private static bool EvalCABindingTarget(Expression? p)
+    {
+        if (p is null) return false;
+        switch (p)
+        {
+            case Identifier id: return id.Name == "arguments";
+            case AssignmentPattern ap: return EvalCABindingTarget(ap.Target);
+            case AssignmentExpression { Op: "=" } a: return EvalCABindingTarget(a.Target);
+            case RestElement re: return EvalCABindingTarget(re.Argument);
+            case SpreadElement sp: return EvalCABindingTarget(sp.Argument);
+            case ArrayPattern arr:
+                foreach (var el in arr.Elements)
+                {
+                    switch (el)
+                    {
+                        case ArrayPatternBindingElement b:
+                            if (EvalCABindingTarget(b.Target)) return true;
+                            break;
+                        case ArrayPatternRestElement r:
+                            if (EvalCABindingTarget(r.Target)) return true;
+                            break;
+                    }
+                }
+                return false;
+            case ObjectPattern obj:
+                foreach (var prop in obj.Properties)
+                    if (EvalCABindingTarget(prop.Target)) return true;
+                return obj.Rest is not null && EvalCABindingTarget(obj.Rest.Argument);
+            default:
+                return false;
+        }
+    }
+
     /// <summary>§10.2.1.1 / §13.2.5 — does any <em>nested arrow</em> in this
     /// (non-arrow) function's body reference <c>this</c>? Arrow functions have
     /// no own <c>this</c> binding; they resolve <c>this</c> lexically to the

@@ -802,7 +802,9 @@ public sealed partial class JsCompiler
     {
         // Reserve a local slot per simple-identifier parameter so the
         // callee sees args in slots 0..N-1.
-        BindFunctionParameters(fd.Params);
+        // wp:M3-81 — a function declaration is never an arrow, so its parameter
+        // default region is an initializer context for the eval ContainsArguments rule.
+        BindFunctionParameters(fd.Params, markInitializer: true);
         // gap:closure-write-back — captured `var` bindings must exist as
         // locals BEFORE we compile any nested function body that might
         // resolve them as upvalues. Pre-allocate slots for every captured
@@ -3837,7 +3839,10 @@ public sealed partial class JsCompiler
         // `with` is sloppy-only; ConfigureWithCapture handles that.)
         sub.ConfigureWithCapture(_withDepth, fe.Strict);
         sub.RunCaptureAnalysisForFunction(fe.Params, fe.Body.Body);
-        sub.BindFunctionParameters(fe.Params);
+        // wp:M3-81 — only a NON-arrow function's parameter default region is an
+        // initializer context for the eval ContainsArguments rule; an arrow's own
+        // parameter list is not (arrows have no own `arguments` binding).
+        sub.BindFunctionParameters(fe.Params, markInitializer: !isArrow);
         // gap:closure-write-back — pre-allocate captured vars as cell slots
         // BEFORE hoisting, so a hoisted inner function that writes an outer var
         // resolves it to the parent's cell slot rather than LoadGlobal/Store-
@@ -4147,8 +4152,22 @@ public sealed partial class JsCompiler
         _b.EmitSlot(Opcode.BindCallee, slot);
     }
 
-    private void BindFunctionParameters(IReadOnlyList<Expression> parameters)
+    private void BindFunctionParameters(IReadOnlyList<Expression> parameters, bool markInitializer = false)
     {
+        // wp:M3-81 — §sec-performeval-rules-in-initializer: a direct eval inside a
+        // (non-arrow) function's parameter default initializer is subject to the
+        // ContainsArguments early error. Bracket the parameter-binding prologue so
+        // the VM's DirectEval applies the check while a default is being evaluated.
+        // Arrows pass markInitializer=false because they have no own `arguments`
+        // binding — UNLESS the arrow's own parameter list explicitly binds the name
+        // `arguments` (an `arguments` formal parameter), in which case the rule
+        // applies just as for an ordinary function with its own arguments binding.
+        // Only emit the markers when a default actually exists, to keep the common
+        // (no-default) parameter prologue byte-for-byte unchanged.
+        var bracket = (markInitializer || ParamsBindArguments(parameters))
+            && parameters.Any(HasParamDefault);
+        if (bracket) _b.Emit(Opcode.EnterInitializer);
+
         var argSlots = new int[parameters.Count];
         Array.Fill(argSlots, -1);
 
@@ -4198,6 +4217,100 @@ public sealed partial class JsCompiler
 
             DeclarePatternBindings(param);
             EmitPatternFromLocal(param, argSlots[i], isDeclaration: true);
+        }
+
+        if (bracket) _b.Emit(Opcode.ExitInitializer);
+    }
+
+    /// <summary>wp:M3-81 — does any parameter in <paramref name="parameters"/>
+    /// bind an identifier whose name is <c>arguments</c>? Lets an arrow function
+    /// whose own parameter list explicitly introduces an <c>arguments</c> binding
+    /// (e.g. <c>(p = …, arguments) => {}</c>) still trigger the
+    /// eval-inside-initializer ContainsArguments early error — the arrow now HAS
+    /// an own <c>arguments</c> binding (in its parameter scope) that a direct eval
+    /// declaring <c>arguments</c> in a sibling default would collide with.</summary>
+    private static bool ParamsBindArguments(IReadOnlyList<Expression> parameters)
+    {
+        foreach (var p in parameters) if (ParamBindsArguments(p)) return true;
+        return false;
+    }
+
+    private static bool ParamBindsArguments(Expression? p)
+    {
+        switch (p)
+        {
+            case null: return false;
+            case Identifier id: return id.Name == "arguments";
+            case AssignmentExpression { Op: "=" } a: return ParamBindsArguments(a.Target);
+            case AssignmentPattern a: return ParamBindsArguments(a.Target);
+            case SpreadElement sp: return ParamBindsArguments(sp.Argument);
+            case RestElement re: return ParamBindsArguments(re.Argument);
+            case ArrayPattern arr:
+                foreach (var el in arr.Elements)
+                {
+                    switch (el)
+                    {
+                        case ArrayPatternBindingElement b:
+                            if (ParamBindsArguments(b.Target)) return true;
+                            break;
+                        case ArrayPatternRestElement r:
+                            if (ParamBindsArguments(r.Target)) return true;
+                            break;
+                    }
+                }
+                return false;
+            case ObjectPattern obj:
+                foreach (var prop in obj.Properties)
+                    if (ParamBindsArguments(prop.Target)) return true;
+                return obj.Rest is not null && ParamBindsArguments(obj.Rest.Argument);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>wp:M3-81 — does this formal parameter carry a default initializer,
+    /// either directly (<c>x = …</c>) or nested inside a destructuring pattern
+    /// (<c>[x = …]</c> / <c>{ x = … }</c> / <c>...[x = …]</c>)? Drives whether the
+    /// parameter-binding prologue needs the EnterInitializer/ExitInitializer
+    /// markers for the eval-inside-initializer ContainsArguments rule.</summary>
+    private static bool HasParamDefault(Expression? p)
+    {
+        switch (p)
+        {
+            case null:
+            case Identifier:
+                return false;
+            case AssignmentExpression { Op: "=" }:
+            case AssignmentPattern:
+                return true;
+            case SpreadElement sp: return HasParamDefault(sp.Argument);
+            case RestElement re: return HasParamDefault(re.Argument);
+            case ArrayPattern arr:
+                foreach (var el in arr.Elements)
+                {
+                    switch (el)
+                    {
+                        case ArrayPatternBindingElement b:
+                            if (b.Default is not null || HasParamDefault(b.Target)) return true;
+                            break;
+                        case ArrayPatternRestElement r:
+                            if (HasParamDefault(r.Target)) return true;
+                            break;
+                    }
+                }
+                return false;
+            case ObjectPattern obj:
+                foreach (var prop in obj.Properties)
+                    if (prop.Default is not null || HasParamDefault(prop.Target)) return true;
+                return obj.Rest is not null && HasParamDefault(obj.Rest.Argument);
+            case ArrayExpression aex:
+                foreach (var el in aex.Elements) if (HasParamDefault(el)) return true;
+                return false;
+            case ObjectExpression oex:
+                foreach (var prop in oex.Properties) if (HasParamDefault(prop.Value)) return true;
+                return false;
+            default:
+                return false;
         }
     }
 

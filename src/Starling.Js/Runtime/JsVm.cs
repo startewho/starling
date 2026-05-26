@@ -133,7 +133,7 @@ public sealed class JsVm
     /// path.</para></summary>
     private JsValue PerformDirectEval(JsValue[] args, EvalScope callerScope,
         JsFunction? caller, JsValue callerThis, JsObject? callerNewTarget, bool callerStrict,
-        ref EvalVarStore? callerVarStore)
+        bool inInitializer, ref EvalVarStore? callerVarStore)
     {
         var x = args.Length > 0 ? args[0] : JsValue.Undefined;
         if (!x.IsString) return x;
@@ -156,6 +156,17 @@ public sealed class JsVm
                 CallerStrict: callerStrict, InFunction: inFunction,
                 InMethod: inMethod, InDerivedConstructor: inDerivedCtor);
             var program = new Parse.JsParser(x.AsString).ParseProgram(ctx);
+
+            // wp:M3-81 — §sec-performeval-rules-in-initializer Additional Early
+            // Error Rules for Eval Inside Initializer: when this direct eval occurs
+            // inside a class field/static initializer or a (non-arrow) function
+            // parameter default, "ScriptBody : StatementList — It is a Syntax Error
+            // if ContainsArguments of StatementList is true." Throw before the body
+            // runs (a pre-execution early error), so no side effect is observed.
+            if (inInitializer && Bytecode.CaptureAnalysis.ContainsArgumentsInEvalBody(program.Body))
+                throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                    "'arguments' is not allowed in an eval call inside an initializer"));
+
             var evalIsStrict = callerStrict || program.Strict;
 
             // §19.2.1.3 EvalDeclarationInstantiation — a NON-strict direct eval
@@ -428,6 +439,16 @@ public sealed class JsVm
         // a free identifier resolves own-env -> enclosing eval-env -> global.
         if (!frameStrict && chunk.HasDirectEval)
             frameVarStore = new EvalVarStore { Parent = frameVarStore };
+
+        // wp:M3-81 — §sec-performeval-rules-in-initializer initializer depth. A
+        // direct eval whose ScriptBody ContainsArguments is an early SyntaxError
+        // while this is > 0. Seed it for class field / static-block thunks
+        // (chunk.IsInitializer), and for an arrow closure that inherited the
+        // initializer context lexically (chunk.IsArrow && the closure's
+        // InInitializer flag). Parameter default regions toggle it at runtime via
+        // the Enter/ExitInitializer opcodes the compiler brackets them with.
+        var initDepth = (chunk.IsInitializer
+            || (chunk.IsArrow && currentFunction is { InInitializer: true })) ? 1 : 0;
 
         void Push(JsValue v)
         {
@@ -1245,6 +1266,17 @@ public sealed class JsVm
                     break;
                 }
 
+                // wp:M3-81 — §sec-performeval-rules-in-initializer: open/close the
+                // initializer region bracketing a non-arrow function's parameter
+                // default prologue. While initDepth > 0, a direct eval whose
+                // ScriptBody ContainsArguments throws a SyntaxError.
+                case Opcode.EnterInitializer:
+                    initDepth++;
+                    break;
+                case Opcode.ExitInitializer:
+                    initDepth--;
+                    break;
+
                 // ----- Calls -----
                 // §10.2.1: plain Call binds this=Undefined (strict default);
                 // CallMethod takes a receiver and binds this=receiver, used
@@ -1301,7 +1333,8 @@ public sealed class JsVm
                         // it by ref so PerformDirectEval can create it lazily and
                         // the rest of THIS frame then resolves those names too.
                         Push(PerformDirectEval(callArgs, callerScope, currentFunction, thisV,
-                            newTarget, frameStrict, ref frameVarStore));
+                            newTarget, frameStrict, inInitializer: initDepth > 0,
+                            ref frameVarStore));
                         break;
                     }
                     if (!IsCallableValue(callee))
@@ -1332,6 +1365,14 @@ public sealed class JsVm
                     // resolves against the enclosing method's home object.
                     if (template.Body.IsArrow && currentFunction?.HomeObject is { } h1)
                         fn.HomeObject = h1;
+                    // wp:M3-81 — §sec-performeval-rules-in-initializer: an arrow
+                    // created while this frame is inside an initializer region (a
+                    // parameter default or a field/static initializer) inherits the
+                    // "inside-initializer" status lexically, so a deferred direct
+                    // eval in its body still hits the ContainsArguments early error
+                    // when the arrow is later invoked.
+                    if (template.Body.IsArrow && initDepth > 0)
+                        fn.InInitializer = true;
                     // wp:M3-73 — snapshot the creating frame's eval-introduced var
                     // store so this closure resolves free identifiers through the
                     // vars a direct eval injected into the enclosing function's
@@ -1366,6 +1407,11 @@ public sealed class JsVm
                     // [[HomeObject]] lexically for `super.x` (see LoadFunction).
                     if (template.Body.IsArrow && currentFunction?.HomeObject is { } h2)
                         closure.HomeObject = h2;
+                    // wp:M3-81 — an arrow closure created inside an initializer
+                    // region inherits the inside-initializer status (see
+                    // LoadFunction) for the eval ContainsArguments early error.
+                    if (template.Body.IsArrow && initDepth > 0)
+                        closure.InInitializer = true;
                     // wp:M3-73 — snapshot the creating frame's eval-introduced var
                     // store (see LoadFunction).
                     if (frameVarStore is not null)

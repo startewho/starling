@@ -71,6 +71,13 @@ public sealed class Chunk
     /// onto an arrow closure when it is created, letting <c>super.x</c> inside the
     /// arrow resolve against the enclosing method's home object.</summary>
     public bool IsArrow { get; init; }
+    /// <summary>wp:M3-81 — true when this chunk is a class field initializer or
+    /// static-block thunk (an "initializer" per §sec-performeval-rules-in-initializer).
+    /// At frame entry the VM seeds a non-zero initializer depth so a direct eval
+    /// running at this thunk's top level (and inside arrows it lexically creates,
+    /// which carry <see cref="Starling.Js.Runtime.JsFunction.InInitializer"/>) is
+    /// subject to the ContainsArguments early-error rule.</summary>
+    public bool IsInitializer { get; init; }
     /// <summary>gap:closure-write-back — the set of local-slot indices in
     /// this chunk that the compiler promoted to <c>Cell</c> storage because
     /// at least one nested function references the binding. Empty for
@@ -385,6 +392,11 @@ public sealed class ChunkBuilder
     /// <c>super</c>.</summary>
     public bool IsArrow { get; set; }
 
+    /// <summary>wp:M3-81 — set true while building a class field initializer or
+    /// static-block thunk so the produced <see cref="Chunk.IsInitializer"/> is
+    /// stamped (drives the eval-inside-initializer ContainsArguments rule).</summary>
+    public bool IsInitializer { get; set; }
+
     /// <summary>§16.1.7 — the private-name environment in scope for this body;
     /// stamped onto <see cref="Chunk.PrivateNameScope"/> so a direct eval can
     /// recover the enclosing class's private names. Null when none are in scope.</summary>
@@ -400,5 +412,5 @@ public sealed class ChunkBuilder
     public Chunk Build(string? name = null)
         => new(_code.ToArray(), _constants.ToArray(), LocalCount, name, _capturedSlots,
             _positions is null ? null : _positions.ToArray())
-        { IsStrict = IsStrict, HasPrologue = HasPrologue, CapturesWith = CapturesWith, SourcePath = SourcePath, IsArrow = IsArrow, HasDirectEval = HasDirectEval, PrivateNameScope = PrivateNameScope };
+        { IsStrict = IsStrict, HasPrologue = HasPrologue, CapturesWith = CapturesWith, SourcePath = SourcePath, IsArrow = IsArrow, IsInitializer = IsInitializer, HasDirectEval = HasDirectEval, PrivateNameScope = PrivateNameScope };
 }
