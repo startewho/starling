@@ -889,6 +889,11 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "visibilityState",
             (_, _) => JsValue.String("visible"));
 
+        // CSSOM §6.1 — document.styleSheets returns a StyleSheetList over the
+        // document's <style>/<link rel=stylesheet> elements in tree order.
+        EventTargetBinding.DefineAccessor(realm, docProto, "styleSheets",
+            (thisV, _) => CssomBinding.StyleSheetsAccessor(realm, thisV));
+
         // DOM §4.5 — document.implementation returns a DOMImplementation object.
         // One singleton per document is fine (cached on the wrapper with a hidden key).
         EventTargetBinding.DefineAccessor(realm, docProto, "implementation", (thisV, _) =>
@@ -1625,6 +1630,13 @@ public static class NodeBindings
         }
         return sb.ToString();
     }
+
+    /// <summary>The kebab-case CSS property names exposed as camelCase/kebab
+    /// accessors on a CSSStyleDeclaration. Shared with <see cref="CssomBinding"/>.</summary>
+    internal static IReadOnlyList<string> InlineStylePropertyNames => InlineStyleProperties;
+
+    /// <summary>Public kebab→camel converter shared with <see cref="CssomBinding"/>.</summary>
+    internal static string KebabToCamelPublic(string kebab) => KebabToCamel(kebab);
 
     // Comprehensive list of CSS properties exposed via element.style.X
     private static readonly string[] InlineStyleProperties =

@@ -5,7 +5,9 @@ public readonly record struct CssToken(
     string Value = "",
     double Number = 0,
     string Unit = "",
-    char Delimiter = '\0')
+    char Delimiter = '\0',
+    bool HasSign = false,
+    bool IsInteger = false)
 {
     public override string ToString() => Type switch
     {

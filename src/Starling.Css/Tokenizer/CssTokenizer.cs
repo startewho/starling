@@ -150,12 +150,18 @@ public sealed class CssTokenizer
     private CssToken ConsumeNumeric()
     {
         var start = _position;
-        if (Peek() is '+' or '-')
+        // CSS Syntax 3 §4.3.3: a number records its sign and integer/number type
+        // flag. We carry these so An+B parsing (§9) can distinguish signed from
+        // signless integers and value serialization can canonicalize numbers.
+        var hasSign = Peek() is '+' or '-';
+        if (hasSign)
             _position++;
 
+        var isInteger = true;
         ConsumeDigits();
         if (Peek() == '.' && char.IsAsciiDigit(Peek(1)))
         {
+            isInteger = false;
             _position++;
             ConsumeDigits();
         }
@@ -163,6 +169,7 @@ public sealed class CssTokenizer
         if (Peek() is 'e' or 'E' && (char.IsAsciiDigit(Peek(1)) ||
             ((Peek(1) is '+' or '-') && char.IsAsciiDigit(Peek(2)))))
         {
+            isInteger = false;
             _position++;
             if (Peek() is '+' or '-')
                 _position++;
@@ -174,16 +181,16 @@ public sealed class CssTokenizer
         if (Peek() == '%')
         {
             _position++;
-            return new CssToken(CssTokenType.Percentage, Number: number);
+            return new CssToken(CssTokenType.Percentage, Number: number, HasSign: hasSign, IsInteger: isInteger);
         }
 
         if (WouldStartIdentifier())
         {
             var unit = ConsumeName();
-            return new CssToken(CssTokenType.Dimension, Number: number, Unit: unit);
+            return new CssToken(CssTokenType.Dimension, Number: number, Unit: unit, HasSign: hasSign, IsInteger: isInteger);
         }
 
-        return new CssToken(CssTokenType.Number, Number: number);
+        return new CssToken(CssTokenType.Number, Number: number, HasSign: hasSign, IsInteger: isInteger);
     }
 
     private CssToken ConsumeIdentLike()
