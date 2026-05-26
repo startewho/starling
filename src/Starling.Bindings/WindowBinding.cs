@@ -176,6 +176,9 @@ public static class WindowBinding
         // 9) M3-31: Web Crypto minimal surface — crypto.getRandomValues +
         //    crypto.randomUUID. crypto.subtle is intentionally left undefined.
         CryptoBinding.Install(runtime);
+
+        // 10) WPT-02: DOM §4.6 Range + document.createRange().
+        RangeBinding.Install(realm);
     }
 
     /// <summary>Resolve the runtime that backs the given realm. Returns null

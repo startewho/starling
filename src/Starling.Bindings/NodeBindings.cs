@@ -276,12 +276,168 @@ public static class NodeBindings
             return r is null ? JsValue.Null : JsValue.String(r);
         }, length: 1);
 
+        // ---- CharacterData mixin (DOM §4.9) — exposed on Node.prototype so
+        // Text/Comment/CData/ProcessingInstruction inherit them. Methods that
+        // don't apply to non-CharacterData nodes simply return undefined.
+        EventTargetBinding.DefineAccessor(realm, nodeProto, "data",
+            (thisV, _) => DomWrappers.UnwrapNode(thisV) is CharacterData cd
+                ? JsValue.String(cd.Data) : JsValue.Undefined,
+            (thisV, args) =>
+            {
+                if (DomWrappers.UnwrapNode(thisV) is CharacterData cd)
+                    cd.Data = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                return JsValue.Undefined;
+            });
+        EventTargetBinding.DefineAccessor(realm, nodeProto, "length",
+            (thisV, _) => DomWrappers.UnwrapNode(thisV) is CharacterData cd
+                ? JsValue.Number(cd.Data.Length) : JsValue.Undefined);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "substringData", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not CharacterData cd) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
+            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            offset = Math.Max(0, Math.Min(offset, cd.Data.Length));
+            count = Math.Max(0, Math.Min(count, cd.Data.Length - offset));
+            return JsValue.String(cd.Data.Substring(offset, count));
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "appendData", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is CharacterData cd)
+                cd.Data += args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+            return JsValue.Undefined;
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "insertData", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not CharacterData cd) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
+            var s = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "";
+            offset = Math.Max(0, Math.Min(offset, cd.Data.Length));
+            cd.Data = cd.Data[..offset] + s + cd.Data[offset..];
+            return JsValue.Undefined;
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "deleteData", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not CharacterData cd) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
+            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            offset = Math.Max(0, Math.Min(offset, cd.Data.Length));
+            count = Math.Max(0, Math.Min(count, cd.Data.Length - offset));
+            cd.Data = cd.Data[..offset] + cd.Data[(offset + count)..];
+            return JsValue.Undefined;
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, nodeProto, "replaceData", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not CharacterData cd) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
+            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            var s = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
+            offset = Math.Max(0, Math.Min(offset, cd.Data.Length));
+            count = Math.Max(0, Math.Min(count, cd.Data.Length - offset));
+            cd.Data = cd.Data[..offset] + s + cd.Data[(offset + count)..];
+            return JsValue.Undefined;
+        }, length: 3);
+        // Text.splitText(offset) — splits text node at offset.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "splitText", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapNode(thisV) is not Text text) return JsValue.Null;
+            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
+            offset = Math.Max(0, Math.Min(offset, text.Data.Length));
+            // Create new text node; owner document is set by InsertBefore via SetOwnerDocumentRecursive.
+            var newText = (text.OwnerDocument ?? new Document()).CreateTextNode(text.Data[offset..]);
+            text.Data = text.Data[..offset];
+            text.ParentNode?.InsertBefore(newText, text.NextSibling);
+            return JsValue.Object(DomWrappers.Wrap(realm, newText));
+        }, length: 1);
+        // Text.wholeText — concatenation of adjacent text nodes. Simple approximation.
+        EventTargetBinding.DefineAccessor(realm, nodeProto, "wholeText",
+            (thisV, _) => DomWrappers.UnwrapNode(thisV) is Text t ? JsValue.String(t.Data) : JsValue.Undefined);
+
         var nodeCtor = new JsNativeFunction(realm, "Node", 0, (_, _) =>
             throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
         nodeCtor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(nodeProto), writable: false, enumerable: false, configurable: false));
         nodeProto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(nodeCtor), writable: true, enumerable: false, configurable: true));
+
+        // DOM §4.4 nodeType constants — on both Node constructor and Node.prototype
+        // so both `Node.ELEMENT_NODE` and `node.ELEMENT_NODE` resolve.
+        foreach (var (name, value) in new[] {
+            ("ELEMENT_NODE", 1), ("ATTRIBUTE_NODE", 2), ("TEXT_NODE", 3),
+            ("CDATA_SECTION_NODE", 4), ("ENTITY_REFERENCE_NODE", 5), ("ENTITY_NODE", 6),
+            ("PROCESSING_INSTRUCTION_NODE", 7), ("COMMENT_NODE", 8), ("DOCUMENT_NODE", 9),
+            ("DOCUMENT_TYPE_NODE", 10), ("DOCUMENT_FRAGMENT_NODE", 11), ("NOTATION_NODE", 12) })
+        {
+            var v = JsValue.Number(value);
+            nodeCtor.DefineOwnProperty(name, PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: false));
+            nodeProto.DefineOwnProperty(name, PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: false));
+        }
+
+        // DOM §4.4.4 compareDocumentPosition bit-mask constants.
+        foreach (var (name, value) in new[] {
+            ("DOCUMENT_POSITION_DISCONNECTED", 1), ("DOCUMENT_POSITION_PRECEDING", 2),
+            ("DOCUMENT_POSITION_FOLLOWING", 4), ("DOCUMENT_POSITION_CONTAINS", 8),
+            ("DOCUMENT_POSITION_CONTAINED_BY", 16), ("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 32) })
+        {
+            var v = JsValue.Number(value);
+            nodeCtor.DefineOwnProperty(name, PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: false));
+            nodeProto.DefineOwnProperty(name, PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: false));
+        }
+
+        // DOM §4.4.4 compareDocumentPosition(other) — returns a bitmask indicating
+        // the relative position of `other` with respect to `this`.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "compareDocumentPosition", (thisV, args) =>
+        {
+            var self = DomWrappers.UnwrapNode(thisV);
+            var other = args.Length > 0 ? DomWrappers.UnwrapNode(args[0]) : null;
+            if (self is null || other is null) return JsValue.Number(0);
+            if (ReferenceEquals(self, other)) return JsValue.Number(0);
+            // Find the roots; if different, return DISCONNECTED | IMPLEMENTATION_SPECIFIC.
+            var rootSelf = NodeRoot(self);
+            var rootOther = NodeRoot(other);
+            if (!ReferenceEquals(rootSelf, rootOther))
+            {
+                // DOM §4.4.5: must also set PRECEDING or FOLLOWING consistently.
+                // Use a stable implementation-defined order (hash code of the root, then
+                // of the node itself) so the comparison is at least internally consistent.
+                var selfHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(self);
+                var otherHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(other);
+                // If other "precedes" (by hash order), set PRECEDING; else FOLLOWING.
+                var precOrFollow = (otherHash < selfHash || (otherHash == selfHash && self.GetHashCode() < other.GetHashCode())) ? 2 : 4;
+                return JsValue.Number(1 | 32 | precOrFollow); // DISCONNECTED | IMPLEMENTATION_SPECIFIC | (PRECEDING|FOLLOWING)
+            }
+            // Check containment.
+            var selfContainsOther = IsAncestor(self, other);
+            var otherContainsSelf = IsAncestor(other, self);
+            int bits = 0;
+            if (selfContainsOther)
+                bits |= 16; // CONTAINED_BY (other is contained by self)
+            if (otherContainsSelf)
+                bits |= 8; // CONTAINS (self is contained by other, i.e. other contains self)
+            // Determine PRECEDING/FOLLOWING by pre-order walk.
+            // "preceding" = other comes before self in tree order.
+            if (IsBeforeInTreeOrder(other, self))
+                bits |= 2; // PRECEDING (other precedes self, so self is after other)
+            else
+                bits |= 4; // FOLLOWING (other follows self)
+            return JsValue.Number(bits);
+        }, length: 1);
+
+        // DOM §4.4.3 isSameNode(other) — same as ===.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "isSameNode", (thisV, args) =>
+        {
+            var self = DomWrappers.UnwrapNode(thisV);
+            var other = args.Length > 0 ? DomWrappers.UnwrapNode(args[0]) : null;
+            return JsValue.Boolean(self is not null && ReferenceEquals(self, other));
+        }, length: 1);
+
+        // DOM §4.4.3 isEqualNode(other) — structural equality.
+        EventTargetBinding.DefineMethod(realm, nodeProto, "isEqualNode", (thisV, args) =>
+        {
+            var self = DomWrappers.UnwrapNode(thisV);
+            var other = args.Length > 0 ? DomWrappers.UnwrapNode(args[0]) : null;
+            return JsValue.Boolean(AreEqual(self, other));
+        }, length: 1);
+
         realm.NodeConstructor = nodeCtor;
         realm.GlobalObject.DefineOwnProperty("Node",
             PropertyDescriptor.Data(JsValue.Object(nodeCtor), writable: true, enumerable: false, configurable: true));
@@ -858,6 +1014,10 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "documentElement", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.DocumentElement is { } e
                 ? JsValue.Object(DomWrappers.Wrap(realm, e)) : JsValue.Null);
+        // DOM §4.5 document.doctype — the DocumentType child, or null.
+        EventTargetBinding.DefineAccessor(realm, docProto, "doctype", (thisV, _) =>
+            DomWrappers.UnwrapDocument(thisV)?.DocType is { } dt
+                ? JsValue.Object(DomWrappers.Wrap(realm, dt)) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, docProto, "body", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.Body is { } b
                 ? JsValue.Object(DomWrappers.Wrap(realm, b)) : JsValue.Null);
@@ -1148,6 +1308,116 @@ public static class NodeBindings
         foreach (var a in args)
             list.Add(DomWrappers.UnwrapNode(a) is { } n ? n : doc.CreateTextNode(JsValue.ToStringValue(a)));
         return list;
+    }
+
+    // -------------------------------------------------------------------------
+    // DOM tree helpers (used by compareDocumentPosition / isEqualNode)
+    // -------------------------------------------------------------------------
+
+    /// <summary>Walk up to the tree root of <paramref name="n"/> (no owner doc).</summary>
+    private static Node NodeRoot(Node n)
+    {
+        while (n.ParentNode is { } p) n = p;
+        return n;
+    }
+
+    /// <summary>True when <paramref name="ancestor"/> is an inclusive ancestor
+    /// of <paramref name="descendant"/> (i.e. same node or a proper ancestor).</summary>
+    private static bool IsAncestor(Node ancestor, Node descendant)
+    {
+        var cur = descendant;
+        while (cur is not null)
+        {
+            if (ReferenceEquals(cur, ancestor)) return true;
+            cur = cur.ParentNode;
+        }
+        return false;
+    }
+
+    /// <summary>Returns true when <paramref name="a"/> precedes
+    /// <paramref name="b"/> in tree pre-order (depth-first, left-to-right).
+    /// Both nodes must share the same root.</summary>
+    private static bool IsBeforeInTreeOrder(Node a, Node b)
+    {
+        // Collect ancestors-from-root for each node (including the node itself).
+        static System.Collections.Generic.List<Node> Path(Node n)
+        {
+            var path = new System.Collections.Generic.List<Node>();
+            for (var cur = n; cur is not null; cur = cur.ParentNode)
+                path.Insert(0, cur);
+            return path;
+        }
+        var pa = Path(a);
+        var pb = Path(b);
+        // Find the first divergence point.
+        var min = Math.Min(pa.Count, pb.Count);
+        for (var i = 0; i < min; i++)
+        {
+            if (!ReferenceEquals(pa[i], pb[i]))
+            {
+                // pa[i-1] is the common ancestor; find sibling index.
+                var parent = i > 0 ? pa[i - 1] : null;
+                if (parent is null) return false;
+                for (var child = parent.FirstChild; child is not null; child = child.NextSibling)
+                {
+                    if (ReferenceEquals(child, pa[i])) return true;   // a's branch comes first
+                    if (ReferenceEquals(child, pb[i])) return false;  // b's branch comes first
+                }
+                return false;
+            }
+        }
+        // One is a prefix of the other; the shorter path (ancestor) comes first.
+        return pa.Count < pb.Count;
+    }
+
+    /// <summary>Structural (deep) equality per DOM §4.4.3 isEqualNode algorithm.</summary>
+    private static bool AreEqual(Node? a, Node? b)
+    {
+        if (a is null && b is null) return true;
+        if (a is null || b is null) return false;
+        if (a.Kind != b.Kind) return false;
+        // Check node-type-specific attributes.
+        switch (a)
+        {
+            case Element ea when b is Element eb:
+                if (ea.TagName != eb.TagName || ea.Namespace != eb.Namespace) return false;
+                // Compare attributes (order-independent).
+                var attrsA = ea.Attributes;
+                var attrsB = eb.Attributes;
+                if (attrsA.Count != attrsB.Count) return false;
+                for (var i = 0; i < attrsA.Count; i++)
+                {
+                    var atA = attrsA[i];
+                    var localName = NamedNodeMap.LocalNameOf(atA.Name);
+                    var atB = eb.GetAttributeNS(atA.Namespace, localName);
+                    if (atB is null || atA.Value != atB) return false;
+                }
+                break;
+            case Text ta when b is Text tb:
+                if (ta.Data != tb.Data) return false;
+                break;
+            case Comment ca when b is Comment cb:
+                if (ca.Data != cb.Data) return false;
+                break;
+            case ProcessingInstruction pia when b is ProcessingInstruction pib:
+                if (pia.Target != pib.Target || pia.Data != pib.Data) return false;
+                break;
+            case Document:
+                break; // Documents are equal iff children are equal (checked below).
+            case DocumentType dta when b is DocumentType dtb:
+                if (dta.Name != dtb.Name) return false;
+                break;
+        }
+        // Recurse into children.
+        var ac = a.FirstChild;
+        var bc = b.FirstChild;
+        while (ac is not null && bc is not null)
+        {
+            if (!AreEqual(ac, bc)) return false;
+            ac = ac.NextSibling;
+            bc = bc.NextSibling;
+        }
+        return ac is null && bc is null;
     }
 
     private static bool IsNameStart(char c) => char.IsLetter(c) || c == '_' || c == ':';
