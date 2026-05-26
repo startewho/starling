@@ -108,19 +108,11 @@ public static class ReflectObj
                     arr.Push(k.IsSymbol ? JsValue.Symbol(k.AsSymbol) : JsValue.String(k.AsString));
                 return JsValue.Object(arr);
             }
-            // Spec §10.1.11.1 OrdinaryOwnPropertyKeys order: integer indices, then
-            // string keys (insertion order), then symbol keys (insertion order).
-            var intKeys = new List<(uint Index, string Key)>();
-            var stringKeys = new List<string>();
-            foreach (var k in target.Keys)
-            {
-                if (JsArray.IsArrayIndex(k, out var idx)) intKeys.Add((idx, k));
-                else stringKeys.Add(k);
-            }
-            intKeys.Sort((a, b) => a.Index.CompareTo(b.Index));
-            foreach (var (_, k) in intKeys) arr.Push(JsValue.String(k));
-            foreach (var k in stringKeys) arr.Push(JsValue.String(k));
-            foreach (var sym in target.SymbolKeys) arr.Push(JsValue.Symbol(sym));
+            // Spec §10.1.11.1 OrdinaryOwnPropertyKeys order (integer indices
+            // ascending, then string keys in creation order, then symbols) is
+            // now produced directly by [[OwnPropertyKeys]].
+            foreach (var k in target.OwnPropertyKeys)
+                arr.Push(k.IsSymbol ? JsValue.Symbol(k.AsSymbol) : JsValue.String(k.AsString));
             return JsValue.Object(arr);
         });
 

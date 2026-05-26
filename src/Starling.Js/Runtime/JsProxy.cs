@@ -220,6 +220,14 @@ public sealed class JsProxy : JsObject
     public override bool DefineOwnProperty(JsSymbol symbol, PropertyDescriptor desc)
         => DefineOwnPropertyImpl(JsPropertyKey.Symbol(symbol), desc);
 
+    /// <summary>Route the user-facing partial define through the proxy's
+    /// <c>defineProperty</c> trap (the base partial path would bypass the trap
+    /// by writing straight into the proxy object's own property bag). The trap
+    /// receives the resolved descriptor; the partial-presence info is folded
+    /// in by the caller's <see cref="JsMappedArguments.DefineFromUser"/>.</summary>
+    internal override bool DefineOwnPropertyPartial(JsPropertyKey key, PropertyDescriptor desc, DescriptorFields present)
+        => DefineOwnPropertyImpl(key, desc);
+
     private bool DefineOwnPropertyImpl(JsPropertyKey key, PropertyDescriptor desc)
     {
         var (target, handler) = RequireLive("defineProperty");
