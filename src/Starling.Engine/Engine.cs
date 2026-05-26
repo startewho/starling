@@ -89,6 +89,9 @@ public sealed class StarlingEngine
         Activity.Current?.SetTag("viewport.h", options.Viewport.Height);
         Activity.Current?.SetTag("font_size", options.FontSize);
         Activity.Current?.SetTag("output.path", outputPath);
+        var roz = new RozRuntime(options.Roz, _diag);
+        if (roz.Checkpoint("start") is { } startErr)
+            return Fail(startErr);
 
         var parsed = UrlParser.Parse(url);
         if (parsed.IsErr)
@@ -151,6 +154,10 @@ public sealed class StarlingEngine
             // <noscript> contents inert raw text instead of parsed elements.
             doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
         }
+        if (roz.Checkpoint("post_parse_html") is { } parseErr)
+            return Fail(parseErr);
+        if (roz.CheckDomBudget(doc, "post_parse_html") is { } parseDomErr)
+            return Fail(parseDomErr);
 
         using var images = new ImageFetcher(_diag, http);
         using var stylesheets = new StylesheetFetcher(_diag, http);
@@ -191,6 +198,8 @@ public sealed class StarlingEngine
                 FetchSheetsThenFontsAsync()
             ).ConfigureAwait(false);
         }
+        if (roz.Checkpoint("post_fetch_resources") is { } fetchErr)
+            return Fail(fetchErr);
 
         // Run page JavaScript. Mutations to the DOM (text content, new
         // elements, <img src=…> writes) land on `doc` and feed into the
@@ -270,6 +279,10 @@ public sealed class StarlingEngine
                 }
             }
         }
+        if (roz.Checkpoint("post_scripts") is { } scriptsErr)
+            return Fail(scriptsErr);
+        if (roz.CheckDomBudget(doc, "post_scripts") is { } scriptsDomErr)
+            return Fail(scriptsDomErr);
 
         // Prefetch CSS-referenced background-image url()s now so the paint
         // pipeline can resolve them synchronously when emitting display items.
@@ -279,6 +292,8 @@ public sealed class StarlingEngine
                 .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
                 .ConfigureAwait(false);
         }
+        if (roz.Checkpoint("post_fetch_backgrounds") is { } bgErr)
+            return Fail(bgErr);
 
         // Extract display text from the post-script DOM so JS-driven
         // mutations (innerText/textContent writes, appended children, fetch
@@ -329,6 +344,8 @@ public sealed class StarlingEngine
             Activity.Current?.SetTag("image.w", bitmap.Width);
             Activity.Current?.SetTag("image.h", bitmap.Height);
         }
+        if (roz.Checkpoint("post_render_document") is { } renderErr)
+            return Fail(renderErr);
 
         try
         {
@@ -349,6 +366,8 @@ public sealed class StarlingEngine
             {
                 return Fail($"Save failed: {ex.Message}");
             }
+            if (roz.Checkpoint("post_save_png") is { } saveErr)
+                return Fail(saveErr);
 
             _diag.Log(DiagLevel.Info, "engine",
                 $"Wrote {outputPath} ({bitmap.Width}x{bitmap.Height}, text length={displayText.Length}).");
@@ -1170,6 +1189,85 @@ public sealed class StarlingEngine
             Directory.CreateDirectory(dir);
     }
 
+    private sealed class RozRuntime(RenderRozOptions options, IDiagnostics diag)
+    {
+        private readonly Stopwatch _wall = Stopwatch.StartNew();
+
+        public string? Checkpoint(string stage)
+        {
+            if (options.MaxRenderWallTimeMs is int maxWallMs && maxWallMs > 0 &&
+                _wall.ElapsedMilliseconds > maxWallMs)
+            {
+                var msg = $"Roz limit exceeded ({stage}): render time {_wall.ElapsedMilliseconds}ms > {maxWallMs}ms.";
+                diag.Counter("engine.roz.time_limit", 1);
+                diag.Log(DiagLevel.Error, "engine.roz", msg);
+                return msg;
+            }
+
+            var managed = GC.GetTotalMemory(forceFullCollection: false);
+            Activity.Current?.SetTag("roz.managed_bytes", managed);
+            if (options.MaxManagedHeapBytes is long maxManagedBytes && maxManagedBytes > 0 &&
+                managed > maxManagedBytes)
+            {
+                var msg = $"Roz limit exceeded ({stage}): managed heap {managed} bytes > {maxManagedBytes} bytes.";
+                diag.Counter("engine.roz.managed_limit", 1);
+                diag.Log(DiagLevel.Error, "engine.roz", msg);
+                return msg;
+            }
+
+            var workingSet = Process.GetCurrentProcess().WorkingSet64;
+            Activity.Current?.SetTag("roz.working_set_bytes", workingSet);
+            if (options.MaxWorkingSetBytes is long maxWorkingBytes && maxWorkingBytes > 0 &&
+                workingSet > maxWorkingBytes)
+            {
+                var msg = $"Roz limit exceeded ({stage}): working set {workingSet} bytes > {maxWorkingBytes} bytes.";
+                diag.Counter("engine.roz.working_set_limit", 1);
+                diag.Log(DiagLevel.Error, "engine.roz", msg);
+                return msg;
+            }
+
+            return null;
+        }
+
+        public string? CheckDomBudget(Document document, string stage)
+        {
+            var maxDepth = options.MaxDomDepth;
+            var maxNodes = options.MaxDomNodes;
+            if ((maxDepth is null || maxDepth <= 0) && (maxNodes is null || maxNodes <= 0))
+                return null;
+
+            var visited = 0;
+            var stack = new Stack<(Node Node, int Depth)>();
+            stack.Push((document, 0));
+            while (stack.Count > 0)
+            {
+                var (node, depth) = stack.Pop();
+                visited++;
+                if (maxDepth is int depthLimit && depthLimit > 0 && depth > depthLimit)
+                {
+                    var msg = $"Roz limit exceeded ({stage}): DOM depth {depth} > {depthLimit}.";
+                    diag.Counter("engine.roz.dom_depth_limit", 1);
+                    diag.Log(DiagLevel.Error, "engine.roz", msg);
+                    return msg;
+                }
+
+                if (maxNodes is int nodeLimit && nodeLimit > 0 && visited > nodeLimit)
+                {
+                    var msg = $"Roz limit exceeded ({stage}): DOM nodes {visited} > {nodeLimit}.";
+                    diag.Counter("engine.roz.dom_nodes_limit", 1);
+                    diag.Log(DiagLevel.Error, "engine.roz", msg);
+                    return msg;
+                }
+
+                for (var child = node.LastChild; child is not null; child = child.PreviousSibling)
+                    stack.Push((child, depth + 1));
+            }
+
+            Activity.Current?.SetTag("roz.dom_nodes", visited);
+            return null;
+        }
+    }
+
     /// <summary>
     /// Fetch an HTML page, following redirects. Returns both the body and the
     /// final post-redirect URL — callers need the latter as the base for
@@ -1455,6 +1553,26 @@ public sealed record RenderOptions(Size Viewport, float FontSize = 32f)
     /// re-cascade when the user flips the theme.
     /// </summary>
     public Starling.Css.Media.ColorScheme PreferredColorScheme { get; init; } = Starling.Css.Media.ColorScheme.Light;
+
+    /// <summary>
+    /// Roz safety budgets for render-time, memory, and DOM growth limits.
+    /// </summary>
+    public RenderRozOptions Roz { get; init; } = RenderRozOptions.Default;
+}
+
+/// <summary>
+/// Configurable safety budgets enforced by the Roz runtime checks.
+/// Null means "no limit" for that dimension.
+/// </summary>
+public sealed record RenderRozOptions
+{
+    public static RenderRozOptions Default { get; } = new();
+
+    public int? MaxRenderWallTimeMs { get; init; } = 30_000;
+    public long? MaxManagedHeapBytes { get; init; } = 1024L * 1024L * 1024L;
+    public long? MaxWorkingSetBytes { get; init; } = 2L * 1024L * 1024L * 1024L;
+    public int? MaxDomDepth { get; init; } = 4096;
+    public int? MaxDomNodes { get; init; } = 2_000_000;
 }
 
 public sealed record RenderOutcome(string OutputPath, int Width, int Height, string DisplayText);

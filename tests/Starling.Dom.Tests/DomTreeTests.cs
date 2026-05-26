@@ -284,4 +284,45 @@ public class DomTreeTests
         cdata.NodeName.Should().Be("#cdata-section");
         pi.NodeName.Should().Be("xml-stylesheet");
     }
+
+    [TestMethod]
+    public void Descendants_handles_deep_trees_without_recursive_stack_overflow()
+    {
+        var doc = new Document();
+        var root = doc.CreateElement("root");
+        doc.AppendChild(root);
+
+        const int depth = 12_000;
+        var cursor = root;
+        for (var i = 0; i < depth; i++)
+        {
+            var child = doc.CreateElement("n");
+            cursor.AppendChild(child);
+            cursor = child;
+        }
+
+        root.Descendants().Count().Should().Be(depth);
+    }
+
+    [TestMethod]
+    public void OwnerDocument_propagation_handles_deep_reparenting_without_recursive_stack_overflow()
+    {
+        var doc1 = new Document();
+        var doc2 = new Document();
+        var root = doc1.CreateElement("root");
+        doc1.AppendChild(root);
+
+        const int depth = 8_000;
+        var cursor = root;
+        for (var i = 0; i < depth; i++)
+        {
+            var child = doc1.CreateElement("n");
+            cursor.AppendChild(child);
+            cursor = child;
+        }
+
+        doc2.AppendChild(root);
+        root.OwnerDocument.Should().BeSameAs(doc2);
+        cursor.OwnerDocument.Should().BeSameAs(doc2);
+    }
 }

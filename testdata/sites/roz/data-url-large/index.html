@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Roz large data URL</title>
+  </head>
+  <body>
+    <h1>Large data URL fixture</h1>
+    <img id="target" alt="data payload">
+    <script>
+      const chunk = "A".repeat(1024 * 256);
+      let payload = "";
+      for (let i = 0; i < 32; i++) payload += chunk;
+      document.getElementById("target").src = "data:text/plain;base64," + btoa(payload);
+    </script>
+  </body>
+</html>

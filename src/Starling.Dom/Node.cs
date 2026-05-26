@@ -160,11 +160,17 @@ public abstract class Node : EventTarget
 
     public IEnumerable<Node> Descendants()
     {
-        for (var child = FirstChild; child is not null; child = child.NextSibling)
+        // Iterative pre-order walk avoids unbounded recursion on hostile DOM depth.
+        var stack = new Stack<Node>();
+        for (var child = LastChild; child is not null; child = child.PreviousSibling)
+            stack.Push(child);
+
+        while (stack.Count > 0)
         {
-            yield return child;
-            foreach (var descendant in child.Descendants())
-                yield return descendant;
+            var node = stack.Pop();
+            yield return node;
+            for (var child = node.LastChild; child is not null; child = child.PreviousSibling)
+                stack.Push(child);
         }
     }
 
@@ -264,10 +270,16 @@ public abstract class Node : EventTarget
 
     internal void SetOwnerDocumentRecursive(Document? document)
     {
-        if (this is not Document)
-            OwnerDocument = document;
+        var stack = new Stack<Node>();
+        stack.Push(this);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is not Document)
+                node.OwnerDocument = document;
 
-        for (var child = FirstChild; child is not null; child = child.NextSibling)
-            child.SetOwnerDocumentRecursive(document);
+            for (var child = node.LastChild; child is not null; child = child.PreviousSibling)
+                stack.Push(child);
+        }
     }
 }

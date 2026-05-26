@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Roz DOM fanout</title>
+  </head>
+  <body>
+    <h1>DOM fanout fixture</h1>
+    <div id="sink"></div>
+    <script>
+      const sink = document.getElementById("sink");
+      for (let i = 0; i < 20000; i++) {
+        const n = document.createElement("span");
+        n.textContent = "x";
+        sink.appendChild(n);
+      }
+    </script>
+  </body>
+</html>
