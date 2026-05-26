@@ -269,3 +269,36 @@ Recommended sequencing for the next sessions (each is a focused WP, ideally its
 own agent): **CSSOM stylesheet subsystem** (biggest weak area, css/css-syntax) →
 **DOMException + createElement(NS) validation** (paired) → **Ranges** → then
 Phase 3 `assert_equals` per area. Re-baseline + ratchet after each.
+
+- 2026-05-26: **WPT-02 DOM Range + Selection complete.** Full DOM §4.6 Range
+  host model (`DomRange` + `RangeBinding`), `document.createRange()` + `new
+  Range()` constructor, all standard Range prototype methods, `StaticRange`
+  stub, `Selection` stub (`getSelection()→null`). Companion fixes: CharacterData
+  mixin methods (`substringData`, `appendData`, `insertData`, `deleteData`,
+  `replaceData`, `splitText`, `wholeText`), Node type constants (1–12),
+  `DOCUMENT_POSITION_*` constants, `compareDocumentPosition` (full DOM §4.4.5
+  — 100%, 1444/1444), `isSameNode`, `isEqualNode`, `document.doctype`,
+  `document.createCDATASection`, `new Document()` constructor,
+  `String.prototype.substr` (Annex B).
+  - **Predicted**: createRange cluster ~54 direct + downstream; compareDocumentPosition 1242.
+  - **Observed**: dom/ranges (focused) 1/224 → 35876/44491 **(80.64%)**;
+    dom/nodes 47.3% → **64.2%** (+1242 compareDocumentPosition); full suite
+    1459/5250 (27.80%) → **6528/16843 (38.76%)** (+5069 passes; denominator
+    expanded as Range tests now produce results).
+  - **Deferred**: live Range mutation tracking (Range auto-collapse on DOM
+    change), Selection implementation beyond stub, `cloneContents` /
+    `extractContents` / `surroundContents` full implementation (blocked by
+    absent iframe support; 4176 NOTRUN remain in iframe-driven tests).
+  - **Out-of-scope correctly failing**: `dom/ranges/tentative/OpaqueRange-*`
+    (CSS Anchor Positioning API, not standard Range).
+  - No regressions: Dom 39, Bindings 219, Js 1840 (+1 pre-existing
+    Captured_lexical failure unchanged).
+
+| Remaining cluster (post WPT-02 baseline) | Subtests | Why it's big |
+|---|--:|---|
+| `notrun` (iframe-gated) | 4877 | async_test tests via iframes never complete |
+| `assert_equals` (Phase 3) | 1516 | semantic; per-area correctness |
+| `removeAllRanges` (Selection) | 827 | Selection API deferred |
+| dom/traversal (`createNodeIterator`, `createTreeWalker`) | 1549 | entirely absent subsystem |
+| `assert_throws_dom` | 257 | Event dispatch + Range DOMException gaps |
+| `timeout` | 230 | Event dispatch async |

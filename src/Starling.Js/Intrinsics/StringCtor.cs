@@ -76,6 +76,8 @@ public static class StringCtor
         IntrinsicHelpers.DefineMethod(realm, stringProto, "split", 2, (thisV, args) => Split(realm, thisV, args));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "startsWith", 1, (thisV, args) => StartsWith(realm, thisV, args));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "substring", 2, (thisV, args) => Substring(realm, thisV, args));
+        // Annex B §B.2.2.1 String.prototype.substr(start[, length]) — legacy but widely used.
+        IntrinsicHelpers.DefineMethod(realm, stringProto, "substr", 2, (thisV, args) => Substr(realm, thisV, args));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "toLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLowerInvariant()));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "toUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpperInvariant()));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture)));
@@ -506,6 +508,29 @@ public static class StringCtor
             : s.Length;
         if (start > end) (start, end) = (end, start);
         return JsValue.String(s.Substring((int)start, (int)(end - start)));
+    }
+
+    // Annex B §B.2.2.1 String.prototype.substr(start[, length]).
+    private static JsValue Substr(JsRealm realm, JsValue thisV, JsValue[] args)
+    {
+        var s = ThisStringValue(realm, thisV);
+        var size = (long)s.Length;
+        var intStart = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        long lstart;
+        if (double.IsNegativeInfinity(intStart)) lstart = 0;
+        else if (intStart < 0) lstart = Math.Max(size + (long)intStart, 0);
+        else lstart = Math.Min((long)intStart, size);
+        long resultLen;
+        if (args.Length <= 1 || args[1].IsUndefined)
+            resultLen = size - lstart;
+        else
+        {
+            var lenNum = ToIntegerOrInfinity(args[1]);
+            if (double.IsNegativeInfinity(lenNum) || lenNum <= 0) return JsValue.String("");
+            resultLen = Math.Min(double.IsPositiveInfinity(lenNum) ? size : (long)lenNum, size - lstart);
+        }
+        if (resultLen <= 0) return JsValue.String("");
+        return JsValue.String(s.Substring((int)lstart, (int)resultLen));
     }
 
     // §22.1.3.21 String.prototype.split returns a genuine Array (ArrayCreate),

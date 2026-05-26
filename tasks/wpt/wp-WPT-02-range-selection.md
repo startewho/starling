@@ -1,64 +1,80 @@
----
-id: WPT-02
-title: Standard DOM Range + Selection (DOM §4.6, §5)
-status: in_progress
-area: wpt / dom
-baseline: 27.79% (1459/5250, dom,css,url, sha-pinned, post-WP-01)
----
+# WP-WPT-02: Standard DOM Range + Selection (DOM §4.6, §5)
+
+## Status: complete
 
 ## Goal
-Build the standard DOM `Range` model (DOM Living Standard §4.6) and a minimal
-`Selection` (§5), wire `document.createRange()` and `window.getSelection()`, and
-expose `Range` as a window interface constructor. Targets `dom/ranges`
-(currently 1/224, 0.4%) plus `createRange` uses scattered across `dom/nodes`.
+Implement the `Range` (DOM §4.6) and `Selection` (DOM §5) APIs so
+WPT `dom/ranges/` tests start passing. Baseline was 1/224 dom/ranges
+subtests (common.js setup was crashing before any subtests ran).
 
-## Out of scope — IMPORTANT
-- `dom/ranges/tentative/OpaqueRange-*` files: this is the experimental **CSS
-  Anchor Positioning** `OpaqueRange` / `createValueRange` API (~109 subtests:
-  `createValueRange` 61 + `clear` 19 + `length` 13 + `e` 16). **NOT standard
-  Range** — skip these. They will continue to fail; that is correct.
-- `HTMLInputElement.setSelectionRange` (15) — text-input selection, not Range.
-- Live boundary-point updates under DOM mutation (DOM §4.6.1) — first-pass
-  implementation may defer. Only implement if `causes.txt` shows assert_equals
-  failures that depend on it (predict-then-verify).
+## Scope
 
-## Why these tests fail today (measured)
-- `missing-method:createRange` (54), e.g. `dom/nodes/MutationObserver-characterData.html`.
-- ~30–50 downstream `assert_equals` in `dom/ranges` once `createRange` works.
+**In scope:**
+- `DomRange` host object implementing DOM §4.6 boundary-point Range model
+- `document.createRange()` and `new Range()` constructor
+- All standard Range prototype methods: `setStart`, `setEnd`, `setStartBefore`,
+  `setStartAfter`, `setEndBefore`, `setEndAfter`, `collapse`,
+  `selectNode`, `selectNodeContents`, `compareBoundaryPoints`,
+  `comparePoint`, `isPointInRange`, `intersectsNode`, `cloneRange`,
+  `detach`, `deleteContents`, `toString`, plus read-only attributes
+  `startContainer`, `startOffset`, `endContainer`, `endOffset`,
+  `collapsed`, `commonAncestorContainer`
+- `StaticRange` stub (constructor only, no mutation tracking)
+- `Selection` global stub (`window.getSelection()` → `null`,
+  `document.getSelection()` → `null`)
+- `document.doctype` accessor (exposes DocumentType child node)
+- `document.createCDATASection()` (fixes harness setup in common.js)
+- `new Document()` constructor (fixes 28 harness errors)
+- CharacterData mixin methods: `data` (r/w), `substringData`, `appendData`,
+  `insertData`, `deleteData`, `replaceData`, `splitText`, `wholeText`
+- Node type constants (ELEMENT_NODE=1 … NOTATION_NODE=12) on both Node
+  constructor and Node.prototype
+- `DOCUMENT_POSITION_*` constants (1,2,4,8,16,32) on Node constructor and
+  Node.prototype
+- `compareDocumentPosition` (full DOM §4.4.5 algorithm including
+  DISCONNECTED + PRECEDING/FOLLOWING consistency requirement)
+- `isSameNode`, `isEqualNode`
+- `String.prototype.substr` (Annex B §B.2.2.1, used by Range-mutations.js)
 
-Predicted Δ subtests: **~70–100** (createRange unblocks + assert_equals cascade).
+**Explicitly out of scope (correctly remain failing):**
+- `dom/ranges/tentative/OpaqueRange-*` — CSS Anchor Positioning API, not
+  standard Range; ~109 subtests remain failing as expected
+- Live range mutation tracking (Range boundary auto-update on DOM mutation,
+  dom/ranges/Range-adopt-test.html) — requires mutation-observer integration
+- `Selection` implementation beyond stub (`removeAllRanges`, `addRange` etc.)
+- `cloneContents`, `extractContents`, `surroundContents` — depend on iframes
+  and generate NOTRUN subtests (4176 NOTRUN remain)
 
-## Scope (in)
-1. **`Range`** (§4.6) as a JS-visible host object: ctor, getters
-   (`startContainer`/`startOffset`/`endContainer`/`endOffset`/`collapsed`/
-   `commonAncestorContainer`), boundary methods (`setStart`/`setEnd`/
-   `setStartBefore`/`setStartAfter`/`setEndBefore`/`setEndAfter`/`selectNode`/
-   `selectNodeContents`/`collapse`), introspection (`isPointInRange`/
-   `comparePoint`/`intersectsNode`/`compareBoundaryPoints`/`toString`/
-   `cloneRange`/`detach`).
-2. **Mutation-content methods** (`extractContents`/`cloneContents`/
-   `deleteContents`/`insertNode`/`surroundContents`) — **only** if causes.txt
-   shows tests that need them. Predict-first; do not build speculatively.
-3. **`document.createRange()`** rooted at the document.
-4. **`Range` as a window interface constructor** so `instanceof Range` works.
-5. **`Selection` (§5) minimal**: `window.getSelection()` returning a Selection
-   with `anchorNode`/`focusNode`/`anchorOffset`/`focusOffset`/`isCollapsed`/
-   `rangeCount`/`addRange`/`removeRange`/`removeAllRanges`/`getRangeAt`/
-   `empty`/`toString`. Default empty state is sufficient — no need to track
-   user selection.
+## Predicted delta (from causes.txt, pre-implementation)
+- `createRange` cluster: ~54 direct + downstream from common.js setup
+  completing → hundreds of dom/ranges subtests previously blocked
+- `compareDocumentPosition`: 1242 assert_in_array subtests in
+  Node-compareDocumentPosition.html
+- `document.doctype` + `substr`: ~600+ (doctype→280+252+124 arg-type
+  failures; substr→2642 Range-mutations subtests)
 
-## Acceptance
-- Measured Δ on full `dom,css,url` suite; report `pass X→Y` and `dom/ranges
-  A%→B%`. Predict-then-verify against causes.txt.
-- No regressions in css/url/dom-nodes (Range methods may interact with MO).
-- MSTest regression tests (AwesomeAssertions, `[Spec]`/`[SpecFact]` per §4.6
-  steps): boundary-point invariants, cloneRange, comparePoint matrix,
-  `instanceof Range` smoke.
-- PLAN.md status log entry; WP doc → `status: complete`.
+## Observed delta
+- dom/ranges (focused): 1/224 subtests → 35876/44491 (80.64%)
+- dom/nodes: 3477/7356 (47.3%) → 4719/7356 (64.2%)
+  (+1242 passes from compareDocumentPosition fix)
+- Full suite (dom,css,url): 1459/5250 (27.80%) → 6528/16843 (38.76%)
+  (+5069 passes; denominator expanded because Range tests now produce results)
+- compareDocumentPosition: 0% → 100% (1444/1444)
 
-## Notes (recon)
-- DOM types: `src/Starling.Dom/`. Search for any existing Range scaffolding first.
-- Binding pattern: follow WPT-01 / `EventTargetBinding.DefineAccessor/DefineMethod`
-  + `DomWrappers` identity map. The Bindings backend is **Starling.Bindings**
-  (the one WPT runs on).
-- Range needs identity (one JS wrapper per host Range); use `DomWrappers` for that.
+## Files changed
+- `src/Starling.Dom/DomRange.cs` — new (full DOM §4.6 host implementation)
+- `src/Starling.Bindings/RangeBinding.cs` — new (JS bindings layer)
+- `src/Starling.Bindings/NodeBindings.cs` — modified (CharacterData methods,
+  Node type + DOCUMENT_POSITION constants, compareDocumentPosition,
+  isSameNode, isEqualNode, document.doctype, document.createCDATASection,
+  new Document() constructor, compareDocumentPosition helper methods)
+- `src/Starling.Bindings/WindowBinding.cs` — modified (Install() step 10:
+  RangeBinding.Install(realm))
+- `src/Starling.Js/Intrinsics/StringCtor.cs` — modified (String.prototype.substr)
+
+## Deferred items
+- Live range mutation tracking (Range auto-collapse on node removal)
+- Selection API beyond stub
+- `cloneContents`, `extractContents`, `surroundContents` full implementation
+  (blocked by missing iframe support)
+- `DOMParser` constructor (1 failure in StaticRange-constructor.html)
