@@ -58,9 +58,19 @@ public static class Globals
         {
             throw new JsThrow(realm.NewSyntaxError(ex.Message));
         }
-        var vm = realm.ActiveVm
-            ?? throw new JsThrow(realm.NewTypeError("eval requires an active execution context"));
-        return vm.RunEval(chunk);
+        // wp:M3-83 — cross-realm execution. The common single-realm path has an
+        // ActiveVm published by the running JsVm. But when this realm's `eval`
+        // (or a function closing over it) is invoked from ANOTHER realm's VM —
+        // the $262.createRealm() case where host code holds `other.eval` and
+        // calls it while the host realm's VM is the one on the native stack —
+        // THIS realm has no running execution context. Recover the realm's own
+        // primary VM via its owner runtime and publish it for the eval so the
+        // body resolves against THIS realm's global environment (§9.6 / §19.2.1).
+        if (realm.ActiveVm is { } active)
+            return active.RunEval(chunk);
+        if (realm.OwnerRuntime is { } owner)
+            return owner.WithActiveVm(vm => vm.RunEval(chunk));
+        throw new JsThrow(realm.NewTypeError("eval requires an active execution context"));
     }
 
     /// <summary>§19.2.6.4 Encode — percent-encode UTF-8 bytes, preserving encodeURI's reserved set.</summary>
