@@ -612,5 +612,18 @@ public enum Opcode : byte
     /// can consume [obj, key, fn].</summary>
     SetHomeObjectComputed,
 
+    /// <summary>wp:M3-81 — open an "inside-initializer" region for the
+    /// §sec-performeval-rules-in-initializer ContainsArguments early-error rule.
+    /// Bracketed around a non-arrow function's formal parameter-binding prologue
+    /// (parameter default initializers). While the region is open, a direct eval
+    /// whose ScriptBody ContainsArguments throws a SyntaxError before running.
+    /// Increments a frame-local initializer depth; no stack effect.</summary>
+    EnterInitializer,
+
+    /// <summary>wp:M3-81 — close the region opened by
+    /// <see cref="EnterInitializer"/>. Decrements the frame-local initializer
+    /// depth; no stack effect.</summary>
+    ExitInitializer,
+
     Halt,           // end-of-program sentinel
 }

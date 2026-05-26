@@ -93,6 +93,18 @@ public sealed class JsFunction : JsObject
     /// eval introduced. Null for the common case.</summary>
     internal EvalVarStore? CapturedEvalVarStore { get; set; }
 
+    /// <summary>wp:M3-81 — true when this is an arrow closure created (directly or
+    /// transitively through enclosing arrows) inside an initializer context: a
+    /// non-arrow function's parameter default region or a class field/static
+    /// initializer thunk. Arrows inherit the §sec-performeval-rules-in-initializer
+    /// "inside-initializer" status lexically (they have no own <c>arguments</c>),
+    /// so a direct eval whose ScriptBody ContainsArguments running inside such an
+    /// arrow — even when the arrow is invoked long after the initializer finished
+    /// (e.g. <c>class C { x = () =&gt; eval("arguments") }; new C().x()</c>) — must
+    /// still throw a SyntaxError. The VM stamps this at closure creation when the
+    /// creating frame's initializer depth is non-zero. False otherwise.</summary>
+    internal bool InInitializer { get; set; }
+
     public JsFunction(string name, Chunk body, int arityDeclared)
         : this(name, body, arityDeclared, Array.Empty<JsValue>())
     {

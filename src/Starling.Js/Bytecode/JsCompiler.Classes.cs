@@ -233,7 +233,9 @@ public sealed partial class JsCompiler
         // analysis must precede BindFunctionParameters so a captured + mutated
         // constructor parameter is promoted to a Cell (PromoteParamCell).
         sub.RunCaptureAnalysisForFunction(parameters, bodyBlock.Body);
-        sub.BindFunctionParameters(parameters);
+        // wp:M3-81 — a class constructor is a non-arrow function; its parameter
+        // default region is an initializer context for the eval ContainsArguments rule.
+        sub.BindFunctionParameters(parameters, markInitializer: true);
 
         if (synthesizedDerived)
         {
@@ -302,7 +304,9 @@ public sealed partial class JsCompiler
         // Capture analysis must precede BindFunctionParameters so a captured +
         // mutated method parameter is promoted to a Cell (PromoteParamCell).
         sub.RunCaptureAnalysisForFunction(md.Params, md.Body.Body);
-        sub.BindFunctionParameters(md.Params);
+        // wp:M3-81 — a class method/accessor is a non-arrow function; its parameter
+        // default region is an initializer context for the eval ContainsArguments rule.
+        sub.BindFunctionParameters(md.Params, markInitializer: true);
         sub.PreallocateCapturedVarBindings(md.Body.Body);
         sub.HoistFunctionDeclarations(md.Body.Body);
         // wp:M3-20 — methods/accessors are non-arrow functions; synthesize an
@@ -414,6 +418,10 @@ public sealed partial class JsCompiler
         //   the (already-coerced) key and performs the define.
         var sub = new JsCompiler(parent: this);
         sub._b.IsStrict = true; // §15.7 — field initializers are strict
+        // wp:M3-81 — §sec-performeval-rules-in-initializer: a direct eval inside a
+        // class field initializer is subject to the ContainsArguments early error.
+        // Mark the thunk so the VM seeds the initializer depth at frame entry.
+        sub._b.IsInitializer = true;
         sub._privateScopes.Push(_privateScopes.Peek());
         sub._classMethodDepth = 1;
         // wp:M3-04c2 — the field-init thunk is a single expression, but run the
@@ -459,6 +467,9 @@ public sealed partial class JsCompiler
     {
         var sub = new JsCompiler(parent: this);
         sub._b.IsStrict = true; // §15.7 — static blocks are strict
+        // wp:M3-81 — §sec-performeval-rules-in-initializer: a direct eval inside a
+        // static initializer block is subject to the ContainsArguments early error.
+        sub._b.IsInitializer = true;
         sub._privateScopes.Push(_privateScopes.Peek());
         sub._classMethodDepth = 1;
         // wp:M3-04c2 — static-block bodies run their own statement list and so
