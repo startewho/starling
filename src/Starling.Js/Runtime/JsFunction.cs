@@ -32,6 +32,19 @@ public sealed class JsFunction : JsObject
     public string Name { get; }
     public Chunk Body { get; }
     public int ArityDeclared { get; }
+
+    /// <summary>wp:M3-83 — §9.3.1 [[Realm]]: the realm in which this function was
+    /// created (the realm whose <c>Function.prototype</c> it inherits and against
+    /// whose global environment its body must resolve free identifiers, allocate
+    /// intrinsics, and throw errors). Set by <see cref="CreateInstance"/>. The VM
+    /// reads it on call/construct so a function created in a <em>foreign</em>
+    /// realm (e.g. via a second realm's global eval from $262.createRealm) runs
+    /// with that realm as the running execution context even when invoked from
+    /// the host realm's VM — so cross-realm class brand checks, error identity,
+    /// and per-realm intrinsics are correct. Null only for template instances in
+    /// the constant pool, which are never directly callable.</summary>
+    public JsRealm? Realm { get; set; }
+
     /// <summary>Captured-binding cells, in the order assigned by the
     /// compiler. Each entry is a <c>JsValue.Object(cell)</c> where the
     /// <see cref="Cell"/> aliases the same storage the owning scope reads
@@ -145,6 +158,9 @@ public sealed class JsFunction : JsObject
             // via DefineClass the template carries the slot.
             HomeObject = template.HomeObject,
             Kind = template.Kind,
+            // wp:M3-83 — record the creating realm so the VM can run this
+            // function's body with its own realm active (cross-realm execution).
+            Realm = realm,
         };
         fn.SetPrototypeOf(realm.FunctionPrototype);
 

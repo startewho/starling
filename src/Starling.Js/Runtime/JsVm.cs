@@ -225,6 +225,23 @@ public sealed class JsVm
     /// <see cref="StartAsyncBody"/>.</summary>
     public JsValue CallFunction(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
+        // wp:M3-83 — §9.3.1 cross-realm execution. If this function was created
+        // in a DIFFERENT realm than the one this VM runs (the $262.createRealm
+        // case: a foreign realm's function invoked from the host realm's VM),
+        // dispatch through that realm's own VM with its realm published as the
+        // running execution context. PrepareForOrdinaryCall pushes the callee's
+        // [[Realm]] as the current realm; doing so makes the body resolve
+        // globals, allocate intrinsics, and throw errors in the function's realm.
+        if (fn.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)
+            && fnRealm.OwnerRuntime is { } owner)
+            return owner.WithActiveVm(foreignVm =>
+                ReferenceEquals(foreignVm, this) ? CallFunctionLocal(fn, thisValue, args)
+                                                 : foreignVm.CallFunction(fn, thisValue, args));
+        return CallFunctionLocal(fn, thisValue, args);
+    }
+
+    private JsValue CallFunctionLocal(JsFunction fn, JsValue thisValue, JsValue[] args)
+    {
         // §10.2.1.2 OrdinaryCallBindThis: a SLOPPY function called with a nullish
         // `this` binds the global object, not undefined. This makes the
         // ubiquitous global-detection idiom `(function(){return this})()` and
@@ -255,6 +272,20 @@ public sealed class JsVm
     /// constructor's <c>prototype</c> property, run the body with <c>this</c>
     /// bound to it, and return whichever object the body produced.</summary>
     public JsValue ConstructFunction(JsFunction fn, JsValue[] args, JsObject newTarget)
+    {
+        // wp:M3-83 — §9.3.2 cross-realm construct. Mirror CallFunction: a foreign
+        // realm's constructor (a class produced by another realm's eval) must run
+        // with its realm active so its `this` instance, prototype, and any brand
+        // / error it throws come from the constructor's realm, not the caller's.
+        if (fn.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)
+            && fnRealm.OwnerRuntime is { } owner)
+            return owner.WithActiveVm(foreignVm =>
+                ReferenceEquals(foreignVm, this) ? ConstructFunctionLocal(fn, args, newTarget)
+                                                 : foreignVm.ConstructFunction(fn, args, newTarget));
+        return ConstructFunctionLocal(fn, args, newTarget);
+    }
+
+    private JsValue ConstructFunctionLocal(JsFunction fn, JsValue[] args, JsObject newTarget)
     {
         // Derived class constructor — <c>this</c> is uninitialized until
         // super(...) runs (§10.2.1.1). Pass the realm's sentinel so

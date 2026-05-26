@@ -94,7 +94,7 @@ public sealed class JsFinalizationRegistry : JsObject
     }
 
     /// <summary>Optional handle so the cleanup pass can use
-    /// <see cref="JsRuntime.WithActiveVm"/>. The runtime sets this when it
+    /// <see cref="JsRuntime.WithActiveVm(Action)"/>. The runtime sets this when it
     /// owns this registry.</summary>
     internal JsRuntime? JsRuntimeHandle { get; set; }
 

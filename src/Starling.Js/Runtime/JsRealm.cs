@@ -230,6 +230,19 @@ public sealed class JsRealm
     /// <see cref="JsFunction"/> dispatch.</summary>
     public JsVm? ActiveVm { get; internal set; }
 
+    /// <summary>wp:M3-83 — the <see cref="JsRuntime"/> that owns this realm. Set
+    /// once by <see cref="JsRuntime"/> at construction. Lets host code that
+    /// re-enters JS against a realm with no running execution context (the
+    /// classic case: a <em>foreign</em> realm from <c>$262.createRealm()</c>
+    /// whose <c>global.eval</c> / functions are invoked while the host realm's
+    /// VM is the one on the native stack) recover the realm's own primary VM and
+    /// publish it as <see cref="ActiveVm"/> for the duration of that re-entry —
+    /// so per-realm context-dependent ops (eval, global resolution) run against
+    /// the correct realm. Null only for a bare <see cref="JsRealm"/> created
+    /// outside a runtime (unit-test scaffolding); such realms still throw the
+    /// "active execution context" TypeError, matching prior behavior.</summary>
+    public JsRuntime? OwnerRuntime { get; internal set; }
+
     /// <summary>wp:M3-68 — §6.2.5.5: reading a bare free identifier that resolves
     /// to no binding throws a ReferenceError. Default <c>true</c> (spec-correct;
     /// what Test262 expects). An embedder can set this <c>false</c> so unresolved

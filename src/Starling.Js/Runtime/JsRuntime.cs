@@ -37,6 +37,11 @@ public sealed class JsRuntime
     public JsRuntime()
     {
         Realm = new JsRealm();
+        // wp:M3-83 — back-reference so host re-entry into THIS realm (e.g. a
+        // foreign $262.createRealm() realm whose eval/functions are invoked from
+        // the host realm's VM) can recover this realm's own primary VM and
+        // publish it as the running execution context. See JsRealm.OwnerRuntime.
+        Realm.OwnerRuntime = this;
         ObjectCtor.Install(Realm);
         FunctionCtor.Install(Realm); // B2-2 — single-line region so the B3-4 merge stays trivial.
         ArrayCtor.Install(Realm);    // B2-4
@@ -121,12 +126,31 @@ public sealed class JsRuntime
         }
     }
 
-    /// <summary>Lazily-allocated primary VM used by <see cref="WithActiveVm"/>
+    /// <summary>Lazily-allocated primary VM used by <see cref="WithActiveVm(Action)"/>
     /// when there's no script-driven VM on the stack. Held privately so it
     /// stays an implementation detail of the helper.</summary>
     private JsVm? _primaryVm;
 
     private JsVm GetOrCreatePrimaryVm() => _primaryVm ??= new JsVm(this);
+
+    /// <summary>wp:M3-83 — establish a running execution context for this
+    /// realm if none is active, run <paramref name="body"/>, and return its
+    /// result. When <see cref="JsRealm.ActiveVm"/> is already set (the realm is
+    /// mid-execution) it is reused as-is; otherwise the realm's lazily-created
+    /// primary VM is published as <see cref="JsRealm.ActiveVm"/> for the
+    /// duration and restored on exit (even when the body throws). Used by the
+    /// global <c>eval</c> path so a <em>foreign</em> realm's <c>eval</c>, invoked
+    /// from the host realm's VM, has its own realm's context to run against
+    /// (cross-realm execution, §9.6 / §19.2.1).</summary>
+    internal JsValue WithActiveVm(Func<JsVm, JsValue> body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        var previous = Realm.ActiveVm;
+        var vm = previous ?? GetOrCreatePrimaryVm();
+        Realm.ActiveVm = vm;
+        try { return body(vm); }
+        finally { Realm.ActiveVm = previous; }
+    }
 
     /// <summary>
     /// Run <paramref name="body"/> with <see cref="JsRealm.ActiveVm"/> set, then

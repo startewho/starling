@@ -286,7 +286,15 @@ public static class AbstractOperations
             JsNativeFunction nat => nat.Body(thisValue, args),
             JsFunction fn => vm is not null
                 ? vm.CallFunction(fn, thisValue, args)
-                : throw new InvalidOperationException("VM required to call JS function"),
+                // wp:M3-83 — host invokes a foreign-realm JS function with no
+                // ambient VM (e.g. Function.prototype.call on a foreign function,
+                // where the install-site realm's ActiveVm is null because the
+                // host VM is the one on the stack). Recover via the callee's own
+                // realm: §9.3.1 [[Realm]] is the right context for the body, and
+                // its owner runtime publishes its primary VM as ActiveVm.
+                : fn.Realm?.OwnerRuntime is { } owner
+                    ? owner.WithActiveVm(foreignVm => foreignVm.CallFunction(fn, thisValue, args))
+                    : throw new InvalidOperationException("VM required to call JS function"),
             JsBoundFunction bf => Call(vm, JsValue.Object(bf.Target), bf.BoundThis,
                 ConcatBoundArgs(bf.BoundArgs, args)),
             JsProxy proxy => proxy.ProxyCall(thisValue, args),
@@ -313,7 +321,10 @@ public static class AbstractOperations
             JsNativeFunction nat => nat.Body(JsValue.Object(newTarget), args),
             JsFunction fn => vm is not null
                 ? vm.ConstructFunction(fn, args, newTarget)
-                : throw new InvalidOperationException("VM required to construct JS function"),
+                // wp:M3-83 — mirror Call's foreign-realm fallback for [[Construct]].
+                : fn.Realm?.OwnerRuntime is { } owner
+                    ? owner.WithActiveVm(foreignVm => foreignVm.ConstructFunction(fn, args, newTarget))
+                    : throw new InvalidOperationException("VM required to construct JS function"),
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
                 ConcatBoundArgs(bf.BoundArgs, args), newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
