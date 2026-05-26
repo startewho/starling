@@ -126,6 +126,64 @@ public sealed class JsArray : JsObject
         return base.DefineOwnProperty(name, desc);
     }
 
+    /// <summary>For an array-index or <c>length</c> string key the partial
+    /// define must reach the dense backing (or the magic <c>length</c> setter),
+    /// not the base property-bag — so we route it through the array's own
+    /// [[DefineOwnProperty]] with a descriptor that merges the caller's
+    /// specified fields onto the current slot's attributes. Non-index string
+    /// keys and symbol keys defer to the base ordinary-object partial path.</summary>
+    internal override bool DefineOwnPropertyPartial(JsPropertyKey key, PropertyDescriptor desc, DescriptorFields present)
+    {
+        if (!key.IsSymbol)
+        {
+            var s = key.AsString;
+            if (s == "length" || IsArrayIndex(s, out _))
+            {
+                var cur = GetOwnPropertyDescriptor(s);
+                var merged = MergeForExotic(cur, desc, present);
+                return DefineOwnProperty(s, merged);
+            }
+        }
+        return base.DefineOwnPropertyPartial(key, desc, present);
+    }
+
+    /// <summary>Fold the <paramref name="present"/> fields of <paramref name="desc"/>
+    /// onto <paramref name="cur"/> (or onto default false/undefined for a
+    /// fresh slot) to produce the resolved descriptor an exotic
+    /// [[DefineOwnProperty]] expects. Mirrors the inheritance the base
+    /// <see cref="JsObject.DefineOwnPropertyPartial"/> performs but returns
+    /// the merged value instead of writing it.</summary>
+    private static PropertyDescriptor MergeForExotic(PropertyDescriptor? cur, PropertyDescriptor desc, DescriptorFields present)
+    {
+        if (cur is null)
+        {
+            return desc.IsAccessor
+                ? PropertyDescriptor.Accessor(
+                    present.HasGet ? desc.Getter : null,
+                    present.HasSet ? desc.Setter : null,
+                    present.HasEnumerable && desc.Enumerable,
+                    present.HasConfigurable && desc.Configurable)
+                : PropertyDescriptor.Data(
+                    present.HasValue ? desc.Value : JsValue.Undefined,
+                    present.HasWritable && desc.Writable,
+                    present.HasEnumerable && desc.Enumerable,
+                    present.HasConfigurable && desc.Configurable);
+        }
+        var c = cur.Value;
+        var enumerable = present.HasEnumerable ? desc.Enumerable : c.Enumerable;
+        var configurable = present.HasConfigurable ? desc.Configurable : c.Configurable;
+        if (desc.IsAccessor)
+        {
+            return PropertyDescriptor.Accessor(
+                present.HasGet ? desc.Getter : (c.IsAccessor ? c.Getter : null),
+                present.HasSet ? desc.Setter : (c.IsAccessor ? c.Setter : null),
+                enumerable, configurable);
+        }
+        var writable = present.HasWritable ? desc.Writable : (!c.IsAccessor && c.Writable);
+        var value = present.HasValue ? desc.Value : (c.IsAccessor ? JsValue.Undefined : c.Value);
+        return PropertyDescriptor.Data(value, writable, enumerable, configurable);
+    }
+
     public override bool Delete(string name)
     {
         if (name == "length") return false; // non-configurable

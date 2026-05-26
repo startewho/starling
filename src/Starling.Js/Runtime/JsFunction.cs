@@ -148,20 +148,26 @@ public sealed class JsFunction : JsObject
         };
         fn.SetPrototypeOf(realm.FunctionPrototype);
 
-        // §10.2.4 — the function's own `prototype` slot holds the object that
-        // `new f()` uses as the new-target prototype. Spec descriptor is
-        // writable=true, enumerable=false, configurable=false.
+        // Own-property creation order is observable (Object.getOwnPropertyNames
+        // / Reflect.ownKeys) and the spec fixes it as length, then name, then
+        // prototype: OrdinaryFunctionCreate (§10.2.3) sets "length" first, the
+        // caller's SetFunctionName (§10.2.9) adds "name", and MakeConstructor
+        // (§10.2.5) installs "prototype" last. Match that here so a class /
+        // function reports ["length","name","prototype", ...].
+        // `name` and `length` are non-enumerable, non-writable, configurable per §17.
+        fn.DefineOwnProperty("length",
+            PropertyDescriptor.Data(JsValue.Number(template.ArityDeclared), writable: false, enumerable: false, configurable: true));
+        fn.DefineOwnProperty("name",
+            PropertyDescriptor.Data(JsValue.String(template.Name), writable: false, enumerable: false, configurable: true));
+
+        // §10.2.5 MakeConstructor — the function's own `prototype` slot holds the
+        // object that `new f()` uses as the new-target prototype. Spec descriptor
+        // is writable=true, enumerable=false, configurable=false.
         var protoObj = new JsObject(realm.ObjectPrototype);
         protoObj.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(fn), writable: true, enumerable: false, configurable: true));
         fn.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(protoObj), writable: true, enumerable: false, configurable: false));
-
-        // `name` and `length` are non-enumerable, non-writable, configurable per §17.
-        fn.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String(template.Name), writable: false, enumerable: false, configurable: true));
-        fn.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(template.ArityDeclared), writable: false, enumerable: false, configurable: true));
         return fn;
     }
 

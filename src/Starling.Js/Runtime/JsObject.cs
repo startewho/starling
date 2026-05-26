@@ -16,6 +16,34 @@ public class JsObject
     private readonly Dictionary<JsSymbol, PropertyDescriptor> _symbolProperties =
         new();
 
+    /// <summary>String own-key creation order. The <see cref="Dictionary{TKey,TValue}"/>
+    /// backing does NOT preserve chronological order across delete+reinsert (a
+    /// removed slot is recycled by the next add), but §10.1.11.1 requires
+    /// "ascending chronological order of property creation". We keep this
+    /// authoritative ordered list in lockstep with <see cref="_properties"/> via
+    /// <see cref="PutString"/> / <see cref="RemoveString"/> so a re-added key
+    /// lands at the end. Used for the non-array-index string bucket.</summary>
+    private readonly List<string> _stringKeyOrder = new();
+
+    /// <summary>Insert or update a string-keyed descriptor, maintaining
+    /// <see cref="_stringKeyOrder"/>. A brand-new key is appended (correct
+    /// creation order even after a prior delete); an existing key keeps its
+    /// position.</summary>
+    private void PutString(string name, PropertyDescriptor desc)
+    {
+        if (!_properties.ContainsKey(name)) _stringKeyOrder.Add(name);
+        _properties[name] = desc;
+    }
+
+    /// <summary>Remove a string-keyed descriptor, keeping
+    /// <see cref="_stringKeyOrder"/> in sync.</summary>
+    private bool RemoveString(string name)
+    {
+        if (!_properties.Remove(name)) return false;
+        _stringKeyOrder.Remove(name);
+        return true;
+    }
+
     /// <summary>The [[Prototype]] internal slot. Mutate via
     /// <see cref="SetPrototypeOf"/> so subclasses can override.</summary>
     public JsObject? Prototype { get; private set; }
@@ -122,11 +150,11 @@ public class JsObject
         {
             if (desc.IsAccessor) return; // accessor path — caller should use AbstractOperations.Set
             if (!desc.Writable) return;
-            _properties[name] = desc.WithValue(value);
+            _properties[name] = desc.WithValue(value); // existing key — order unchanged
             return;
         }
         if (!Extensible) return;
-        _properties[name] = PropertyDescriptor.Data(value);
+        PutString(name, PropertyDescriptor.Data(value));
     }
 
     public virtual void Set(JsSymbol symbol, JsValue value)
@@ -185,7 +213,15 @@ public class JsObject
     /// false when the operation is rejected (e.g. non-configurable conflict
     /// or non-extensible object).</summary>
     public virtual bool DefineOwnProperty(string name, PropertyDescriptor desc)
-        => DefineOwnPropertyCore(_properties, name, desc);
+    {
+        if (_properties.TryGetValue(name, out var existing))
+        {
+            if (!ValidateRedefine(existing, desc)) return false;
+        }
+        else if (!Extensible) return false;
+        PutString(name, desc);
+        return true;
+    }
 
     public virtual bool DefineOwnProperty(JsSymbol symbol, PropertyDescriptor desc)
         => DefineOwnPropertyCore(_symbolProperties, symbol, desc);
@@ -200,22 +236,95 @@ public class JsObject
     /// validator (which rejects a non-configurable data property's legal
     /// writable:true→false transition).</summary>
     internal void ForceDefineOwnProperty(string name, PropertyDescriptor desc)
-        => _properties[name] = desc;
+        => PutString(name, desc);
+
+    /// <summary>Symbol-keyed counterpart of <see cref="ForceDefineOwnProperty(string, PropertyDescriptor)"/>
+    /// — bypasses §10.1.6.3 validation. Used by the partial-merge path so a
+    /// non-configurable data property's legal writable:true→false transition
+    /// can be applied to a symbol-keyed slot too.</summary>
+    internal void ForceDefineOwnProperty(JsSymbol symbol, PropertyDescriptor desc)
+        => _symbolProperties[symbol] = desc;
+
+    /// <summary>§10.1.6.3 ValidateAndApplyPropertyDescriptor restricted to what a
+    /// partial <c>Object.defineProperty</c> / <c>Reflect.defineProperty</c>
+    /// redefinition needs: only the fields the caller actually specified
+    /// (<paramref name="present"/>) are applied; the rest are inherited from the
+    /// existing own descriptor (or defaulted to false / undefined for a fresh
+    /// property). Returns false when the change is rejected by a
+    /// non-configurable conflict or non-extensible add. Symbol- and
+    /// string-keyed slots share one implementation.</summary>
+    internal virtual bool DefineOwnPropertyPartial(JsPropertyKey key, PropertyDescriptor desc, DescriptorFields present)
+    {
+        var existing = GetOwnPropertyDescriptor(key);
+        if (existing is null)
+        {
+            if (!Extensible) return false;
+            var fresh = desc.IsAccessor
+                ? PropertyDescriptor.Accessor(
+                    present.HasGet ? desc.Getter : null,
+                    present.HasSet ? desc.Setter : null,
+                    present.HasEnumerable && desc.Enumerable,
+                    present.HasConfigurable && desc.Configurable)
+                : PropertyDescriptor.Data(
+                    present.HasValue ? desc.Value : JsValue.Undefined,
+                    present.HasWritable && desc.Writable,
+                    present.HasEnumerable && desc.Enumerable,
+                    present.HasConfigurable && desc.Configurable);
+            if (key.IsSymbol) ForceDefineOwnProperty(key.AsSymbol, fresh);
+            else ForceDefineOwnProperty(key.AsString, fresh);
+            return true;
+        }
+
+        var cur = existing.Value;
+        var changingKind = desc.IsAccessor != cur.IsAccessor;
+        var enumerable = present.HasEnumerable ? desc.Enumerable : cur.Enumerable;
+        var configurable = present.HasConfigurable ? desc.Configurable : cur.Configurable;
+
+        if (!cur.Configurable)
+        {
+            if (configurable) return false;
+            if (present.HasEnumerable && desc.Enumerable != cur.Enumerable) return false;
+            if (changingKind) return false;
+            if (!cur.IsAccessor)
+            {
+                if (!cur.Writable)
+                {
+                    if (present.HasWritable && desc.Writable) return false;
+                    if (present.HasValue && !desc.Value.Equals(cur.Value)) return false;
+                }
+            }
+            else
+            {
+                if (present.HasGet && !ReferenceEquals(desc.Getter, cur.Getter)) return false;
+                if (present.HasSet && !ReferenceEquals(desc.Setter, cur.Setter)) return false;
+            }
+        }
+
+        PropertyDescriptor merged;
+        if (desc.IsAccessor)
+        {
+            merged = PropertyDescriptor.Accessor(
+                present.HasGet ? desc.Getter : (cur.IsAccessor ? cur.Getter : null),
+                present.HasSet ? desc.Setter : (cur.IsAccessor ? cur.Setter : null),
+                enumerable, configurable);
+        }
+        else
+        {
+            var writable = present.HasWritable ? desc.Writable : (!cur.IsAccessor && cur.Writable);
+            var value = present.HasValue ? desc.Value : (cur.IsAccessor ? JsValue.Undefined : cur.Value);
+            merged = PropertyDescriptor.Data(value, writable, enumerable, configurable);
+        }
+        if (key.IsSymbol) ForceDefineOwnProperty(key.AsSymbol, merged);
+        else ForceDefineOwnProperty(key.AsString, merged);
+        return true;
+    }
 
     private bool DefineOwnPropertyCore<TKey>(Dictionary<TKey, PropertyDescriptor> table, TKey key, PropertyDescriptor desc)
         where TKey : notnull
     {
         if (table.TryGetValue(key, out var existing))
         {
-            if (!existing.Configurable)
-            {
-                // Allow same-value re-define; reject otherwise. Spec §10.1.6.3
-                // is more nuanced but this covers the common cases.
-                if (existing.IsAccessor != desc.IsAccessor) return false;
-                if (existing.Configurable != desc.Configurable) return false;
-                if (existing.Enumerable != desc.Enumerable) return false;
-                if (!existing.IsAccessor && existing.Writable != desc.Writable) return false;
-            }
+            if (!ValidateRedefine(existing, desc)) return false;
         }
         else if (!Extensible)
         {
@@ -225,13 +334,28 @@ public class JsObject
         return true;
     }
 
+    /// <summary>Subset of §10.1.6.3 ValidateAndApplyPropertyDescriptor's
+    /// non-configurable conflict checks — false rejects the redefine. Pulled
+    /// out so the string-keyed <see cref="DefineOwnProperty(string, PropertyDescriptor)"/>
+    /// can share the rules with the symbol-keyed
+    /// <see cref="DefineOwnPropertyCore"/> path.</summary>
+    private static bool ValidateRedefine(PropertyDescriptor existing, PropertyDescriptor desc)
+    {
+        if (existing.Configurable) return true;
+        if (existing.IsAccessor != desc.IsAccessor) return false;
+        if (existing.Configurable != desc.Configurable) return false;
+        if (existing.Enumerable != desc.Enumerable) return false;
+        if (!existing.IsAccessor && existing.Writable != desc.Writable) return false;
+        return true;
+    }
+
     /// <summary>§10.1.10 [[Delete]] — returns true on success, false if the
     /// property exists and is non-configurable.</summary>
     public virtual bool Delete(string name)
     {
         if (!_properties.TryGetValue(name, out var desc)) return true;
         if (!desc.Configurable) return false;
-        return _properties.Remove(name);
+        return RemoveString(name);
     }
 
     public virtual bool Delete(JsSymbol symbol)
@@ -243,25 +367,53 @@ public class JsObject
 
     public bool Delete(JsPropertyKey key) => key.IsSymbol ? Delete(key.AsSymbol) : Delete(key.AsString);
 
-    /// <summary>All own keys, in insertion order (Dictionary preserves it
-    /// since .NET 6).</summary>
-    public virtual IEnumerable<string> Keys => _properties.Keys;
+    /// <summary>§10.1.11.1 OrdinaryOwnPropertyKeys ordering for the string
+    /// keys of this object's property bag: every <em>array-index</em> key
+    /// (canonical numeric string in [0, 2^32-1) — the
+    /// <see cref="JsArray.IsArrayIndex"/> test) first, in ascending numeric
+    /// order, then every remaining String key in property-creation order.
+    /// The <see cref="Dictionary{TKey,TValue}"/> backing preserves insertion
+    /// order for the non-index bucket (.NET 6+). Non-index numeric-looking
+    /// keys ("1e+55", "-1", "4294967295") stay in the string bucket per spec.</summary>
+    private IEnumerable<string> OrderedStringKeys()
+    {
+        // Fast path: no array-index keys → emit in chronological creation order.
+        List<uint>? indices = null;
+        foreach (var key in _stringKeyOrder)
+        {
+            if (JsArray.IsArrayIndex(key, out var idx))
+                (indices ??= new List<uint>()).Add(idx);
+        }
+        if (indices is null)
+        {
+            foreach (var key in _stringKeyOrder) yield return key;
+            yield break;
+        }
+        indices.Sort();
+        foreach (var idx in indices) yield return JsArray.IndexToString(idx);
+        foreach (var key in _stringKeyOrder)
+            if (!JsArray.IsArrayIndex(key, out _)) yield return key;
+    }
+
+    /// <summary>All own string keys in §10.1.11.1 order (integer indices
+    /// ascending, then other strings in creation order).</summary>
+    public virtual IEnumerable<string> Keys => OrderedStringKeys();
     public IEnumerable<JsSymbol> SymbolKeys => _symbolProperties.Keys;
     public virtual IEnumerable<JsPropertyKey> OwnPropertyKeys
     {
         get
         {
-            foreach (var key in _properties.Keys) yield return JsPropertyKey.String(key);
+            foreach (var key in OrderedStringKeys()) yield return JsPropertyKey.String(key);
             foreach (var key in _symbolProperties.Keys) yield return JsPropertyKey.Symbol(key);
         }
     }
 
-    /// <summary>Own keys filtered to enumerable data properties — used by
-    /// <c>Object.keys</c> and friends.</summary>
+    /// <summary>Own keys filtered to enumerable data properties, in
+    /// §10.1.11.1 order — used by <c>Object.keys</c> and friends.</summary>
     public virtual IEnumerable<string> EnumerableKeys()
     {
-        foreach (var pair in _properties)
-            if (pair.Value.Enumerable) yield return pair.Key;
+        foreach (var key in OrderedStringKeys())
+            if (_properties[key].Enumerable) yield return key;
     }
 
     public IEnumerable<JsSymbol> EnumerableSymbolKeys()

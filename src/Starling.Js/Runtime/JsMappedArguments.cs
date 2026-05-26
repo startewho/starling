@@ -186,82 +186,11 @@ public sealed class JsMappedArguments : JsObject
         return true;
     }
 
-    /// <summary>§10.1.6.3 ValidateAndApplyPropertyDescriptor restricted to what a
-    /// partial <c>Object.defineProperty</c> redefinition needs: only the fields
-    /// the caller actually specified (<paramref name="present"/>) are applied; the
-    /// rest are inherited from the existing own descriptor (or defaulted to false /
-    /// undefined for a fresh property). Returns false when the change is rejected
-    /// by a non-configurable conflict.</summary>
+    /// <summary>String-keyed wrapper around the base
+    /// <see cref="JsObject.DefineOwnPropertyPartial"/>. Kept so the mapped path
+    /// below reads cleanly; semantics are identical.</summary>
     private bool DefinePartial(string name, PropertyDescriptor desc, DescriptorFields present)
-    {
-        var existing = base.GetOwnPropertyDescriptor(name);
-        if (existing is null)
-        {
-            if (!Extensible) return false;
-            // Fresh property: unspecified attributes default to false / undefined.
-            ForceDefineOwnProperty(name, desc.IsAccessor
-                ? PropertyDescriptor.Accessor(
-                    present.HasGet ? desc.Getter : null,
-                    present.HasSet ? desc.Setter : null,
-                    present.HasEnumerable && desc.Enumerable,
-                    present.HasConfigurable && desc.Configurable)
-                : PropertyDescriptor.Data(
-                    present.HasValue ? desc.Value : JsValue.Undefined,
-                    present.HasWritable && desc.Writable,
-                    present.HasEnumerable && desc.Enumerable,
-                    present.HasConfigurable && desc.Configurable));
-            return true;
-        }
-
-        var cur = existing.Value;
-        var changingKind = desc.IsAccessor != cur.IsAccessor;
-        // Effective attributes: present fields from the new descriptor, otherwise
-        // the current ones (or, when flipping data⇄accessor, the spec defaults).
-        var enumerable = present.HasEnumerable ? desc.Enumerable : cur.Enumerable;
-        var configurable = present.HasConfigurable ? desc.Configurable : cur.Configurable;
-
-        // §10.1.6.3 step 4 — a non-configurable property rejects most changes.
-        if (!cur.Configurable)
-        {
-            if (configurable) return false;
-            if (present.HasEnumerable && desc.Enumerable != cur.Enumerable) return false;
-            if (changingKind) return false;
-            if (!cur.IsAccessor)
-            {
-                // Non-configurable data: cannot become writable, and once
-                // non-writable the value is frozen.
-                if (!cur.Writable)
-                {
-                    if (present.HasWritable && desc.Writable) return false;
-                    if (present.HasValue && !desc.Value.Equals(cur.Value)) return false;
-                }
-            }
-            else
-            {
-                if (present.HasGet && !ReferenceEquals(desc.Getter, cur.Getter)) return false;
-                if (present.HasSet && !ReferenceEquals(desc.Setter, cur.Setter)) return false;
-            }
-        }
-
-        PropertyDescriptor merged;
-        if (desc.IsAccessor)
-        {
-            merged = PropertyDescriptor.Accessor(
-                present.HasGet ? desc.Getter : (cur.IsAccessor ? cur.Getter : null),
-                present.HasSet ? desc.Setter : (cur.IsAccessor ? cur.Setter : null),
-                enumerable, configurable);
-        }
-        else
-        {
-            var writable = present.HasWritable ? desc.Writable : (!cur.IsAccessor && cur.Writable);
-            var value = present.HasValue ? desc.Value : (cur.IsAccessor ? JsValue.Undefined : cur.Value);
-            merged = PropertyDescriptor.Data(value, writable, enumerable, configurable);
-        }
-        // Existing-property update bypasses the base validator's own checks (we
-        // performed §10.1.6.3 above); write the merged descriptor directly.
-        ForceDefineOwnProperty(name, merged);
-        return true;
-    }
+        => DefineOwnPropertyPartial(JsPropertyKey.String(name), desc, present);
 
     /// <summary>Define <paramref name="desc"/> (already resolved from
     /// <paramref name="descSource"/>) on <paramref name="target"/>, routing through
@@ -274,7 +203,12 @@ public sealed class JsMappedArguments : JsObject
     {
         if (target is JsMappedArguments ma && !key.IsSymbol)
             return ma.DefineOwnPropertyMapped(key.AsString, desc, DescriptorFields.FromSource(descSource));
-        return target.DefineOwnProperty(key, desc);
+        // §10.1.6 OrdinaryDefineOwnProperty with the field-presence info threaded
+        // through from §6.2.5.6 ToPropertyDescriptor — preserves attributes the
+        // caller did NOT specify (e.g. defineProperty(o,'a',{value:11}) keeps
+        // [[Enumerable]] from the existing descriptor). Without this routing the
+        // collapsed PropertyDescriptor's default flags clobber the prior state.
+        return target.DefineOwnPropertyPartial(key, desc, DescriptorFields.FromSource(descSource));
     }
 }
 

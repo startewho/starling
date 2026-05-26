@@ -103,6 +103,22 @@ public sealed class JsModuleNamespace : JsObject
     public override bool DefineOwnProperty(JsSymbol symbol, PropertyDescriptor desc)
         => DefineMatches(GetOwnPropertyDescriptor(symbol), desc);
 
+    /// <summary>§10.4.6.6 partial — only the fields the caller actually
+    /// specified must match the current export's data descriptor. Any
+    /// addition or specified-field mismatch is rejected (returns false).
+    /// Routed through by <see cref="JsMappedArguments.DefineFromUser"/>.</summary>
+    internal override bool DefineOwnPropertyPartial(JsPropertyKey key, PropertyDescriptor desc, DescriptorFields present)
+    {
+        var current = GetOwnPropertyDescriptor(key);
+        if (current is not { } cur) return false; // no such export → reject add
+        if (desc.IsAccessor) return false; // current is always a data descriptor
+        if (present.HasConfigurable && desc.Configurable) return false; // current is non-configurable
+        if (present.HasEnumerable && desc.Enumerable != cur.Enumerable) return false;
+        if (present.HasWritable && desc.Writable != cur.Writable) return false;
+        if (present.HasValue && !AbstractOperations.SameValue(desc.Value, cur.Value)) return false;
+        return true;
+    }
+
     /// <summary>§10.4.6.6 — a define succeeds only when the proposed descriptor
     /// is exactly the current one (no attribute or value change). Any addition or
     /// modification is rejected (returns false).</summary>
