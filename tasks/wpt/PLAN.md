@@ -169,6 +169,36 @@ hand-rolled CSS `[Spec]` stub backlog where WPT now covers it.
     (`c249b4a`): pass 1289→1334, 24.42%→25.27%.
   - `Node.moveBefore` (atomic move): pass 1334→1339, →**25.51%**.
 
+- 2026-05-26: **WPT-01 CSSOM stylesheet subsystem complete.** New
+  `document.styleSheets[i].cssRules[j]` → `CSSStyleRule` chain on the
+  Starling.Bindings backend, backed by a live mutable CSSOM model in
+  `Starling.Css/Cssom/`. Includes: spec-correct An+B microsyntax parser
+  (`AnbParser`) that respects whitespace + explicit-sign semantics; selector
+  serializer (`SelectorSerializer`) with An+B serialization per Syntax §9.2;
+  CSS value canonicalizer (`CssValueSerializer`) for `getPropertyValue`
+  round-trip (`1.0`→`1`, `.1`→`0.1`, `1.0px`→`1px`; rejects `1.` / `1.px`);
+  CSSOM declaration block (`CssomDeclarationBlock`) reusing the inline-style
+  semantics. Tokenizer now carries `HasSign`/`IsInteger` flags on numeric
+  tokens (additive, default-false — no callsite changes needed).
+  - **Predicted**: setProperty(101) + slice(87) clusters ≈ 188 subtests
+    (~93 from the 3 canonical files certain, ~95 across urange/inclusive-ranges
+    partial); actual reach contingent on canonicalization depth.
+  - **Observed**: pass **1339→1459 (+120)**, rate **25.50%→27.80%**,
+    css/css-syntax **15/394 (3.8%)→135/394 (34.3%)**. Canonical files now
+    100% pass (anb-parsing 67/67, anb-serialization 20/20,
+    decimal-points-in-numbers 6/6). Partial conversions: urange-parsing
+    95→85 failures (+10), inclusive-ranges 38→28 (+10). No regressions in
+    dom/url areas (by-area pass counts unchanged outside css-syntax).
+    setProperty cluster partially un-blocked (urange/inclusive-ranges still
+    need urange canonicalization + ident-escaping for full conversion;
+    deferred — out of WP-01 scope).
+  - **Unit-test coverage**: 125 new MSTest cases (93 An+B parse/serialize
+    mirroring WPT tables, 15 value canonicalization, 17 selector serialization,
+    7 binding-level integration over the full chain) — all green.
+  - Full suite green: Css 672, Bindings 219, Css.Spec 99, Dom 37, Js 1840
+    (only pre-existing `Captured_lexical` failure unchanged), Html 7162,
+    Engine 154, Paint 171, Layout 201, Bindings.Jint 85.
+
 **Session result: 754→1339 passing subtests (+585, +78%), 14.54%→25.51%.** Cheap
 mechanical wins are now exhausted — every remaining high-impact cluster is a
 large *absent subsystem* or the semantic tail. Confirmed by exploration (no host

@@ -300,36 +300,65 @@ public sealed class SelectorParser
         }
 
         if (ofIndex is null)
-            return new NthArgument(ParseNthPattern(ComponentValuesText(values)));
-
-        var nthText = ComponentValuesText(values.Take(ofIndex.Value).ToList());
-        var ofValues = values.Skip(ofIndex.Value + 1).ToList();
-        return new NthArgument(ParseNthPattern(nthText), ParseSelectorList(ofValues));
-    }
-
-    private static NthPattern ParseNthPattern(string text)
-    {
-        var normalized = text.Replace(" ", string.Empty, StringComparison.Ordinal)
-            .ToLowerInvariant();
-        if (normalized == "odd")
-            return new NthPattern(2, 1);
-        if (normalized == "even")
-            return new NthPattern(2, 0);
-        if (!normalized.Contains('n', StringComparison.Ordinal))
-            return new NthPattern(0, int.Parse(normalized, CultureInfo.InvariantCulture));
-
-        var n = normalized.IndexOf('n', StringComparison.Ordinal);
-        var aText = normalized[..n];
-        var bText = normalized[(n + 1)..];
-        var a = aText switch
         {
-            "" or "+" => 1,
-            "-" => -1,
-            _ => int.Parse(aText, CultureInfo.InvariantCulture),
-        };
-        var b = string.IsNullOrEmpty(bText) ? 0 : int.Parse(bText, CultureInfo.InvariantCulture);
-        return new NthPattern(a, b);
+            var pattern = ParseNthPattern(values, out var valid);
+            return new NthArgument(pattern, null, valid);
+        }
+
+        var nthValues = values.Take(ofIndex.Value).ToList();
+        var ofValues = values.Skip(ofIndex.Value + 1).ToList();
+        var pat = ParseNthPattern(nthValues, out var ofValid);
+        return new NthArgument(pat, ParseSelectorList(ofValues), ofValid);
     }
+
+    /// <summary>Parse An+B (CSS Syntax 3 §9) from component values, preserving the
+    /// whitespace and sign information the An+B grammar depends on. Falls back to
+    /// the identity pattern (0n+0) on a parse error so existing selector matching
+    /// degrades gracefully; <paramref name="valid"/> reports whether the An+B
+    /// microsyntax actually parsed (used by CSSOM selectorText).</summary>
+    private static NthPattern ParseNthPattern(IReadOnlyList<CssComponentValue> values, out bool valid)
+    {
+        var tokens = FlattenTokens(values);
+        var parsed = AnbParser.Parse(tokens);
+        valid = parsed is not null;
+        return parsed ?? new NthPattern(0, 0);
+    }
+
+    private static List<CssToken> FlattenTokens(IReadOnlyList<CssComponentValue> values)
+    {
+        var tokens = new List<CssToken>();
+        foreach (var v in values)
+            FlattenInto(v, tokens);
+        return tokens;
+    }
+
+    private static void FlattenInto(CssComponentValue value, List<CssToken> tokens)
+    {
+        switch (value)
+        {
+            case CssTokenValue t:
+                tokens.Add(t.Token);
+                break;
+            case CssFunction f:
+                tokens.Add(new CssToken(CssTokenType.Function, f.Name));
+                foreach (var inner in f.Values) FlattenInto(inner, tokens);
+                tokens.Add(new CssToken(CssTokenType.RightParen));
+                break;
+            case CssSimpleBlock b:
+                tokens.Add(new CssToken(b.StartToken));
+                foreach (var inner in b.Values) FlattenInto(inner, tokens);
+                tokens.Add(new CssToken(MatchingEnd(b.StartToken)));
+                break;
+        }
+    }
+
+    private static CssTokenType MatchingEnd(CssTokenType start) => start switch
+    {
+        CssTokenType.LeftParen => CssTokenType.RightParen,
+        CssTokenType.LeftSquare => CssTokenType.RightSquare,
+        CssTokenType.LeftBrace => CssTokenType.RightBrace,
+        _ => CssTokenType.Eof,
+    };
 
     private bool TryParseAttributeSelector(CssSimpleBlock block, out AttributeSelector selector)
     {

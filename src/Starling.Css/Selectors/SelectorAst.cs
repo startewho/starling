@@ -130,8 +130,11 @@ public static class PseudoElementHelpers
     };
 }
 
-/// <summary>Argument for nth-style pseudos with optional "of S" filter (Selectors 4 §15.3).</summary>
-public sealed record NthArgument(NthPattern Pattern, SelectorList? OfSelector = null);
+/// <summary>Argument for nth-style pseudos with optional "of S" filter (Selectors 4 §15.3).
+/// <paramref name="IsValid"/> is false when the An+B microsyntax failed to parse — the
+/// pattern then degrades to 0n+0 for matching, but CSSOM selectorText treats the whole
+/// selector as a parse error.</summary>
+public sealed record NthArgument(NthPattern Pattern, SelectorList? OfSelector = null, bool IsValid = true);
 
 public readonly record struct Specificity(int Ids, int Classes, int Types) : IComparable<Specificity>
 {
