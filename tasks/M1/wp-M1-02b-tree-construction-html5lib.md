@@ -2,7 +2,7 @@
 id: "wp:M1-02b-tree-construction-html5lib"
 parent: "wp:M1-02-html-tree-builder"
 milestone: "M1"
-status: "claimed"
+status: "complete"
 claimed_by: "agent-claude-cody"
 claimed_at: "2026-05-27T18:36:40Z"
 branch: "main"
@@ -12,6 +12,7 @@ subsystem: "Starling.Html"
 plan_refs:
   - "browser-plan/04_HTML_PARSING.md#tree-builder"
   - "browser-plan/12_TESTING.md"
+completed_at: "2026-05-27T18:46:11Z"
 ---
 
 # wp:M1-02b — html5lib tree-construction suite
@@ -167,3 +168,4 @@ are independently picked up; together they take us from 44% toward 95%.
   list in `wp:M1-02`: adoption agency (§13.2.6.4.7), foreign content
   (§13.2.6.5), real `InTemplate` mode, `InHeadNoscript`, table sub-modes.
   Each will get its own successor WP when picked up.
+- 2026-05-27T18:46:11Z — merged; complete
