@@ -18,13 +18,13 @@ plan_refs:
 
 ## Goal
 
-Vendor the html5lib-tests `tree-construction/` corpus and wire it as an xUnit
-data-driven test, the same way `wp:M1-01h` wired the tokenizer half. Drive the
-pass rate to the WHATWG tree-construction conformance gate that `wp:M1-02`
-promised but deferred (≥ 95% on `tests1.dat` through the rest of the corpus,
-100% on adoption-agency cases in `tests1.dat`). Each fixture failure becomes
-either a `[SpecFact]` (passing) or a `[PendingFact]` with a real assertion body
-so promotion is a one-line attribute flip.
+Stand up a tree-construction conformance runner against the WHATWG-conformance
+`html5lib-tests/tree-construction/` corpus, measure a baseline pass rate, and
+ratchet toward the ≥ 95% target that `wp:M1-02` deferred. "Start" deliverable:
+the harness + vendored corpus + a measured baseline, with a floor gate that
+prevents regression. Reaching 95% is iterative tree-builder work tracked from
+the failure report this produces — broken out into the successor WPs listed
+below (`wp:M1-02c…g`).
 
 ## Why now
 
@@ -62,19 +62,60 @@ table sub-modes, frameset, InHeadNoscript) at once and turns
 - Content glob in `tests/Starling.Html.Tests/Starling.Html.Tests.csproj`
   mirroring the existing tokenizer glob.
 
-## Acceptance
+## Delivered (this WP — infrastructure + baseline)
 
-- Every `.dat` block under `tree-construction/` runs as a discoverable test
-  case named by file + block index (so failures point to the exact fixture).
-- `tests1.dat`: **100%** pass (this is the canonical adoption-agency corpus per
-  `browser-plan/04_HTML_PARSING.md` line 244).
-- Overall suite: **≥ 95%** `[SpecFact]` pass; remainder filed as
-  `[PendingFact("…", trackingWp: "…")]` linking to a successor WP (one per
-  insertion-mode bucket — InTemplate, foreign content, table sub-modes,
-  InHeadNoscript, frameset).
-- `tasks/SPEC_COVERAGE.md` gains an "HTML parsing" section row (or the existing
-  hand-synced spec table is extended) pointing at this fixture suite and the
-  current pass rate.
+- `testdata/spec/html5lib-tests/tree-construction/` — corpus vendored at the
+  upstream SHA `e4463205ac3c4500e1379103daadfdcfe5e33af5` (56 top-level `.dat`
+  files + `scripted/`, 1699 cases total). `UPSTREAM.md` records the pin +
+  re-vendor recipe.
+- `tests/Starling.Html.Tests/TreeBuilder/`:
+  - `Html5LibDatFile.cs` — pure-managed parser for the `.dat` block format
+    (sections `#data`, `#errors`, `#new-errors`, `#document`,
+    `#document-fragment`, `#script-on`, `#script-off`).
+  - `Html5LibTreeSerializer.cs` — DOM → indented-tree dump matching the
+    corpus's `#document` body byte-for-byte (namespace designators
+    `svg ` / `math ` / `xlink ` / `xml ` / `xmls `, attribute lexicographic
+    sort, etc.).
+  - `Html5LibTreeConstructionTests.cs` — Test262-style runner: one
+    `[TestMethod]` aggregating across all blocks, sidecar
+    `bin/.../results/tree-construction/{summary,failures}.txt`,
+    env knobs `STARLING_TREEBUILD_FILTER` / `_FLOOR` / `_VERBOSE`.
+- `src/Starling.Dom/DocumentType.cs` — drive-by: `Name` may be empty
+  (DOM §4.6 doesn't require non-empty, and WHATWG HTML §13.2.5.74 explicitly
+  emits empty-name doctypes for `<!DOCTYPE >` input). Eliminates 3 crashes.
+- `tasks/SPEC_COVERAGE.md` — new "HTML parsing" section row pointing at this
+  runner and the current rate.
+
+## Acceptance (infrastructure)
+
+- ✅ Every `.dat` block runs through the harness; failures are addressable by
+  `file.dat#index` via `STARLING_TREEBUILD_FILTER`.
+- ✅ Sidecar report written on every run; full failure dump in
+  `results/tree-construction/failures.txt` for offline triage.
+- ✅ Floor gate in place. Baseline 2026-05-27: **44.23% (786/1777)**, 0 crashes,
+  ~0.1 s. Floor set to 44%; raise as conformance improves.
+- ✅ `tasks/SPEC_COVERAGE.md` has a row for this runner.
+
+## Toward 95% — successor WPs
+
+Each successor moves a bucket from "all red" to "all green" in the runner. They
+are independently picked up; together they take us from 44% toward 95%.
+
+- `wp:M1-02c-in-template-mode` — model §13.2.6.4.4 / §13.2.6.4.16 fully
+  (template-content document fragment, "in template" insertion mode, template
+  insertion-mode stack). Fixtures: `template.dat`.
+- `wp:M1-02d-adoption-agency` — implement §13.2.6.4.7 literally. Fixtures:
+  `adoption01.dat`, `adoption02.dat`, `tricky01.dat`, big chunks of
+  `tests1.dat` / `tests7.dat` / `webkit02.dat`.
+- `wp:M1-02e-foreign-content` — §13.2.6.5 SVG + MathML insertion modes,
+  case-corrected element + attribute names. Fixtures: `svg.dat`, `math.dat`,
+  `foreign-fragment.dat`, `namespace-sensitivity.dat`, `tests9.dat`.
+- `wp:M1-02f-table-sub-modes` — InTable, InTableText, InCaption, InColumnGroup,
+  InTableBody, InRow, InCell, InSelectInTable per §13.2.6.4.9-15. Fixtures:
+  `tables01.dat`, large chunks of `webkit01.dat` / `webkit02.dat`.
+- `wp:M1-02g-in-head-noscript` — model the "in head noscript" insertion mode
+  with the scripting flag disabled (the html5lib conformance default). Fixtures:
+  `noscript01.dat`.
 
 ## Notes
 
