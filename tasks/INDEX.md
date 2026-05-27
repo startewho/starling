@@ -33,6 +33,7 @@ order: milestone, then numeric id, then sub-letter.
 | [wp:M1-01g-tokenizer-entities](M1/wp-M1-01g-tokenizer-entities.md) | 🟢 complete | agent-claude-cody | Starling.Html |
 | [wp:M1-01h-tokenizer-html5lib](M1/wp-M1-01h-tokenizer-html5lib.md) | 🟢 complete | agent-copilot-gpt-5.5 | Starling.Html |
 | [wp:M1-02-html-tree-builder](M1/wp-M1-02-html-tree-builder.md) | 🟢 complete | agent-copilot-gpt-5.5 | Starling.Html |
+| [wp:M1-02b-tree-construction-html5lib](M1/wp-M1-02b-tree-construction-html5lib.md) | 🔵 available | — | Starling.Html |
 | [wp:M1-03-dom-core](M1/wp-M1-03-dom-core.md) | 🟢 complete | agent-copilot-gpt-5.5 | Starling.Dom |
 | [wp:M1-04-dom-events](M1/wp-M1-04-dom-events.md) | 🟢 complete | agent-copilot-gpt-5.5 | Starling.Dom |
 | [wp:M1-05-css-tokenizer-parser](M1/wp-M1-05-css-tokenizer-parser.md) | 🟢 complete | agent-copilot-gpt-5.5 | Starling.Css |
