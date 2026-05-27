@@ -493,6 +493,26 @@ public sealed class HtmlTreeBuilder
                 _mode = InsertionMode.Text;
                 _tokenizer.SetState(TokenizerState.ScriptData);
                 return;
+            case StartTagToken start when start.Name == "template":
+                // §13.2.6.4.4 "in head" — <template> start tag. The spec inserts
+                // the element, switches to "in template" insertion mode, and
+                // parses children as template content. We don't model the "in
+                // template" mode yet (see InsertionMode.cs), so we insert the
+                // template and immediately pop it off the stack of open elements
+                // — children of <template> end up parsed in normal flow, which
+                // is incorrect but non-crashing. Without this case the parser
+                // loops between InHead ↔ AfterHead, because AfterHead forwards
+                // <template> start tags here per §13.2.6.4.5 and InHead's
+                // "anything else" path puts the token right back into AfterHead.
+                InsertElement(start);
+                _openElements.Pop();
+                return;
+            case EndTagToken end when end.Name == "template":
+                // Matching simplification: the start tag was already popped, so
+                // swallow the end tag rather than walking the open-elements
+                // stack. Falling through to the "anything else" path here would
+                // pop the head element instead, breaking subsequent parsing.
+                return;
             case EndTagToken end when end.Name == "head":
                 _openElements.Pop();
                 _mode = InsertionMode.AfterHead;
