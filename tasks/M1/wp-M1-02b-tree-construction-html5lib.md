@@ -2,9 +2,9 @@
 id: "wp:M1-02b-tree-construction-html5lib"
 parent: "wp:M1-02-html-tree-builder"
 milestone: "M1"
-status: "available"
-claimed_by: ""
-claimed_at: ""
+status: "claimed"
+claimed_by: "agent-claude-cody"
+claimed_at: "2026-05-27T18:36:40Z"
 branch: "main"
 depends_on:
   - "wp:M1-02-html-tree-builder"
@@ -103,3 +103,4 @@ table sub-modes, frameset, InHeadNoscript) at once and turns
   (commit on main, same day) is a non-crashing placeholder; the real
   `InTemplate` mode and the rest of the deferred `wp:M1-02` scope sit behind
   this WP's pass-rate ratchet.
+- 2026-05-27T18:36:40Z — claimed by agent-claude-cody, working on main
