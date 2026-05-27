@@ -1476,27 +1476,6 @@ public static class NodeBindings
                 throw new JsThrow(realm.NewTypeError("createDocumentFragment called on non-Document"));
             return JsValue.Object(DomWrappers.Wrap(realm, d.CreateDocumentFragment()));
         }, length: 0);
-        // DOM §4.5 — document.createAttribute(localName).
-        EventTargetBinding.DefineMethod(realm, docProto, "createAttribute", (thisV, args) =>
-        {
-            if (DomWrappers.UnwrapDocument(thisV) is null || args.Length == 0)
-                throw new JsThrow(realm.NewTypeError("createAttribute requires a localName"));
-            var localName = JsValue.ToStringValue(args[0]);
-            if (!IsValidName(localName))
-                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{localName}' is not a valid attribute name");
-            var attr = new Attr(localName, "");
-            return JsValue.Object(DomWrappers.WrapAttr(realm, attr));
-        }, length: 1);
-        // DOM §4.5 — document.createAttributeNS(namespace, qualifiedName).
-        EventTargetBinding.DefineMethod(realm, docProto, "createAttributeNS", (thisV, args) =>
-        {
-            if (DomWrappers.UnwrapDocument(thisV) is null || args.Length < 2)
-                throw new JsThrow(realm.NewTypeError("createAttributeNS requires (namespace, qualifiedName)"));
-            var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var qname = JsValue.ToStringValue(args[1]);
-            ValidateQualifiedName(realm, ns, qname);
-            return JsValue.Object(DomWrappers.WrapAttr(realm, new Attr(qname, "", ns)));
-        }, length: 2);
         // DOM §4.5 — document.createCDATASection(data).
         EventTargetBinding.DefineMethod(realm, docProto, "createCDATASection", (thisV, args) =>
         {
