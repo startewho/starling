@@ -177,6 +177,17 @@ tests that have started passing — when one does, promote it from
 | `@starting-style` | css-transitions-2 | 🔴 |
 | `@container` | css-contain-3 | 🚫 deferred |
 
+## HTML parsing
+
+The file mainly tracks CSS but this section anchors the HTML side too — the
+WHATWG HTML tree-construction conformance corpus is owned by
+`wp:M1-02b-tree-construction-html5lib` and gates on a ratchet baseline.
+
+| Spec | URL | Status | Folder | Tracking WP |
+|---|---|---|---|---|
+| HTML §13.2 tokenizer | https://html.spec.whatwg.org/multipage/parsing.html#tokenization | ✅ | `Starling.Html.Tests/Tokenizer/Html5LibTokenizerTests.cs` (7032/7032) | `wp:M1-01h-tokenizer-html5lib` |
+| HTML §13.2.6 tree construction | https://html.spec.whatwg.org/multipage/parsing.html#tree-construction | 🟢 | `Starling.Html.Tests/TreeBuilder/Html5LibTreeConstructionTests.cs` (baseline 44.23%, 786/1777, 2026-05-27; floor 44%) | `wp:M1-02b-tree-construction-html5lib` |
+
 ---
 
 ## Overall counters (manual until SpecGen lands)

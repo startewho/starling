@@ -104,3 +104,25 @@ table sub-modes, frameset, InHeadNoscript) at once and turns
   `InTemplate` mode and the rest of the deferred `wp:M1-02` scope sit behind
   this WP's pass-rate ratchet.
 - 2026-05-27T18:36:40Z — claimed by agent-claude-cody, working on main
+- 2026-05-27T18:55Z — corpus vendored at upstream SHA
+  `e4463205ac3c4500e1379103daadfdcfe5e33af5` (1699 .dat cases, 78 of them in
+  `scripted/`). Runner mirrors the Test262 pattern: one `[TestMethod]`
+  aggregating across all blocks, on-disk sidecar report at
+  `bin/.../results/tree-construction/{summary,failures}.txt`,
+  `STARLING_TREEBUILD_FILTER`/`STARLING_TREEBUILD_FLOOR`/`STARLING_TREEBUILD_VERBOSE`
+  env knobs. Drive-by: relaxed `DocumentType` ctor to allow empty `Name`
+  (DOM §4.6 + WHATWG HTML §13.2.5.74 — `<!DOCTYPE >` emits an empty-name
+  doctype, and our ctor threw `ArgumentException`).
+  **Baseline: 44.23% (786/1777), 0 crashes, in 0.1 s.** Floor set to 44%.
+  Per-fixture highlights (full breakdown in the sidecar):
+  - ≥ 95%: `entities01.dat` 98.7%, `entities02.dat` 96.2%
+  - ~90%: `blocks.dat`, `comments01.dat`, `doctype01.dat`, `menuitem-element.dat`
+  - 0%: `noscript01.dat` (no `InHeadNoscript` mode), `tests9.dat` /
+    `math.dat` / `namespace-sensitivity.dat` (no foreign-content mode),
+    `tricky01.dat`, `pending-spec-changes*.dat`, `ark.dat`
+  - low: `adoption01.dat` 5.3%, `adoption02.dat` 0% (no adoption agency),
+    `webkit02.dat` 22.4%, `tests_innerHTML_1.dat` 32.1%
+  Remaining buckets toward the 95% target line up with the deferred-scope
+  list in `wp:M1-02`: adoption agency (§13.2.6.4.7), foreign content
+  (§13.2.6.5), real `InTemplate` mode, `InHeadNoscript`, table sub-modes.
+  Each will get its own successor WP when picked up.
