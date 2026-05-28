@@ -18,7 +18,7 @@ be messy, and we'll lean heavily on AI agents.
 Take the evolution of SpaceX's Raptor engine as an example. See Raptor 1? That's
 our target for this phase. Raptor 2 and Raptor 3? That's where we want to go.
 
-![Raptor engine comparison](docs/raptor-engine-comparison.jpeg)
+![Raptor engine comparison](./raptor-engine-comparison.jpeg)
 
 Thankfully, the browser and web ecosystem is mature. There are tons of
 specifications and tests, and none of it is new — implementing an existing spec
