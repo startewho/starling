@@ -214,11 +214,20 @@ public sealed class CssParser
         _position++;
         SkipWhitespace();
         ConsumeIf(CssTokenType.Colon);
+        // CSS Variables L1 §2: a custom property (`--*`) stores its declared
+        // value as a token stream, preserving interior whitespace (only the
+        // leading/trailing whitespace is trimmed). Regular properties collapse
+        // whitespace as before.
+        var isCustomProperty = name.StartsWith("--", StringComparison.Ordinal);
         var values = ConsumeComponentValuesUntil(
-            preserveWhitespace: false,
+            preserveWhitespace: isCustomProperty,
             CssTokenType.Semicolon,
             CssTokenType.RightBrace);
+        if (isCustomProperty)
+            TrimEdgeWhitespace(values);
         var important = RemoveTrailingImportant(values);
+        if (isCustomProperty)
+            TrimEdgeWhitespace(values);
         ConsumeIf(CssTokenType.Semicolon);
         _declarationCount++;
         return new CssDeclaration(name, values, important);
@@ -339,5 +348,15 @@ public sealed class CssParser
 
         values.RemoveRange(values.Count - 2, 2);
         return true;
+    }
+
+    /// <summary>CSS Variables L1 §2: trim leading and trailing whitespace tokens
+    /// from a preserved custom-property token stream (interior whitespace stays).</summary>
+    private static void TrimEdgeWhitespace(List<CssComponentValue> values)
+    {
+        while (values.Count > 0 && values[^1] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            values.RemoveAt(values.Count - 1);
+        while (values.Count > 0 && values[0] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            values.RemoveAt(0);
     }
 }
