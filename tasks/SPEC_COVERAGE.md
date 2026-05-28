@@ -176,7 +176,7 @@ tests that have started passing — when one does, promote it from
 |---|---|---|---|---|
 | CSSOM | https://drafts.csswg.org/cssom/ | 🟢 | `CssCssom1/`, `src/Starling.Css/Cssom/` — CSSStyleDeclaration §6.4 (setProperty/getPropertyValue/priority/removeProperty/item/length/cssText) behavioral tests (`wp:spec-cssom`); CSSStyleSheet/CSSRule OM + live bindings surface partially covered | `wp:spec-cssom` |
 | CSSOM View | https://drafts.csswg.org/cssom-view/ | 🔴 | — | `wp:spec-cssom-view` |
-| CSS Properties & Values API L1 (`@property`) | https://www.w3.org/TR/css-properties-values-api-1/ | 🟢 | `CssPropertiesValues1/`, `src/Starling.Css/PropertiesValues/` — `@property` at-rule parse: name/syntax/inherits/initial-value descriptors + validity (universal syntax, required descriptors) (`wp:spec-css-properties-values-api-1`); typed computed-value coercion + JS registerProperty not implemented | `wp:spec-css-properties-values-api-1` |
+| CSS Properties & Values API L1 (`@property`) | https://www.w3.org/TR/css-properties-values-api-1/ | 🟢 | `CssPropertiesValues1/`, `src/Starling.Css/PropertiesValues/` — `@property` at-rule parse + **engine collection** (`StyleEngine.RegisteredProperties`, last-wins across sheets) (`wp:spec-css-properties-values-api-1`); typed computed-value coercion, registered initial-value substitution, `inherits` override + JS registerProperty not implemented | `wp:spec-css-properties-values-api-1` |
 | CSS Typed OM 1 | https://www.w3.org/TR/css-typed-om-1/ | 🔴 | — | `wp:spec-css-typed-om-1` |
 | CSS Houdini Paint API | https://www.w3.org/TR/css-paint-api-1/ | 🚫 | v1-deferred 2026-05-27 | — |
 
