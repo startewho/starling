@@ -172,6 +172,7 @@ public enum PropertyId
     OverscrollBehaviorY,
     ScrollbarWidth,
     ScrollbarColor,
+    ScrollbarGutter,
 
     // Forms / UI
     AccentColor,
@@ -249,6 +250,10 @@ public enum PropertyId
     TextShadow,
     TextAlignLast,
 
+    // Inline layout (CSS Inline 3)
+    VerticalAlign,
+    BaselineSource,
+
     // Text layout
     TextIndent,
     WordSpacing,
@@ -278,6 +283,9 @@ public enum PropertyId
     AnimationFillMode,
     AnimationPlayState,
     AnimationComposition,
+    AnimationTimeline,
+    AnimationRangeStart,
+    AnimationRangeEnd,
 
     // Visual effects (appended): box shadow
     BoxShadow,

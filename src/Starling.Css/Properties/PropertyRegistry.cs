@@ -147,6 +147,9 @@ public static class PropertyRegistry
             PropertyId.WritingMode => new CssKeyword("horizontal-tb"),
             PropertyId.TextOrientation => new CssKeyword("mixed"),
             PropertyId.UnicodeBidi => new CssKeyword("normal"),
+            // CSS Inline 3 §3/§4 — vertical-align (initial baseline) + baseline-source.
+            PropertyId.VerticalAlign => new CssKeyword("baseline"),
+            PropertyId.BaselineSource => new CssKeyword("auto"),
 
             // Flexbox
             PropertyId.FlexDirection => new CssKeyword("row"),
@@ -231,6 +234,8 @@ public static class PropertyRegistry
             PropertyId.OverscrollBehaviorX or PropertyId.OverscrollBehaviorY => new CssKeyword("auto"),
             // CSS Scrollbars 1 §3/§4 — both default to `auto`.
             PropertyId.ScrollbarWidth or PropertyId.ScrollbarColor => new CssKeyword("auto"),
+            // CSS Overflow 3 §3.2 — scrollbar-gutter initial `auto`.
+            PropertyId.ScrollbarGutter => new CssKeyword("auto"),
 
             // Forms / UI
             PropertyId.AccentColor or PropertyId.CaretColor => new CssKeyword("auto"),
@@ -274,6 +279,9 @@ public static class PropertyRegistry
             PropertyId.AnimationFillMode => new CssKeyword("none"),
             PropertyId.AnimationPlayState => new CssKeyword("running"),
             PropertyId.AnimationComposition => new CssKeyword("replace"),
+            // CSS Animations 2 §3 — scroll/view timeline + range.
+            PropertyId.AnimationTimeline => new CssKeyword("auto"),
+            PropertyId.AnimationRangeStart or PropertyId.AnimationRangeEnd => new CssKeyword("normal"),
 
             // Generated content + lists
             // CSS Content 3 §2.1 — `content` initial is `normal` (computes to
