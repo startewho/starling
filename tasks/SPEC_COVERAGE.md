@@ -102,9 +102,9 @@ tests that have started passing — when one does, promote it from
 | CSS Fonts 4 | https://www.w3.org/TR/css-fonts-4/ | 🟢 | legacy (`FontFaceParserTests`) — gaps in `font-variation-settings`, `font-feature-settings`, `size-adjust` | `wp:spec-css-fonts-4` |
 | CSS Font Loading 3 (`document.fonts`) | https://www.w3.org/TR/css-font-loading-3/ | 🔴 | — | `wp:spec-css-font-loading-3` |
 | CSS Text 3 | https://www.w3.org/TR/css-text-3/ | 🟢 | `Starling.Layout.Tests/CssText3InlineTests`, `Starling.Css.Spec.Tests/CssText3/` — white-space pre*/transform/spacing/indent/tab-size/wrap applied (`wp:M5-css-12`) | `wp:spec-css-text-3` |
-| CSS Text 4 | https://www.w3.org/TR/css-text-4/ | 🔴 | — | `wp:spec-css-text-4` |
+| CSS Text 4 | https://www.w3.org/TR/css-text-4/ | 🟢 | `CssText4/` — L4 property additions (word-break/overflow-wrap/line-break/hyphens/text-wrap/text-align-last/tab-size) parse + cascade (`wp:spec-css-text-4`); layout behaviors (balance/pretty wrapping) not implemented | `wp:spec-css-text-4` |
 | CSS Text Decoration 3 | https://www.w3.org/TR/css-text-decor-3/ | 🟢 | `Starling.Css.Spec.Tests/CssTextDecor3/`, `Starling.Paint.Tests` — line/style/color/thickness + text-shadow painted (`wp:M5-css-15`); skip-ink/underline-position deferred | `wp:spec-css-text-decor-3` |
-| CSS Text Decoration 4 | https://www.w3.org/TR/css-text-decor-4/ | 🔴 | — | `wp:spec-css-text-decor-4` |
+| CSS Text Decoration 4 | https://www.w3.org/TR/css-text-decor-4/ | 🟢 | `CssTextDecor4/` — L4 thickness/underline-offset/underline-position + shorthand-with-thickness parse (`wp:spec-css-text-decor-4`); spelling/grammar-error painting not implemented | `wp:spec-css-text-decor-4` |
 | CSS Inline 3 | https://www.w3.org/TR/css-inline-3/ | 🔴 | — | `wp:spec-css-inline-3` |
 
 ## Layout
@@ -122,7 +122,7 @@ tests that have started passing — when one does, promote it from
 | CSS Tables 3 | https://www.w3.org/TR/css-tables-3/ | 🟢 | `TableLayoutTests` (minimal) | `wp:spec-css-tables-3` |
 | CSS Multicol 1 | https://www.w3.org/TR/css-multicol-1/ | 🔴 | — | `wp:spec-css-multicol-1` |
 | CSS Logical Properties 1 | https://www.w3.org/TR/css-logical-1/ | 🟢 | `LogicalPropertyTests` | `wp:spec-css-logical-1` |
-| CSS Writing Modes 4 | https://www.w3.org/TR/css-writing-modes-4/ | 🔴 | — | `wp:spec-css-writing-modes-4` |
+| CSS Writing Modes 4 | https://www.w3.org/TR/css-writing-modes-4/ | 🟢 | `CssWritingModes4/` — writing-mode/direction/text-orientation/unicode-bidi parse + cascade/inheritance (`wp:spec-css-writing-modes-4`); vertical layout not yet implemented | `wp:spec-css-writing-modes-4` |
 | CSS Overflow 3 | https://www.w3.org/TR/css-overflow-3/ | 🔴 | — | `wp:spec-css-overflow-3` |
 | CSS Containment 2 | https://www.w3.org/TR/css-contain-2/ | 🔴 | — | `wp:spec-css-contain-2` |
 | CSS Container Queries 1 | https://www.w3.org/TR/css-contain-3/ | 🔴 | — | `wp:spec-css-contain-3` |
@@ -142,9 +142,9 @@ tests that have started passing — when one does, promote it from
 | CSS Shapes 1 | https://www.w3.org/TR/css-shapes-1/ | 🔴 | — | `wp:spec-css-shapes-1` |
 | CSS Transforms 1 | https://www.w3.org/TR/css-transforms-1/ | 🟢 | `CssTransformParserTests`, `TransformPropertyTests` | `wp:spec-css-transforms-1` |
 | CSS Transforms 2 (3D, individual props) | https://www.w3.org/TR/css-transforms-2/ | 🔴 | — | `wp:spec-css-transforms-2` |
-| CSS Scroll Snap 1 | https://www.w3.org/TR/css-scroll-snap-1/ | 🔴 | — | `wp:spec-css-scroll-snap-1` |
-| CSS Scrollbars 1 | https://www.w3.org/TR/css-scrollbars-1/ | 🔴 | — | `wp:spec-css-scrollbars-1` |
-| CSS Overscroll Behavior 1 | https://www.w3.org/TR/css-overscroll-1/ | 🔴 | — | `wp:spec-css-overscroll-1` |
+| CSS Scroll Snap 1 | https://www.w3.org/TR/css-scroll-snap-1/ | 🟢 | `CssScrollSnap1/` — scroll-snap-type/align/stop + scroll-margin/padding parse + cascade (`wp:spec-css-scroll-snap-1`); snap positioning behavior not implemented | `wp:spec-css-scroll-snap-1` |
+| CSS Scrollbars 1 | https://www.w3.org/TR/css-scrollbars-1/ | 🟢 | `CssScrollbars1/` — scrollbar-width/scrollbar-color properties parse + cascade/inheritance (`wp:spec-css-scrollbars-1`); scrollbar painting not implemented | `wp:spec-css-scrollbars-1` |
+| CSS Overscroll Behavior 1 | https://www.w3.org/TR/css-overscroll-1/ | 🟢 | `CssOverscroll1/` — overscroll-behavior-x/y + shorthand parse + cascade (`wp:spec-css-overscroll-1`); invalid-keyword rejection pending (no per-property value validation) | `wp:spec-css-overscroll-1` |
 | CSS View Transitions 1 | https://www.w3.org/TR/css-view-transitions-1/ | 🔴 | — | `wp:spec-css-view-transitions-1` |
 | CSS Scroll-Driven Animations 1 | https://www.w3.org/TR/scroll-animations-1/ | 🔴 | — | `wp:spec-scroll-animations-1` |
 
@@ -152,10 +152,10 @@ tests that have started passing — when one does, promote it from
 
 | Spec | URL | Status | Folder | Tracking WP |
 |---|---|---|---|---|
-| CSS Basic UI 4 | https://www.w3.org/TR/css-ui-4/ | 🔴 | — | `wp:spec-css-ui-4` |
+| CSS Basic UI 4 | https://www.w3.org/TR/css-ui-4/ | 🟢 | `CssUi4/` — outline (shorthand + longhands)/outline-offset/resize/text-overflow/caret-color/accent-color/appearance/cursor parse + cascade (`wp:spec-css-ui-4`); outline painting + text-overflow rendering not implemented | `wp:spec-css-ui-4` |
 | CSS Pseudo 4 | https://www.w3.org/TR/css-pseudo-4/ | 🟢 | `PseudoElementTests` (legacy) — `::backdrop`, `::marker`, `::file-selector-button` untested | `wp:spec-css-pseudo-4` |
 | CSS Lists 3 | https://www.w3.org/TR/css-lists-3/ | 🟢 | `CssLists3/`, `Starling.Layout.Tests/ListMarkerTests` — list-style-type markers (disc/decimal/alpha/roman…) (`wp:M5-css-16`); marker `inside`/image deferred | `wp:spec-css-lists-3` |
-| CSS Counter Styles 3 (`@counter-style`) | https://www.w3.org/TR/css-counter-styles-3/ | 🔴 | — | `wp:spec-css-counter-styles-3` |
+| CSS Counter Styles 3 (`@counter-style`) | https://www.w3.org/TR/css-counter-styles-3/ | 🟢 | `CssCounterStyles3/`, `src/Starling.Css/CounterStyle/` — `@counter-style` at-rule + cyclic/fixed/symbolic/alphabetic/numeric/additive/extends generation + predefined styles (`wp:spec-css-counter-styles-3`); image symbols + multi-range deferred | `wp:spec-css-counter-styles-3` |
 | CSS Generated Content 3 | https://www.w3.org/TR/css-content-3/ | 🟢 | `CssContent3/`, `Starling.Layout.Tests/GeneratedContentLayoutTests` — `content` on `::before`/`::after` (string/attr()) (`wp:M5-css-16`); counters/quotes deferred | `wp:spec-css-content-3` |
 | CSS Speech 1 | https://www.w3.org/TR/css-speech-1/ | 🚫 | v1-deferred 2026-05-27 | — |
 | CSS Ruby 1 | https://www.w3.org/TR/css-ruby-1/ | 🚫 | v1-deferred 2026-05-27 | — |
@@ -191,7 +191,7 @@ tests that have started passing — when one does, promote it from
 | `@font-face` | css-fonts-4 | ✅ `FontFaceParserTests` |
 | `@keyframes` | css-animations-1 | ✅ `KeyframesParserTests` |
 | `@property` | css-properties-values-api-1 | 🔴 |
-| `@counter-style` | css-counter-styles-3 | 🔴 |
+| `@counter-style` | css-counter-styles-3 | 🟢 `CssCounterStyles3/CounterStyleTests` |
 | `@page` | css-page-3 | 🚫 v1-deferred (print) |
 | `@scope` | css-cascade-6 | 🔴 |
 | `@starting-style` | css-transitions-2 | 🔴 |
@@ -208,9 +208,9 @@ stale — the matrix has always held more rows than that.
 |---|---|
 | Specs catalogued | 67 |
 | ✅ Implemented | 3 |
-| 🟢 In progress | 27 |
+| 🟢 In progress | 35 |
 | 🟡 Scaffolded only | 0 |
-| 🔴 Not started (in scope, no work yet) | 32 |
+| 🔴 Not started (in scope, no work yet) | 24 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
