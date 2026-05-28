@@ -56,7 +56,32 @@ use `SplitTopLevelCommas` — unify on that). Promote
 **Risk.** Parser-level; touches many multi-value properties. Run the FULL suite
 (Css, Css.Spec, Layout, Paint) after.
 
+## Tier 1c — gaps found by the core conformance suites
+
+The comprehensive `[Spec]` suites for the four core parse/cascade specs all
+pass except for these real engine bugs (each a `[PendingFact]` with the spec's
+tracking id). Fixing them flips the PendingFacts → `[SpecFact]` and drives all
+four specs to ✅ (they have no paint/layout layer — these are their last gaps):
+
+- **css-syntax-3** (1): `CssToken` for a hash carries no `id`/`unrestricted`
+  type flag (§4.3.6). Add the flag; set `id` when the value is a valid ident.
+- **css-values-4** (4): the calc reducer folds `CalcLength`/`CalcAngle` but not
+  `CalcTime` or `CalcFrequency` (same-unit and cross-unit) — `calc(2s + 1s)` /
+  `calc(1khz + 1hz)` stay unfolded; and `1e2px` (scientific-notation dimension)
+  doesn't tokenize as `100px`.
+- **css-cascade-5** (1): nested `@layer outer { … }` treats the sub-layer's
+  declarations as stronger than rules that are unlayered-within-`outer` (§7);
+  the unlayered-within-a-layer rules must win.
+- **selectors-4** (7): form-validation pseudo-classes (`:valid`/`:invalid`/
+  `:in-range`/`:out-of-range`/`:autofill`/`:user-valid`/`:user-invalid`) aren't
+  matched; `:lang()` accepts only a single string (not a comma list); and
+  `:focus-visible` is aliased to `:focus` (no keyboard-vs-pointer heuristic).
+  (Several of these depend on form-state/interaction tracking, so they may move
+  with the behavior-layer WP rather than here.)
+
 ## Done when
 
-Both PendingFacts above are `[SpecFact]`; the enumerated specs gain
-invalid-value-rejection SpecFacts; all suites green. Update `tasks/SPEC_COVERAGE.md`.
+Both systemic PendingFacts (1a/1b) are `[SpecFact]`; the enumerated specs gain
+invalid-value-rejection SpecFacts; the Tier-1c gaps are fixed (→ syntax-3,
+values-4, cascade-5, selectors-4 reach ✅); all suites green. Update
+`tasks/SPEC_COVERAGE.md`.
