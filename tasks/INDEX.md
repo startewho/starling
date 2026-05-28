@@ -234,6 +234,24 @@ Parallel review track for targeted module audits. Each package records
 | [wp:M13-10-review-bindings](M13/wp-M13-10-review-bindings.md) | 🔵 available | — | Starling.Bindings | — |
 | [wp:M13-11-review-engine](M13/wp-M13-11-review-engine.md) | 🔵 available | — | Starling.Engine | — |
 
+## Spec conformance (ongoing — CSS-V1)
+
+Driving every in-scope CSS spec to ✅ per `tasks/SPEC_COVERAGE.md`. The
+parse/cascade + at-rule-parse + OM-model tier is **done — 🔴 is now 0** (every
+in-scope spec ≥ 🟢, 4 at ✅). These packages cover the remaining lift (behavior/
+paint layer + JS bindings) to drive the 58 🟢 → ✅.
+
+| ID | Status | Owner | Subsystem |
+|---|---|---|---|
+| [wp:spec-conformance-bootstrap](spec/wp-spec-conformance-bootstrap.md) | 🟡 in_review | agent-copilot-claude-opus-4.7 | Starling.Css / spec-infra |
+| [wp:spec-css-v1-systemic-fixes](spec/wp-spec-css-v1-systemic-fixes.md) | 🔵 available | — | Starling.Css (value parsing + registry) |
+| [wp:spec-css-v1-om-subsystems](spec/wp-spec-css-v1-om-subsystems.md) | 🔵 available | — | Cssom / Bindings / Js.Hosting |
+| [wp:spec-css-v1-behavior-layer](spec/wp-spec-css-v1-behavior-layer.md) | ⚫ blocked | — | Layout / Paint / Cascade |
+
+`wp:spec-css-v1-behavior-layer` is blocked on `wp:spec-css-v1-systemic-fixes`
+(value validation + comma-splitting land first). The systemic-fixes and
+om-subsystems packages are independent and available now.
+
 ## Available right now (no dependencies pending)
 
 Engine code-review track (`M13`) is fully open: all module review packages

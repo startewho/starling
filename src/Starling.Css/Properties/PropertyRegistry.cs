@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Starling.Css.Parser;
 using Starling.Css.Values;
 
@@ -5,10 +6,13 @@ namespace Starling.Css.Properties;
 
 public static class PropertyRegistry
 {
-    private static readonly Dictionary<string, PropertyId> Names =
-        Enum.GetValues<PropertyId>().ToDictionary(ToCssName, id => id, StringComparer.OrdinalIgnoreCase);
+    // Build-once / read-many name→id table, read on every declaration parse:
+    // FrozenDictionary per the repo C# performance policy (hot lookup path).
+    private static readonly FrozenDictionary<string, PropertyId> Names =
+        Enum.GetValues<PropertyId>().ToFrozenDictionary(ToCssName, id => id, StringComparer.OrdinalIgnoreCase);
 
-    private static readonly HashSet<PropertyId> Inherited =
+    // Build-once / read-many inheritance set, read on every cascade: FrozenSet.
+    private static readonly FrozenSet<PropertyId> Inherited = FrozenSet.ToFrozenSet<PropertyId>(
     [
         PropertyId.Color,
         PropertyId.FontFamily,
@@ -42,6 +46,9 @@ public static class PropertyRegistry
         PropertyId.PointerEvents,
         PropertyId.CaretColor,
         PropertyId.ColorScheme,
+        // CSS Scrollbars 1 §3/§4 — scrollbar-width and scrollbar-color are inherited.
+        PropertyId.ScrollbarWidth,
+        PropertyId.ScrollbarColor,
         // CSS Lists 3 §2: list-style-* are inherited so a marker type set on
         // the list container applies to every list item descendant. `quotes`
         // is inherited per CSS Content 3 §5.
@@ -49,7 +56,7 @@ public static class PropertyRegistry
         PropertyId.ListStylePosition,
         PropertyId.ListStyleImage,
         PropertyId.Quotes,
-    ];
+    ]);
 
     public static IReadOnlyList<PropertyId> All { get; } = Enum.GetValues<PropertyId>();
 
@@ -103,8 +110,14 @@ public static class PropertyRegistry
             PropertyId.BackgroundColor => CssColor.Transparent,
             PropertyId.BackgroundImage => new CssKeyword("none"),
             PropertyId.BackgroundPosition => new CssKeyword("0% 0%"),
+            // CSS Backgrounds 4 §3 — background-position-x/y longhands, initial 0%.
+            PropertyId.BackgroundPositionX or PropertyId.BackgroundPositionY => new CssPercentage(0),
             PropertyId.BackgroundSize => new CssKeyword("auto"),
             PropertyId.BackgroundRepeat => new CssKeyword("repeat"),
+            // CSS Backgrounds 3 §3 — initial values for attachment/origin/clip.
+            PropertyId.BackgroundAttachment => new CssKeyword("scroll"),
+            PropertyId.BackgroundOrigin => new CssKeyword("padding-box"),
+            PropertyId.BackgroundClip => new CssKeyword("border-box"),
             PropertyId.Opacity => new CssNumber(1),
             PropertyId.Visibility => new CssKeyword("visible"),
             PropertyId.FontFamily => new CssKeyword("serif"),
@@ -140,6 +153,9 @@ public static class PropertyRegistry
             PropertyId.WritingMode => new CssKeyword("horizontal-tb"),
             PropertyId.TextOrientation => new CssKeyword("mixed"),
             PropertyId.UnicodeBidi => new CssKeyword("normal"),
+            // CSS Inline 3 §3/§4 — vertical-align (initial baseline) + baseline-source.
+            PropertyId.VerticalAlign => new CssKeyword("baseline"),
+            PropertyId.BaselineSource => new CssKeyword("auto"),
 
             // Flexbox
             PropertyId.FlexDirection => new CssKeyword("row"),
@@ -164,10 +180,21 @@ public static class PropertyRegistry
             // Gap
             PropertyId.RowGap or PropertyId.ColumnGap => new CssKeyword("normal"),
 
+            // CSS Multicol 1 §3-§5 initial values.
+            PropertyId.ColumnCount or PropertyId.ColumnWidth => new CssKeyword("auto"),
+            PropertyId.ColumnRuleWidth => new CssKeyword("medium"),
+            PropertyId.ColumnRuleStyle => new CssKeyword("none"),
+            PropertyId.ColumnRuleColor => new CssKeyword("currentColor"),
+            PropertyId.ColumnSpan => new CssKeyword("none"),
+            PropertyId.ColumnFill => new CssKeyword("balance"),
+
             // Sizing
             PropertyId.AspectRatio => new CssKeyword("auto"),
             PropertyId.ObjectFit => new CssKeyword("fill"),
             PropertyId.ObjectPosition => new CssKeyword("50% 50%"),
+            // CSS Sizing 4 §4 — contain-intrinsic-size longhands, initial `none`.
+            PropertyId.ContainIntrinsicWidth or PropertyId.ContainIntrinsicHeight
+                or PropertyId.ContainIntrinsicInlineSize or PropertyId.ContainIntrinsicBlockSize => new CssKeyword("none"),
 
             // Visual effects
             PropertyId.Transform or PropertyId.Translate or PropertyId.Scale or PropertyId.Rotate => new CssKeyword("none"),
@@ -175,9 +202,16 @@ public static class PropertyRegistry
             PropertyId.TransformBox => new CssKeyword("view-box"),
             PropertyId.Perspective => new CssKeyword("none"),
             PropertyId.PerspectiveOrigin => new CssKeyword("50% 50%"),
+            // CSS Transforms 2 §5.
+            PropertyId.TransformStyle => new CssKeyword("flat"),
+            PropertyId.BackfaceVisibility => new CssKeyword("visible"),
             PropertyId.Filter or PropertyId.BackdropFilter => new CssKeyword("none"),
             PropertyId.MixBlendMode or PropertyId.BackgroundBlendMode => new CssKeyword("normal"),
             PropertyId.ClipPath => new CssKeyword("none"),
+            // CSS Shapes 1 §2-§3.
+            PropertyId.ShapeOutside => new CssKeyword("none"),
+            PropertyId.ShapeMargin => CssLength.Zero,
+            PropertyId.ShapeImageThreshold => new CssNumber(0),
             PropertyId.BoxShadow => new CssKeyword("none"),
             PropertyId.MaskImage => new CssKeyword("none"),
             PropertyId.MaskPosition => new CssKeyword("0% 0%"),
@@ -204,6 +238,10 @@ public static class PropertyRegistry
             PropertyId.ScrollMarginTop or PropertyId.ScrollMarginRight or PropertyId.ScrollMarginBottom or PropertyId.ScrollMarginLeft => CssLength.Zero,
             PropertyId.ScrollPaddingTop or PropertyId.ScrollPaddingRight or PropertyId.ScrollPaddingBottom or PropertyId.ScrollPaddingLeft => new CssKeyword("auto"),
             PropertyId.OverscrollBehaviorX or PropertyId.OverscrollBehaviorY => new CssKeyword("auto"),
+            // CSS Scrollbars 1 §3/§4 — both default to `auto`.
+            PropertyId.ScrollbarWidth or PropertyId.ScrollbarColor => new CssKeyword("auto"),
+            // CSS Overflow 3 §3.2 — scrollbar-gutter initial `auto`.
+            PropertyId.ScrollbarGutter => new CssKeyword("auto"),
 
             // Forms / UI
             PropertyId.AccentColor or PropertyId.CaretColor => new CssKeyword("auto"),
@@ -212,6 +250,13 @@ public static class PropertyRegistry
             PropertyId.PointerEvents => new CssKeyword("auto"),
             PropertyId.UserSelect => new CssKeyword("auto"),
             PropertyId.Cursor => new CssKeyword("auto"),
+            // CSS Basic UI 4 §3 (outline), §6 (resize), §7 (text-overflow).
+            PropertyId.OutlineWidth => new CssKeyword("medium"),
+            PropertyId.OutlineStyle => new CssKeyword("none"),
+            PropertyId.OutlineColor => new CssKeyword("auto"),
+            PropertyId.OutlineOffset => CssLength.Zero,
+            PropertyId.Resize => new CssKeyword("none"),
+            PropertyId.TextOverflow => new CssKeyword("clip"),
 
             // Logical longhands — default to physical equivalents.
             PropertyId.MarginInlineStart or PropertyId.MarginInlineEnd or PropertyId.MarginBlockStart or PropertyId.MarginBlockEnd => CssLength.Zero,
@@ -240,6 +285,16 @@ public static class PropertyRegistry
             PropertyId.AnimationFillMode => new CssKeyword("none"),
             PropertyId.AnimationPlayState => new CssKeyword("running"),
             PropertyId.AnimationComposition => new CssKeyword("replace"),
+            // CSS Animations 2 §3 — scroll/view timeline + range.
+            PropertyId.AnimationTimeline => new CssKeyword("auto"),
+            PropertyId.AnimationRangeStart or PropertyId.AnimationRangeEnd => new CssKeyword("normal"),
+            // CSS Scroll-Driven Animations 1 §2-§4.
+            PropertyId.ScrollTimelineName or PropertyId.ViewTimelineName or PropertyId.TimelineScope => new CssKeyword("none"),
+            PropertyId.ScrollTimelineAxis or PropertyId.ViewTimelineAxis => new CssKeyword("block"),
+            PropertyId.ViewTimelineInset => new CssKeyword("auto"),
+            // CSS Anchor Positioning 1 §2-§5.
+            PropertyId.AnchorName or PropertyId.PositionArea or PropertyId.AnchorScope => new CssKeyword("none"),
+            PropertyId.PositionAnchor => new CssKeyword("auto"),
 
             // Generated content + lists
             // CSS Content 3 §2.1 — `content` initial is `normal` (computes to
@@ -336,6 +391,10 @@ public static class PropertyRegistry
                 foreach (var item in ExpandBackground(values, important))
                     yield return item;
                 break;
+            case "mask":
+                foreach (var item in ExpandMask(values, important))
+                    yield return item;
+                break;
             case "border":
                 foreach (var value in values)
                 {
@@ -354,6 +413,69 @@ public static class PropertyRegistry
                         foreach (var item in Box(PropertyId.BorderTopWidth, PropertyId.BorderRightWidth, PropertyId.BorderBottomWidth, PropertyId.BorderLeftWidth, [value], important))
                             yield return item;
                     }
+                }
+                break;
+            // CSS Scroll-Driven Animations 1 §3.1 — `scroll-timeline: <name> <axis>?`.
+            case "scroll-timeline":
+                yield return new PropertyDeclaration(PropertyId.ScrollTimelineName, values[0], important);
+                yield return new PropertyDeclaration(PropertyId.ScrollTimelineAxis, values.Count > 1 ? values[1] : new CssKeyword("block"), important);
+                break;
+            // CSS Scroll-Driven Animations 1 §4.1 — `view-timeline: <name> <axis>?`.
+            case "view-timeline":
+                yield return new PropertyDeclaration(PropertyId.ViewTimelineName, values[0], important);
+                yield return new PropertyDeclaration(PropertyId.ViewTimelineAxis, values.Count > 1 ? values[1] : new CssKeyword("block"), important);
+                break;
+            // CSS Sizing 4 §4 — `contain-intrinsic-size: [ none | <length> ]{1,2}`
+            // sets width then height (one value applies to both).
+            case "contain-intrinsic-size":
+                yield return new PropertyDeclaration(PropertyId.ContainIntrinsicWidth, values[0], important);
+                yield return new PropertyDeclaration(PropertyId.ContainIntrinsicHeight, values.Count > 1 ? values[1] : values[0], important);
+                break;
+            // CSS Multicol 1 §7.1 — `columns: <'column-width'> || <'column-count'>`.
+            // Each component is `auto` or a length (width) / integer (count).
+            case "columns":
+                {
+                    CssValue? colWidth = null, colCount = null;
+                    foreach (var value in values)
+                    {
+                        if (value is CssNumber) colCount = value;
+                        else if (value is CssLength) colWidth = value;
+                        else if (value is CssKeyword { Name: "auto" }) { /* applies to whichever is unset */ }
+                        else colWidth ??= value;
+                    }
+                    yield return new PropertyDeclaration(PropertyId.ColumnWidth, colWidth ?? new CssKeyword("auto"), important);
+                    yield return new PropertyDeclaration(PropertyId.ColumnCount, colCount ?? new CssKeyword("auto"), important);
+                }
+                break;
+            // CSS Multicol 1 §6 — `column-rule: <'column-rule-width'> || <'column-rule-style'> || <'column-rule-color'>`.
+            case "column-rule":
+                {
+                    CssValue? rColor = null, rStyle = null, rWidth = null;
+                    foreach (var value in values)
+                    {
+                        if (IsBorderStyle(value)) rStyle = value;
+                        else if (IsColorLike(value)) rColor = value;
+                        else rWidth = value;
+                    }
+                    yield return new PropertyDeclaration(PropertyId.ColumnRuleColor, rColor ?? new CssKeyword("currentColor"), important);
+                    yield return new PropertyDeclaration(PropertyId.ColumnRuleStyle, rStyle ?? new CssKeyword("none"), important);
+                    yield return new PropertyDeclaration(PropertyId.ColumnRuleWidth, rWidth ?? new CssKeyword("medium"), important);
+                }
+                break;
+            // CSS Basic UI 4 §3.4 — `outline: <'outline-color'> || <'outline-style'> || <'outline-width'>`.
+            // Omitted longhands reset to their initial value.
+            case "outline":
+                {
+                    CssValue? oColor = null, oStyle = null, oWidth = null;
+                    foreach (var value in values)
+                    {
+                        if (IsBorderStyle(value)) oStyle = value;
+                        else if (IsColorLike(value)) oColor = value;
+                        else oWidth = value;
+                    }
+                    yield return new PropertyDeclaration(PropertyId.OutlineColor, oColor ?? new CssKeyword("auto"), important);
+                    yield return new PropertyDeclaration(PropertyId.OutlineStyle, oStyle ?? new CssKeyword("none"), important);
+                    yield return new PropertyDeclaration(PropertyId.OutlineWidth, oWidth ?? new CssKeyword("medium"), important);
                 }
                 break;
 
@@ -614,53 +736,236 @@ public static class PropertyRegistry
 
     private static IEnumerable<PropertyDeclaration> ExpandBackground(List<CssValue> values, bool important)
     {
-        // CSS Backgrounds 3 §3.10 — the `background` shorthand sets multiple
-        // background-* longhands. Full layered parsing (split on top-level
-        // commas, per-layer position/size with slash separator) is deferred;
-        // for now we collect each component once across the value list. This
-        // is enough for the common single-layer authoring style used by sites
-        // like mcmaster.com: `background: url(sprite.png) -60px 0 no-repeat`.
-        CssValue? color = null;
+        // CSS Backgrounds 3 §3.4 — the `background` shorthand sets the eight
+        // background-* longhands. The value is a comma-separated list of layers
+        // ( [ <bg-layer> , ]* <final-bg-layer> ). `background-color` may only
+        // appear in the final layer; every layer that omits a given longhand
+        // resets it to its initial value.
+        var layers = SplitTopLevelCommas(values);
+        if (layers.Count == 0)
+            yield break;
+
+        // Per-layer accumulators for each layered longhand. Background-color is
+        // a single value taken from the final layer only.
+        var images = new List<CssValue>();
+        var positions = new List<CssValue>();
+        var sizes = new List<CssValue>();
+        var repeats = new List<CssValue>();
+        var attachments = new List<CssValue>();
+        var origins = new List<CssValue>();
+        var clips = new List<CssValue>();
+        CssValue color = CssColor.Transparent;
+
+        for (var i = 0; i < layers.Count; i++)
+        {
+            var isFinal = i == layers.Count - 1;
+            var (parsed, layerColor) = ParseBackgroundLayer(layers[i], isFinal);
+            if (isFinal && layerColor is not null)
+                color = layerColor;
+
+            images.Add(parsed.Image);
+            positions.Add(parsed.Position);
+            sizes.Add(parsed.Size);
+            repeats.Add(parsed.Repeat);
+            attachments.Add(parsed.Attachment);
+            origins.Add(parsed.Origin);
+            clips.Add(parsed.Clip);
+        }
+
+        // CSS Backgrounds 3 §3.4 — background-color is not layered; it takes the
+        // final layer's color (initial transparent otherwise).
+        yield return new PropertyDeclaration(PropertyId.BackgroundColor, color, important);
+        yield return Layered(PropertyId.BackgroundImage, images, important);
+        yield return Layered(PropertyId.BackgroundPosition, positions, important);
+        yield return Layered(PropertyId.BackgroundSize, sizes, important);
+        yield return Layered(PropertyId.BackgroundRepeat, repeats, important);
+        yield return Layered(PropertyId.BackgroundAttachment, attachments, important);
+        yield return Layered(PropertyId.BackgroundOrigin, origins, important);
+        yield return Layered(PropertyId.BackgroundClip, clips, important);
+
+        static PropertyDeclaration Layered(PropertyId id, List<CssValue> layerValues, bool important)
+            => new(id, layerValues.Count == 1 ? layerValues[0] : new CssValueList(layerValues), important);
+    }
+
+    private readonly record struct BackgroundLayer(
+        CssValue Image,
+        CssValue Position,
+        CssValue Size,
+        CssValue Repeat,
+        CssValue Attachment,
+        CssValue Origin,
+        CssValue Clip);
+
+    /// <summary>
+    /// Parse a single <c>&lt;bg-layer&gt;</c> per CSS Backgrounds 3 §3.4. Any
+    /// omitted component resets to its initial value. The optional
+    /// <c>&lt;position&gt; [ / &lt;size&gt; ]?</c> is slash-separated. When two
+    /// box keywords (border-box / padding-box / content-box) are present, the
+    /// first sets <c>background-origin</c> and the second <c>background-clip</c>;
+    /// a single box keyword sets both. <paramref name="allowColor"/> is true only
+    /// for the final layer, where a <c>background-color</c> is permitted.
+    /// </summary>
+    private static (BackgroundLayer Layer, CssValue? Color) ParseBackgroundLayer(
+        List<CssValue> values,
+        bool allowColor)
+    {
         CssValue? image = null;
         CssValue? repeat = null;
+        CssValue? attachment = null;
+        CssValue? color = null;
+        var boxes = new List<CssValue>();
         var positionValues = new List<CssValue>();
+        var sizeValues = new List<CssValue>();
+
+        // The optional `<position> [ / <size> ]?` puts the size right after the
+        // slash. Only the size component(s) immediately after the slash belong
+        // to background-size; any following keywords (attachment, box) are
+        // parsed normally once the size run ends.
+        var afterSlash = false;
+        foreach (var v in values)
+        {
+            if (v is CssKeyword { Name: "/" })
+            {
+                afterSlash = true;
+                continue;
+            }
+
+            if (afterSlash)
+            {
+                if (IsBackgroundSizeComponent(v))
+                {
+                    sizeValues.Add(v);
+                    continue;
+                }
+                afterSlash = false; // size run ended; fall through to normal routing.
+            }
+
+            if (image is null && IsBackgroundImage(v))
+                image = v;
+            else if (repeat is null && v is CssKeyword rk && IsBackgroundRepeatKeyword(rk.Name))
+                repeat = v;
+            else if (attachment is null && v is CssKeyword ak && IsBackgroundAttachmentKeyword(ak.Name))
+                attachment = v;
+            else if (v is CssKeyword bk && IsBackgroundBoxKeyword(bk.Name))
+                boxes.Add(v);
+            else if (v is CssLength or CssPercentage or CssNumber
+                || (v is CssKeyword pk && IsBackgroundPositionKeyword(pk.Name)))
+                positionValues.Add(v);
+            else if (allowColor && color is null && IsColorLike(v))
+                color = v;
+        }
+
+        var size = sizeValues.Count switch
+        {
+            0 => new CssKeyword("auto"),
+            1 => sizeValues[0],
+            _ => new CssValueList(sizeValues),
+        };
+
+        CssValue position = positionValues.Count switch
+        {
+            0 => new CssKeyword("0% 0%"),
+            1 => positionValues[0],
+            _ => new CssValueList(positionValues),
+        };
+
+        // First box → origin, second → clip; one box sets both (§3.4).
+        var origin = boxes.Count > 0 ? boxes[0] : new CssKeyword("padding-box");
+        var clip = boxes.Count > 1 ? boxes[1] : (boxes.Count == 1 ? boxes[0] : new CssKeyword("border-box"));
+
+        var layer = new BackgroundLayer(
+            image ?? new CssKeyword("none"),
+            position,
+            size,
+            repeat ?? new CssKeyword("repeat"),
+            attachment ?? new CssKeyword("scroll"),
+            origin,
+            clip);
+        return (layer, color);
+    }
+
+    /// <summary>
+    /// CSS Masking 1 §7.5 — the <c>mask</c> shorthand sets the eight mask-* longhands.
+    /// Single-layer support: classifies each component and resets omitted longhands to
+    /// their initial value. The optional <c>&lt;position&gt; [ / &lt;size&gt; ]?</c> is
+    /// slash-separated; two geometry-box keywords set mask-origin then mask-clip.
+    /// </summary>
+    private static IEnumerable<PropertyDeclaration> ExpandMask(List<CssValue> values, bool important)
+    {
+        CssValue? image = null, mode = null, repeat = null, composite = null;
+        var boxes = new List<CssValue>();
+        var positionValues = new List<CssValue>();
+        var sizeValues = new List<CssValue>();
+        var afterSlash = false;
 
         foreach (var v in values)
         {
-            if (color is null && IsColorLike(v))
+            if (v is CssKeyword { Name: "/" }) { afterSlash = true; continue; }
+            if (afterSlash)
             {
-                color = v;
+                if (IsBackgroundSizeComponent(v)) { sizeValues.Add(v); continue; }
+                afterSlash = false;
             }
-            else if (image is null && (v is CssUrl || v is CssFunctionValue { Name: "linear-gradient" or "radial-gradient" or "conic-gradient" or "repeating-linear-gradient" or "repeating-radial-gradient" or "repeating-conic-gradient" or "image-set" or "url" }))
-            {
+
+            if (image is null && IsBackgroundImage(v))
                 image = v;
-            }
-            else if (v is CssKeyword k && IsBackgroundRepeatKeyword(k.Name))
-            {
+            else if (mode is null && v is CssKeyword mk && IsMaskModeKeyword(mk.Name))
+                mode = v;
+            else if (repeat is null && v is CssKeyword rk && IsBackgroundRepeatKeyword(rk.Name))
                 repeat = v;
-            }
+            else if (composite is null && v is CssKeyword ck && IsMaskCompositeKeyword(ck.Name))
+                composite = v;
+            else if (v is CssKeyword bk && IsMaskGeometryBoxKeyword(bk.Name))
+                boxes.Add(v);
             else if (v is CssLength or CssPercentage or CssNumber
                 || (v is CssKeyword pk && IsBackgroundPositionKeyword(pk.Name)))
-            {
                 positionValues.Add(v);
-            }
         }
 
-        if (color is not null)
-            yield return new PropertyDeclaration(PropertyId.BackgroundColor, color, important);
-        if (image is not null)
-            yield return new PropertyDeclaration(PropertyId.BackgroundImage, image, important);
-        if (repeat is not null)
-            yield return new PropertyDeclaration(PropertyId.BackgroundRepeat, repeat, important);
-        if (positionValues.Count > 0)
-        {
-            var pos = positionValues.Count == 1 ? positionValues[0] : new CssValueList(positionValues);
-            yield return new PropertyDeclaration(PropertyId.BackgroundPosition, pos, important);
-        }
+        var size = sizeValues.Count switch { 0 => new CssKeyword("auto"), 1 => sizeValues[0], _ => new CssValueList(sizeValues) };
+        CssValue position = positionValues.Count switch { 0 => new CssKeyword("0% 0%"), 1 => positionValues[0], _ => new CssValueList(positionValues) };
+        var origin = boxes.Count > 0 ? boxes[0] : new CssKeyword("border-box");
+        var clip = boxes.Count > 1 ? boxes[1] : (boxes.Count == 1 ? boxes[0] : new CssKeyword("border-box"));
+
+        yield return new PropertyDeclaration(PropertyId.MaskImage, image ?? new CssKeyword("none"), important);
+        yield return new PropertyDeclaration(PropertyId.MaskMode, mode ?? new CssKeyword("match-source"), important);
+        yield return new PropertyDeclaration(PropertyId.MaskPosition, position, important);
+        yield return new PropertyDeclaration(PropertyId.MaskSize, size, important);
+        yield return new PropertyDeclaration(PropertyId.MaskRepeat, repeat ?? new CssKeyword("repeat"), important);
+        yield return new PropertyDeclaration(PropertyId.MaskOrigin, origin, important);
+        yield return new PropertyDeclaration(PropertyId.MaskClip, clip, important);
+        yield return new PropertyDeclaration(PropertyId.MaskComposite, composite ?? new CssKeyword("add"), important);
     }
+
+    private static bool IsMaskModeKeyword(string name)
+        => name is "alpha" or "luminance" or "match-source";
+
+    private static bool IsMaskCompositeKeyword(string name)
+        => name is "add" or "subtract" or "intersect" or "exclude";
+
+    private static bool IsMaskGeometryBoxKeyword(string name)
+        => name is "border-box" or "padding-box" or "content-box"
+            or "fill-box" or "stroke-box" or "view-box" or "no-clip";
+
+    private static bool IsBackgroundImage(CssValue v)
+        => v is CssUrl
+            || v is CssGradient
+            || v is CssKeyword { Name: "none" }
+            || v is CssFunctionValue { Name: "linear-gradient" or "radial-gradient" or "conic-gradient" or "repeating-linear-gradient" or "repeating-radial-gradient" or "repeating-conic-gradient" or "image-set" or "url" };
 
     private static bool IsBackgroundRepeatKeyword(string name)
         => name is "repeat" or "no-repeat" or "repeat-x" or "repeat-y" or "space" or "round";
+
+    private static bool IsBackgroundSizeComponent(CssValue v)
+        => v is CssLength or CssPercentage or CssNumber
+            or CssKeyword { Name: "auto" or "cover" or "contain" }
+            or CssFunctionValue { Name: "calc" };
+
+    private static bool IsBackgroundAttachmentKeyword(string name)
+        => name is "scroll" or "fixed" or "local";
+
+    private static bool IsBackgroundBoxKeyword(string name)
+        => name is "border-box" or "padding-box" or "content-box";
 
     private static bool IsBackgroundPositionKeyword(string name)
         => name is "left" or "right" or "top" or "bottom" or "center";
@@ -1172,7 +1477,12 @@ public static class PropertyRegistry
         ["border-color"] = [PropertyId.BorderTopColor, PropertyId.BorderRightColor, PropertyId.BorderBottomColor, PropertyId.BorderLeftColor],
         ["border-radius"] = [PropertyId.BorderTopLeftRadius, PropertyId.BorderTopRightRadius, PropertyId.BorderBottomRightRadius, PropertyId.BorderBottomLeftRadius],
         ["overflow"] = [PropertyId.OverflowX, PropertyId.OverflowY],
-        ["background"] = [PropertyId.BackgroundColor, PropertyId.BackgroundImage, PropertyId.BackgroundPosition, PropertyId.BackgroundSize, PropertyId.BackgroundRepeat],
+        ["background"] =
+        [
+            PropertyId.BackgroundColor, PropertyId.BackgroundImage, PropertyId.BackgroundPosition,
+            PropertyId.BackgroundSize, PropertyId.BackgroundRepeat, PropertyId.BackgroundAttachment,
+            PropertyId.BackgroundOrigin, PropertyId.BackgroundClip,
+        ],
         ["border"] =
         [
             PropertyId.BorderTopWidth, PropertyId.BorderRightWidth, PropertyId.BorderBottomWidth, PropertyId.BorderLeftWidth,
@@ -1227,6 +1537,12 @@ public static class PropertyRegistry
         ["scroll-margin"] = [PropertyId.ScrollMarginTop, PropertyId.ScrollMarginRight, PropertyId.ScrollMarginBottom, PropertyId.ScrollMarginLeft],
         ["scroll-padding"] = [PropertyId.ScrollPaddingTop, PropertyId.ScrollPaddingRight, PropertyId.ScrollPaddingBottom, PropertyId.ScrollPaddingLeft],
         ["overscroll-behavior"] = [PropertyId.OverscrollBehaviorX, PropertyId.OverscrollBehaviorY],
+        ["outline"] = [PropertyId.OutlineColor, PropertyId.OutlineStyle, PropertyId.OutlineWidth],
+        ["mask"] = [PropertyId.MaskImage, PropertyId.MaskMode, PropertyId.MaskPosition, PropertyId.MaskSize, PropertyId.MaskRepeat, PropertyId.MaskOrigin, PropertyId.MaskClip, PropertyId.MaskComposite],
+        ["scroll-timeline"] = [PropertyId.ScrollTimelineName, PropertyId.ScrollTimelineAxis],
+        ["view-timeline"] = [PropertyId.ViewTimelineName, PropertyId.ViewTimelineAxis],
+        ["columns"] = [PropertyId.ColumnWidth, PropertyId.ColumnCount],
+        ["column-rule"] = [PropertyId.ColumnRuleColor, PropertyId.ColumnRuleStyle, PropertyId.ColumnRuleWidth],
         ["text-decoration"] = [PropertyId.TextDecorationLine, PropertyId.TextDecorationStyle, PropertyId.TextDecorationColor, PropertyId.TextDecorationThickness],
         ["list-style"] = [PropertyId.ListStyleType, PropertyId.ListStylePosition, PropertyId.ListStyleImage],
         ["transition"] = [PropertyId.TransitionProperty, PropertyId.TransitionDuration, PropertyId.TransitionTimingFunction, PropertyId.TransitionDelay],

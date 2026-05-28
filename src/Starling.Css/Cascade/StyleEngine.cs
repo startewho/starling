@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Starling.Common.Diagnostics;
 using Starling.Css.Animations;
+using Starling.Css.CounterStyle;
 using Starling.Css.Media;
 using Starling.Css.Parser;
 using Starling.Css.Properties;
@@ -30,6 +31,22 @@ public sealed class StyleEngine
     // positional pseudo-classes (the UA sheet's one `:first-child` is
     // already handled via SharingKey.PreviousElementSiblingTag).
     private bool _sharingDisabled;
+
+    /// <summary>Resolver built from every <c>@counter-style</c> rule in the
+    /// attached stylesheets (CSS Counter Styles 3 §3). Holds the predefined
+    /// styles plus any author-defined ones. Use
+    /// <see cref="CounterStyleResolver.Render(string, int)"/> to turn a counter
+    /// integer into its marker text.</summary>
+    public CounterStyleResolver CounterStyles { get; private set; } = CounterStyleResolver.Default;
+
+    /// <summary>Custom properties registered via <c>@property</c> across the
+    /// attached stylesheets (CSS Properties and Values API 1 §2), keyed by name
+    /// (including the leading <c>--</c>). Later registrations of the same name
+    /// win, matching the cascade's last-wins order. Holds the parsed
+    /// <c>syntax</c>/<c>inherits</c>/<c>initial-value</c> descriptors so the
+    /// cascade can honor a registered property's initial value and inheritance.</summary>
+    public IReadOnlyDictionary<string, PropertiesValues.RegisteredProperty> RegisteredProperties { get; private set; }
+        = new Dictionary<string, PropertiesValues.RegisteredProperty>();
 
     public StyleEngine(bool includeUserAgentStyleSheet = true, IDiagnostics? diagnostics = null)
     {
@@ -84,6 +101,8 @@ public sealed class StyleEngine
         if (!_sharingDisabled && SheetUsesUnshareableSelectors(index))
             _sharingDisabled = true;
         RegisterKeyframesFromSheet(sheet);
+        RebuildCounterStyles();
+        RebuildRegisteredProperties();
     }
 
     public void RemoveStyleSheet(StyleSheet sheet)
@@ -94,6 +113,28 @@ public sealed class StyleEngine
         // Re-evaluate whether sharing can be re-enabled after removal.
         _sharingDisabled = _sheetIndexes.Values.Any(SheetUsesUnshareableSelectors);
         UnregisterKeyframesFromSheet(sheet);
+        RebuildCounterStyles();
+        RebuildRegisteredProperties();
+    }
+
+    private void RebuildCounterStyles()
+    {
+        // CSS Counter Styles 3 §3: later @counter-style definitions of a name
+        // win. Collect across all sheets in add order so the resolver's
+        // last-wins map matches the cascade.
+        var rules = _sheets.SelectMany(CounterStyleParser.ParseAll);
+        CounterStyles = new CounterStyleResolver(rules);
+    }
+
+    private void RebuildRegisteredProperties()
+    {
+        // CSS Properties and Values API 1 §2: a later @property of the same name
+        // wins. Collect across all sheets in add order into a last-wins map.
+        var map = new Dictionary<string, PropertiesValues.RegisteredProperty>();
+        foreach (var sheet in _sheets)
+            foreach (var registered in PropertiesValues.PropertyDefinitionParser.ParseAll(sheet))
+                map[registered.Name] = registered;
+        RegisteredProperties = map;
     }
 
     private void RegisterKeyframesFromSheet(StyleSheet sheet)
@@ -593,6 +634,13 @@ public sealed class StyleEngine
         foreach (var pair in customWinners)
             customProperties[pair.Key] = pair.Value.Value;
 
+        // CSS Variables L1 §3.3: a custom property whose var() references form a
+        // cycle is invalid at computed-value time and computes to the
+        // guaranteed-invalid value. Drop every property in a cycle from the map
+        // so it reads as undefined — any var() pointing at it then takes its
+        // fallback, or makes the using property invalid-at-computed-value-time.
+        RemoveCyclicCustomProperties(customProperties);
+
         var values = new Dictionary<PropertyId, CssValue>();
         foreach (var property in PropertyRegistry.All)
         {
@@ -604,7 +652,18 @@ public sealed class StyleEngine
             else
                 value = PropertyRegistry.InitialValue(property);
 
-            values[property] = ResolveReferences(value, customProperties, element);
+            var resolved = ResolveReferences(value, customProperties, element);
+            // CSS Variables L1 §3.2: if a var() in a non-custom property cannot be
+            // substituted (the referenced custom property is undefined or
+            // guaranteed-invalid and no fallback supplies a value), the declaration
+            // is invalid at computed-value time and behaves as `unset` — the
+            // inherited value for inherited properties, else the initial value.
+            if (ContainsUnresolvedVar(resolved))
+                resolved = PropertyRegistry.Inherits(property) && parentStyle is not null
+                    ? parentStyle.Get(property)
+                    : PropertyRegistry.InitialValue(property);
+
+            values[property] = resolved;
         }
 
         ResolveLengths(values, parentStyle, element);
@@ -1361,6 +1420,132 @@ public sealed class StyleEngine
                 function.Arguments.Select(v => ResolveReferences(v, customProperties, element)).ToList()),
             _ => value,
         };
+
+    /// <summary>
+    /// True if <paramref name="value"/> still carries a <see cref="CssVarReference"/>
+    /// after substitution — i.e. a var() that pointed at an undefined or
+    /// guaranteed-invalid custom property and had no usable fallback. Per CSS
+    /// Variables L1 §3.2 the using declaration is then invalid at computed-value
+    /// time.
+    /// </summary>
+    private static bool ContainsUnresolvedVar(CssValue value)
+        => value switch
+        {
+            CssVarReference => true,
+            CssValueList list => list.Values.Any(ContainsUnresolvedVar),
+            CssFunctionValue function => function.Arguments.Any(ContainsUnresolvedVar),
+            _ => false,
+        };
+
+    /// <summary>
+    /// CSS Variables L1 §3.3: detect cycles in the custom-property dependency
+    /// graph and remove every custom property that takes part in one. Each edge
+    /// runs from a custom property to every other custom property named by a
+    /// var() anywhere in its token stream (including inside fallbacks — a var()
+    /// in a fallback still counts as a reference per the §3.3 cycle algorithm).
+    /// A property on a cycle (including a direct self-reference) computes to the
+    /// guaranteed-invalid value, so dropping it from the map makes it read as
+    /// undefined for the rest of substitution.
+    /// </summary>
+    private static void RemoveCyclicCustomProperties(
+        Dictionary<string, IReadOnlyList<CssComponentValue>> customProperties)
+    {
+        if (customProperties.Count == 0) return;
+
+        // Build the dependency edges once. Only references to names that are
+        // actually defined can form a cycle.
+        var edges = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var (name, tokens) in customProperties)
+        {
+            var refs = new HashSet<string>(StringComparer.Ordinal);
+            CollectVarReferences(tokens, refs);
+            refs.IntersectWith(customProperties.Keys);
+            edges[name] = refs;
+        }
+
+        // Iterative DFS with three colours (white/grey/black) so we can flag
+        // any node that reaches a grey node — that back-edge is the cycle.
+        var state = new Dictionary<string, int>(StringComparer.Ordinal); // 0=white,1=grey,2=black
+        var onCycle = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var start in edges.Keys)
+        {
+            if (state.GetValueOrDefault(start) != 0) continue;
+            var stack = new Stack<(string Node, IEnumerator<string> Edges)>();
+            state[start] = 1;
+            stack.Push((start, edges[start].GetEnumerator()));
+            while (stack.Count > 0)
+            {
+                var (node, it) = stack.Peek();
+                if (it.MoveNext())
+                {
+                    var next = it.Current;
+                    var color = state.GetValueOrDefault(next);
+                    if (color == 1)
+                    {
+                        // Back-edge: `next` and every grey node above it on the
+                        // stack (down to `next`) sit on the cycle.
+                        onCycle.Add(next);
+                        foreach (var frame in stack)
+                        {
+                            onCycle.Add(frame.Node);
+                            if (string.Equals(frame.Node, next, StringComparison.Ordinal)) break;
+                        }
+                    }
+                    else if (color == 0)
+                    {
+                        state[next] = 1;
+                        stack.Push((next, edges[next].GetEnumerator()));
+                    }
+                }
+                else
+                {
+                    state[node] = 2;
+                    stack.Pop();
+                }
+            }
+        }
+
+        foreach (var name in onCycle)
+            customProperties.Remove(name);
+    }
+
+    /// <summary>Collect the names of every custom property referenced by a
+    /// <c>var()</c> anywhere in <paramref name="values"/> (recursing into
+    /// functions and blocks, including var() fallbacks).</summary>
+    private static void CollectVarReferences(
+        IReadOnlyList<CssComponentValue> values,
+        HashSet<string> into)
+    {
+        foreach (var cv in values)
+        {
+            switch (cv)
+            {
+                case CssFunction func when func.Name.Equals("var", StringComparison.OrdinalIgnoreCase):
+                    foreach (var arg in func.Values)
+                    {
+                        if (arg is CssTokenValue { Token.Type: CssTokenType.Ident } tv
+                            && tv.Token.Value.StartsWith("--", StringComparison.Ordinal))
+                        {
+                            into.Add(tv.Token.Value);
+                            break; // first ident is the referenced name
+                        }
+                        if (arg is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+                            continue;
+                        break;
+                    }
+                    // The fallback (anything past the first comma) may also name
+                    // custom properties — recurse so those edges are seen too.
+                    CollectVarReferences(func.Values, into);
+                    break;
+                case CssFunction func:
+                    CollectVarReferences(func.Values, into);
+                    break;
+                case CssSimpleBlock block:
+                    CollectVarReferences(block.Values, into);
+                    break;
+            }
+        }
+    }
 
     /// <summary>
     /// CSS Variables L1 §3.7: resolve a pending-substitution value. Substitutes
