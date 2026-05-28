@@ -27,8 +27,6 @@ namespace Starling.Layout.Tests.Flex;
 [Spec("css-flexbox-1", "https://drafts.csswg.org/css-flexbox-1/#intrinsic-sizes", section: "9.9")]
 public sealed class NestedFlexMaxContentTests
 {
-    private const string Wp = "wp:flex-nested-max-content";
-
     private static LayoutEngine NewEngine() => new(new StyleEngine());
 
     private static BlockBox Layout(string html, Size viewport)
@@ -71,10 +69,7 @@ public sealed class NestedFlexMaxContentTests
     //   (24 + 24) + 60 = 108. So mid should grow to 600 - 24 - 108 = 468.
     // ---------------------------------------------------------------------
 
-    [PendingFact(
-        "Nested row flex with inner flex-grow inflates parent's max-content to the outer container width, " +
-        "starving the outer flex-grow sibling (google.com search pill: textarea collapses to width 0).",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Nested_flex_with_inner_grow_does_not_starve_outer_flex_grow_sibling()
     {
         var root = Layout("""
@@ -104,9 +99,7 @@ public sealed class NestedFlexMaxContentTests
         ById(root, "btn").Frame.Width.Should().BeApproximately(60, 0.5);
     }
 
-    [PendingFact(
-        "Nested row flex with grandchild flex-grow inflates max-content (two levels of nesting deep).",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Three_level_nesting_with_innermost_grow_does_not_inflate_outer_max_content()
     {
         // Outer flex (600) → mid (flex:1) + right (flex container).
@@ -130,10 +123,7 @@ public sealed class NestedFlexMaxContentTests
         ById(root, "m").Frame.Width.Should().BeApproximately(550, 0.5);
     }
 
-    [PendingFact(
-        "Inner column-direction flex inside an outer row flex: the column's max-content (max of " +
-        "items' main-content widths) must propagate, not the column's flexed width.",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Column_inside_row_propagates_max_of_items_not_grown_width()
     {
         // Inner column: max-content cross-size = max(item cross sizes) = 30.
@@ -197,11 +187,7 @@ public sealed class NestedFlexMaxContentTests
         ById(root, "m").Frame.Width.Should().BeApproximately(480, 0.5);
     }
 
-    [PendingFact(
-        "Multiple inner grow children must not multiply the parent's max-content (the inner grow " +
-        "items share whatever space their container has, but each one contributing 'measurement-width' " +
-        "to the parent's natural size is the bug shape).",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Inner_flex_with_multiple_grow_children_still_reports_finite_max_content()
     {
         // Two flex-grow children inside the nested container, no explicit
@@ -223,9 +209,7 @@ public sealed class NestedFlexMaxContentTests
         ById(root, "m").Frame.Width.Should().BeApproximately(560, 0.5);
     }
 
-    [PendingFact(
-        "Gaps on the inner flex container are part of its max-content (Flexbox 1 §9.9).",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Inner_flex_gap_is_included_in_max_content()
     {
         // Inner container: gap:8, three 20-wide static children + one flex:1.
@@ -248,11 +232,7 @@ public sealed class NestedFlexMaxContentTests
         ById(root, "m").Frame.Width.Should().BeApproximately(516, 0.5);
     }
 
-    [PendingFact(
-        "Inner flex-grow inside a sibling of an OUTER flex-grow with explicit `flex-basis: 0` still " +
-        "must not inflate the sibling's natural width (basis:0 means the sibling occupies only its " +
-        "max-content for layout purposes).",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Outer_basis_zero_does_not_change_inner_intrinsic_calculation()
     {
         // Same shape as the headline test but the middle uses `flex-basis:0`
@@ -278,10 +258,7 @@ public sealed class NestedFlexMaxContentTests
         ById(root, "m").Frame.Width.Should().BeApproximately(468, 0.5);
     }
 
-    [PendingFact(
-        "Google.com search pill regression — the textarea slot must keep most of the pill's width when " +
-        "the right-side icon cluster is itself a flex container with a flex-grow child.",
-        trackingWp: Wp)]
+    [TestMethod]
     public void Google_search_pill_shape_does_not_collapse_textarea_to_zero()
     {
         // Reduction of the live Google layout (div.SDkEP > UMOYhd, a4bIc,
