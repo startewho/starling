@@ -167,7 +167,7 @@ tests that have started passing — when one does, promote it from
 | CSS Animations 1 | https://www.w3.org/TR/css-animations-1/ | ✅ | `CssAnimations1/` (96 SpecFact): `@keyframes` parse (incl. vendor-prefixed, grouped selectors, per-keyframe timing), all 8 longhands + shorthand + multi-layer, engine sampling (interpolation/fill/direction/iteration) | — |
 | CSS Animations 2 | https://www.w3.org/TR/css-animations-2/ | 🟢 | `CssAnimations2/` — animation-timeline + animation-range-start/end parse + cascade (`wp:spec-css-animations-2`); scroll/view-timeline driving not implemented | `wp:spec-css-animations-2` |
 | CSS Transitions 1 | https://www.w3.org/TR/css-transitions-1/ | ✅ | `TransitionEngineTests`, `TransitionEngineSpecTests` | — |
-| CSS Easing 1 | https://www.w3.org/TR/css-easing-1/ | 🟢 | `CssEasing1/` (47 SpecFact): cubic-bezier + keyword aliases + `steps()` (all jump variants + step-start/end) | 4 gaps → `wp:spec-css-easing-1`: `linear()` function form (multi-stop / explicit positions) not implemented |
+| CSS Easing 1 | https://www.w3.org/TR/css-easing-1/ | ✅ | `CssEasing1/` (51 SpecFact): cubic-bezier + keyword aliases + `steps()` (all jump variants + step-start/end) + `linear()` (multi-stop, explicit + auto-distributed positions) | — |
 | Web Animations 1 | https://www.w3.org/TR/web-animations-1/ | 🟢 | `WebAnimations1/`, `src/Starling.Css/WebAnimations/` — §4 timing model (`EffectTiming`→`ComputeProgress`→`ComputedTiming`: phases, active duration, simple/directed/eased iteration progress, fill, alternate/reverse) reusing existing `TimingFunction` easing (`wp:spec-web-animations-1`); JS WAAPI (`Element.animate`/`Animation`/`KeyframeEffect`) not implemented | `wp:spec-web-animations-1` |
 
 ## OM / scripting (`Starling.Cssom.Spec.Tests` family — to be created)
@@ -207,21 +207,21 @@ stale — the matrix has always held more rows than that.
 | | Count |
 |---|---|
 | Specs catalogued | 67 |
-| ✅ Implemented | 15 |
-| 🟢 In progress | 47 |
+| ✅ Implemented | 16 |
+| 🟢 In progress | 46 |
 | 🟡 Scaffolded only | 0 |
 | 🔴 Not started (in scope, no work yet) | 0 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
 deferrals (MathML Core, print specs) are not catalogued as CSS spec rows. So
-the v1 work ahead is **15 done (✅), 47 in progress (🟢), 0 not-started (🔴)**.
+the v1 work ahead is **16 done (✅), 46 in progress (🟢), 0 not-started (🔴)**.
 Every in-scope spec has landed `[Spec]` coverage at the parse / cascade / model
 level; the 15 ✅ are fully conformant (Position 3, Flexbox 1, Transitions 1,
 Counter Styles 3, Syntax 3, Values 4, Cascade 5, Custom Properties 1, Nesting 1,
-Color 4, Logical 1, Transforms 1, Animations 1, Box Model 3, Overscroll Behavior 1).
-The remaining lift to drive the
-47 🟢 → ✅ is the behavior/paint layer + JS-OM bindings + the per-spec gaps the
+Color 4, Logical 1, Transforms 1, Animations 1, Box Model 3, Overscroll Behavior 1,
+Easing 1). The remaining lift to drive the
+46 🟢 → ✅ is the behavior/paint layer + JS-OM bindings + the per-spec gaps the
 conformance suites surfaced — many of which cluster on a single **per-property
 value-validation** fix (rejecting invalid keywords/values), tracked in
 `tasks/spec/wp-spec-css-v1-*.md`.
