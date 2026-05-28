@@ -960,7 +960,7 @@ public sealed class CssValues4Tests
     }
 
     [Spec("css-values-4", "https://www.w3.org/TR/css-values-4/#calc-notation", "§10")]
-    [PendingFact("calc(2s + 1s) stays CssCalc — the reducer has no same-unit fold path for CalcTime (only CalcLength and CalcAngle are folded). Should produce CssTime(3, Seconds).", trackingWp: "wp:spec-css-values-4")]
+    [SpecFact]
     public void Calc_time_same_unit_folds_to_CssTime()
     {
         // calc(2s + 1s) — both time, same unit — reducer should fold per spec.
@@ -1418,7 +1418,7 @@ public sealed class CssValues4Tests
     // ---------------------------------------------------------------------------
 
     [Spec("css-values-4", "https://www.w3.org/TR/css-values-4/#calc-notation", "§10")]
-    [PendingFact("Cross-unit time calc (s + ms) — reducer does not currently normalize mixed time units; stays CssCalc rather than folding to a single time value.", trackingWp: "wp:spec-css-values-4")]
+    [SpecFact]
     public void Calc_s_plus_ms_different_units_fold_to_single_time()
     {
         // calc(1s + 500ms) — both absolute time; spec says they should fold.
@@ -1429,7 +1429,7 @@ public sealed class CssValues4Tests
     }
 
     [Spec("css-values-4", "https://www.w3.org/TR/css-values-4/#frequency-value", "§8.3")]
-    [PendingFact("Cross-unit frequency calc (hz + khz) — reducer does not currently normalize mixed frequency units.", trackingWp: "wp:spec-css-values-4")]
+    [SpecFact]
     public void Calc_hz_plus_khz_folds_to_single_frequency()
     {
         var v = Parse("calc(500hz + 0.5khz)");
@@ -1438,7 +1438,7 @@ public sealed class CssValues4Tests
     }
 
     [Spec("css-values-4", "https://www.w3.org/TR/css-values-4/#number-value", "§4")]
-    [PendingFact("Scientific notation on dimension values (e.g. 1e2px) — tokenizer may not accept 'e' followed by digits when an ident unit follows.", trackingWp: "wp:spec-css-values-4")]
+    [SpecFact]
     public void Scientific_notation_dimension_parses_correctly()
     {
         // 1e2px means 100px per CSS Syntax 3.
