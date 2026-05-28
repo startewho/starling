@@ -749,6 +749,45 @@ public sealed class StyleEngine
         return (_mediaContext.ViewportWidthPx, _mediaContext.ViewportHeightPx);
     }
 
+    // CSS Containment 3 §5: evaluate an `@container` size query against the
+    // element's query container. The optional leading container-name is stripped
+    // (name matching is not yet honored — the nearest container is used); the
+    // remaining condition is a size feature query evaluated against the container
+    // box (reusing the media-feature evaluator with a container-sized context).
+    private bool ContainerQueryMatches(AtRule rule, Element element)
+    {
+        // Split the optional leading <container-name> from the condition.
+        var prelude = rule.Prelude;
+        var conditionStart = 0;
+        for (var i = 0; i < prelude.Count; i++)
+        {
+            if (prelude[i] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            {
+                conditionStart = i + 1;
+                continue;
+            }
+            if (prelude[i] is CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var ident } }
+                && !ident.Equals("not", StringComparison.OrdinalIgnoreCase))
+                conditionStart = i + 1; // a leading name; condition follows
+            break;
+        }
+        var condition = prelude.Skip(conditionStart).ToList();
+        if (condition.Count == 0)
+            return false;
+
+        var (cw, ch) = ResolveContainerSize(element);
+        var ctx = _mediaContext with { ViewportWidthPx = cw, ViewportHeightPx = ch };
+        try
+        {
+            var list = MediaQueryParser.ParseList(condition);
+            return MediaQueryEvaluator.Evaluate(list, ctx);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string ExtractFontFamily(Dictionary<PropertyId, CssValue> values)
         => values[PropertyId.FontFamily] switch
         {
@@ -957,6 +996,24 @@ public sealed class StyleEngine
                     {
                         GatherFromRules(
                             atRule2.Rules,
+                            origin,
+                            element,
+                            candidates,
+                            customCandidates,
+                            context,
+                            ref order,
+                            layerOrder,
+                            currentLayerPath,
+                            parentSelectors,
+                            sheetIndex,
+                            candidateRules);
+                    }
+                    break;
+                case AtRule { Name: var nameC } atRuleC when nameC.Equals("container", StringComparison.OrdinalIgnoreCase):
+                    if (ContainerQueryMatches(atRuleC, element))
+                    {
+                        GatherFromRules(
+                            atRuleC.Rules,
                             origin,
                             element,
                             candidates,
