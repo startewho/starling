@@ -176,7 +176,7 @@ tests that have started passing — when one does, promote it from
 |---|---|---|---|---|
 | CSSOM | https://drafts.csswg.org/cssom/ | 🟢 | `CssCssom1/`, `src/Starling.Css/Cssom/` — CSSStyleDeclaration §6.4 (setProperty/getPropertyValue/priority/removeProperty/item/length/cssText) behavioral tests (`wp:spec-cssom`); CSSStyleSheet/CSSRule OM + live bindings surface partially covered | `wp:spec-cssom` |
 | CSSOM View | https://drafts.csswg.org/cssom-view/ | 🔴 | — | `wp:spec-cssom-view` |
-| CSS Properties & Values API L1 (`@property`) | https://www.w3.org/TR/css-properties-values-api-1/ | 🔴 | — | `wp:spec-css-properties-values-api-1` |
+| CSS Properties & Values API L1 (`@property`) | https://www.w3.org/TR/css-properties-values-api-1/ | 🟢 | `CssPropertiesValues1/`, `src/Starling.Css/PropertiesValues/` — `@property` at-rule parse: name/syntax/inherits/initial-value descriptors + validity (universal syntax, required descriptors) (`wp:spec-css-properties-values-api-1`); typed computed-value coercion + JS registerProperty not implemented | `wp:spec-css-properties-values-api-1` |
 | CSS Typed OM 1 | https://www.w3.org/TR/css-typed-om-1/ | 🔴 | — | `wp:spec-css-typed-om-1` |
 | CSS Houdini Paint API | https://www.w3.org/TR/css-paint-api-1/ | 🚫 | v1-deferred 2026-05-27 | — |
 
@@ -190,7 +190,7 @@ tests that have started passing — when one does, promote it from
 | `@layer` | css-cascade-5 | ✅ `CascadeLayersTests` |
 | `@font-face` | css-fonts-4 | ✅ `FontFaceParserTests` |
 | `@keyframes` | css-animations-1 | ✅ `KeyframesParserTests` |
-| `@property` | css-properties-values-api-1 | 🔴 |
+| `@property` | css-properties-values-api-1 | 🟢 `CssPropertiesValues1/AtPropertyTests` |
 | `@counter-style` | css-counter-styles-3 | 🟢 `CssCounterStyles3/CounterStyleTests` |
 | `@page` | css-page-3 | 🚫 v1-deferred (print) |
 | `@scope` | css-cascade-6 | 🔴 |
@@ -208,9 +208,9 @@ stale — the matrix has always held more rows than that.
 |---|---|
 | Specs catalogued | 67 |
 | ✅ Implemented | 3 |
-| 🟢 In progress | 49 |
+| 🟢 In progress | 50 |
 | 🟡 Scaffolded only | 0 |
-| 🔴 Not started (in scope, no work yet) | 10 |
+| 🔴 Not started (in scope, no work yet) | 9 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
