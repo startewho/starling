@@ -155,7 +155,7 @@ tests that have started passing — when one does, promote it from
 | CSS Basic UI 4 | https://www.w3.org/TR/css-ui-4/ | 🟢 | `CssUi4/` — outline (shorthand + longhands)/outline-offset/resize/text-overflow/caret-color/accent-color/appearance/cursor parse + cascade (`wp:spec-css-ui-4`); outline painting + text-overflow rendering not implemented | `wp:spec-css-ui-4` |
 | CSS Pseudo 4 | https://www.w3.org/TR/css-pseudo-4/ | 🟢 | `PseudoElementTests` (legacy) — `::backdrop`, `::marker`, `::file-selector-button` untested | `wp:spec-css-pseudo-4` |
 | CSS Lists 3 | https://www.w3.org/TR/css-lists-3/ | 🟢 | `CssLists3/`, `Starling.Layout.Tests/ListMarkerTests` — list-style-type markers (disc/decimal/alpha/roman…) (`wp:M5-css-16`); marker `inside`/image deferred | `wp:spec-css-lists-3` |
-| CSS Counter Styles 3 (`@counter-style`) | https://www.w3.org/TR/css-counter-styles-3/ | 🟢 | `CssCounterStyles3/`, `src/Starling.Css/CounterStyle/` — `@counter-style` at-rule + cyclic/fixed/symbolic/alphabetic/numeric/additive/extends generation + predefined styles (`wp:spec-css-counter-styles-3`); image symbols + multi-range deferred | `wp:spec-css-counter-styles-3` |
+| CSS Counter Styles 3 (`@counter-style`) | https://www.w3.org/TR/css-counter-styles-3/ | ✅ | `CssCounterStyles3/` (25 tests), `src/Starling.Css/CounterStyle/` — `@counter-style` at-rule + all systems (cyclic/fixed/symbolic/alphabetic/numeric/additive/extends) + every descriptor incl. multi-range + `infinite` bounds + predefined styles; engine-wired (`StyleEngine.CounterStyles`) + consumed by layout (`ListMarker`). (`<image>` symbols render as marker images — that painting is a CSS Lists 3 / layout concern, not counter-string generation.) | — |
 | CSS Generated Content 3 | https://www.w3.org/TR/css-content-3/ | 🟢 | `CssContent3/`, `Starling.Layout.Tests/GeneratedContentLayoutTests` — `content` on `::before`/`::after` (string/attr()) (`wp:M5-css-16`); counters/quotes deferred | `wp:spec-css-content-3` |
 | CSS Speech 1 | https://www.w3.org/TR/css-speech-1/ | 🚫 | v1-deferred 2026-05-27 | — |
 | CSS Ruby 1 | https://www.w3.org/TR/css-ruby-1/ | 🚫 | v1-deferred 2026-05-27 | — |
@@ -191,7 +191,7 @@ tests that have started passing — when one does, promote it from
 | `@font-face` | css-fonts-4 | ✅ `FontFaceParserTests` |
 | `@keyframes` | css-animations-1 | ✅ `KeyframesParserTests` |
 | `@property` | css-properties-values-api-1 | 🟢 `CssPropertiesValues1/AtPropertyTests` |
-| `@counter-style` | css-counter-styles-3 | 🟢 `CssCounterStyles3/CounterStyleTests` |
+| `@counter-style` | css-counter-styles-3 | ✅ `CssCounterStyles3/CounterStyleTests` |
 | `@page` | css-page-3 | 🚫 v1-deferred (print) |
 | `@scope` | css-cascade-6 | 🟢 `CssScope1/ScopeRuleTests` |
 | `@starting-style` | css-transitions-2 | 🔴 |
@@ -207,12 +207,14 @@ stale — the matrix has always held more rows than that.
 | | Count |
 |---|---|
 | Specs catalogued | 67 |
-| ✅ Implemented | 3 |
-| 🟢 In progress | 55 |
+| ✅ Implemented | 4 |
+| 🟢 In progress | 54 |
 | 🟡 Scaffolded only | 0 |
 | 🔴 Not started (in scope, no work yet) | 4 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
 deferrals (MathML Core, print specs) are not catalogued as CSS spec rows. So
-the v1 work ahead is **3 done, 59 to go**.
+the v1 work ahead is **4 done (✅), 58 to go** — of which 54 are 🟢 (parse +
+cascade conformance landed; behavior/OM layer remains) and 4 are 🔴 (JS-OM
+subsystems: cssom-view, typed-om, web-animations, font-loading).
