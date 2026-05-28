@@ -221,6 +221,13 @@ public static class PropertyRegistry
             PropertyId.PointerEvents => new CssKeyword("auto"),
             PropertyId.UserSelect => new CssKeyword("auto"),
             PropertyId.Cursor => new CssKeyword("auto"),
+            // CSS Basic UI 4 §3 (outline), §6 (resize), §7 (text-overflow).
+            PropertyId.OutlineWidth => new CssKeyword("medium"),
+            PropertyId.OutlineStyle => new CssKeyword("none"),
+            PropertyId.OutlineColor => new CssKeyword("auto"),
+            PropertyId.OutlineOffset => CssLength.Zero,
+            PropertyId.Resize => new CssKeyword("none"),
+            PropertyId.TextOverflow => new CssKeyword("clip"),
 
             // Logical longhands — default to physical equivalents.
             PropertyId.MarginInlineStart or PropertyId.MarginInlineEnd or PropertyId.MarginBlockStart or PropertyId.MarginBlockEnd => CssLength.Zero,
@@ -363,6 +370,22 @@ public static class PropertyRegistry
                         foreach (var item in Box(PropertyId.BorderTopWidth, PropertyId.BorderRightWidth, PropertyId.BorderBottomWidth, PropertyId.BorderLeftWidth, [value], important))
                             yield return item;
                     }
+                }
+                break;
+            // CSS Basic UI 4 §3.4 — `outline: <'outline-color'> || <'outline-style'> || <'outline-width'>`.
+            // Omitted longhands reset to their initial value.
+            case "outline":
+                {
+                    CssValue? oColor = null, oStyle = null, oWidth = null;
+                    foreach (var value in values)
+                    {
+                        if (IsBorderStyle(value)) oStyle = value;
+                        else if (IsColorLike(value)) oColor = value;
+                        else oWidth = value;
+                    }
+                    yield return new PropertyDeclaration(PropertyId.OutlineColor, oColor ?? new CssKeyword("auto"), important);
+                    yield return new PropertyDeclaration(PropertyId.OutlineStyle, oStyle ?? new CssKeyword("none"), important);
+                    yield return new PropertyDeclaration(PropertyId.OutlineWidth, oWidth ?? new CssKeyword("medium"), important);
                 }
                 break;
 
@@ -1361,6 +1384,7 @@ public static class PropertyRegistry
         ["scroll-margin"] = [PropertyId.ScrollMarginTop, PropertyId.ScrollMarginRight, PropertyId.ScrollMarginBottom, PropertyId.ScrollMarginLeft],
         ["scroll-padding"] = [PropertyId.ScrollPaddingTop, PropertyId.ScrollPaddingRight, PropertyId.ScrollPaddingBottom, PropertyId.ScrollPaddingLeft],
         ["overscroll-behavior"] = [PropertyId.OverscrollBehaviorX, PropertyId.OverscrollBehaviorY],
+        ["outline"] = [PropertyId.OutlineColor, PropertyId.OutlineStyle, PropertyId.OutlineWidth],
         ["text-decoration"] = [PropertyId.TextDecorationLine, PropertyId.TextDecorationStyle, PropertyId.TextDecorationColor, PropertyId.TextDecorationThickness],
         ["list-style"] = [PropertyId.ListStyleType, PropertyId.ListStylePosition, PropertyId.ListStyleImage],
         ["transition"] = [PropertyId.TransitionProperty, PropertyId.TransitionDuration, PropertyId.TransitionTimingFunction, PropertyId.TransitionDelay],
