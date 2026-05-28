@@ -82,9 +82,9 @@ tests that have started passing — when one does, promote it from
 
 | Spec | URL | Status | Folder | Tracking WP |
 |---|---|---|---|---|
-| CSS Syntax L3 | https://www.w3.org/TR/css-syntax-3/ | 🟢 | `CssSyntax3/` (121 SpecFact: §4 tokenizer + §5 parser/consume algorithms) | 1 gap → `wp:spec-css-syntax-3`: hash token lacks `id`/`unrestricted` type flag (§4.3.6) |
-| CSS Values & Units L4 | https://www.w3.org/TR/css-values-4/ | 🟢 | `CssValues4/` (126 SpecFact: keywords/numbers/percentages/all unit dims + conversions/calc fold + math fns) | 4 gaps → `wp:spec-css-values-4`: calc time/frequency same+cross-unit fold; `1e2px` scientific-notation dimension |
-| CSS Cascade & Inheritance L5 | https://www.w3.org/TR/css-cascade-5/ | 🟢 | `CssCascade5/` (46 SpecFact: specificity/origin+importance/@layer/CSS-wide keywords/`all`/inheritance via `Compute`) | 1 gap → `wp:spec-css-cascade-5`: nested `@layer` treats sub-layer as stronger than outer-unlayered (§7) |
+| CSS Syntax L3 | https://www.w3.org/TR/css-syntax-3/ | ✅ | `CssSyntax3/` (122 SpecFact: §4 tokenizer incl. hash `id`/`unrestricted` type flag §4.3.6 + §5 parser/consume algorithms) | — |
+| CSS Values & Units L4 | https://www.w3.org/TR/css-values-4/ | ✅ | `CssValues4/` (130 SpecFact: keywords/numbers/percentages/all unit dims + conversions/calc fold incl. time+frequency/math fns) | — |
+| CSS Cascade & Inheritance L5 | https://www.w3.org/TR/css-cascade-5/ | ✅ | `CssCascade5/` (47 SpecFact: specificity/origin+importance/@layer incl. nested sub-layer ordering §6.4.2/CSS-wide keywords/`all`/inheritance via `Compute`) | — |
 | CSS Custom Properties L1 | https://www.w3.org/TR/css-variables-1/ | 🟢 | `Starling.Css.Spec.Tests/CssVariables1/` — `--*` token-stream preservation, `var()` substitution + nested fallback, §3.3 cycle detection done (`wp:spec-css-variables-1`) | `wp:spec-css-variables-1` |
 | CSS Conditional L5 (`@media`, `@supports`) | https://www.w3.org/TR/css-conditional-5/ | 🟢 | legacy | `wp:spec-css-conditional-5` |
 | CSS Nesting L1 | https://www.w3.org/TR/css-nesting-1/ | 🟢 | `Starling.Css.Tests/NestingTests` (legacy) | `wp:spec-css-nesting-1` |
@@ -207,15 +207,16 @@ stale — the matrix has always held more rows than that.
 | | Count |
 |---|---|
 | Specs catalogued | 67 |
-| ✅ Implemented | 4 |
-| 🟢 In progress | 58 |
+| ✅ Implemented | 7 |
+| 🟢 In progress | 55 |
 | 🟡 Scaffolded only | 0 |
 | 🔴 Not started (in scope, no work yet) | 0 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
 deferrals (MathML Core, print specs) are not catalogued as CSS spec rows. So
-the v1 work ahead is **4 done (✅), 58 in progress (🟢), 0 not-started (🔴)**.
-Every in-scope spec now has landed `[Spec]` coverage at the parse / cascade /
-model level. The remaining lift to drive the 58 🟢 → ✅ is the behavior/paint
-layer + JS-OM bindings, tracked in `tasks/spec/wp-spec-css-v1-*.md`.
+the v1 work ahead is **7 done (✅), 55 in progress (🟢), 0 not-started (🔴)**.
+Every in-scope spec has landed `[Spec]` coverage at the parse / cascade / model
+level; the 7 ✅ are fully conformant. The remaining lift to drive the 55 🟢 → ✅
+is the behavior/paint layer + JS-OM bindings + the per-spec gaps the conformance
+suites surfaced, tracked in `tasks/spec/wp-spec-css-v1-*.md`.

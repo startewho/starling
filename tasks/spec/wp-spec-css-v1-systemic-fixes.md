@@ -63,16 +63,14 @@ pass except for these real engine bugs (each a `[PendingFact]` with the spec's
 tracking id). Fixing them flips the PendingFacts → `[SpecFact]` and drives all
 four specs to ✅ (they have no paint/layout layer — these are their last gaps):
 
-- **css-syntax-3** (1): `CssToken` for a hash carries no `id`/`unrestricted`
-  type flag (§4.3.6). Add the flag; set `id` when the value is a valid ident.
-- **css-values-4** (4): the calc reducer folds `CalcLength`/`CalcAngle` but not
-  `CalcTime` or `CalcFrequency` (same-unit and cross-unit) — `calc(2s + 1s)` /
-  `calc(1khz + 1hz)` stay unfolded; and `1e2px` (scientific-notation dimension)
-  doesn't tokenize as `100px`.
-- **css-cascade-5** (1): nested `@layer outer { … }` treats the sub-layer's
-  declarations as stronger than rules that are unlayered-within-`outer` (§7);
-  the unlayered-within-a-layer rules must win.
-- **selectors-4** (7): form-validation pseudo-classes (`:valid`/`:invalid`/
+- ~~**css-syntax-3** (1): hash `id`/`unrestricted` type flag (§4.3.6)~~ — DONE
+  (`CssToken.HashIsId`); **css-syntax-3 is ✅**.
+- ~~**css-values-4** (4): calc `CalcTime`/`CalcFrequency` add/sub folding +
+  `1e2px` dimension~~ — DONE (folding added; `1e2px` already worked);
+  **css-values-4 is ✅**.
+- ~~**css-cascade-5** (1): nested `@layer` ancestor-direct vs sub-layer (§6.4.2)~~
+  — DONE (path-aware `LayerOrder.Compare`); **css-cascade-5 is ✅**.
+- **selectors-4** (7, OPEN): form-validation pseudo-classes (`:valid`/`:invalid`/
   `:in-range`/`:out-of-range`/`:autofill`/`:user-valid`/`:user-invalid`) aren't
   matched; `:lang()` accepts only a single string (not a comma list); and
   `:focus-visible` is aliased to `:focus` (no keyboard-vs-pointer heuristic).
