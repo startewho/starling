@@ -85,9 +85,9 @@ tests that have started passing — when one does, promote it from
 | CSS Syntax L3 | https://www.w3.org/TR/css-syntax-3/ | ✅ | `CssSyntax3/` (122 SpecFact: §4 tokenizer incl. hash `id`/`unrestricted` type flag §4.3.6 + §5 parser/consume algorithms) | — |
 | CSS Values & Units L4 | https://www.w3.org/TR/css-values-4/ | ✅ | `CssValues4/` (130 SpecFact: keywords/numbers/percentages/all unit dims + conversions/calc fold incl. time+frequency/math fns) | — |
 | CSS Cascade & Inheritance L5 | https://www.w3.org/TR/css-cascade-5/ | ✅ | `CssCascade5/` (47 SpecFact: specificity/origin+importance/@layer incl. nested sub-layer ordering §6.4.2/CSS-wide keywords/`all`/inheritance via `Compute`) | — |
-| CSS Custom Properties L1 | https://www.w3.org/TR/css-variables-1/ | 🟢 | `Starling.Css.Spec.Tests/CssVariables1/` — `--*` token-stream preservation, `var()` substitution + nested fallback, §3.3 cycle detection done (`wp:spec-css-variables-1`) | `wp:spec-css-variables-1` |
-| CSS Conditional L5 (`@media`, `@supports`) | https://www.w3.org/TR/css-conditional-5/ | 🟢 | legacy | `wp:spec-css-conditional-5` |
-| CSS Nesting L1 | https://www.w3.org/TR/css-nesting-1/ | 🟢 | `Starling.Css.Tests/NestingTests` (legacy) | `wp:spec-css-nesting-1` |
+| CSS Custom Properties L1 | https://www.w3.org/TR/css-variables-1/ | ✅ | `CssVariables1/` (21 SpecFact) — `--*` token-stream preservation, `var()` substitution + nested/partial/comma fallback in shorthands, §3.3 cycle detection, §3.2 IACVT (inherited→parent / non-inherited→initial), empty-value semantics | — |
+| CSS Conditional L5 (`@media`, `@supports`) | https://www.w3.org/TR/css-conditional-5/ | 🟢 | `CssConditional5/` (81 SpecFact: media types/modifiers/features/range syntax/`and`/`or`; `@supports` prop/`not`/`and`/`or`/`selector()`) | 2 gaps → `wp:spec-css-conditional-5`: `@supports` accepts invalid property values + `selector()` accepts invalid selectors (no value/selector validation) |
+| CSS Nesting L1 | https://www.w3.org/TR/css-nesting-1/ | ✅ | `CssNesting1/` (27 SpecFact: `&` descendant/compound/pseudo/`:is()`-semantics, implicit nesting w/ combinators, nested `@media`/`@supports`, 3-deep, decl-ordering, specificity, `@layer` interaction) | — |
 | Selectors L4 | https://www.w3.org/TR/selectors-4/ | 🟢 | `Selectors4/` (89 SpecFact: all attr operators + `i` flag, 4 combinators, full structural/`nth` suite incl. `of S`, `:is`/`:where`/`:not`/`:has`) | 7 gaps → `wp:spec-selectors-4`: form-validation pseudos (`:valid`/`:invalid`/`:in-range`/`:out-of-range`/`:autofill`/`:user-*`), `:lang()` comma-list, `:focus-visible` heuristic |
 | CSS Scoping (`@scope`) | https://www.w3.org/TR/css-cascade-6/#scoped-styles | 🟢 | `CssScope1/`, `src/Starling.Css/Scope/` — `@scope (start) [to (end)]` at-rule parse: bounds + scoped inner rules (`wp:spec-css-scope-1`); scoping proximity cascade step not implemented | `wp:spec-css-scope-1` |
 
@@ -95,7 +95,7 @@ tests that have started passing — when one does, promote it from
 
 | Spec | URL | Status | Folder | Tracking WP |
 |---|---|---|---|---|
-| CSS Color 4 | https://www.w3.org/TR/css-color-4/ | 🟢 | legacy (`ColorFunctionTests`, `GamutMappingTests`) | `wp:spec-css-color-4` |
+| CSS Color 4 | https://www.w3.org/TR/css-color-4/ | ✅ | `CssColor4/` (124 SpecFact: hex/named/`transparent`/`currentColor`, `rgb`/`hsl`/`hwb` legacy+modern, `lab`/`lch`/`oklab`/`oklch`, `color()` srgb/display-p3/rec2020, `none` channels, §13.1 gamut mapping) | — |
 | CSS Color 5 (color-mix, relative) | https://www.w3.org/TR/css-color-5/ | 🟢 | `CssColor5/` — relative color syntax `rgb(from …)`/`oklch(from …)` done (`wp:spec-css-color-5-relative`); `color-mix()` still untested | `wp:spec-css-color-5-relative` |
 | CSS Color HDR 6 | https://www.w3.org/TR/css-color-hdr/ | 🚫 | v1-deferred 2026-05-27 | — |
 | CSS Color Adjust 1 (`color-scheme`, `forced-colors`) | https://www.w3.org/TR/css-color-adjust-1/ | 🚫 | v1-deferred 2026-05-27 | — |
@@ -121,7 +121,7 @@ tests that have started passing — when one does, promote it from
 | CSS Grid 2 | https://www.w3.org/TR/css-grid-2/ | 🟢 | `GridPropertyTests` parse-only; **no layout tests** | `wp:spec-css-grid-2-layout` |
 | CSS Tables 3 | https://www.w3.org/TR/css-tables-3/ | 🟢 | `TableLayoutTests` (minimal) | `wp:spec-css-tables-3` |
 | CSS Multicol 1 | https://www.w3.org/TR/css-multicol-1/ | 🟢 | `CssMulticol1/` — column-count/width, columns + column-rule shorthands, column-span/fill parse + cascade (`wp:spec-css-multicol-1`); column fragmentation layout not implemented | `wp:spec-css-multicol-1` |
-| CSS Logical Properties 1 | https://www.w3.org/TR/css-logical-1/ | 🟢 | `LogicalPropertyTests` | `wp:spec-css-logical-1` |
+| CSS Logical Properties 1 | https://www.w3.org/TR/css-logical-1/ | 🟢 | `CssLogical1/` (56 SpecFact: all logical longhands/shorthands/sizing/inset/corner-radii map correctly in `horizontal-tb`+`ltr`) | 25 gaps → `wp:spec-css-logical-1`: mapping is hardcoded LTR+horizontal-tb — `direction:rtl` (9) + `vertical-rl`/`vertical-lr` axis swap (16) not implemented |
 | CSS Writing Modes 4 | https://www.w3.org/TR/css-writing-modes-4/ | 🟢 | `CssWritingModes4/` — writing-mode/direction/text-orientation/unicode-bidi parse + cascade/inheritance (`wp:spec-css-writing-modes-4`); vertical layout not yet implemented | `wp:spec-css-writing-modes-4` |
 | CSS Overflow 3 | https://www.w3.org/TR/css-overflow-3/ | 🟢 | `CssOverflow3/` — overflow shorthand + overflow-x/y + overflow-clip-margin + scrollbar-gutter parse + cascade (`wp:spec-css-overflow-3`); clip/scroll behavior partially in layout, gutter reservation not implemented | `wp:spec-css-overflow-3` |
 | CSS Containment 2 | https://www.w3.org/TR/css-contain-2/ | 🟢 | `CssContain2/` — contain (none/strict/content/size/layout/style/paint/inline-size + combos) + content-visibility parse + cascade (`wp:spec-css-contain-2`); containment layout effects not implemented | `wp:spec-css-contain-2` |
@@ -207,16 +207,18 @@ stale — the matrix has always held more rows than that.
 | | Count |
 |---|---|
 | Specs catalogued | 67 |
-| ✅ Implemented | 7 |
-| 🟢 In progress | 55 |
+| ✅ Implemented | 10 |
+| 🟢 In progress | 52 |
 | 🟡 Scaffolded only | 0 |
 | 🔴 Not started (in scope, no work yet) | 0 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
 deferrals (MathML Core, print specs) are not catalogued as CSS spec rows. So
-the v1 work ahead is **7 done (✅), 55 in progress (🟢), 0 not-started (🔴)**.
+the v1 work ahead is **10 done (✅), 52 in progress (🟢), 0 not-started (🔴)**.
 Every in-scope spec has landed `[Spec]` coverage at the parse / cascade / model
-level; the 7 ✅ are fully conformant. The remaining lift to drive the 55 🟢 → ✅
-is the behavior/paint layer + JS-OM bindings + the per-spec gaps the conformance
-suites surfaced, tracked in `tasks/spec/wp-spec-css-v1-*.md`.
+level; the 10 ✅ are fully conformant (Position 3, Flexbox 1, Transitions 1,
+Counter Styles 3, Syntax 3, Values 4, Cascade 5, Custom Properties 1, Nesting 1,
+Color 4). The remaining lift to drive the 52 🟢 → ✅ is the behavior/paint layer
++ JS-OM bindings + the per-spec gaps the conformance suites surfaced, tracked in
+`tasks/spec/wp-spec-css-v1-*.md`.
