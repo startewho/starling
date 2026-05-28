@@ -343,9 +343,7 @@ public sealed class FontFaceAtRuleTests
 
     // ── font-variation-settings gap inside @font-face ─────────────────────
 
-    [PendingFact(
-        "font-variation-settings inside @font-face is silently ignored by FontFaceParser — descriptor not exposed on FontFaceRule",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-variation-settings-desc")]
     public void Font_face_variation_settings_descriptor_is_exposed()
     {
@@ -365,9 +363,7 @@ public sealed class FontFaceAtRuleTests
 
     // ── size-adjust gap inside @font-face ────────────────────────────────
 
-    [PendingFact(
-        "size-adjust inside @font-face is silently ignored by FontFaceParser — descriptor not exposed on FontFaceRule",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#descdef-font-face-size-adjust")]
     public void Font_face_size_adjust_descriptor_is_exposed()
     {
@@ -387,9 +383,7 @@ public sealed class FontFaceAtRuleTests
 
     // ── font-feature-settings gap inside @font-face ───────────────────────
 
-    [PendingFact(
-        "font-feature-settings inside @font-face is silently ignored by FontFaceParser — descriptor not exposed on FontFaceRule",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-feature-settings-desc")]
     public void Font_face_feature_settings_descriptor_is_exposed()
     {

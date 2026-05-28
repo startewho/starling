@@ -20,13 +20,10 @@ public sealed class SizeAdjustTests
         return rule.Declarations.SelectMany(PropertyRegistry.Parse).ToList();
     }
 
-    // size-adjust is NOT registered as a CSS property in PropertyId today —
-    // it is a @font-face descriptor only in CSS Fonts 4. The matrix flags it
-    // as a gap. All tests here are PendingFact.
+    // size-adjust is registered in PropertyId/PropertyRegistry (initial 100%,
+    // not inherited) and is accepted inside @font-face by the parser.
 
-    [PendingFact(
-        "size-adjust is not registered in PropertyId / PropertyRegistry — gaps flagged in matrix",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#descdef-font-face-size-adjust")]
     public void Size_adjust_percentage_parses_as_property()
     {
@@ -37,9 +34,7 @@ public sealed class SizeAdjustTests
         decls[0].Value.Should().Be(new CssPercentage(120));
     }
 
-    [PendingFact(
-        "size-adjust @font-face descriptor parsing not validated — FontFaceParser ignores it",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#descdef-font-face-size-adjust")]
     public void Size_adjust_in_font_face_descriptor_is_parsed()
     {

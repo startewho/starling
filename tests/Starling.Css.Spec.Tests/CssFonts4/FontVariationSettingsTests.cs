@@ -71,9 +71,7 @@ public sealed class FontVariationSettingsTests
     // stores the raw tokens without validating axis tag format or interpreting
     // the numeric value as a typed axis setting.
 
-    [PendingFact(
-        "font-variation-settings axis/value round-trip not validated — parser stores raw tokens, no typed AxisSetting model",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-variation-settings-def")]
     public void Axis_tag_preserved_and_value_accessible_as_number()
     {
