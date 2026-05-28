@@ -158,7 +158,8 @@ public sealed class CssParser
         // downstream see the descriptors.
         if (name.Equals("font-face", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("counter-style", StringComparison.OrdinalIgnoreCase) ||
-            name.Equals("property", StringComparison.OrdinalIgnoreCase))
+            name.Equals("property", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("view-transition", StringComparison.OrdinalIgnoreCase))
         {
             var declarations = ParseDeclarationList();
             ConsumeIf(CssTokenType.RightBrace);
