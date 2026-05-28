@@ -32,4 +32,4 @@ we're not. Not all of it, anyway. We review the themes, the overall
 organization, and the foundation we're building on, rather than every line.
 
 ### Phase 1 and Beyond
-Test, fail, simplify, and scale. This is where refinement and innovation continues to happen.
+Test, fail, simplify, and scale. This is where refinement and innovation continue to happen.
