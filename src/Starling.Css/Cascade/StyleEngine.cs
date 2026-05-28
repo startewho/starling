@@ -39,6 +39,15 @@ public sealed class StyleEngine
     /// integer into its marker text.</summary>
     public CounterStyleResolver CounterStyles { get; private set; } = CounterStyleResolver.Default;
 
+    /// <summary>Custom properties registered via <c>@property</c> across the
+    /// attached stylesheets (CSS Properties and Values API 1 §2), keyed by name
+    /// (including the leading <c>--</c>). Later registrations of the same name
+    /// win, matching the cascade's last-wins order. Holds the parsed
+    /// <c>syntax</c>/<c>inherits</c>/<c>initial-value</c> descriptors so the
+    /// cascade can honor a registered property's initial value and inheritance.</summary>
+    public IReadOnlyDictionary<string, PropertiesValues.RegisteredProperty> RegisteredProperties { get; private set; }
+        = new Dictionary<string, PropertiesValues.RegisteredProperty>();
+
     public StyleEngine(bool includeUserAgentStyleSheet = true, IDiagnostics? diagnostics = null)
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
@@ -93,6 +102,7 @@ public sealed class StyleEngine
             _sharingDisabled = true;
         RegisterKeyframesFromSheet(sheet);
         RebuildCounterStyles();
+        RebuildRegisteredProperties();
     }
 
     public void RemoveStyleSheet(StyleSheet sheet)
@@ -104,6 +114,7 @@ public sealed class StyleEngine
         _sharingDisabled = _sheetIndexes.Values.Any(SheetUsesUnshareableSelectors);
         UnregisterKeyframesFromSheet(sheet);
         RebuildCounterStyles();
+        RebuildRegisteredProperties();
     }
 
     private void RebuildCounterStyles()
@@ -113,6 +124,17 @@ public sealed class StyleEngine
         // last-wins map matches the cascade.
         var rules = _sheets.SelectMany(CounterStyleParser.ParseAll);
         CounterStyles = new CounterStyleResolver(rules);
+    }
+
+    private void RebuildRegisteredProperties()
+    {
+        // CSS Properties and Values API 1 §2: a later @property of the same name
+        // wins. Collect across all sheets in add order into a last-wins map.
+        var map = new Dictionary<string, PropertiesValues.RegisteredProperty>();
+        foreach (var sheet in _sheets)
+            foreach (var registered in PropertiesValues.PropertyDefinitionParser.ParseAll(sheet))
+                map[registered.Name] = registered;
+        RegisteredProperties = map;
     }
 
     private void RegisterKeyframesFromSheet(StyleSheet sheet)
