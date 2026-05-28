@@ -35,10 +35,10 @@ Bindings.Tests work, **not** fresh-base worktree fan-out (see memory
    animation *engine* exists (`AnimationEngineTests`) but not the OM. Needs JS
    bindings over the existing engine.
 
-3. **CSS Typed OM 1** (`css-typed-om-1`) — `CSSStyleValue`/`CSSUnitValue`/
-   `CSSKeywordValue`, `attributeStyleMap`, `computedStyleMap`. Essentially
-   unimplemented; needs a typed-value model + JS bindings over the existing
-   `CssValue` types.
+3. **CSS Typed OM 1** (`css-typed-om-1`) — 🟢 DONE (model): `CSSStyleValue`/
+   `CSSNumericValue`/`CSSUnitValue`/`CSSKeywordValue`/`CSSUnparsedValue` +
+   `CSSStyleValue.parse()` in `src/Starling.Css/TypedOm/`. Remaining: numeric
+   math ops + JS `attributeStyleMap`/`computedStyleMap` bindings.
 
 4. **CSS Font Loading 3** (`css-font-loading-3`) — `document.fonts`
    (`FontFaceSet`, `FontFace`, `.load()`, `.ready`, `.check()`). Unimplemented;
