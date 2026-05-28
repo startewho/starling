@@ -27,9 +27,7 @@ public sealed class FontShorthandTests
     // "font" has no PropertyId entry and no case in ExpandSwitch, so the
     // shorthand produces zero declarations today).
 
-    [PendingFact(
-        "font shorthand expander not implemented — PropertyId.Font does not exist and no ExpandSwitch case",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-prop")]
     public void Shorthand_italic_bold_16px_1_5_sans_serif_expands_all_longhands()
     {
@@ -59,9 +57,7 @@ public sealed class FontShorthandTests
         family!.Value.Should().Be(new CssKeyword("sans-serif"));
     }
 
-    [PendingFact(
-        "font shorthand expander not implemented — system font keywords (caption/menu/…) require UA font lookup",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#system-font-values")]
     public void System_font_keyword_caption()
     {
@@ -71,9 +67,7 @@ public sealed class FontShorthandTests
         decls.Should().NotBeEmpty("system font keyword should produce at least one declaration");
     }
 
-    [PendingFact(
-        "font shorthand expander not implemented",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-prop")]
     public void Shorthand_with_only_size_and_family()
     {

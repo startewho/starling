@@ -20,13 +20,10 @@ public sealed class FontFeatureSettingsTests
         return rule.Declarations.SelectMany(PropertyRegistry.Parse).ToList();
     }
 
-    // font-feature-settings is NOT in the PropertyId enum today — the property
-    // is not registered. All tests in this class are PendingFact because the
-    // matrix flags it as a gap.
+    // font-feature-settings is registered in PropertyId/PropertyRegistry
+    // (initial `normal`, inherited) and parses via the generic value path.
 
-    [PendingFact(
-        "font-feature-settings is not registered in PropertyId / PropertyRegistry — gaps flagged in matrix",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-feature-settings-prop")]
     public void Keyword_normal_is_parsed()
     {
@@ -37,9 +34,7 @@ public sealed class FontFeatureSettingsTests
         decls[0].Value.Should().Be(new CssKeyword("normal"));
     }
 
-    [PendingFact(
-        "font-feature-settings is not registered in PropertyId / PropertyRegistry",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-feature-settings-prop")]
     public void Feature_tag_liga_0_disables_ligatures()
     {
@@ -49,9 +44,7 @@ public sealed class FontFeatureSettingsTests
         decls[0].Value.Should().BeOfType<CssValueList>();
     }
 
-    [PendingFact(
-        "font-feature-settings is not registered in PropertyId / PropertyRegistry",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-feature-settings-prop")]
     public void Feature_tag_smcp_on_enables_small_caps()
     {
@@ -60,9 +53,7 @@ public sealed class FontFeatureSettingsTests
         decls.Should().ContainSingle();
     }
 
-    [PendingFact(
-        "font-feature-settings is not registered in PropertyId / PropertyRegistry",
-        trackingWp: "wp:spec-css-fonts-4")]
+    [SpecFact]
     [Spec("css-fonts-4", "https://www.w3.org/TR/css-fonts-4/", "#font-feature-settings-prop")]
     public void Feature_settings_is_inherited()
     {
