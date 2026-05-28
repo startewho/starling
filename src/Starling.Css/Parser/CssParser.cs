@@ -151,7 +151,15 @@ public sealed class CssParser
             return new AtRule(name, prelude, [], []);
 
         _position++;
-        if (name.Equals("font-face", StringComparison.OrdinalIgnoreCase))
+        // @font-face (CSS Fonts 3 §4), @counter-style (CSS Counter Styles 3
+        // §3) and @property (CSS Properties & Values API 1 §2) all hold a
+        // declaration list (their "descriptors") rather than nested rules.
+        // Parse the body as declarations so the strongly-typed parsers
+        // downstream see the descriptors.
+        if (name.Equals("font-face", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("counter-style", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("property", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("view-transition", StringComparison.OrdinalIgnoreCase))
         {
             var declarations = ParseDeclarationList();
             ConsumeIf(CssTokenType.RightBrace);
@@ -214,11 +222,20 @@ public sealed class CssParser
         _position++;
         SkipWhitespace();
         ConsumeIf(CssTokenType.Colon);
+        // CSS Variables L1 §2: a custom property (`--*`) stores its declared
+        // value as a token stream, preserving interior whitespace (only the
+        // leading/trailing whitespace is trimmed). Regular properties collapse
+        // whitespace as before.
+        var isCustomProperty = name.StartsWith("--", StringComparison.Ordinal);
         var values = ConsumeComponentValuesUntil(
-            preserveWhitespace: false,
+            preserveWhitespace: isCustomProperty,
             CssTokenType.Semicolon,
             CssTokenType.RightBrace);
+        if (isCustomProperty)
+            TrimEdgeWhitespace(values);
         var important = RemoveTrailingImportant(values);
+        if (isCustomProperty)
+            TrimEdgeWhitespace(values);
         ConsumeIf(CssTokenType.Semicolon);
         _declarationCount++;
         return new CssDeclaration(name, values, important);
@@ -339,5 +356,15 @@ public sealed class CssParser
 
         values.RemoveRange(values.Count - 2, 2);
         return true;
+    }
+
+    /// <summary>CSS Variables L1 §2: trim leading and trailing whitespace tokens
+    /// from a preserved custom-property token stream (interior whitespace stays).</summary>
+    private static void TrimEdgeWhitespace(List<CssComponentValue> values)
+    {
+        while (values.Count > 0 && values[^1] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            values.RemoveAt(values.Count - 1);
+        while (values.Count > 0 && values[0] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            values.RemoveAt(0);
     }
 }

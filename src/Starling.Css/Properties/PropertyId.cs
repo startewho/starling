@@ -50,8 +50,13 @@ public enum PropertyId
     BackgroundColor,
     BackgroundImage,
     BackgroundPosition,
+    BackgroundPositionX,
+    BackgroundPositionY,
     BackgroundSize,
     BackgroundRepeat,
+    BackgroundAttachment,
+    BackgroundOrigin,
+    BackgroundClip,
     Opacity,
     Visibility,
     FontFamily,
@@ -97,10 +102,23 @@ public enum PropertyId
     RowGap,
     ColumnGap,
 
+    // Multi-column (CSS Multicol 1)
+    ColumnCount,
+    ColumnWidth,
+    ColumnRuleWidth,
+    ColumnRuleStyle,
+    ColumnRuleColor,
+    ColumnSpan,
+    ColumnFill,
+
     // Sizing
     AspectRatio,
     ObjectFit,
     ObjectPosition,
+    ContainIntrinsicWidth,
+    ContainIntrinsicHeight,
+    ContainIntrinsicInlineSize,
+    ContainIntrinsicBlockSize,
 
     // Visual effects
     Transform,
@@ -111,11 +129,16 @@ public enum PropertyId
     Rotate,
     Perspective,
     PerspectiveOrigin,
+    TransformStyle,
+    BackfaceVisibility,
     Filter,
     BackdropFilter,
     MixBlendMode,
     BackgroundBlendMode,
     ClipPath,
+    ShapeOutside,
+    ShapeMargin,
+    ShapeImageThreshold,
     MaskImage,
     MaskPosition,
     MaskSize,
@@ -149,6 +172,9 @@ public enum PropertyId
     ScrollPaddingLeft,
     OverscrollBehaviorX,
     OverscrollBehaviorY,
+    ScrollbarWidth,
+    ScrollbarColor,
+    ScrollbarGutter,
 
     // Forms / UI
     AccentColor,
@@ -158,6 +184,12 @@ public enum PropertyId
     PointerEvents,
     UserSelect,
     Cursor,
+    OutlineWidth,
+    OutlineStyle,
+    OutlineColor,
+    OutlineOffset,
+    Resize,
+    TextOverflow,
 
     // Logical: margin
     MarginInlineStart,
@@ -220,6 +252,10 @@ public enum PropertyId
     TextShadow,
     TextAlignLast,
 
+    // Inline layout (CSS Inline 3)
+    VerticalAlign,
+    BaselineSource,
+
     // Text layout
     TextIndent,
     WordSpacing,
@@ -249,6 +285,23 @@ public enum PropertyId
     AnimationFillMode,
     AnimationPlayState,
     AnimationComposition,
+    AnimationTimeline,
+    AnimationRangeStart,
+    AnimationRangeEnd,
+
+    // Scroll-driven animations (CSS Scroll-Driven Animations 1)
+    ScrollTimelineName,
+    ScrollTimelineAxis,
+    ViewTimelineName,
+    ViewTimelineAxis,
+    ViewTimelineInset,
+    TimelineScope,
+
+    // Anchor positioning (CSS Anchor Positioning 1)
+    AnchorName,
+    PositionAnchor,
+    PositionArea,
+    AnchorScope,
 
     // Visual effects (appended): box shadow
     BoxShadow,
