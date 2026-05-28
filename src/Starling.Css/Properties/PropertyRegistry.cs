@@ -193,6 +193,10 @@ public static class PropertyRegistry
             PropertyId.Filter or PropertyId.BackdropFilter => new CssKeyword("none"),
             PropertyId.MixBlendMode or PropertyId.BackgroundBlendMode => new CssKeyword("normal"),
             PropertyId.ClipPath => new CssKeyword("none"),
+            // CSS Shapes 1 §2-§3.
+            PropertyId.ShapeOutside => new CssKeyword("none"),
+            PropertyId.ShapeMargin => CssLength.Zero,
+            PropertyId.ShapeImageThreshold => new CssNumber(0),
             PropertyId.BoxShadow => new CssKeyword("none"),
             PropertyId.MaskImage => new CssKeyword("none"),
             PropertyId.MaskPosition => new CssKeyword("0% 0%"),
