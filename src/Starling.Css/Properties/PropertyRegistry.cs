@@ -105,6 +105,10 @@ public static class PropertyRegistry
             PropertyId.BackgroundPosition => new CssKeyword("0% 0%"),
             PropertyId.BackgroundSize => new CssKeyword("auto"),
             PropertyId.BackgroundRepeat => new CssKeyword("repeat"),
+            // CSS Backgrounds 3 §3 — initial values for attachment/origin/clip.
+            PropertyId.BackgroundAttachment => new CssKeyword("scroll"),
+            PropertyId.BackgroundOrigin => new CssKeyword("padding-box"),
+            PropertyId.BackgroundClip => new CssKeyword("border-box"),
             PropertyId.Opacity => new CssNumber(1),
             PropertyId.Visibility => new CssKeyword("visible"),
             PropertyId.FontFamily => new CssKeyword("serif"),
@@ -614,53 +618,173 @@ public static class PropertyRegistry
 
     private static IEnumerable<PropertyDeclaration> ExpandBackground(List<CssValue> values, bool important)
     {
-        // CSS Backgrounds 3 §3.10 — the `background` shorthand sets multiple
-        // background-* longhands. Full layered parsing (split on top-level
-        // commas, per-layer position/size with slash separator) is deferred;
-        // for now we collect each component once across the value list. This
-        // is enough for the common single-layer authoring style used by sites
-        // like mcmaster.com: `background: url(sprite.png) -60px 0 no-repeat`.
-        CssValue? color = null;
+        // CSS Backgrounds 3 §3.4 — the `background` shorthand sets the eight
+        // background-* longhands. The value is a comma-separated list of layers
+        // ( [ <bg-layer> , ]* <final-bg-layer> ). `background-color` may only
+        // appear in the final layer; every layer that omits a given longhand
+        // resets it to its initial value.
+        var layers = SplitTopLevelCommas(values);
+        if (layers.Count == 0)
+            yield break;
+
+        // Per-layer accumulators for each layered longhand. Background-color is
+        // a single value taken from the final layer only.
+        var images = new List<CssValue>();
+        var positions = new List<CssValue>();
+        var sizes = new List<CssValue>();
+        var repeats = new List<CssValue>();
+        var attachments = new List<CssValue>();
+        var origins = new List<CssValue>();
+        var clips = new List<CssValue>();
+        CssValue color = CssColor.Transparent;
+
+        for (var i = 0; i < layers.Count; i++)
+        {
+            var isFinal = i == layers.Count - 1;
+            var (parsed, layerColor) = ParseBackgroundLayer(layers[i], isFinal);
+            if (isFinal && layerColor is not null)
+                color = layerColor;
+
+            images.Add(parsed.Image);
+            positions.Add(parsed.Position);
+            sizes.Add(parsed.Size);
+            repeats.Add(parsed.Repeat);
+            attachments.Add(parsed.Attachment);
+            origins.Add(parsed.Origin);
+            clips.Add(parsed.Clip);
+        }
+
+        // CSS Backgrounds 3 §3.4 — background-color is not layered; it takes the
+        // final layer's color (initial transparent otherwise).
+        yield return new PropertyDeclaration(PropertyId.BackgroundColor, color, important);
+        yield return Layered(PropertyId.BackgroundImage, images, important);
+        yield return Layered(PropertyId.BackgroundPosition, positions, important);
+        yield return Layered(PropertyId.BackgroundSize, sizes, important);
+        yield return Layered(PropertyId.BackgroundRepeat, repeats, important);
+        yield return Layered(PropertyId.BackgroundAttachment, attachments, important);
+        yield return Layered(PropertyId.BackgroundOrigin, origins, important);
+        yield return Layered(PropertyId.BackgroundClip, clips, important);
+
+        static PropertyDeclaration Layered(PropertyId id, List<CssValue> layerValues, bool important)
+            => new(id, layerValues.Count == 1 ? layerValues[0] : new CssValueList(layerValues), important);
+    }
+
+    private readonly record struct BackgroundLayer(
+        CssValue Image,
+        CssValue Position,
+        CssValue Size,
+        CssValue Repeat,
+        CssValue Attachment,
+        CssValue Origin,
+        CssValue Clip);
+
+    /// <summary>
+    /// Parse a single <c>&lt;bg-layer&gt;</c> per CSS Backgrounds 3 §3.4. Any
+    /// omitted component resets to its initial value. The optional
+    /// <c>&lt;position&gt; [ / &lt;size&gt; ]?</c> is slash-separated. When two
+    /// box keywords (border-box / padding-box / content-box) are present, the
+    /// first sets <c>background-origin</c> and the second <c>background-clip</c>;
+    /// a single box keyword sets both. <paramref name="allowColor"/> is true only
+    /// for the final layer, where a <c>background-color</c> is permitted.
+    /// </summary>
+    private static (BackgroundLayer Layer, CssValue? Color) ParseBackgroundLayer(
+        List<CssValue> values,
+        bool allowColor)
+    {
         CssValue? image = null;
         CssValue? repeat = null;
+        CssValue? attachment = null;
+        CssValue? color = null;
+        var boxes = new List<CssValue>();
         var positionValues = new List<CssValue>();
+        var sizeValues = new List<CssValue>();
 
+        // The optional `<position> [ / <size> ]?` puts the size right after the
+        // slash. Only the size component(s) immediately after the slash belong
+        // to background-size; any following keywords (attachment, box) are
+        // parsed normally once the size run ends.
+        var afterSlash = false;
         foreach (var v in values)
         {
-            if (color is null && IsColorLike(v))
+            if (v is CssKeyword { Name: "/" })
             {
-                color = v;
+                afterSlash = true;
+                continue;
             }
-            else if (image is null && (v is CssUrl || v is CssFunctionValue { Name: "linear-gradient" or "radial-gradient" or "conic-gradient" or "repeating-linear-gradient" or "repeating-radial-gradient" or "repeating-conic-gradient" or "image-set" or "url" }))
+
+            if (afterSlash)
             {
+                if (IsBackgroundSizeComponent(v))
+                {
+                    sizeValues.Add(v);
+                    continue;
+                }
+                afterSlash = false; // size run ended; fall through to normal routing.
+            }
+
+            if (image is null && IsBackgroundImage(v))
                 image = v;
-            }
-            else if (v is CssKeyword k && IsBackgroundRepeatKeyword(k.Name))
-            {
+            else if (repeat is null && v is CssKeyword rk && IsBackgroundRepeatKeyword(rk.Name))
                 repeat = v;
-            }
+            else if (attachment is null && v is CssKeyword ak && IsBackgroundAttachmentKeyword(ak.Name))
+                attachment = v;
+            else if (v is CssKeyword bk && IsBackgroundBoxKeyword(bk.Name))
+                boxes.Add(v);
             else if (v is CssLength or CssPercentage or CssNumber
                 || (v is CssKeyword pk && IsBackgroundPositionKeyword(pk.Name)))
-            {
                 positionValues.Add(v);
-            }
+            else if (allowColor && color is null && IsColorLike(v))
+                color = v;
         }
 
-        if (color is not null)
-            yield return new PropertyDeclaration(PropertyId.BackgroundColor, color, important);
-        if (image is not null)
-            yield return new PropertyDeclaration(PropertyId.BackgroundImage, image, important);
-        if (repeat is not null)
-            yield return new PropertyDeclaration(PropertyId.BackgroundRepeat, repeat, important);
-        if (positionValues.Count > 0)
+        var size = sizeValues.Count switch
         {
-            var pos = positionValues.Count == 1 ? positionValues[0] : new CssValueList(positionValues);
-            yield return new PropertyDeclaration(PropertyId.BackgroundPosition, pos, important);
-        }
+            0 => new CssKeyword("auto"),
+            1 => sizeValues[0],
+            _ => new CssValueList(sizeValues),
+        };
+
+        CssValue position = positionValues.Count switch
+        {
+            0 => new CssKeyword("0% 0%"),
+            1 => positionValues[0],
+            _ => new CssValueList(positionValues),
+        };
+
+        // First box → origin, second → clip; one box sets both (§3.4).
+        var origin = boxes.Count > 0 ? boxes[0] : new CssKeyword("padding-box");
+        var clip = boxes.Count > 1 ? boxes[1] : (boxes.Count == 1 ? boxes[0] : new CssKeyword("border-box"));
+
+        var layer = new BackgroundLayer(
+            image ?? new CssKeyword("none"),
+            position,
+            size,
+            repeat ?? new CssKeyword("repeat"),
+            attachment ?? new CssKeyword("scroll"),
+            origin,
+            clip);
+        return (layer, color);
     }
+
+    private static bool IsBackgroundImage(CssValue v)
+        => v is CssUrl
+            || v is CssGradient
+            || v is CssKeyword { Name: "none" }
+            || v is CssFunctionValue { Name: "linear-gradient" or "radial-gradient" or "conic-gradient" or "repeating-linear-gradient" or "repeating-radial-gradient" or "repeating-conic-gradient" or "image-set" or "url" };
 
     private static bool IsBackgroundRepeatKeyword(string name)
         => name is "repeat" or "no-repeat" or "repeat-x" or "repeat-y" or "space" or "round";
+
+    private static bool IsBackgroundSizeComponent(CssValue v)
+        => v is CssLength or CssPercentage or CssNumber
+            or CssKeyword { Name: "auto" or "cover" or "contain" }
+            or CssFunctionValue { Name: "calc" };
+
+    private static bool IsBackgroundAttachmentKeyword(string name)
+        => name is "scroll" or "fixed" or "local";
+
+    private static bool IsBackgroundBoxKeyword(string name)
+        => name is "border-box" or "padding-box" or "content-box";
 
     private static bool IsBackgroundPositionKeyword(string name)
         => name is "left" or "right" or "top" or "bottom" or "center";
@@ -1172,7 +1296,12 @@ public static class PropertyRegistry
         ["border-color"] = [PropertyId.BorderTopColor, PropertyId.BorderRightColor, PropertyId.BorderBottomColor, PropertyId.BorderLeftColor],
         ["border-radius"] = [PropertyId.BorderTopLeftRadius, PropertyId.BorderTopRightRadius, PropertyId.BorderBottomRightRadius, PropertyId.BorderBottomLeftRadius],
         ["overflow"] = [PropertyId.OverflowX, PropertyId.OverflowY],
-        ["background"] = [PropertyId.BackgroundColor, PropertyId.BackgroundImage, PropertyId.BackgroundPosition, PropertyId.BackgroundSize, PropertyId.BackgroundRepeat],
+        ["background"] =
+        [
+            PropertyId.BackgroundColor, PropertyId.BackgroundImage, PropertyId.BackgroundPosition,
+            PropertyId.BackgroundSize, PropertyId.BackgroundRepeat, PropertyId.BackgroundAttachment,
+            PropertyId.BackgroundOrigin, PropertyId.BackgroundClip,
+        ],
         ["border"] =
         [
             PropertyId.BorderTopWidth, PropertyId.BorderRightWidth, PropertyId.BorderBottomWidth, PropertyId.BorderLeftWidth,
