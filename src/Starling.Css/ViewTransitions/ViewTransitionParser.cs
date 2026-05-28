@@ -16,7 +16,8 @@ public static class ViewTransitionParser
         ArgumentNullException.ThrowIfNull(sheet);
         foreach (var rule in sheet.Rules)
         {
-            if (rule is AtRule { Name: "view-transition" } atRule)
+            if (rule is AtRule atRule
+                && string.Equals(atRule.Name, "view-transition", StringComparison.OrdinalIgnoreCase))
                 yield return Parse(atRule);
         }
     }
