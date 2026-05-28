@@ -173,22 +173,21 @@ public sealed class ComprehensiveTests
     // §3.1 — guaranteed-invalid value (empty initial custom property)
     // ---------------------------------------------------------------
 
-    [Spec("css-variables-1", "https://www.w3.org/TR/css-variables-1/#guaranteed-invalid", section: "3.1")]
-    [PendingFact(
-        "Engine substitutes the empty token list from --x: ; into color: var(--x, green) and then " +
-        "applies IACVT, but falls back to `unset` (initial black) instead of the var() fallback " +
-        "(green). §3.1 requires that when the substituted value is empty the var() fallback wins.",
-        trackingWp: "wp:spec-css-variables-1")]
-    public void Var_referencing_empty_custom_property_uses_fallback()
+    [Spec("css-variables-1", "https://www.w3.org/TR/css-variables-1/#using-variables", section: "3")]
+    [SpecFact]
+    public void Var_with_empty_custom_property_substitutes_empty_not_fallback()
     {
-        // §3.1: an empty custom property value ( --x: ; ) is not the
-        // guaranteed-invalid value — it is a valid empty list. But when a
-        // non-custom property is set via var(--x) and the substitution yields
-        // an empty token list, the value is invalid at computed-value time.
-        // With a fallback: the var() fallback should be used.
-        var style = Compute("--x: ; color: var(--x, green);");
-        // The empty substitution makes the declaration invalid; spec says fallback green wins.
-        style.GetColor(PropertyId.Color).Should().Be(new Starling.Css.Values.CssColor(0, 128, 0));
+        // §3: an explicitly-empty custom property ( --x: ; ) is a VALID empty
+        // value, NOT the guaranteed-invalid value. So `var(--x, green)`
+        // substitutes the empty value — the fallback is consulted ONLY when the
+        // custom property is guaranteed-invalid. The resulting empty `color:` is
+        // then invalid-at-computed-value-time and behaves as `unset`; the
+        // fallback green must NOT win.
+        var green = new Starling.Css.Values.CssColor(0, 128, 0);
+        var withEmpty = Compute("--x: ; color: var(--x, green);").GetColor(PropertyId.Color);
+        withEmpty.Should().NotBe(green, "the fallback is not used when the custom property is defined (empty)");
+        // Behaves exactly as `unset`.
+        withEmpty.Should().Be(Compute("color: unset;").GetColor(PropertyId.Color));
     }
 
     // ---------------------------------------------------------------
