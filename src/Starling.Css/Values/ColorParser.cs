@@ -14,6 +14,18 @@ public static class ColorParser
     {
         color = CssColor.Transparent;
         var lower = name.ToLowerInvariant();
+
+        // CSS Color 5 §4: relative color syntax — `rgb(from <color> r g b)` etc.
+        // When the first argument is the `from` keyword, resolve the origin color,
+        // bind the target space's channel keywords, and rewrite the channel
+        // expressions into ordinary numeric components before the regular parse.
+        if (StartsWithFrom(raw, out var afterFrom) &&
+            lower is "rgb" or "rgba" or "hsl" or "hsla" or "hwb"
+                  or "lab" or "lch" or "oklab" or "oklch")
+        {
+            return TryParseRelative(lower, afterFrom, out color);
+        }
+
         return lower switch
         {
             "rgb" or "rgba" => TryParseRgb(raw, out color),
@@ -27,6 +39,189 @@ public static class ColorParser
             "color-mix" => TryParseColorMix(raw, out color),
             _ => false,
         };
+    }
+
+    // ---------- CSS Color 5 §4: relative color syntax ----------
+
+    /// <summary>True when the first non-whitespace argument is the <c>from</c>
+    /// keyword. Returns the component values that follow it (the origin color
+    /// plus channel expressions).</summary>
+    private static bool StartsWithFrom(IReadOnlyList<CssComponentValue> raw, out IReadOnlyList<CssComponentValue> rest)
+    {
+        rest = raw;
+        var noWs = FilterWhitespace(raw).ToList();
+        if (noWs.Count == 0) return false;
+        if (noWs[0] is not CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var kw } } ||
+            !kw.Equals("from", StringComparison.OrdinalIgnoreCase))
+            return false;
+        rest = noWs.Skip(1).ToList();
+        return true;
+    }
+
+    /// <summary>
+    /// Resolve a relative color: parse the origin <c>&lt;color&gt;</c>, decompose
+    /// it into the target space's channels, bind the channel keywords (e.g.
+    /// <c>r g b</c>, <c>l c h</c>), and evaluate each channel expression — a bare
+    /// number/percentage/angle, the <c>none</c> keyword, a channel keyword, or a
+    /// <c>calc()</c> referencing channel keywords. CSS Color 5 §4.
+    /// </summary>
+    private static bool TryParseRelative(string fn, IReadOnlyList<CssComponentValue> rest, out CssColor color)
+    {
+        color = CssColor.Transparent;
+        if (rest.Count == 0) return false;
+
+        // The first component value is the origin color. It may be a function
+        // (rgb(...), oklch(...), color(...)) or a single token (named / hex).
+        var origin = rest[0];
+        CssColor originColor;
+        if (origin is CssFunction of)
+        {
+            if (!TryParseFunction(of.Name, of.Values, out originColor)) return false;
+        }
+        else if (origin is CssTokenValue tv && TryParseInline(new List<CssComponentValue> { tv }, out var inline))
+        {
+            originColor = inline;
+        }
+        else
+        {
+            return false;
+        }
+
+        // Decompose the origin into the target space's channel symbol table.
+        var symbols = DecomposeForFunction(fn, originColor);
+        if (symbols is null) return false;
+
+        // The remaining components are the channel expressions. Rewrite every
+        // channel-keyword ident into a literal number token, then hand the
+        // result to the normal per-function parser.
+        var channelArgs = rest.Skip(1).Select(v => SubstituteChannels(v, symbols)).ToList();
+
+        return fn switch
+        {
+            "rgb" or "rgba" => TryParseRgb(channelArgs, out color),
+            "hsl" or "hsla" => TryParseHsl(channelArgs, out color),
+            "hwb" => TryParseHwb(channelArgs, out color),
+            "lab" => TryParseLab(channelArgs, out color),
+            "lch" => TryParseLch(channelArgs, out color),
+            "oklab" => TryParseOklab(channelArgs, out color),
+            "oklch" => TryParseOklch(channelArgs, out color),
+            _ => false,
+        };
+    }
+
+    /// <summary>Decompose <paramref name="c"/> into the channel keywords used by
+    /// the target color function, returning a case-insensitive symbol table
+    /// (channel name → numeric value in the units the function's own parser
+    /// expects). Returns null for unsupported functions.</summary>
+    private static Dictionary<string, double>? DecomposeForFunction(string fn, CssColor c)
+    {
+        var alpha = double.IsNaN(c.AlphaF) ? 1.0 : c.AlphaF;
+        var t = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase) { ["alpha"] = alpha };
+        switch (fn)
+        {
+            case "rgb" or "rgba":
+            {
+                // rgb() channel keywords are numbers in the 0..255 range.
+                var (r, g, b) = SrgbOf(c);
+                t["r"] = r * 255.0; t["g"] = g * 255.0; t["b"] = b * 255.0;
+                return t;
+            }
+            case "hsl" or "hsla":
+            {
+                var (r, g, b) = SrgbOf(c);
+                var (h, s, l) = ColorConversion.SrgbToHsl(Math.Clamp(r, 0, 1), Math.Clamp(g, 0, 1), Math.Clamp(b, 0, 1));
+                // s/l keywords carry the 0..100 (percentage) magnitude.
+                t["h"] = h; t["s"] = s * 100.0; t["l"] = l * 100.0;
+                return t;
+            }
+            case "hwb":
+            {
+                var (r, g, b) = SrgbOf(c);
+                var rr = Math.Clamp(r, 0, 1); var gg = Math.Clamp(g, 0, 1); var bb = Math.Clamp(b, 0, 1);
+                var (h, _, _) = ColorConversion.SrgbToHsl(rr, gg, bb);
+                var w = Math.Min(rr, Math.Min(gg, bb));
+                var bk = 1 - Math.Max(rr, Math.Max(gg, bb));
+                t["h"] = h; t["w"] = w * 100.0; t["b"] = bk * 100.0;
+                return t;
+            }
+            case "lab":
+            {
+                var (L, a, b) = ComponentsIn(ColorSpace.Lab, c);
+                t["l"] = L; t["a"] = a; t["b"] = b;
+                return t;
+            }
+            case "lch":
+            {
+                var (L, ch, h) = ComponentsIn(ColorSpace.Lch, c);
+                t["l"] = L; t["c"] = ch; t["h"] = h;
+                return t;
+            }
+            case "oklab":
+            {
+                var (L, a, b) = ComponentsIn(ColorSpace.Oklab, c);
+                t["l"] = L; t["a"] = a; t["b"] = b;
+                return t;
+            }
+            case "oklch":
+            {
+                var (L, ch, h) = ComponentsIn(ColorSpace.Oklch, c);
+                t["l"] = L; t["c"] = ch; t["h"] = h;
+                return t;
+            }
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>sRGB components (0..1) of any color.</summary>
+    private static (double R, double G, double B) SrgbOf(CssColor c)
+    {
+        if (!c.HasWideGamutData)
+            return (c.R / 255.0, c.G / 255.0, c.B / 255.0);
+        var s1 = double.IsNaN(c.C1) ? 0 : c.C1;
+        var s2 = double.IsNaN(c.C2) ? 0 : c.C2;
+        var s3 = double.IsNaN(c.C3) ? 0 : c.C3;
+        return ColorConversion.ToSrgb(c.Space, s1, s2, s3);
+    }
+
+    /// <summary>Native components of <paramref name="c"/> expressed in
+    /// <paramref name="target"/>, routing through XYZ-D65 when needed.</summary>
+    private static (double, double, double) ComponentsIn(ColorSpace target, CssColor c)
+    {
+        if (c.HasWideGamutData && c.Space == target)
+            return (double.IsNaN(c.C1) ? 0 : c.C1, double.IsNaN(c.C2) ? 0 : c.C2, double.IsNaN(c.C3) ? 0 : c.C3);
+
+        double x, y, z;
+        if (c.HasWideGamutData)
+        {
+            var s1 = double.IsNaN(c.C1) ? 0 : c.C1;
+            var s2 = double.IsNaN(c.C2) ? 0 : c.C2;
+            var s3 = double.IsNaN(c.C3) ? 0 : c.C3;
+            (x, y, z) = ColorConversion.ToXyzD65(c.Space, s1, s2, s3);
+        }
+        else
+        {
+            (x, y, z) = ColorConversion.ToXyzD65(ColorSpace.Srgb, c.R / 255.0, c.G / 255.0, c.B / 255.0);
+        }
+        return XyzToSpace(target, x, y, z);
+    }
+
+    /// <summary>Recursively rewrite channel-keyword idents into literal numbers so
+    /// the existing numeric component readers (and calc() evaluator) can consume
+    /// the channel expressions unchanged.</summary>
+    private static CssComponentValue SubstituteChannels(CssComponentValue v, IReadOnlyDictionary<string, double> symbols)
+    {
+        switch (v)
+        {
+            case CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var name } } when symbols.TryGetValue(name, out var val):
+                return new CssTokenValue(new CssToken(CssTokenType.Number, Number: val, IsInteger: false));
+            case CssFunction f:
+                return new CssFunction(f.Name, f.Values.Select(c => SubstituteChannels(c, symbols)).ToList());
+            case CssSimpleBlock b:
+                return new CssSimpleBlock(b.StartToken, b.Values.Select(c => SubstituteChannels(c, symbols)).ToList());
+            default:
+                return v;
+        }
     }
 
     // ---------- rgb / rgba ----------
