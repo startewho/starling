@@ -710,6 +710,17 @@ public static class PropertyRegistry
                     yield return item;
                 break;
 
+            // CSS Compositing 1 §5.2: `background-blend-mode` is a comma-separated
+            // list of blend keywords (one per background layer). Split on the
+            // top-level comma artifacts so the value is one clean entry per layer.
+            case "background-blend-mode":
+                {
+                    var modes = values.Where(v => v is not CssKeyword { Name: "" or "," }).ToList();
+                    yield return new PropertyDeclaration(PropertyId.BackgroundBlendMode,
+                        modes.Count == 1 ? modes[0] : new CssValueList(modes), important);
+                }
+                break;
+
             default:
                 if (TryGetPropertyId(name, out var id))
                 {
