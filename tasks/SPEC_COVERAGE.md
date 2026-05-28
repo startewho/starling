@@ -89,7 +89,7 @@ tests that have started passing — when one does, promote it from
 | CSS Conditional L5 (`@media`, `@supports`) | https://www.w3.org/TR/css-conditional-5/ | 🟢 | legacy | `wp:spec-css-conditional-5` |
 | CSS Nesting L1 | https://www.w3.org/TR/css-nesting-1/ | 🟢 | `Starling.Css.Tests/NestingTests` (legacy) | `wp:spec-css-nesting-1` |
 | Selectors L4 | https://www.w3.org/TR/selectors-4/ | 🟢 | legacy — needs `Selectors4/` | `wp:spec-selectors-4` |
-| CSS Scoping (`@scope`) | https://www.w3.org/TR/css-cascade-6/#scoped-styles | 🔴 | — | `wp:spec-css-scope-1` |
+| CSS Scoping (`@scope`) | https://www.w3.org/TR/css-cascade-6/#scoped-styles | 🟢 | `CssScope1/`, `src/Starling.Css/Scope/` — `@scope (start) [to (end)]` at-rule parse: bounds + scoped inner rules (`wp:spec-css-scope-1`); scoping proximity cascade step not implemented | `wp:spec-css-scope-1` |
 
 ## Color & typography
 
@@ -193,7 +193,7 @@ tests that have started passing — when one does, promote it from
 | `@property` | css-properties-values-api-1 | 🟢 `CssPropertiesValues1/AtPropertyTests` |
 | `@counter-style` | css-counter-styles-3 | 🟢 `CssCounterStyles3/CounterStyleTests` |
 | `@page` | css-page-3 | 🚫 v1-deferred (print) |
-| `@scope` | css-cascade-6 | 🔴 |
+| `@scope` | css-cascade-6 | 🟢 `CssScope1/ScopeRuleTests` |
 | `@starting-style` | css-transitions-2 | 🔴 |
 | `@container` | css-contain-3 | 🔴 |
 
@@ -208,9 +208,9 @@ stale — the matrix has always held more rows than that.
 |---|---|
 | Specs catalogued | 67 |
 | ✅ Implemented | 3 |
-| 🟢 In progress | 50 |
+| 🟢 In progress | 51 |
 | 🟡 Scaffolded only | 0 |
-| 🔴 Not started (in scope, no work yet) | 9 |
+| 🔴 Not started (in scope, no work yet) | 8 |
 | 🚫 v1-deferred (the seven buckets) | 5 rows + MathML Core + print specs |
 
 In-scope total: **62 specs** (67 rows − 5 deferred rows). The two non-row
