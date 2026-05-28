@@ -163,6 +163,12 @@ public enum PropertyId
     PointerEvents,
     UserSelect,
     Cursor,
+    OutlineWidth,
+    OutlineStyle,
+    OutlineColor,
+    OutlineOffset,
+    Resize,
+    TextOverflow,
 
     // Logical: margin
     MarginInlineStart,
