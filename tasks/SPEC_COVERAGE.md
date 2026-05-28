@@ -82,13 +82,13 @@ tests that have started passing — when one does, promote it from
 
 | Spec | URL | Status | Folder | Tracking WP |
 |---|---|---|---|---|
-| CSS Syntax L3 | https://www.w3.org/TR/css-syntax-3/ | 🟢 | `Starling.Css.Tests/CssTokenizerTests`, `CssParserTests` (legacy unit) — needs `Starling.Css.Spec.Tests/CssSyntax3/` | `wp:spec-css-syntax-3` |
-| CSS Values & Units L4 | https://www.w3.org/TR/css-values-4/ | 🟢 | legacy — needs `Starling.Css.Spec.Tests/CssValues4/` | `wp:spec-css-values-4` |
-| CSS Cascade & Inheritance L5 | https://www.w3.org/TR/css-cascade-5/ | 🟢 | legacy — needs `Starling.Css.Spec.Tests/CssCascade5/` | `wp:spec-css-cascade-5` |
+| CSS Syntax L3 | https://www.w3.org/TR/css-syntax-3/ | 🟢 | `CssSyntax3/` (121 SpecFact: §4 tokenizer + §5 parser/consume algorithms) | 1 gap → `wp:spec-css-syntax-3`: hash token lacks `id`/`unrestricted` type flag (§4.3.6) |
+| CSS Values & Units L4 | https://www.w3.org/TR/css-values-4/ | 🟢 | `CssValues4/` (126 SpecFact: keywords/numbers/percentages/all unit dims + conversions/calc fold + math fns) | 4 gaps → `wp:spec-css-values-4`: calc time/frequency same+cross-unit fold; `1e2px` scientific-notation dimension |
+| CSS Cascade & Inheritance L5 | https://www.w3.org/TR/css-cascade-5/ | 🟢 | `CssCascade5/` (46 SpecFact: specificity/origin+importance/@layer/CSS-wide keywords/`all`/inheritance via `Compute`) | 1 gap → `wp:spec-css-cascade-5`: nested `@layer` treats sub-layer as stronger than outer-unlayered (§7) |
 | CSS Custom Properties L1 | https://www.w3.org/TR/css-variables-1/ | 🟢 | `Starling.Css.Spec.Tests/CssVariables1/` — `--*` token-stream preservation, `var()` substitution + nested fallback, §3.3 cycle detection done (`wp:spec-css-variables-1`) | `wp:spec-css-variables-1` |
 | CSS Conditional L5 (`@media`, `@supports`) | https://www.w3.org/TR/css-conditional-5/ | 🟢 | legacy | `wp:spec-css-conditional-5` |
 | CSS Nesting L1 | https://www.w3.org/TR/css-nesting-1/ | 🟢 | `Starling.Css.Tests/NestingTests` (legacy) | `wp:spec-css-nesting-1` |
-| Selectors L4 | https://www.w3.org/TR/selectors-4/ | 🟢 | legacy — needs `Selectors4/` | `wp:spec-selectors-4` |
+| Selectors L4 | https://www.w3.org/TR/selectors-4/ | 🟢 | `Selectors4/` (89 SpecFact: all attr operators + `i` flag, 4 combinators, full structural/`nth` suite incl. `of S`, `:is`/`:where`/`:not`/`:has`) | 7 gaps → `wp:spec-selectors-4`: form-validation pseudos (`:valid`/`:invalid`/`:in-range`/`:out-of-range`/`:autofill`/`:user-*`), `:lang()` comma-list, `:focus-visible` heuristic |
 | CSS Scoping (`@scope`) | https://www.w3.org/TR/css-cascade-6/#scoped-styles | 🟢 | `CssScope1/`, `src/Starling.Css/Scope/` — `@scope (start) [to (end)]` at-rule parse: bounds + scoped inner rules (`wp:spec-css-scope-1`); scoping proximity cascade step not implemented | `wp:spec-css-scope-1` |
 
 ## Color & typography
