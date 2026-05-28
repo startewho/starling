@@ -809,9 +809,7 @@ public sealed class PseudoElement4Tests
     /// but does not yet assign a dedicated <see cref="PseudoElement"/> kind.</para>
     /// </summary>
     [Spec("css-pseudo-4", "https://www.w3.org/TR/css-pseudo-4/#pseudo-element-syntax", section: "2")]
-    [PendingFact("Functional pseudo-elements (::part(), ::slotted()) are not yet assigned " +
-                 "dedicated PseudoElement enum values; they parse as Unknown.",
-                 trackingWp: "wp:spec-css-pseudo-4")]
+    [SpecFact]
     public void Functional_pseudo_element_part_parses_with_dedicated_kind()
     {
         // When implemented, ::part(foo) should parse to a distinct PseudoElement kind
@@ -825,8 +823,7 @@ public sealed class PseudoElement4Tests
     /// assigned a dedicated kind.</para>
     /// </summary>
     [Spec("css-pseudo-4", "https://www.w3.org/TR/css-pseudo-4/#pseudo-element-syntax", section: "2")]
-    [PendingFact("::slotted() is not yet assigned a dedicated PseudoElement enum value.",
-                 trackingWp: "wp:spec-css-pseudo-4")]
+    [SpecFact]
     public void Functional_pseudo_element_slotted_parses_with_dedicated_kind()
     {
         var selector = SelectorParser.ParseSelectorList("slot::slotted(div)").Selectors.Single();
