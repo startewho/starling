@@ -175,7 +175,10 @@ public class Element : Node
             // Document.IsLayoutRelevantAttribute for the trade-off.
             d.BumpMutationVersion();
             if (Document.IsLayoutRelevantAttribute(attrName))
+            {
                 d.BumpLayoutInvalidationVersion();
+                d.RecordLayoutMutation(this, LayoutChangeKind.LayoutRelevantAttr);
+            }
             return;
         }
         // Detached element — fall back to the parent walk in OnTreeMutated.

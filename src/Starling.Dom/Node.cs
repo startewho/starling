@@ -95,7 +95,10 @@ public abstract class Node : EventTarget
                 previous.NextSibling = child;
         }
 
-        OnTreeMutated(affectsLayout: !IsLayoutInvariantElement(child));
+        var childAffectsLayout = !IsLayoutInvariantElement(child);
+        OnTreeMutated(affectsLayout: childAffectsLayout);
+        if (childAffectsLayout)
+            (OwnerDocument ?? this as Document)?.RecordLayoutMutation(this, LayoutChangeKind.ChildInserted);
         NotifyConnected(child);
         return child;
     }
@@ -161,7 +164,10 @@ public abstract class Node : EventTarget
         NextSibling = null;
         // Cache before nulling refs above? We already read `this` after the
         // unhook, so call the lookup now while the type is known.
-        parent.OnTreeMutated(affectsLayout: !IsLayoutInvariantElement(this));
+        var removedAffectsLayout = !IsLayoutInvariantElement(this);
+        parent.OnTreeMutated(affectsLayout: removedAffectsLayout);
+        if (removedAffectsLayout)
+            (parent.OwnerDocument ?? parent as Document)?.RecordLayoutMutation(parent, LayoutChangeKind.ChildRemoved);
     }
 
     public IEnumerable<Node> ChildNodes

@@ -46,6 +46,24 @@ public abstract class Box
     public Edges Padding { get; internal set; }
     public Edges Border { get; internal set; }
 
+    // ---- Incremental-layout cache (see Starling.Layout.Incremental) ----------
+    //
+    // These back constraint-space-keyed subtree reuse. They are written only on
+    // the incremental path; the full-rebuild path never reads them, so a box
+    // laid out the old way is byte-for-byte identical to before.
+
+    /// <summary>The constraint space this box was last laid out against, or
+    /// null if it has never been laid out under the incremental engine. Reuse
+    /// requires this to equal the incoming constraint space.</summary>
+    internal Starling.Layout.Incremental.ConstraintSpace? LaidConstraint;
+
+    /// <summary>True when this box or any descendant was touched by a mutation
+    /// since its last layout — set during reconciliation along the root-to-change
+    /// path. A subtree-dirty box cannot be reused; a clean one (with a matching
+    /// constraint space) is repositioned in O(1) without descending, because
+    /// every child <see cref="Frame"/> is parent-relative.</summary>
+    internal bool SubtreeDirty;
+
     public void AppendChild(Box child)
     {
         ArgumentNullException.ThrowIfNull(child);
@@ -77,7 +95,10 @@ public sealed class TextBox : Box
         Text = text;
     }
 
-    public string Text { get; }
+    /// <summary>The run's text. Settable so incremental layout can refresh a
+    /// changed text node in place (the box structure is unchanged by a text
+    /// edit); the inline pass re-shapes from the new value.</summary>
+    public string Text { get; internal set; }
 
     /// <summary>
     /// Populated by the inline formatting context: one entry per line fragment
