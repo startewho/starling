@@ -20,6 +20,7 @@ public abstract class CharacterData : Node
 
             _data = normalized;
             OnTreeMutated();
+            OwnerDocument?.RecordLayoutMutation(this, LayoutChangeKind.TextChanged);
         }
     }
 

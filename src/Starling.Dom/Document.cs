@@ -31,6 +31,41 @@ public sealed class Document : Node
 
     internal void BumpLayoutInvalidationVersion() => LayoutInvalidationVersion++;
 
+    // ---- Per-frame layout-mutation batch (incremental layout) ----------------
+    //
+    // When RecordLayoutMutations is on, every layout-relevant DOM change appends
+    // a (target, kind) record here. The incremental layout engine drains the
+    // batch each frame to reconcile only the changed subtrees. Off by default,
+    // so non-incremental pages pay nothing.
+
+    private List<LayoutMutation>? _layoutMutations;
+
+    /// <summary>Enables per-frame recording of layout-relevant mutations into a
+    /// batch the incremental layout engine drains. The engine turns this on for
+    /// the live page; it stays off for one-shot renders.</summary>
+    public bool RecordLayoutMutations { get; set; }
+
+    internal void RecordLayoutMutation(Node target, LayoutChangeKind kind)
+    {
+        if (!RecordLayoutMutations) return;
+        // Only batch mutations on the live tree. Edits to a detached subtree
+        // (built before insertion) are subsumed when its connected ancestor is
+        // reconciled, and recording them would name unmapped nodes.
+        if (!target.IsConnectedToDocument) return;
+        (_layoutMutations ??= new List<LayoutMutation>()).Add(new LayoutMutation(target, kind));
+    }
+
+    /// <summary>Removes and returns the mutations recorded since the last drain.
+    /// Empty when nothing layout-relevant changed (or recording is off).</summary>
+    public IReadOnlyList<LayoutMutation> DrainLayoutMutations()
+    {
+        if (_layoutMutations is null || _layoutMutations.Count == 0)
+            return Array.Empty<LayoutMutation>();
+        var snapshot = _layoutMutations.ToArray();
+        _layoutMutations.Clear();
+        return snapshot;
+    }
+
     /// <summary>Per-attribute-name bump counter (diagnostic). Engine reads
     /// this after script execution to surface "which attribute caused all the
     /// re-layouts" without needing a full mutation log.</summary>
@@ -43,6 +78,28 @@ public sealed class Document : Node
         AttributeMutationCounts[attrName] = n + 1;
     }
 
+    /// <summary>
+    /// Attribute names that some active stylesheet selects on
+    /// (e.g. <c>[data-state="open"]</c> → <c>data-state</c>). Set by the layout
+    /// pass from the style engine. Selector-aware invalidation (plan §7): a write
+    /// to one of these is layout-relevant even when the static heuristic in
+    /// <see cref="IsLayoutRelevantAttribute"/> would treat it as cosmetic, so
+    /// author CSS keyed on a <c>data-*</c>/<c>aria-*</c> attribute no longer
+    /// misses a recompute when a script flips that attribute. Empty until layout
+    /// runs (the default heuristic still applies).
+    /// </summary>
+    public IReadOnlySet<string> StyleReferencedAttributes { get; set; } = EmptyAttributeSet;
+
+    private static readonly IReadOnlySet<string> EmptyAttributeSet =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether a value change on <paramref name="attrName"/> can shift
+    /// cascade or layout for this document — the static heuristic
+    /// (<see cref="IsLayoutRelevantAttribute"/>) widened by the attributes the
+    /// page's own stylesheets actually select on (<see cref="StyleReferencedAttributes"/>).</summary>
+    public bool IsAttributeLayoutRelevant(string attrName)
+        => IsLayoutRelevantAttribute(attrName) || StyleReferencedAttributes.Contains(attrName);
+
     /// <summary>True iff a value change on <paramref name="attrName"/> can
     /// shift cascade or layout for an ordinary HTML page.</summary>
     /// <remarks>
@@ -53,12 +110,13 @@ public sealed class Document : Node
     /// Google's homepage this turns ~350 of ~500 attribute mutations into
     /// no-op bumps, which keeps the layout cache valid through the analytics
     /// noise and skips redundant reflows.</para>
-    /// <para><b>Correctness caveat:</b> a page whose author CSS uses an
-    /// attribute selector (e.g. <c>[role="button"] { … }</c>) AND mutates
-    /// that attribute via script will miss a cascade recompute until the
-    /// next layout-relevant change. That combination is rare in the wild;
-    /// the spec-correct alternative is selector-aware invalidation, which is
-    /// a follow-up.</para>
+    /// <para>This is only the static half. A page whose author CSS uses an
+    /// attribute selector (e.g. <c>[role="button"] { … }</c>) AND mutates that
+    /// attribute via script is handled by selector-aware invalidation:
+    /// <see cref="IsAttributeLayoutRelevant"/> also consults
+    /// <see cref="StyleReferencedAttributes"/>, the attributes the page's own
+    /// stylesheets select on. Callers on the invalidation path should use that
+    /// instance method, not this static heuristic alone.</para>
     /// </remarks>
     public static bool IsLayoutRelevantAttribute(string attrName)
     {

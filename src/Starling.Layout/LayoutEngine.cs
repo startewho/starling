@@ -6,6 +6,7 @@ using Starling.Layout.Block;
 using Starling.Layout.Box;
 using Starling.Layout.Text;
 using Starling.Layout.Tree;
+using Starling.Layout.Verification;
 
 namespace Starling.Layout;
 
@@ -42,6 +43,15 @@ public sealed class LayoutEngine
         _abort = abort;
     }
 
+    /// <summary>
+    /// Phase 0d dual-run verification. When set, every <c>LayoutDocument</c>
+    /// call lays the document out a second time and asserts the two outputs are
+    /// geometrically identical, logging the first divergence. Defaults to the
+    /// <see cref="LayoutVerifier.EnvVar"/> env switch; tests set it directly.
+    /// Doubles layout cost, so it is a debug/CI tool only.
+    /// </summary>
+    public bool VerifyLayout { get; init; } = LayoutVerifier.Enabled;
+
     public BlockBox LayoutDocument(Document document, Size viewport)
         => LayoutDocument(document, viewport, nowMs: null);
 
@@ -55,6 +65,40 @@ public sealed class LayoutEngine
     {
         ArgumentNullException.ThrowIfNull(document);
 
+        var root = LayoutOnce(document, viewport, nowMs);
+
+        if (VerifyLayout)
+            Verify(root, document, viewport, nowMs);
+
+        return root;
+    }
+
+    /// <summary>
+    /// Re-lays the document out a second time (full rebuild) and compares it to
+    /// <paramref name="produced"/>. Today both sides are a full rebuild, so this
+    /// is an identity check that proves the harness itself; once the incremental
+    /// path lands, <paramref name="produced"/> becomes the incremental output and
+    /// this stays the always-correct reference it is checked against.
+    /// </summary>
+    private void Verify(BlockBox produced, Document document, Size viewport, double? nowMs)
+    {
+        using var _ = _diag.Span("layout", "verify");
+        var reference = LayoutOnce(document, viewport, nowMs);
+        var divergence = LayoutVerifier.FindFirstDivergence(produced, reference);
+        if (divergence is { } d)
+        {
+            _diag.Counter("layout.verify.divergent", 1);
+            _diag.Log(DiagLevel.Error, "layout.verify",
+                $"layout divergence: {d}");
+        }
+        else
+        {
+            _diag.Counter("layout.verify.ok", 1);
+        }
+    }
+
+    private BlockBox LayoutOnce(Document document, Size viewport, double? nowMs)
+    {
         _diag.Counter("layout.runs", 1);
         using var span = _diag.Span("layout", "run");
         Activity.Current?.SetTag("layout.viewport_width", viewport.Width);

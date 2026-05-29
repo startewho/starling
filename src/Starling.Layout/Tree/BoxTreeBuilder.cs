@@ -16,13 +16,25 @@ internal sealed class BoxTreeBuilder
     private readonly StyleEngine _style;
     private readonly IImageResolver _images;
     private readonly double? _nowMs;
+    // Element/text-node → box maps for the incremental path. Owned by the
+    // LayoutSession (so they persist across frames) and passed in; null on the
+    // full-rebuild path, which records nothing.
+    private readonly Dictionary<Element, Box.Box>? _elementMap;
+    private readonly Dictionary<Starling.Dom.Text, TextBox>? _textMap;
 
-    public BoxTreeBuilder(StyleEngine style, IImageResolver? images = null, double? nowMs = null)
+    public BoxTreeBuilder(
+        StyleEngine style,
+        IImageResolver? images = null,
+        double? nowMs = null,
+        Dictionary<Element, Box.Box>? elementMap = null,
+        Dictionary<Starling.Dom.Text, TextBox>? textMap = null)
     {
         ArgumentNullException.ThrowIfNull(style);
         _style = style;
         _images = images ?? NullImageResolver.Instance;
         _nowMs = nowMs;
+        _elementMap = elementMap;
+        _textMap = textMap;
     }
 
     private ComputedStyle Compute(Element el, CascadeCache cache)
@@ -33,6 +45,11 @@ internal sealed class BoxTreeBuilder
     public BlockBox Build(Document document)
     {
         ArgumentNullException.ThrowIfNull(document);
+
+        // Selector-aware invalidation (plan §7): tell the document which
+        // attributes its stylesheets select on, so a later script write to a
+        // data-*/aria-* attribute that author CSS targets invalidates layout.
+        document.StyleReferencedAttributes = _style.ReferencedAttributeNames;
 
         var root = document.DocumentElement;
         if (root is null)
@@ -51,6 +68,7 @@ internal sealed class BoxTreeBuilder
         _style.PrecomputeTree(root, cache);
         var rootStyle = Compute(root, cache);
         var rootBox = new BlockBox(rootStyle, root);
+        if (_elementMap is not null) _elementMap[root] = rootBox;
         rootBox.Hints = StackingContextResolver.Resolve(rootBox, rootStyle, isRoot: true);
         BuildChildren(root, rootStyle, rootBox, cache);
         WrapInlinesInAnonymousBlocks(rootBox);
@@ -72,64 +90,236 @@ internal sealed class BoxTreeBuilder
             switch (child)
             {
                 case Element element:
-                    var elementStyle = Compute(element, cache);
-                    var display = DisplayKeyword(elementStyle);
-                    if (display == "none") continue;
-                    if (display == "contents")
-                    {
-                        BuildChildren(element, elementStyle, parentBox, cache);
-                        continue;
-                    }
-                    if (string.Equals(element.LocalName, "img", StringComparison.OrdinalIgnoreCase))
-                    {
-                        BuildImage(element, elementStyle, parentBox);
-                        continue;
-                    }
-                    if (string.Equals(element.LocalName, "svg", StringComparison.OrdinalIgnoreCase))
-                    {
-                        BuildSvg(element, elementStyle, parentBox);
-                        continue;
-                    }
-                    // inline-flex / inline-grid are inline-LEVEL but establish a
-                    // flex/grid formatting context internally: they place as
-                    // atomic inlines in their parent's line box (shrink-to-fit),
-                    // so they're InlineBoxes here. When the parent itself
-                    // blockifies its children (a flex/grid container), the child
-                    // becomes a block-level item regardless.
-                    var isInlineLevel = display is "inline" or "inline-block" or "inline-flex" or "inline-grid";
-                    Box.Box box = isInlineLevel && !blockifyChildren
-                        ? new InlineBox(elementStyle, element)
-                        : new BlockBox(elementStyle, element);
-                    box.Hints = StackingContextResolver.Resolve(box, elementStyle);
-                    parentBox.AppendChild(box);
-
-                    // CSS Lists 3 §3 — a list-item synthesizes a marker box as
-                    // its first in-flow child. Markers paint through the normal
-                    // text path (no dedicated display item), so we prepend a
-                    // TextBox carrying the marker string.
-                    if (display == "list-item")
-                        AppendListMarker(element, elementStyle, box);
-
-                    // CSS Content 3 §2 — synthesize ::before before children.
-                    AppendPseudoElement(element, elementStyle, box, PseudoElement.Before, cache);
-                    BuildChildren(element, elementStyle, box, cache);
-                    // ::after after children.
-                    AppendPseudoElement(element, elementStyle, box, PseudoElement.After, cache);
-                    // <input> is a void element with no DOM children — synthesize
-                    // a TextBox from its value/placeholder so the search box and
-                    // submit button labels actually show up. Real intrinsic
-                    // sizing from the `size` attribute lands with form layout.
-                    if (string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
-                        AppendInputLabel(element, elementStyle, box);
+                    BuildElementInto(element, parentStyle, parentBox, blockifyChildren, cache);
                     break;
                 case Starling.Dom.Text text:
                     var data = text.Data;
                     if (data.Length == 0) continue;
                     var textBox = new TextBox(data, parentStyle);
+                    if (_textMap is not null) _textMap[text] = textBox;
                     parentBox.AppendChild(textBox);
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Build the box(es) for one element child and append them to
+    /// <paramref name="parentBox"/>. Factored out of <see cref="BuildChildren"/>
+    /// so the incremental path can rebuild a single element's subtree in
+    /// isolation (<see cref="RebuildElementSubtree"/>).
+    /// </summary>
+    private void BuildElementInto(Element element, ComputedStyle? parentStyle, Box.Box parentBox, bool blockifyChildren, CascadeCache cache)
+    {
+        var elementStyle = Compute(element, cache);
+        var display = DisplayKeyword(elementStyle);
+        if (display == "none") return;
+        if (display == "contents")
+        {
+            BuildChildren(element, elementStyle, parentBox, cache);
+            return;
+        }
+        if (string.Equals(element.LocalName, "img", StringComparison.OrdinalIgnoreCase))
+        {
+            BuildImage(element, elementStyle, parentBox);
+            return;
+        }
+        if (string.Equals(element.LocalName, "svg", StringComparison.OrdinalIgnoreCase))
+        {
+            BuildSvg(element, elementStyle, parentBox);
+            return;
+        }
+        // inline-flex / inline-grid are inline-LEVEL but establish a flex/grid
+        // formatting context internally: they place as atomic inlines in their
+        // parent's line box (shrink-to-fit), so they're InlineBoxes here. When
+        // the parent itself blockifies its children (a flex/grid container), the
+        // child becomes a block-level item regardless.
+        var isInlineLevel = display is "inline" or "inline-block" or "inline-flex" or "inline-grid";
+        Box.Box box = isInlineLevel && !blockifyChildren
+            ? new InlineBox(elementStyle, element)
+            : new BlockBox(elementStyle, element);
+        box.Hints = StackingContextResolver.Resolve(box, elementStyle);
+        if (_elementMap is not null) _elementMap[element] = box;
+        parentBox.AppendChild(box);
+
+        // CSS Lists 3 §3 — a list-item synthesizes a marker box as its first
+        // in-flow child. Markers paint through the normal text path (no dedicated
+        // display item), so we prepend a TextBox carrying the marker string.
+        if (display == "list-item")
+            AppendListMarker(element, elementStyle, box);
+
+        // CSS Content 3 §2 — synthesize ::before before children.
+        AppendPseudoElement(element, elementStyle, box, PseudoElement.Before, cache);
+        BuildChildren(element, elementStyle, box, cache);
+        // ::after after children.
+        AppendPseudoElement(element, elementStyle, box, PseudoElement.After, cache);
+        // <input> is a void element with no DOM children — synthesize a TextBox
+        // from its value/placeholder so the search box and submit button labels
+        // actually show up.
+        if (string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
+            AppendInputLabel(element, elementStyle, box);
+    }
+
+    /// <summary>
+    /// Incremental reconciliation: rebuild the box subtree for a single
+    /// <paramref name="element"/> whose style or content changed, re-cascading
+    /// it and its descendants against <paramref name="parentStyle"/> (the
+    /// element's parent's computed style). Returns the freshly built box, or
+    /// null when the element produces no single box (<c>display:none</c> or
+    /// <c>display:contents</c>) — the caller falls back to a full rebuild in that
+    /// case, since the parent's box structure would change. Anonymous-block
+    /// wrapping is applied to the rebuilt subtree so it matches a full build.
+    /// </summary>
+    public Box.Box? RebuildElementSubtree(Element element, ComputedStyle? parentStyle, bool blockifyParent)
+    {
+        var cache = new CascadeCache();
+        _style.PrecomputeTree(element, cache);
+        // A scratch parent collects the build output; we only keep the single
+        // child box (if exactly one was produced).
+        var scratch = new BlockBox(parentStyle, element: null);
+        BuildElementInto(element, parentStyle, scratch, blockifyParent, cache);
+        if (scratch.Children.Count != 1) return null; // none / contents / multi
+        var box = scratch.Children[0];
+        WrapInlinesInAnonymousBlocks(box);
+        box.Parent = null;
+        return box;
+    }
+
+    /// <summary>
+    /// Incremental reconciliation of a structural change (plan §3a + §3b): rebuild
+    /// <paramref name="parentBox"/>'s child list from <paramref name="parentElement"/>'s
+    /// current DOM children, reusing each unchanged child's already-laid-out box
+    /// subtree and building only the inserted/changed one, then re-bucketing the
+    /// parent's direct child run (localized anonymous re-wrap). The parent's
+    /// subtree is re-cascaded first, so a child whose computed style shifted — e.g.
+    /// a positional <c>:nth-child</c> selector firing as a sibling moved — is
+    /// detected and rebuilt; only style-unchanged subtrees are reused, which keeps
+    /// it sound for sibling/positional selectors. Returns false (asking the caller
+    /// to fall back to a full rebuild) for a <c>display:contents</c> child, whose
+    /// hoisting this localized path doesn't handle.
+    /// </summary>
+    public bool SpliceChildren(Element parentElement, Box.Box parentBox)
+    {
+        var cache = new CascadeCache();
+        _style.PrecomputeTree(parentElement, cache);
+        var blockify = EstablishesFlexOrGridItems(parentBox.Style);
+
+        // The element boxes currently contributed by this parent's DOM children,
+        // for pruning the ones whose nodes were removed.
+        var oldElementBoxes = CollectChildElementBoxes(parentBox);
+
+        var newChildren = new List<Box.Box>();
+        var kept = new HashSet<Element>();
+
+        for (var dom = parentElement.FirstChild; dom is not null; dom = dom.NextSibling)
+        {
+            switch (dom)
+            {
+                case Element el:
+                    var style = Compute(el, cache);
+                    var display = DisplayKeyword(style);
+                    if (display == "none") continue;
+                    if (display == "contents") return false; // hoisting — fall back
+                    kept.Add(el);
+                    if (_elementMap is not null
+                        && _elementMap.TryGetValue(el, out var existing)
+                        && existing.Parent is not null
+                        && SubtreeStylesUnchanged(existing, cache))
+                    {
+                        newChildren.Add(existing); // reuse the laid-out subtree
+                    }
+                    else
+                    {
+                        var boxes = BuildElementBoxes(el, parentBox.Style, blockify, cache);
+                        if (boxes.Count != 1) return false; // unexpected shape — fall back
+                        newChildren.Add(boxes[0]);
+                    }
+                    break;
+                case Starling.Dom.Text t:
+                    if (t.Data.Length == 0) continue;
+                    if (_textMap is not null && _textMap.TryGetValue(t, out var tb) && tb.Text == t.Data)
+                    {
+                        newChildren.Add(tb);
+                    }
+                    else
+                    {
+                        var fresh = new TextBox(t.Data, parentBox.Style);
+                        if (_textMap is not null) _textMap[t] = fresh;
+                        newChildren.Add(fresh);
+                    }
+                    break;
+            }
+        }
+
+        // Prune the maps of removed subtrees so a later re-insert rebuilds fresh
+        // (a detached node may have been mutated without a recorded batch entry).
+        foreach (var old in oldElementBoxes)
+            if (old.Element is { } e && !kept.Contains(e))
+                PruneElementEntries(old);
+
+        parentBox.Children.Clear();
+        foreach (var c in newChildren)
+        {
+            c.Parent = parentBox;
+            parentBox.Children.Add(c);
+        }
+        WrapDirectChildrenForReconcile(parentBox);
+        return true;
+    }
+
+    /// <summary>Build the box(es) one element child contributes, each with its
+    /// subtree wrapped: 0 = <c>display:none</c>, 1 = a normal element box,
+    /// &gt;1 = <c>display:contents</c> expansion.</summary>
+    private List<Box.Box> BuildElementBoxes(Element el, ComputedStyle? parentStyle, bool blockify, CascadeCache cache)
+    {
+        var scratch = new BlockBox(parentStyle, element: null);
+        BuildElementInto(el, parentStyle, scratch, blockify, cache);
+        var result = new List<Box.Box>(scratch.Children.Count);
+        foreach (var box in scratch.Children)
+        {
+            WrapInlinesInAnonymousBlocks(box);
+            box.Parent = null;
+            result.Add(box);
+        }
+        return result;
+    }
+
+    /// <summary>True when re-cascading every element in <paramref name="box"/>'s
+    /// subtree yields styles equal to the boxes' current styles — i.e. nothing
+    /// the structural change touched restyled this subtree, so it can be reused
+    /// wholesale. The subtree's DOM is unchanged (only a sibling moved), so equal
+    /// styles imply an equal subtree.</summary>
+    private bool SubtreeStylesUnchanged(Box.Box box, CascadeCache cache)
+    {
+        if (box.Element is { } e && (box.Style is null || !box.Style.ValuesEqual(Compute(e, cache))))
+            return false;
+        foreach (var child in box.Children)
+            if (!SubtreeStylesUnchanged(child, cache))
+                return false;
+        return true;
+    }
+
+    /// <summary>The element boxes contributed by a parent's DOM children — its
+    /// direct element-box children plus the element boxes nested one level inside
+    /// its anonymous blocks (inline runs).</summary>
+    private static List<Box.Box> CollectChildElementBoxes(Box.Box parentBox)
+    {
+        var list = new List<Box.Box>();
+        foreach (var c in parentBox.Children)
+        {
+            if (c.Element is not null) list.Add(c);
+            else if (c.Kind == BoxKind.AnonymousBlock)
+                foreach (var gc in c.Children)
+                    if (gc.Element is not null) list.Add(gc);
+        }
+        return list;
+    }
+
+    private void PruneElementEntries(Box.Box box)
+    {
+        if (_elementMap is null) return;
+        if (box.Element is { } e) _elementMap.Remove(e);
+        foreach (var child in box.Children) PruneElementEntries(child);
     }
 
     /// <summary>
@@ -150,35 +340,46 @@ internal sealed class BoxTreeBuilder
         if (parent.Kind == BoxKind.Text || parent.Kind == BoxKind.Replaced)
             return;
 
-        // An anonymous block is itself a wrapper around an inline run; we
-        // never re-wrap its children. But we DO need to descend through it
-        // because it may host an inline-block with mixed children that needs
-        // its own anonymous-block wrapping.
-        if (parent.Kind == BoxKind.AnonymousBlock)
-        {
-            foreach (var child in parent.Children) WrapInlinesInAnonymousBlocks(child);
-            return;
-        }
+        // Bucket this level's inline runs (unless the node flattens into the
+        // enclosing IFC), then descend. An anonymous block never re-buckets its
+        // own children but is still descended through, because it may host an
+        // inline-block with mixed children that needs its own wrapping.
+        if (ShouldWrapDirectChildren(parent))
+            WrapDirectChildren(parent);
 
-        // An inline box with no block-level descendants flattens into the
-        // enclosing IFC; no wrapping needed. Only when an inline (including
-        // inline-block) has mixed block + inline children do we treat it like
-        // a block container for anonymous-block wrapping. An inline-flex /
-        // inline-grid box is the exception: it establishes a flex/grid context,
-        // so its raw text/inline runs must still be wrapped into anonymous
-        // items — otherwise a bare TextBox becomes a flex item the formatting
-        // context can't lay out (the text silently vanishes).
+        foreach (var child in parent.Children) WrapInlinesInAnonymousBlocks(child);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="parent"/>'s direct children need anonymous-block
+    /// bucketing. Anonymous blocks, and inline boxes with no block-level child
+    /// (and not establishing a flex/grid context), flatten into the enclosing
+    /// inline formatting context and are left as-is.
+    /// </summary>
+    private static bool ShouldWrapDirectChildren(Box.Box parent)
+    {
+        if (parent.Kind is BoxKind.Text or BoxKind.Replaced or BoxKind.AnonymousBlock)
+            return false;
+        // An inline-flex / inline-grid box establishes a flex/grid context, so
+        // its raw text/inline runs must still be wrapped into anonymous items —
+        // otherwise a bare TextBox becomes a flex item the formatting context
+        // can't lay out (the text silently vanishes).
         if (parent.Kind == BoxKind.Inline && !HasBlockLevelChild(parent)
             && !EstablishesFlexOrGridItems(parent.Style))
-        {
-            foreach (var child in parent.Children) WrapInlinesInAnonymousBlocks(child);
-            return;
-        }
+            return false;
+        return true;
+    }
 
-        // Always wrap inline runs in an anonymous block — even when the block
-        // contains only inlines — so the block formatting context sees a
-        // uniform list of block-level children. ImageBox (BoxKind.Replaced)
-        // counts as inline content too: <img> is inline-replaced by default.
+    /// <summary>
+    /// Bucket <paramref name="parent"/>'s direct inline runs (inline / text /
+    /// replaced boxes) into anonymous block boxes so the block formatting
+    /// context sees a uniform list of block-level children (CSS 2.2 §9.2.1.1).
+    /// Does <em>not</em> recurse — shared by the full wrap pass and the
+    /// incremental localized re-wrap (§3b), where the children are already
+    /// wrapped internally.
+    /// </summary>
+    private static void WrapDirectChildren(Box.Box parent)
+    {
         var newChildren = new List<Box.Box>();
         AnonymousBlockBox? bucket = null;
         foreach (var child in parent.Children)
@@ -208,8 +409,16 @@ internal sealed class BoxTreeBuilder
 
         parent.Children.Clear();
         parent.Children.AddRange(newChildren);
+    }
 
-        foreach (var child in parent.Children) WrapInlinesInAnonymousBlocks(child);
+    /// <summary>Localized anonymous re-wrap (plan §3b): re-bucket only
+    /// <paramref name="parent"/>'s direct child run, without recursing into the
+    /// children (which the incremental splice has already wrapped internally,
+    /// whether freshly built or reused).</summary>
+    private static void WrapDirectChildrenForReconcile(Box.Box parent)
+    {
+        if (ShouldWrapDirectChildren(parent))
+            WrapDirectChildren(parent);
     }
 
     private static bool HasBlockLevelChild(Box.Box parent)
@@ -281,6 +490,7 @@ internal sealed class BoxTreeBuilder
         {
             var (width, height) = ResolveImageSize(img, resolved);
             var box = new ImageBox(style, img, width, height, resolved.Source);
+            if (_elementMap is not null) _elementMap[img] = box;
             parentBox.AppendChild(box);
             return;
         }
@@ -319,7 +529,9 @@ internal sealed class BoxTreeBuilder
             // when its CSS size is `auto`). The viewBox dims still feed the ratio.
             var ratioOnly = string.IsNullOrEmpty(svg.GetAttribute("width"))
                 && string.IsNullOrEmpty(svg.GetAttribute("height"));
-            parentBox.AppendChild(new ImageBox(style, svg, width, height, resolved.Source, ratioOnly));
+            var svgBox = new ImageBox(style, svg, width, height, resolved.Source, ratioOnly);
+            if (_elementMap is not null) _elementMap[svg] = svgBox;
+            parentBox.AppendChild(svgBox);
             return;
         }
 
