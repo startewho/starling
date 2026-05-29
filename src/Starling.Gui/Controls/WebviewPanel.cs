@@ -66,6 +66,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private int _findCursor;
 
     private LaidOutPage? _currentPage;
+    // Baseline of Document.LayoutInvalidationVersion captured when the current
+    // page was last laid out. The live loop relayouts only when this advances —
+    // i.e. only on mutations a built-in style/layout pass cares about — so a
+    // rAF burst that writes nothing but data-* / aria-* / js* attributes no
+    // longer forces a full reflow every frame. See LiveTick.
+    private int _lastLayoutInvalidationVersion;
     private List<BoxHitTester.PlacedFragment> _fragments = new();
     private double _currentScale = 1.0;
     private DomElement? _hoverAnchor;
@@ -301,6 +307,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         _currentPage?.Dispose();
         _currentPage = page;
+
+        // Re-baseline the live-loop relayout signal to this freshly laid-out
+        // document. A relayout doesn't mutate the DOM, so the version is stable
+        // across the swap; the next tick relayouts only if script advances it.
+        _lastLayoutInvalidationVersion = page.Document.LayoutInvalidationVersion;
 
         // New laid-out page = new display-list version; drop any cached pixels
         // from the previous page so the first render is a clean full repaint.
@@ -1104,14 +1115,31 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var scripting = _currentPage?.Scripting;
         if (scripting is null) { _liveTimer.Stop(); _boundScripting = null; return; }
 
-        bool mutated;
-        try { mutated = scripting.PumpFrame(_liveStopwatch.ElapsedMilliseconds); }
+        try { scripting.PumpFrame(_liveStopwatch.ElapsedMilliseconds); }
         catch (Exception ex)
         {
             _diag.Log(DiagLevel.Warn, "gui", $"live JS pump failed: {ex.Message}");
             return;
         }
-        if (mutated) { CaretLog("LiveTick: pump mutated -> RefreshLiveLayout"); RefreshLiveLayout(); }
+
+        // Relayout only when this frame produced a *layout-relevant* mutation —
+        // a structural/text change or a value change to a layout-relevant
+        // attribute (Document.IsLayoutRelevantAttribute). Pure data-* / aria-* /
+        // js* writes bump MutationVersion but not LayoutInvalidationVersion, so
+        // an analytics or animation rAF that only touches those no longer pays a
+        // full reflow per frame.
+        //
+        // KNOWN GAP (accepted): author CSS using an attribute selector (e.g.
+        // [role="button"] {...}) plus a script writing that attribute misses a
+        // recompute until the next layout-relevant change. The spec-correct fix
+        // is selector-aware invalidation — a tracked follow-up.
+        var layoutVersion = _currentPage?.Document.LayoutInvalidationVersion ?? _lastLayoutInvalidationVersion;
+        if (layoutVersion != _lastLayoutInvalidationVersion)
+        {
+            _lastLayoutInvalidationVersion = layoutVersion;
+            CaretLog("LiveTick: layout-relevant mutation -> RefreshLiveLayout");
+            RefreshLiveLayout();
+        }
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,
