@@ -35,6 +35,17 @@ public sealed class StarlingEngine
     private readonly Painter _painter;
     private readonly Func<StarlingHttpClient> _httpFactory;
 
+    // Per-document store for script-created (Web Animations API) animations.
+    // Persists across the per-layout AnimationEngine rebuilds; re-imported in
+    // RenderFrame so element.animate() output renders like declarative anims.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Document, Css.Animations.ScriptAnimationStore> _scriptAnimations = new();
+
+    // Per-AnimationEngine marker: declarative @keyframes animations are primed
+    // (registered from each element's static animation-* cascade) exactly once
+    // per freshly-built engine, so the GUI animation loop can see them without
+    // running a full RenderWithStyle cascade.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Css.Animations.AnimationEngine, object> _primedEngines = new();
+
     static StarlingEngine()
     {
         // Register the BCL CodePages provider once so WHATWG legacy
@@ -863,8 +874,7 @@ public sealed class StarlingEngine
     {
         ArgumentNullException.ThrowIfNull(page);
 
-        page.Style.AnimationEngine.Tick(nowMs);
-        page.Style.TransitionEngine.Tick(nowMs);
+        PrepareAnimationFrame(page, nowMs);
 
         return _painter.RenderWithStyle(
             page.Document,
@@ -873,6 +883,70 @@ public sealed class StarlingEngine
             page.Images,
             page.WebFonts,
             nowMs: (double)nowMs);
+    }
+
+    /// <summary>Re-apply any script-created (WAAPI) animations for the page's
+    /// document into the current (per-layout) AnimationEngine. Idempotent per
+    /// engine instance, so it is safe to call every frame.</summary>
+    private void ImportScriptAnimations(LaidOutPage page)
+    {
+        if (_scriptAnimations.TryGetValue(page.Document, out var store))
+            store.ImportInto(page.Style.AnimationEngine);
+    }
+
+    /// <summary>
+    /// Advance the page's animation/transition clocks to <paramref name="nowMs"/>
+    /// and import any script (WAAPI) animations, so a subsequent render samples
+    /// the animated values. Public so the live GUI animation loop can drive the
+    /// same path used by <see cref="RenderFrame"/>.
+    /// </summary>
+    public void PrepareAnimationFrame(LaidOutPage page, long nowMs)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ImportScriptAnimations(page);
+        PrimeDeclarativeAnimations(page);
+        page.Style.AnimationEngine.Tick(nowMs);
+        page.Style.TransitionEngine.Tick(nowMs);
+    }
+
+    /// <summary>
+    /// Register the page's declarative <c>@keyframes</c> animations into the
+    /// current <see cref="Css.Animations.AnimationEngine"/> from each element's
+    /// static <c>animation-*</c> cascade (read off the laid-out box tree).
+    /// Without this the engine only learns about declarative animations during a
+    /// full <c>RenderWithStyle</c> cascade — which the GUI's box-tree renderer
+    /// never runs — so they would never start in the live window. Primed once
+    /// per engine instance (the engine is rebuilt per layout); re-running
+    /// <see cref="Css.Animations.AnimationEngine.OnAnimationsCascaded"/> matches
+    /// instances by name and preserves playback.
+    /// </summary>
+    private void PrimeDeclarativeAnimations(LaidOutPage page)
+    {
+        var engine = page.Style.AnimationEngine;
+        if (_primedEngines.TryGetValue(engine, out _)) return;
+        _primedEngines.Add(engine, this);
+        PrimeBox(page.Root, engine);
+
+        static void PrimeBox(Starling.Layout.Box.Box box, Css.Animations.AnimationEngine engine)
+        {
+            if (box.Element is { } el && box.Style is { } style)
+            {
+                var decls = Css.Animations.AnimationCompositor.BuildDeclarations(style);
+                if (decls.Count > 0) engine.OnAnimationsCascaded(el, decls);
+            }
+            foreach (var child in box.Children) PrimeBox(child, engine);
+        }
+    }
+
+    /// <summary>True when the page has any in-flight animation or transition
+    /// (declarative or script). The live GUI loop uses this to decide whether to
+    /// keep repainting frames.</summary>
+    public bool HasActiveAnimations(LaidOutPage page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ImportScriptAnimations(page);
+        PrimeDeclarativeAnimations(page);
+        return page.Style.AnimationEngine.HasInFlight || page.Style.TransitionEngine.ActiveCount > 0;
     }
 
     /// <summary>
@@ -898,8 +972,7 @@ public sealed class StarlingEngine
             : page.Viewport.Height;
         var viewport = new LayoutSize(page.Viewport.Width, height);
 
-        page.Style.AnimationEngine.Tick(nowMs);
-        page.Style.TransitionEngine.Tick(nowMs);
+        PrepareAnimationFrame(page, nowMs);
 
         using var bitmap = _painter.RenderWithStyle(
             page.Document, page.Style, viewport, page.Images, page.WebFonts, nowMs: (double)nowMs);
@@ -1005,6 +1078,8 @@ public sealed class StarlingEngine
             LayoutHost: layoutHost,
             Diag: _diag)
         {
+            AnimationHost = new EngineAnimationHost(
+                _scriptAnimations.GetValue(document, static _ => new Css.Animations.ScriptAnimationStore())),
             ViewportWidth = (int)viewport.Width,
             ViewportHeight = (int)viewport.Height,
             // Same navigation ct that drives the HTTP/pump path: the backend
