@@ -1147,6 +1147,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var page = _currentPage;
         if (page is null) { _liveTimer.Stop(); _boundScripting = null; _animating = false; return; }
 
+        // LTF-06: age the recently-mutated promotion window by one frame before
+        // this tick records new mutations, so a subtree promoted by a past
+        // mutation falls back into the base layer once its hysteresis elapses.
+        page.Document.DecayRecentMutations();
+
         // One span per frame, with sub-spans for each phase (pump / relayout /
         // prepare_anim / render) so a trace shows where a laggy animation frame
         // spends its time. The inner "gui.render" span lives in RenderPageBitmap.
@@ -1753,16 +1758,23 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// inherited into descendant text boxes is a follow-up.
     /// </summary>
     /// <summary>
-    /// Per-frame layer-promotion predicate (LTF-01): a box whose element has any
-    /// active animation or transition becomes its own compositor layer, even with
-    /// no static <see cref="LayerHint"/>. A composite-time transform/opacity is
-    /// applied at composite (the slice stays cacheable); any other animated paint
-    /// property re-rasters just this box's small slice. Boxes with no element
-    /// (anonymous/text) are never promoted here.
+    /// Per-frame layer-promotion predicate (LTF-01 / LTF-06): a box whose element
+    /// has any active animation or transition — or whose subtree a script mutated
+    /// in the last few frames — becomes its own compositor layer, even with no
+    /// static <see cref="LayerHint"/>. A composite-time transform/opacity is
+    /// applied at composite (the slice stays cacheable); any other changed paint
+    /// property re-rasters just this box's small slice while the base layer stays
+    /// cached. Boxes with no element (anonymous/text) are never promoted here.
     /// </summary>
     private bool IsElementAnimatingLayerRoot(LayoutBox box)
     {
         if (_currentPage is not { } page || box.Element is not { } el) return false;
+        // LTF-06: a subtree a script mutated in the last few frames is promoted to
+        // its own isolated layer, so its repaint does not re-raster the base layer
+        // (the base slice excludes it, so the base content hash stays stable and
+        // serves from cache). Light hysteresis (Document.DecayRecentMutations)
+        // keeps it promoted briefly so promotion does not churn frame to frame.
+        if (page.Document.WasRecentlyMutated(el)) return true;
         foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) return true;
         foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
         return false;
