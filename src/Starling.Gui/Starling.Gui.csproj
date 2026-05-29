@@ -56,5 +56,16 @@
          resources so the chrome typography is identical across machines. -->
     <AvaloniaResource Include="Assets\Fonts\Geist-Variable.ttf" />
     <AvaloniaResource Include="Assets\Fonts\GeistMono-Variable.ttf" />
+    <!-- App icon. Avalonia's WindowIcon only parses PNG/ICO, so the runtime
+         window icon (Win/Linux taskbar, macOS titlebar proxy) loads this PNG.
+         The macOS dock reads the .icns from the .app bundle instead — see the
+         Info.plist CFBundleIconFile entry below. -->
+    <AvaloniaResource Include="Assets\icon_1024.png" />
+  </ItemGroup>
+
+  <!-- macOS .app bundle icon: copied next to the published output so a bundle's
+       Info.plist (CFBundleIconFile=AppIcon) can resolve it from Contents/Resources. -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <None Include="Assets\AppIcon.icns" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
