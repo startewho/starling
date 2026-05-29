@@ -1129,10 +1129,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // an analytics or animation rAF that only touches those no longer pays a
         // full reflow per frame.
         //
-        // KNOWN GAP (accepted): author CSS using an attribute selector (e.g.
-        // [role="button"] {...}) plus a script writing that attribute misses a
-        // recompute until the next layout-relevant change. The spec-correct fix
-        // is selector-aware invalidation — a tracked follow-up.
+        // Attribute-selector invalidation is handled by Document.IsAttributeLayoutRelevant:
+        // the layout pass records selector-referenced attributes, so author CSS
+        // keyed on data-* / aria-* still advances LayoutInvalidationVersion.
         var layoutVersion = _currentPage?.Document.LayoutInvalidationVersion ?? _lastLayoutInvalidationVersion;
         if (layoutVersion != _lastLayoutInvalidationVersion)
         {
