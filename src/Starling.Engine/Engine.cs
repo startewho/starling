@@ -854,10 +854,12 @@ public sealed class StarlingEngine
     /// Ticks the page's animation and transition engines forward, then runs the
     /// painter with the timestamp threaded through the cascade so any in-flight
     /// CSS animations and transitions sample their current value into the
-    /// returned bitmap. The page's box tree is rebuilt each call (cheap when
-    /// only animated properties changed; the cascade cache short-circuits the
-    /// static side), so the same <see cref="LaidOutPage"/> can drive an arbitrary
-    /// frame sequence. Callers typically loop calling this once per rAF tick.
+    /// returned bitmap. The page's box tree is rebuilt from scratch each call —
+    /// a fresh box-tree builder with a new per-build cascade cache — so the same
+    /// <see cref="LaidOutPage"/> can drive an arbitrary frame sequence at the
+    /// cost of a full relayout per frame. (Incremental fragment reuse is the
+    /// planned replacement.) Callers typically loop calling this once per rAF
+    /// tick.
     /// </summary>
     public Starling.Common.Image.RenderedBitmap RenderFrame(LaidOutPage page, long nowMs)
     {
