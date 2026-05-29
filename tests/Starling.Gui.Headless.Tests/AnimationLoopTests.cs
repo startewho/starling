@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
@@ -100,6 +101,68 @@ public class AnimationLoopTests
         c500.B.Should().BeLessThan(c999.B);
     }
 
+    [AvaloniaFact]
+    public async Task Transform_animation_on_a_promoted_layer_reblits_content_from_cache()
+    {
+        // A `will-change: transform` div promotes its own compositor layer; the
+        // WAAPI animation drives only `transform`, a composite-time property. So
+        // across frames the layer's CONTENT is unchanged — only the matrix moves.
+        // Phase 5 routes the live repaint through RenderViaLayerTree with a
+        // clock-free page version, so the second frame re-blits the layer pixels
+        // from cache (paint.cache.hit > 0) instead of re-rasterizing, while the
+        // composited output still moves.
+        const string html = """
+            <!doctype html><html><body>
+              <div id='t' style='width:200px;height:200px;background:rgb(255,0,0);will-change:transform'></div>
+              <script>
+                document.getElementById('t').animate(
+                  [{transform:'translateX(0px)'},{transform:'translateX(150px)'}],
+                  {duration:1000, easing:'linear'});
+              </script>
+            </body></html>
+            """;
+        var (engine, page) = await LoadInteractiveAsync(html);
+
+        var diag = new RecordingDiagnostics();
+        using var panel = new WebviewPanel(
+            new ThemeManager(), diag, _ => { }, (_, _) => { },
+            (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)),
+            prepareAnimationFrame: engine.PrepareAnimationFrame,
+            hasActiveAnimations: engine.HasActiveAnimations);
+
+        var window = new Window { Content = panel, Width = 400, Height = 400 };
+        window.Show();
+        panel.ShowPage(page);
+        window.CaptureRenderedFrame();
+
+        // The routing predicate must recognise the promoted layer, or the live
+        // repaint would stay on the flat path and never reuse layer content.
+        typeof(WebviewPanel).GetMethod("PageHasCompositorLayers", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(panel, null).Should().Be(true, "a will-change:transform box is a compositor layer");
+
+        // Frame 0 seeds the per-layer caches; frame 600 (a different clock) must
+        // serve their content from cache — proof the clock-free layer-tree path
+        // ran (the flat path's clock-keyed version would miss every frame).
+        var near = PixelAtFrame(engine, panel, page, nowMs: 0, x: 40, y: 40);
+        var hitsAfterSeed = diag.CountOf("paint.cache.hit");
+        _ = PixelAtFrame(engine, panel, page, nowMs: 600, x: 40, y: 40);
+        var farLeft = PixelAtFrame(engine, panel, page, nowMs: 999, x: 40, y: 40);
+
+        diag.CountOf("paint.cache.hit").Should().BeGreaterThan(hitsAfterSeed,
+            "the transform-only frame re-blits each layer's content from cache");
+
+        // x=40 starts inside the red box (translateX≈0). Red is rgb(255,0,0), so
+        // the green/blue channels are near zero there — the R channel alone can't
+        // tell red from the white page background.
+        near.G.Should().BeLessThan(80, "x=40 is inside the red box at translateX(0)");
+        near.B.Should().BeLessThan(80);
+
+        // Composite-time transform slides the box right; by translateX≈150 the
+        // box has cleared x=40, exposing the lighter page background.
+        var moved = Math.Abs(near.R - farLeft.R) + Math.Abs(near.G - farLeft.G) + Math.Abs(near.B - farLeft.B);
+        moved.Should().BeGreaterThan(60, "the box slid right, changing the pixel at x=40");
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static (byte R, byte G, byte B, byte A) PixelAtFrame(
@@ -148,5 +211,27 @@ public class AnimationLoopTests
             CancellationToken.None, onFirstPaint: _ => { });
         result.IsOk.Should().BeTrue(result.IsErr ? result.Error.Message : "");
         return (engine, result.Value);
+    }
+
+    /// <summary>Counts diagnostic counters so a test can assert cache hits.</summary>
+    private sealed class RecordingDiagnostics : IDiagnostics
+    {
+        private readonly ConcurrentDictionary<string, double> _counters = new();
+
+        public double CountOf(string name) => _counters.TryGetValue(name, out var v) ? v : 0d;
+
+        public void Counter(string name, double value)
+            => _counters.AddOrUpdate(name, value, (_, prev) => prev + value);
+
+        public IDisposable Span(string area, string operation) => NoopSpan.Instance;
+        public void Log(DiagLevel level, string area, string message) { }
+        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
+        public void LogException(string area, Exception exception, string? message = null) { }
+
+        private sealed class NoopSpan : IDisposable
+        {
+            public static readonly NoopSpan Instance = new();
+            public void Dispose() { }
+        }
     }
 }

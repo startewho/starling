@@ -120,6 +120,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Func<LaidOutPage, bool>? _hasActiveAnimations;
     private long _animClockMs;
     private bool _animating;
+    // Cached "does this laid-out page carry a transform/opacity compositor
+    // layer?" answer (Phase 5 routing). Computed once per layout — a relayout
+    // produces a new box tree, so ShowPage resets it to null to recompute.
+    private bool? _pageHasCompositorLayers;
 
     public WebviewPanel(
         ThemeManager tm,
@@ -328,6 +332,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // New laid-out page = new display-list version; drop any cached pixels
         // from the previous page so the first render is a clean full repaint.
         _renderer.InvalidateCache();
+
+        // Fresh box tree — recompute the compositor-layer routing answer lazily.
+        _pageHasCompositorLayers = null;
 
         // Reset interaction state.
         ClearSelection();
@@ -1646,11 +1653,33 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // While animating, the painted pixels change every frame even though the
         // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
         // key by the animation clock to force a fresh raster each frame.
-        var pageVersion = animate
-            ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
-            : _currentPage!.DisplayListVersion;
+        // Phase 5: when an animation is in flight on a page that has
+        // transform/opacity compositor layers, route through the layer tree.
+        // Each layer's CONTENT is cached across frames — the page version
+        // excludes the animation clock, so the cache key is stable — while the
+        // re-sampled transform / opacity are applied at COMPOSITE time. So an
+        // animation-only frame re-blits each layer's pixels from cache instead
+        // of re-rasterizing. The flat path stays the default everywhere else
+        // (no animation, or no promoted layer), so existing goldens are
+        // untouched. Guarded to the no-per-element-scroll case because
+        // RenderViaLayerTree does not yet thread per-container scroll offsets
+        // (tracked follow-up); a scrollable page falls back to the flat path,
+        // which handles offsets correctly.
+        var useLayerTree = animate && scrollLookup is null && PageHasCompositorLayers();
         using (_diag.Span("gui", "render"))
-            rendered = _renderer.Render(_currentPage.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver, viewport, pageVersion, scrollLookup);
+        {
+            if (useLayerTree)
+            {
+                rendered = _renderer.RenderViaLayerTree(_currentPage!.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver, viewport, _currentPage.DisplayListVersion);
+            }
+            else
+            {
+                var pageVersion = animate
+                    ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
+                    : _currentPage!.DisplayListVersion;
+                rendered = _renderer.Render(_currentPage.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver, viewport, pageVersion, scrollLookup);
+            }
+        }
         WriteableBitmap bmp;
         using (rendered)
             bmp = BitmapBridge.ToWriteableBitmap(rendered, _currentScale);
@@ -1689,6 +1718,34 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// opacity, background, border, color of the element itself) render; color
     /// inherited into descendant text boxes is a follow-up.
     /// </summary>
+    // The promotion hints whose layers gain from composite-time caching: a
+    // transform or opacity that can change per frame while the layer's content
+    // (and the picture-cache key) stays put. `will-change` is the author's
+    // explicit "I will animate this on the compositor" signal, so it counts too.
+    private const Starling.Layout.Compositor.LayerHint CompositeAnimatableHints =
+        Starling.Layout.Compositor.LayerHint.Transform3D
+        | Starling.Layout.Compositor.LayerHint.OpacityLessThanOne
+        | Starling.Layout.Compositor.LayerHint.WillChange;
+
+    /// <summary>True when the current laid-out page has a box promoted for a
+    /// composite-time transform / opacity — the layers whose pixels can be
+    /// re-blitted from cache across an animation frame. Computed once per layout
+    /// (cached; reset by <see cref="ShowPage"/>).</summary>
+    private bool PageHasCompositorLayers()
+    {
+        if (_currentPage is null) return false;
+        _pageHasCompositorLayers ??= HasCompositeAnimatableLayer(_currentPage.Root);
+        return _pageHasCompositorLayers.Value;
+    }
+
+    private static bool HasCompositeAnimatableLayer(LayoutBox box)
+    {
+        if ((box.Hints & CompositeAnimatableHints) != 0) return true;
+        foreach (var child in box.Children)
+            if (HasCompositeAnimatableLayer(child)) return true;
+        return false;
+    }
+
     private ComputedStyle? AnimatedStyle(LaidOutPage page, LayoutBox box)
     {
         if (box.Element is not { } el) return null;
