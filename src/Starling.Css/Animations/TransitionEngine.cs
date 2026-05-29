@@ -68,6 +68,17 @@ public sealed class TransitionEngine
     /// <summary>Number of in-flight transitions; primarily exposed for tests / diagnostics.</summary>
     public int ActiveCount => _active.Count;
 
+    /// <summary>The elements with at least one in-flight transition. Incremental
+    /// layout marks these dirty every frame — a transition changes their computed
+    /// style off the clock, with no DOM mutation to record.</summary>
+    public IEnumerable<Element> ActiveElements
+    {
+        get
+        {
+            foreach (var (element, _) in _active.Keys) yield return element;
+        }
+    }
+
     /// <summary>
     /// Called by the cascade after computing a property value for
     /// <paramref name="element"/>. If the property is transitionable and

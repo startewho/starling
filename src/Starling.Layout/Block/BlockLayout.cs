@@ -3,6 +3,7 @@ using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Values;
 using Starling.Layout.Box;
+using Starling.Layout.Incremental;
 using Starling.Layout.Inline;
 using Starling.Layout.Text;
 
@@ -25,12 +26,19 @@ internal sealed class BlockLayout
     private readonly InlineLayout _inline;
     private readonly CancellationToken _abort;
 
-    public BlockLayout(ITextMeasurer measurer, Size viewport, IDiagnostics? diagnostics = null, CancellationToken abort = default)
+    // When true, the block pass records each box's constraint space and reuses a
+    // clean subtree (not dirty + same constraint) by repositioning it in O(1)
+    // instead of recomputing it. Off by default, so the full-rebuild path is
+    // byte-for-byte unchanged. See Starling.Layout.Incremental.
+    private readonly bool _incremental;
+
+    public BlockLayout(ITextMeasurer measurer, Size viewport, IDiagnostics? diagnostics = null, CancellationToken abort = default, bool incremental = false)
     {
         _measurer = measurer;
         _viewport = viewport;
         _inline = new InlineLayout(measurer, viewport, diagnostics);
         _abort = abort;
+        _incremental = incremental;
     }
 
     public void Layout(Box.Box root)
@@ -254,6 +262,34 @@ internal sealed class BlockLayout
 
     private void LayoutBlock(Box.Box child, double containerWidth, double? containerHeight, ref double cursorY, ref double prevBottomMargin, ref bool first, bool measure = false)
     {
+        // Incremental reuse: a clean subtree laid out under the same constraint
+        // space keeps its size and its descendants' (parent-relative) geometry,
+        // so we only re-place its root in the parent's block flow. The placement
+        // math below mirrors the full path exactly, so the dual-run harness sees
+        // no divergence. Measurement mode (inline-block shrink-to-fit) skips
+        // reuse — its alignment behaviour differs from the normal pass.
+        var cs = new ConstraintSpace(containerWidth, containerHeight, _viewport.Width, _viewport.Height);
+        if (_incremental && !measure && !child.SubtreeDirty && child.LaidConstraint == cs)
+        {
+            if (child.Kind == BoxKind.AnonymousBlock)
+            {
+                child.Frame = new Rect(0, cursorY, containerWidth, child.Frame.Height);
+                cursorY = child.Frame.Bottom;
+                prevBottomMargin = 0;
+                first = false;
+                return;
+            }
+
+            var reuseTop = child.Margin.Top;
+            var reuseCollapse = first ? reuseTop : Math.Max(0, Math.Max(reuseTop, prevBottomMargin) - prevBottomMargin);
+            cursorY += reuseCollapse;
+            first = false;
+            child.Frame = new Rect(child.Margin.Left, cursorY, child.Frame.Width, child.Frame.Height);
+            cursorY += child.Frame.Height + child.Margin.Bottom;
+            prevBottomMargin = child.Margin.Bottom;
+            return;
+        }
+
         if (child.Kind == BoxKind.AnonymousBlock)
         {
             // Anonymous blocks take the initial value for box-model properties
@@ -268,6 +304,7 @@ internal sealed class BlockLayout
             cursorY = child.Frame.Bottom;
             prevBottomMargin = 0;
             first = false;
+            Stamp(child, cs, measure);
             return;
         }
 
@@ -318,6 +355,17 @@ internal sealed class BlockLayout
 
         cursorY += fullHeight + child.Margin.Bottom;
         prevBottomMargin = child.Margin.Bottom;
+        Stamp(child, cs, measure);
+    }
+
+    /// <summary>Record the constraint space a freshly laid-out box was computed
+    /// under and clear its dirty mark, so a later frame can reuse it. No-op off
+    /// the incremental path and in measurement mode (whose geometry is tentative).</summary>
+    private void Stamp(Box.Box box, ConstraintSpace cs, bool measure)
+    {
+        if (!_incremental || measure) return;
+        box.LaidConstraint = cs;
+        box.SubtreeDirty = false;
     }
 
     /// <summary>

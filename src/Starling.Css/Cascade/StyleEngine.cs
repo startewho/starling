@@ -32,6 +32,34 @@ public sealed class StyleEngine
     // already handled via SharingKey.PreviousElementSiblingTag).
     private bool _sharingDisabled;
 
+    // True when any active stylesheet uses :has() or :empty — selectors whose
+    // match for an element depends on its descendants/emptiness, so a child
+    // insert/remove can restyle ancestors or the parent itself, anywhere in the
+    // tree. Incremental structural layout then can't localize and falls back to
+    // a full rebuild. (Sibling combinators and positional pseudos like
+    // :nth-child only restyle within the changed parent's children, which the
+    // structural reconciler handles by re-cascading that subtree.)
+    private bool _structuralRebuildSensitive;
+
+    /// <summary>Whether a child insert/remove can change the cascade outside the
+    /// changed parent's own subtree (because some selector uses <c>:has()</c> or
+    /// <c>:empty</c>). When true, incremental structural layout falls back to a
+    /// full rebuild.</summary>
+    public bool StructuralChangeNeedsFullRebuild => _structuralRebuildSensitive;
+
+    // Attribute names referenced by any selector's attribute selector (e.g.
+    // `[data-state="open"]` references "data-state"). Selector-aware invalidation
+    // uses this so a script write to such an attribute is treated as
+    // layout/style-relevant even when the static heuristic would skip it (plan §7).
+    private readonly HashSet<string> _referencedAttributes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The attribute names any active stylesheet selects on
+    /// (<c>[attr]</c>, <c>[attr=v]</c>, …, recursing into <c>:is/:where/:not/:has</c>).
+    /// A DOM write to one of these can change the cascade, so it must invalidate
+    /// layout even if it's a <c>data-*</c>/<c>aria-*</c> attribute the static
+    /// heuristic treats as cosmetic.</summary>
+    public IReadOnlySet<string> ReferencedAttributeNames => _referencedAttributes;
+
     /// <summary>Resolver built from every <c>@counter-style</c> rule in the
     /// attached stylesheets (CSS Counter Styles 3 §3). Holds the predefined
     /// styles plus any author-defined ones. Use
@@ -48,11 +76,32 @@ public sealed class StyleEngine
     public IReadOnlyDictionary<string, PropertiesValues.RegisteredProperty> RegisteredProperties { get; private set; }
         = new Dictionary<string, PropertiesValues.RegisteredProperty>();
 
+    private readonly AnimationTimeline _timeline;
+
     public StyleEngine(bool includeUserAgentStyleSheet = true, IDiagnostics? diagnostics = null)
+        : this(includeUserAgentStyleSheet, diagnostics, timeline: null)
+    {
+    }
+
+    /// <summary>
+    /// Build a style engine that draws its animation/transition state from
+    /// <paramref name="timeline"/>. Pass a timeline the caller keeps alive across
+    /// layout passes (one per document) so animation playback survives a
+    /// relayout — the <see cref="StyleEngine"/> itself is rebuilt every layout,
+    /// but the timeline is not. When <paramref name="timeline"/> is <c>null</c> a
+    /// fresh, engine-local timeline is created (the single-shot render and unit
+    /// test default).
+    /// </summary>
+    public StyleEngine(bool includeUserAgentStyleSheet, IDiagnostics? diagnostics, AnimationTimeline? timeline)
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
-        AnimationEngine = new AnimationEngine();
-        TransitionEngine = new TransitionEngine();
+        _timeline = timeline ?? new AnimationTimeline();
+        // The keyframe registry tracks the *current* stylesheet set, which is
+        // re-attached on every layout. A reused timeline still holds the prior
+        // layout's keyframes, so clear them before AddStyleSheet re-registers
+        // from this layout's sheets. Playback state (active instances, script
+        // animations, transition snapshots) lives elsewhere and is preserved.
+        _timeline.Animations.ClearKeyframes();
         foreach (var origin in Enum.GetValues<StyleOrigin>())
             _layerOrders[origin] = new LayerOrder();
 
@@ -63,13 +112,14 @@ public sealed class StyleEngine
     /// <summary>The animation engine fed by <c>@keyframes</c> rules in every
     /// stylesheet attached via <see cref="AddStyleSheet"/>. Sample with
     /// <see cref="AnimationEngine.GetEffective(Element, PropertyId)"/> after
-    /// the compositor (wp:M5-css-09) feeds cascaded declarations to it.</summary>
-    public AnimationEngine AnimationEngine { get; }
+    /// the compositor (wp:M5-css-09) feeds cascaded declarations to it. Lives on
+    /// the <see cref="AnimationTimeline"/> so it outlives this engine.</summary>
+    public AnimationEngine AnimationEngine => _timeline.Animations;
 
     /// <summary>The transition engine. Independent from animations but exposed
     /// here so the compositor (wp:M5-css-09) can route both through one
     /// <see cref="StyleEngine"/> instance.</summary>
-    public TransitionEngine TransitionEngine { get; }
+    public TransitionEngine TransitionEngine => _timeline.Transitions;
 
     public MediaContext MediaContext
     {
@@ -100,6 +150,9 @@ public sealed class StyleEngine
         _sheetIndexes[sheet] = index;
         if (!_sharingDisabled && SheetUsesUnshareableSelectors(index))
             _sharingDisabled = true;
+        if (!_structuralRebuildSensitive && SheetUsesHasOrEmpty(index))
+            _structuralRebuildSensitive = true;
+        CollectReferencedAttributes(index, _referencedAttributes);
         RegisterKeyframesFromSheet(sheet);
         RebuildCounterStyles();
         RebuildRegisteredProperties();
@@ -112,6 +165,10 @@ public sealed class StyleEngine
         _sheetIndexes.Remove(sheet);
         // Re-evaluate whether sharing can be re-enabled after removal.
         _sharingDisabled = _sheetIndexes.Values.Any(SheetUsesUnshareableSelectors);
+        _structuralRebuildSensitive = _sheetIndexes.Values.Any(SheetUsesHasOrEmpty);
+        _referencedAttributes.Clear();
+        foreach (var idx in _sheetIndexes.Values)
+            CollectReferencedAttributes(idx, _referencedAttributes);
         UnregisterKeyframesFromSheet(sheet);
         RebuildCounterStyles();
         RebuildRegisteredProperties();
@@ -173,6 +230,65 @@ public sealed class StyleEngine
                     foreach (var simple in part.Compound.SimpleSelectors)
                         if (simple is PseudoClassSelector pc && IsUnshareablePseudoClass(pc.Name))
                             return true;
+        return false;
+    }
+
+    /// <summary>True if any selector in <paramref name="index"/> uses
+    /// <c>:has()</c> or <c>:empty</c> (recursing into <c>:is()</c>/<c>:where()</c>/
+    /// <c>:not()</c>/<c>:has()</c> arguments). Those make an element's match
+    /// depend on its descendants/emptiness, so a structural change can restyle
+    /// outside the changed parent's subtree.</summary>
+    private static bool SheetUsesHasOrEmpty(SheetIndex index)
+    {
+        foreach (var parsed in index.ParsedSelectorLists.Values)
+            if (SelectorListUsesHasOrEmpty(parsed))
+                return true;
+        return false;
+    }
+
+    /// <summary>Collect every attribute name referenced by an attribute selector
+    /// in <paramref name="index"/> (recursing into functional pseudo arguments)
+    /// into <paramref name="sink"/>. Selector-aware invalidation (plan §7).</summary>
+    private static void CollectReferencedAttributes(SheetIndex index, HashSet<string> sink)
+    {
+        foreach (var parsed in index.ParsedSelectorLists.Values)
+            CollectReferencedAttributes(parsed, sink);
+    }
+
+    private static void CollectReferencedAttributes(SelectorList list, HashSet<string> sink)
+    {
+        foreach (var complex in list.Selectors)
+            foreach (var part in complex.Parts)
+                foreach (var simple in part.Compound.SimpleSelectors)
+                {
+                    if (simple is AttributeSelector attr)
+                        sink.Add(attr.Name);
+                    else if (simple is PseudoClassSelector pc)
+                        switch (pc.Argument)
+                        {
+                            case SelectorList nested: CollectReferencedAttributes(nested, sink); break;
+                            case NthArgument { OfSelector: { } of }: CollectReferencedAttributes(of, sink); break;
+                        }
+                }
+    }
+
+    private static bool SelectorListUsesHasOrEmpty(SelectorList list)
+    {
+        foreach (var complex in list.Selectors)
+            foreach (var part in complex.Parts)
+                foreach (var simple in part.Compound.SimpleSelectors)
+                {
+                    if (simple is not PseudoClassSelector pc) continue;
+                    if (pc.Name is "has" or "empty") return true;
+                    // Recurse into functional pseudo arguments (:is/:where/:not/:has).
+                    switch (pc.Argument)
+                    {
+                        case SelectorList nested when SelectorListUsesHasOrEmpty(nested):
+                            return true;
+                        case NthArgument { OfSelector: { } of } when SelectorListUsesHasOrEmpty(of):
+                            return true;
+                    }
+                }
         return false;
     }
 
@@ -268,15 +384,14 @@ public sealed class StyleEngine
     public ComputedStyle Compute(Element element, SelectorMatchContext? context)
         => Compute(element, context, cache: null);
 
-    private AnimationCompositor? _compositor;
-
     /// <summary>
     /// The animation/transition compositor wired to this engine's
-    /// <see cref="AnimationEngine"/> and <see cref="TransitionEngine"/>.
-    /// Lazily constructed on first use.
+    /// <see cref="AnimationEngine"/> and <see cref="TransitionEngine"/>. Lives on
+    /// the <see cref="AnimationTimeline"/>, so its per-element snapshots survive
+    /// relayouts (a re-cascade with the same declarations does not restart
+    /// playback or re-trigger transitions).
     /// </summary>
-    public AnimationCompositor Compositor =>
-        _compositor ??= new AnimationCompositor(AnimationEngine, TransitionEngine);
+    public AnimationCompositor Compositor => _timeline.Compositor;
 
     /// <summary>
     /// Compute the static cascade for <paramref name="element"/> and overlay

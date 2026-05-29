@@ -12,11 +12,34 @@ internal static class Fixtures
     private static string LocateRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Starling.sln")))
+        while (dir is not null
+            && !File.Exists(Path.Combine(dir.FullName, "Starling.slnx"))
+            && !File.Exists(Path.Combine(dir.FullName, "Starling.sln")))
             dir = dir.Parent;
         if (dir is null)
-            throw new InvalidOperationException("Could not locate Starling.sln walking up from the bench binary.");
+            throw new InvalidOperationException("Could not locate the Starling solution walking up from the bench binary.");
         return dir.FullName;
+    }
+
+    /// <summary>
+    /// A deep, mutation-friendly page: <paramref name="rows"/> sibling rows, each
+    /// a small subtree (a heading + a paragraph) under a wrapper. Used by the
+    /// incremental-layout bench to show that a localized edit costs O(change),
+    /// not O(tree), as the tree grows. Row <c>i</c> carries <c>id="row-i"</c> so a
+    /// bench can target a known node deep in the document.
+    /// </summary>
+    public static string ListHtml(int rows)
+    {
+        var sb = new System.Text.StringBuilder(rows * 96 + 64);
+        sb.Append("<!doctype html><html><body><main>");
+        for (var i = 0; i < rows; i++)
+        {
+            sb.Append("<section id=\"row-").Append(i).Append("\"><h3>Item ").Append(i)
+              .Append("</h3><p>Row ").Append(i)
+              .Append(" has a short paragraph of body text that wraps.</p></section>");
+        }
+        sb.Append("</main></body></html>");
+        return sb.ToString();
     }
 
     public const string TinyHtml = "<!doctype html><html><body><p>Hello, world.</p></body></html>";

@@ -1,6 +1,8 @@
+using System.Runtime.CompilerServices;
 using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Css;
+using Starling.Css.Animations;
 using Starling.Css.Cascade;
 using Starling.Css.Media;
 using Starling.Css.Parser;
@@ -26,10 +28,28 @@ public sealed class Painter
     private readonly FontResolver _fonts;
     private readonly IDiagnostics _diag;
 
+    // One animation timeline per document, kept alive across the per-layout
+    // StyleEngine rebuilds. Every StyleEngine this painter builds for a given
+    // document shares its timeline, so animation/transition playback survives
+    // relayouts instead of restarting each pass. Weak-keyed so the timeline GCs
+    // with its document.
+    private readonly ConditionalWeakTable<Document, AnimationTimeline> _timelines = new();
+
     public Painter(FontResolver? fonts = null, IDiagnostics? diag = null)
     {
         _fonts = fonts ?? FontResolver.Default;
         _diag = diag ?? NoopDiagnostics.Instance;
+    }
+
+    /// <summary>The persistent <see cref="AnimationTimeline"/> for
+    /// <paramref name="document"/>, created on first use. The engine grabs this
+    /// to register Web Animations API (<c>element.animate</c>) animations into
+    /// the same long-lived <see cref="AnimationEngine"/> the cascade samples,
+    /// without going through a per-layout re-import.</summary>
+    public AnimationTimeline GetAnimationTimeline(Document document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return _timelines.GetValue(document, static _ => new AnimationTimeline());
     }
 
     /// <summary>
@@ -295,6 +315,38 @@ public sealed class Painter
         }
     }
 
+    /// <summary>
+    /// Lay <paramref name="document"/> out through a persistent
+    /// <see cref="Starling.Layout.Incremental.LayoutSession"/>, reusing the
+    /// session's retained box tree where the per-frame mutation batch allows and
+    /// rebuilding only the changed subtrees. The session owns the tree across
+    /// frames; this just supplies a freshly created text measurer (and disposes
+    /// it). Returns the laid-out root. Used by the engine's incremental relayout
+    /// path; falls back internally to a full rebuild when reuse isn't safe.
+    /// </summary>
+    public Starling.Layout.Box.BlockBox LayoutDocumentIncremental(
+        Starling.Layout.Incremental.LayoutSession session,
+        Document document,
+        LayoutSize viewport,
+        FontFaceRegistry? webFonts,
+        double? nowMs = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(document);
+
+        var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
+        try
+        {
+            using (_diag.Span("paint", "layout.incremental"))
+                return session.Layout(document, viewport, measurer, nowMs, ct);
+        }
+        finally
+        {
+            (measurer as IDisposable)?.Dispose();
+        }
+    }
+
     /// <summary>Build only the cascade — no layout, no display list. Used by
     /// <c>BoxLayoutHost</c> (in <c>Starling.Engine</c>) to answer
     /// <c>getComputedStyle</c> reads for purely-cascaded properties
@@ -315,7 +367,7 @@ public sealed class Painter
             return CreateStyleEngine(document, viewport, defaultFontSize, externalStylesheet, _diag, colorScheme);
     }
 
-    private static StyleEngine CreateStyleEngine(
+    private StyleEngine CreateStyleEngine(
         Document document,
         LayoutSize viewport,
         float? defaultFontSize,
@@ -323,7 +375,10 @@ public sealed class Painter
         IDiagnostics diag,
         ColorScheme colorScheme)
     {
-        var style = new StyleEngine(diagnostics: diag);
+        // Reuse the document's persistent timeline so animation/transition state
+        // outlives this (per-layout) StyleEngine.
+        var style = new StyleEngine(
+            includeUserAgentStyleSheet: true, diagnostics: diag, timeline: GetAnimationTimeline(document));
         // Expose the UA's preferred color scheme through @media
         // (prefers-color-scheme: …) and the real viewport size through both
         // @media width/height/orientation queries and the vw/vh/sv*/lv*/dv*
