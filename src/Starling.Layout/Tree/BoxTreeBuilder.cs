@@ -16,13 +16,25 @@ internal sealed class BoxTreeBuilder
     private readonly StyleEngine _style;
     private readonly IImageResolver _images;
     private readonly double? _nowMs;
+    // Element/text-node → box maps for the incremental path. Owned by the
+    // LayoutSession (so they persist across frames) and passed in; null on the
+    // full-rebuild path, which records nothing.
+    private readonly Dictionary<Element, Box.Box>? _elementMap;
+    private readonly Dictionary<Starling.Dom.Text, TextBox>? _textMap;
 
-    public BoxTreeBuilder(StyleEngine style, IImageResolver? images = null, double? nowMs = null)
+    public BoxTreeBuilder(
+        StyleEngine style,
+        IImageResolver? images = null,
+        double? nowMs = null,
+        Dictionary<Element, Box.Box>? elementMap = null,
+        Dictionary<Starling.Dom.Text, TextBox>? textMap = null)
     {
         ArgumentNullException.ThrowIfNull(style);
         _style = style;
         _images = images ?? NullImageResolver.Instance;
         _nowMs = nowMs;
+        _elementMap = elementMap;
+        _textMap = textMap;
     }
 
     private ComputedStyle Compute(Element el, CascadeCache cache)
@@ -51,6 +63,7 @@ internal sealed class BoxTreeBuilder
         _style.PrecomputeTree(root, cache);
         var rootStyle = Compute(root, cache);
         var rootBox = new BlockBox(rootStyle, root);
+        if (_elementMap is not null) _elementMap[root] = rootBox;
         rootBox.Hints = StackingContextResolver.Resolve(rootBox, rootStyle, isRoot: true);
         BuildChildren(root, rootStyle, rootBox, cache);
         WrapInlinesInAnonymousBlocks(rootBox);
@@ -72,64 +85,99 @@ internal sealed class BoxTreeBuilder
             switch (child)
             {
                 case Element element:
-                    var elementStyle = Compute(element, cache);
-                    var display = DisplayKeyword(elementStyle);
-                    if (display == "none") continue;
-                    if (display == "contents")
-                    {
-                        BuildChildren(element, elementStyle, parentBox, cache);
-                        continue;
-                    }
-                    if (string.Equals(element.LocalName, "img", StringComparison.OrdinalIgnoreCase))
-                    {
-                        BuildImage(element, elementStyle, parentBox);
-                        continue;
-                    }
-                    if (string.Equals(element.LocalName, "svg", StringComparison.OrdinalIgnoreCase))
-                    {
-                        BuildSvg(element, elementStyle, parentBox);
-                        continue;
-                    }
-                    // inline-flex / inline-grid are inline-LEVEL but establish a
-                    // flex/grid formatting context internally: they place as
-                    // atomic inlines in their parent's line box (shrink-to-fit),
-                    // so they're InlineBoxes here. When the parent itself
-                    // blockifies its children (a flex/grid container), the child
-                    // becomes a block-level item regardless.
-                    var isInlineLevel = display is "inline" or "inline-block" or "inline-flex" or "inline-grid";
-                    Box.Box box = isInlineLevel && !blockifyChildren
-                        ? new InlineBox(elementStyle, element)
-                        : new BlockBox(elementStyle, element);
-                    box.Hints = StackingContextResolver.Resolve(box, elementStyle);
-                    parentBox.AppendChild(box);
-
-                    // CSS Lists 3 §3 — a list-item synthesizes a marker box as
-                    // its first in-flow child. Markers paint through the normal
-                    // text path (no dedicated display item), so we prepend a
-                    // TextBox carrying the marker string.
-                    if (display == "list-item")
-                        AppendListMarker(element, elementStyle, box);
-
-                    // CSS Content 3 §2 — synthesize ::before before children.
-                    AppendPseudoElement(element, elementStyle, box, PseudoElement.Before, cache);
-                    BuildChildren(element, elementStyle, box, cache);
-                    // ::after after children.
-                    AppendPseudoElement(element, elementStyle, box, PseudoElement.After, cache);
-                    // <input> is a void element with no DOM children — synthesize
-                    // a TextBox from its value/placeholder so the search box and
-                    // submit button labels actually show up. Real intrinsic
-                    // sizing from the `size` attribute lands with form layout.
-                    if (string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
-                        AppendInputLabel(element, elementStyle, box);
+                    BuildElementInto(element, parentStyle, parentBox, blockifyChildren, cache);
                     break;
                 case Starling.Dom.Text text:
                     var data = text.Data;
                     if (data.Length == 0) continue;
                     var textBox = new TextBox(data, parentStyle);
+                    if (_textMap is not null) _textMap[text] = textBox;
                     parentBox.AppendChild(textBox);
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Build the box(es) for one element child and append them to
+    /// <paramref name="parentBox"/>. Factored out of <see cref="BuildChildren"/>
+    /// so the incremental path can rebuild a single element's subtree in
+    /// isolation (<see cref="RebuildElementSubtree"/>).
+    /// </summary>
+    private void BuildElementInto(Element element, ComputedStyle? parentStyle, Box.Box parentBox, bool blockifyChildren, CascadeCache cache)
+    {
+        var elementStyle = Compute(element, cache);
+        var display = DisplayKeyword(elementStyle);
+        if (display == "none") return;
+        if (display == "contents")
+        {
+            BuildChildren(element, elementStyle, parentBox, cache);
+            return;
+        }
+        if (string.Equals(element.LocalName, "img", StringComparison.OrdinalIgnoreCase))
+        {
+            BuildImage(element, elementStyle, parentBox);
+            return;
+        }
+        if (string.Equals(element.LocalName, "svg", StringComparison.OrdinalIgnoreCase))
+        {
+            BuildSvg(element, elementStyle, parentBox);
+            return;
+        }
+        // inline-flex / inline-grid are inline-LEVEL but establish a flex/grid
+        // formatting context internally: they place as atomic inlines in their
+        // parent's line box (shrink-to-fit), so they're InlineBoxes here. When
+        // the parent itself blockifies its children (a flex/grid container), the
+        // child becomes a block-level item regardless.
+        var isInlineLevel = display is "inline" or "inline-block" or "inline-flex" or "inline-grid";
+        Box.Box box = isInlineLevel && !blockifyChildren
+            ? new InlineBox(elementStyle, element)
+            : new BlockBox(elementStyle, element);
+        box.Hints = StackingContextResolver.Resolve(box, elementStyle);
+        if (_elementMap is not null) _elementMap[element] = box;
+        parentBox.AppendChild(box);
+
+        // CSS Lists 3 §3 — a list-item synthesizes a marker box as its first
+        // in-flow child. Markers paint through the normal text path (no dedicated
+        // display item), so we prepend a TextBox carrying the marker string.
+        if (display == "list-item")
+            AppendListMarker(element, elementStyle, box);
+
+        // CSS Content 3 §2 — synthesize ::before before children.
+        AppendPseudoElement(element, elementStyle, box, PseudoElement.Before, cache);
+        BuildChildren(element, elementStyle, box, cache);
+        // ::after after children.
+        AppendPseudoElement(element, elementStyle, box, PseudoElement.After, cache);
+        // <input> is a void element with no DOM children — synthesize a TextBox
+        // from its value/placeholder so the search box and submit button labels
+        // actually show up.
+        if (string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
+            AppendInputLabel(element, elementStyle, box);
+    }
+
+    /// <summary>
+    /// Incremental reconciliation: rebuild the box subtree for a single
+    /// <paramref name="element"/> whose style or content changed, re-cascading
+    /// it and its descendants against <paramref name="parentStyle"/> (the
+    /// element's parent's computed style). Returns the freshly built box, or
+    /// null when the element produces no single box (<c>display:none</c> or
+    /// <c>display:contents</c>) — the caller falls back to a full rebuild in that
+    /// case, since the parent's box structure would change. Anonymous-block
+    /// wrapping is applied to the rebuilt subtree so it matches a full build.
+    /// </summary>
+    public Box.Box? RebuildElementSubtree(Element element, ComputedStyle? parentStyle, bool blockifyParent)
+    {
+        var cache = new CascadeCache();
+        _style.PrecomputeTree(element, cache);
+        // A scratch parent collects the build output; we only keep the single
+        // child box (if exactly one was produced).
+        var scratch = new BlockBox(parentStyle, element: null);
+        BuildElementInto(element, parentStyle, scratch, blockifyParent, cache);
+        if (scratch.Children.Count != 1) return null; // none / contents / multi
+        var box = scratch.Children[0];
+        WrapInlinesInAnonymousBlocks(box);
+        box.Parent = null;
+        return box;
     }
 
     /// <summary>

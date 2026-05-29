@@ -42,6 +42,11 @@ public sealed class AnimationEngine
         }
     }
 
+    /// <summary>The elements with at least one in-flight animation. Incremental
+    /// layout marks these dirty every frame: an animation changes their computed
+    /// style off the animation clock, with no DOM mutation to record.</summary>
+    public IEnumerable<Element> ActiveElements => _active.Keys;
+
     /// <summary>
     /// Register (or replace) a parsed <c>@keyframes</c> rule by name. The
     /// most recent registration wins per spec — later <c>@keyframes</c> in

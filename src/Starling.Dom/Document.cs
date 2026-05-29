@@ -31,6 +31,37 @@ public sealed class Document : Node
 
     internal void BumpLayoutInvalidationVersion() => LayoutInvalidationVersion++;
 
+    // ---- Per-frame layout-mutation batch (incremental layout) ----------------
+    //
+    // When RecordLayoutMutations is on, every layout-relevant DOM change appends
+    // a (target, kind) record here. The incremental layout engine drains the
+    // batch each frame to reconcile only the changed subtrees. Off by default,
+    // so non-incremental pages pay nothing.
+
+    private List<LayoutMutation>? _layoutMutations;
+
+    /// <summary>Enables per-frame recording of layout-relevant mutations into a
+    /// batch the incremental layout engine drains. The engine turns this on for
+    /// the live page; it stays off for one-shot renders.</summary>
+    public bool RecordLayoutMutations { get; set; }
+
+    internal void RecordLayoutMutation(Node target, LayoutChangeKind kind)
+    {
+        if (!RecordLayoutMutations) return;
+        (_layoutMutations ??= new List<LayoutMutation>()).Add(new LayoutMutation(target, kind));
+    }
+
+    /// <summary>Removes and returns the mutations recorded since the last drain.
+    /// Empty when nothing layout-relevant changed (or recording is off).</summary>
+    public IReadOnlyList<LayoutMutation> DrainLayoutMutations()
+    {
+        if (_layoutMutations is null || _layoutMutations.Count == 0)
+            return Array.Empty<LayoutMutation>();
+        var snapshot = _layoutMutations.ToArray();
+        _layoutMutations.Clear();
+        return snapshot;
+    }
+
     /// <summary>Per-attribute-name bump counter (diagnostic). Engine reads
     /// this after script execution to surface "which attribute caused all the
     /// re-layouts" without needing a full mutation log.</summary>
