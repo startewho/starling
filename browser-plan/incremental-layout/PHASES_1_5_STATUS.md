@@ -110,6 +110,41 @@ composite time so a no-layout-change frame serves the cached layer and skips the
 viewport redraw. Acceptance: an animated `transform`/`opacity` frame with no
 layout change serves the layer from cache and skips the redraw.
 
+## Benchmarks
+
+`bench/Starling.Bench/IncrementalLayoutBench.cs` compares a full rebuild against
+an incremental relayout after one small DOM change per frame, on a synthetic
+page that scales with a row count and on the real nginx.org snapshot. Both sides
+share one pre-built StyleEngine, so the numbers isolate the layout pass.
+
+Indicative results (allocation is deterministic; treat absolute times as
+ballpark until a full BenchmarkDotNet run on a quiet host):
+
+| Change            | Rows | Full alloc | Incremental alloc | Time ratio |
+|-------------------|-----:|-----------:|------------------:|-----------:|
+| Text              |  100 |   49.7 MB  |        0 B        |   ~0.01    |
+| Text              | 1000 |  489 MB    |        0 B        |   ~0.01    |
+| Attribute         | 1000 |  489 MB    |     ~670 KB       |   ~0.02    |
+| No change         | 1000 |  489 MB    |        0 B        |   ~0.01    |
+| Structural toggle | 1000 |  489 MB    |      489 MB       |   ~0.95    |
+| Text (nginx.org)  |   —  |   22.4 MB  |     ~9 KB         |   ~0.02    |
+
+The headline holds: a text edit, an attribute edit, and a no-op frame reuse the
+retained tree and recompute only the dirty subtree — flat allocation regardless
+of page size, while the full rebuild's cost grows with the tree.
+
+The benchmark also surfaces an honest limitation: a **structural** change
+rebuilds the whole affected parent's subtree (Phase 3 as shipped), so inserting
+into a parent that holds the entire list costs ~O(rows), no better than a full
+rebuild. The win appears only for content outside the changed parent. Per-child
+splicing (plan §3a) plus localized re-wrap (§3b, flagged in the plan as the
+nastiest piece) would make structural changes O(change) too — the tracked
+next step. The benchmark is what makes this measurable.
+
+A companion `Fixtures.LocateRepoRoot` fix was needed: it looked only for
+`Starling.sln`, but the repo uses `Starling.slnx`, so every fixture-backed
+bench threw before running. It now accepts either.
+
 ## Test inventory added
 
 - `Starling.Layout.Tests/Incremental/LayoutSessionTests` — text, attribute,
