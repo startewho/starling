@@ -9,21 +9,25 @@ namespace Starling.Engine;
 /// <summary>
 /// Engine implementation of the Web Animations API host seam
 /// (<see cref="IAnimationHost"/>). Translates the binding's neutral keyframe /
-/// timing payloads into the CSS animation model and records them in a stable,
-/// per-document <see cref="ScriptAnimationStore"/>; the store is re-imported
-/// into whichever <see cref="AnimationEngine"/> is current (the engine is
-/// rebuilt per layout pass) so script animations render through the same
-/// compositor as declarative <c>@keyframes</c>.
+/// timing payloads into the CSS animation model and registers them directly in
+/// the document's persistent <see cref="AnimationEngine"/> (held by the
+/// document's <see cref="AnimationTimeline"/>). Because that engine outlives the
+/// per-layout <see cref="Starling.Css.Cascade.StyleEngine"/>, a script animation
+/// is added once and survives relayouts — no per-frame re-import. Playback
+/// control and readback go through the live <see cref="AnimationInstance"/>
+/// looked up by handle id.
 /// </summary>
 internal sealed class EngineAnimationHost : IAnimationHost
 {
-    private readonly ScriptAnimationStore _store;
+    private readonly AnimationEngine _engine;
     private readonly Func<double> _clock;
+    private readonly Dictionary<int, AnimationInstance> _byId = new();
     private int _counter;
+    private int _nextId = 1;
 
-    public EngineAnimationHost(ScriptAnimationStore store, Func<double>? clock = null)
+    public EngineAnimationHost(AnimationEngine engine, Func<double>? clock = null)
     {
-        _store = store;
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _clock = clock ?? (static () => 0);
     }
 
@@ -37,28 +41,26 @@ internal sealed class EngineAnimationHost : IAnimationHost
 
         var rule = BuildKeyframesRule(keyframes);
         var decl = BuildDeclaration(rule.Name, timing);
-        return _store.Add(element, rule, decl, TimelineNow);
+        var inst = _engine.AddScriptAnimation(element, decl, rule, TimelineNow);
+        var id = _nextId++;
+        _byId[id] = inst;
+        return id;
     }
 
-    public void Play(int id) => _store.Get(id)?.Play(TimelineNow);
-    public void Pause(int id) => _store.Get(id)?.Pause(TimelineNow);
-    public void Cancel(int id) => _store.Get(id)?.Cancel();
-    public void Finish(int id)
-    {
-        if (_store.Get(id) is { } d) d.Finish(ActiveDurationMs(d.Decl));
-    }
+    public void Play(int id) { if (_byId.TryGetValue(id, out var i)) i.ScriptPlay(); }
+    public void Pause(int id) { if (_byId.TryGetValue(id, out var i)) i.ScriptPause(); }
+    public void Cancel(int id) { if (_byId.TryGetValue(id, out var i)) i.ScriptCancel(); }
+    public void Finish(int id) { if (_byId.TryGetValue(id, out var i)) i.ScriptFinish(); }
 
-    public double CurrentTime(int id) => _store.Get(id)?.CurrentTime(TimelineNow) ?? 0;
-    public void SetCurrentTime(int id, double ms) => _store.Get(id)?.SetCurrentTime(ms, TimelineNow);
+    public double CurrentTime(int id) => _byId.TryGetValue(id, out var i) ? i.ScriptCurrentTime() : 0;
+    public void SetCurrentTime(int id, double ms) { if (_byId.TryGetValue(id, out var i)) i.ScriptSetCurrentTime(ms); }
 
     public string PlayState(int id)
     {
-        if (_store.Get(id) is not { } d) return "idle";
-        if (d.Canceled) return "idle";
-        if (d.Paused) return "paused";
-        var active = ActiveDurationMs(d.Decl);
-        if (!double.IsInfinity(d.Decl.IterationCount) && CurrentTime(id) >= d.Decl.DelayMs + active)
-            return "finished";
+        if (!_byId.TryGetValue(id, out var i)) return "idle";
+        if (i.IsCanceled) return "idle";
+        if (i.IsPaused) return "paused";
+        if (i.IsCompleted) return "finished";
         return "running";
     }
 
@@ -111,9 +113,6 @@ internal sealed class EngineAnimationHost : IAnimationHost
             MapFill(t.Fill),
             AnimationPlayState.Running);
     }
-
-    private static double ActiveDurationMs(AnimationDeclaration d)
-        => d.DurationMs * (double.IsInfinity(d.IterationCount) ? 1 : Math.Max(0, d.IterationCount));
 
     private static AnimationDirection MapDirection(string s) => s switch
     {

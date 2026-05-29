@@ -369,6 +369,10 @@ public sealed class AnimationInstance
     /// <summary>True once <see cref="ScriptCancel"/> was called.</summary>
     public bool IsCanceled => _canceled;
 
+    /// <summary>True while <see cref="ScriptPause"/> holds the playback head
+    /// (Web Animations API <c>paused</c> state).</summary>
+    public bool IsPaused => _scriptPaused;
+
     /// <summary>True once playback has reached its terminal state.</summary>
     public bool IsCompleted => _completed;
 

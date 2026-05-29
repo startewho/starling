@@ -96,15 +96,13 @@ pass. It speeds up that single pass. It does not survive across frames. So every
 frame re-runs selector matching and the cascade for every element, even the
 thousands that did not change.
 
-### 4. Every relayout builds brand-new animation engines
+### 4. Every relayout builds brand-new animation engines (FIXED — see "Already done")
 
-`StyleEngine`'s constructor makes a fresh `AnimationEngine` and
-`TransitionEngine` (`src/Starling.Css/Cascade/StyleEngine.cs`). A relayout makes
-a new `StyleEngine`, so the animation state is rebuilt too. That is why the loop
-re-imports Web Animations API state from `ScriptAnimationStore` and re-primes
-declarative `@keyframes` every single frame (`Engine.ImportScriptAnimations` and
-`Engine.PrimeDeclarativeAnimations`). It works, but it is pure per-frame
-overhead. It only exists because the engine is thrown away and rebuilt.
+This used to be true: `StyleEngine`'s constructor made a fresh `AnimationEngine`
+and `TransitionEngine`, so a relayout rebuilt the animation state and the loop
+re-imported and re-primed every frame. The animation engines now live on a
+per-document `AnimationTimeline` that outlives the `StyleEngine`. See the
+"Already done" section for what changed.
 
 ## What already exists to help
 
@@ -167,11 +165,11 @@ Questions the numbers should answer:
    persist across relayouts and invalidate per element on change. This cuts the
    cascade cost of a relayout from "whole tree" to "changed elements."
 
-3. **Keep the animation engines alive across relayouts. Medium win.**
+3. **Keep the animation engines alive across relayouts. Medium win. DONE.**
    Split `AnimationEngine` and `TransitionEngine` lifetime from `StyleEngine`
    lifetime so a relayout does not rebuild them. This removes the per-frame
    re-import and re-prime. The `ScriptAnimationStore` indirection is then no
-   longer needed for the live path.
+   longer needed for the live path. See "Already done" below.
 
 4. **Incremental layout. The real fix, large.**
    Mark only the changed subtree dirty and re-lay-out just that, reusing the
@@ -219,3 +217,30 @@ The choices to argue at the whiteboard.
 `RefreshLiveLayout`, so the single draw happens after the clock is advanced.
 That halved the draw work per frame. It left the full relayout in place, which
 is what this note is about.
+
+**The animation engines now survive relayouts (fix direction 3).** The
+`AnimationEngine`, `TransitionEngine`, and `AnimationCompositor` moved off the
+`StyleEngine` and onto a new per-document `AnimationTimeline`
+(`src/Starling.Css/Animations/AnimationTimeline.cs`). The `Painter` keeps one
+timeline per `Document` (weak-keyed) and hands the same one to every
+`StyleEngine` it builds for that document (`Painter.GetAnimationTimeline`), so a
+relayout reuses the live engines instead of making new ones. Three follow-on
+cleanups fell out of this:
+
+- Web Animations API (`element.animate`) animations register straight into the
+  persistent `AnimationEngine`. The `ScriptAnimationStore` re-import indirection
+  is gone — `EngineAnimationHost` now holds the live `AnimationInstance` per
+  handle id and the store file was deleted.
+- `Engine.ImportScriptAnimations` is gone. `PrepareAnimationFrame` no longer
+  re-imports anything per frame.
+- Declarative `@keyframes` priming is now keyed on the laid-out box-tree root
+  (`Engine._primedTrees`), not the engine. The same tree primes once across all
+  its frames, and a relayout re-primes the fresh tree so animation-* changes are
+  picked up. `OnAnimationsCascaded` matches by name, so playback is preserved.
+  The keyframe registry is the one piece still rebuilt per layout: the
+  `StyleEngine` constructor clears it on the reused timeline before re-adding the
+  current sheets, which leaves active playback untouched.
+
+This removes the per-frame re-import and re-prime, but the full relayout itself
+(fix directions 1, 2, 4) is still the dominant per-frame cost on a mutating
+page.
