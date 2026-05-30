@@ -1,4 +1,5 @@
 using Starling.Common.Diagnostics;
+using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Layout.Box;
 using Starling.Layout.Tree;
@@ -30,6 +31,7 @@ public sealed class NativeViewportRenderer : IDisposable
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
     private readonly LayerCacheStore _layerCaches;
+    private readonly LayerCacheStore _chromeCaches;
     private bool _disposed;
 
     public NativeViewportRenderer(IDiagnostics? diagnostics = null)
@@ -37,6 +39,7 @@ public sealed class NativeViewportRenderer : IDisposable
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
         _layerCaches = new LayerCacheStore(_diag);
+        _chromeCaches = new LayerCacheStore(_diag);
     }
 
     /// <summary>
@@ -72,6 +75,71 @@ public sealed class NativeViewportRenderer : IDisposable
         {
             _diag.LogException("shell", ex, $"layer-tree present via '{_backend.Name}' failed");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Presents engine-rendered chrome (a strip <paramref name="chromeHeightCss"/>
+    /// CSS px tall at the top) composited above the page, in one zero-copy frame.
+    /// Both are real Starling documents: <paramref name="chromeRoot"/> is laid out
+    /// at the window width × the chrome height, <paramref name="pageRoot"/> fills
+    /// the region below. They blend into a single swapchain present — no overlay,
+    /// no airspace. <paramref name="surfaceWidth"/>/<paramref name="surfaceHeight"/>
+    /// are the swapchain's device-pixel dimensions.
+    /// </summary>
+    public bool PresentComposited(
+        GpuSurfacePresenter presenter,
+        int surfaceWidth,
+        int surfaceHeight,
+        float scale,
+        BlockBox chromeRoot,
+        double chromeHeightCss,
+        BlockBox pageRoot,
+        double scrollX = 0,
+        double scrollY = 0,
+        Func<Box, bool>? pageAnimating = null,
+        Func<Box, ComputedStyle?>? styleOverride = null,
+        IImageResolver? images = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(presenter);
+        ArgumentNullException.ThrowIfNull(chromeRoot);
+        ArgumentNullException.ThrowIfNull(pageRoot);
+        if (surfaceWidth <= 0 || surfaceHeight <= 0 || scale <= 0) return false;
+
+        var chromeDevH = (int)Math.Ceiling(chromeHeightCss * scale);
+        var logicalW = surfaceWidth / scale;
+        var logicalH = surfaceHeight / scale;
+
+        var chromeTree = new LayerTreeBuilder(null, null, _diag, _chromeCaches.CacheFor, null).Build(chromeRoot);
+        var pageTree = new LayerTreeBuilder(styleOverride, images, _diag, _layerCaches.CacheFor, pageAnimating).Build(pageRoot);
+
+        var compositor = new Compositor(_backend, _diag);
+        var ops = new List<LayerBlend>();
+        var keepAlive = new List<RenderedBitmap>();
+        try
+        {
+            // Chrome: top strip, no offset.
+            compositor.AppendSurfaceOps(
+                chromeTree,
+                new LayoutRect(0, 0, logicalW, chromeHeightCss),
+                scale, destOriginXDevice: 0, destOriginYDevice: 0,
+                regionClipDevice: new LayoutRect(0, 0, surfaceWidth, chromeDevH),
+                ops, keepAlive);
+
+            // Page: below the chrome, scrolled, clipped to the content region.
+            compositor.AppendSurfaceOps(
+                pageTree,
+                new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss),
+                scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+                regionClipDevice: new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH),
+                ops, keepAlive);
+
+            return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
+        }
+        finally
+        {
+            foreach (var bmp in keepAlive) bmp.Dispose();
         }
     }
 
