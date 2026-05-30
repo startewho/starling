@@ -85,7 +85,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     /// Returns <c>false</c> if the frame could not be presented (e.g. the surface
     /// is outdated and needs reconfiguring).
     /// </summary>
-    internal bool Present(int width, int height, IReadOnlyList<LayerBlend> ops)
+    internal bool PresentOps(int width, int height, IReadOnlyList<LayerBlend> ops)
     {
         if (width <= 0 || height <= 0) return false;
         lock (_gate)
