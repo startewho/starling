@@ -328,13 +328,22 @@ internal sealed class NativeBrowserWindow : IDisposable
             };
         }
 
+        // GLFW window handle for the native clipboard (phase 4).
+        var glfwHandle = window.Native?.Glfw ?? 0;
+
         if (input.Keyboards.Count > 0)
         {
             var keyboard = input.Keyboards[0];
 
+            // Cmd (macOS) or Ctrl (elsewhere) held — the clipboard chord modifier.
+            bool CmdOrCtrl() =>
+                keyboard.IsKeyPressed(Key.SuperLeft) || keyboard.IsKeyPressed(Key.SuperRight)
+                || keyboard.IsKeyPressed(Key.ControlLeft) || keyboard.IsKeyPressed(Key.ControlRight);
+
             keyboard.KeyChar += (_, c) =>
             {
                 if (page is null || focusedInput is null) return;
+                if (CmdOrCtrl()) return; // a clipboard/shortcut chord, not text
                 var current = HtmlFormControls.Value(focusedInput);
                 HtmlFormControls.SetValue(focusedInput, current + c);
                 page.Scripting?.DispatchEvent(focusedInput,
@@ -349,6 +358,36 @@ internal sealed class NativeBrowserWindow : IDisposable
             keyboard.KeyDown += (_, key, _) =>
             {
                 if (page is null || focusedInput is null) return;
+
+                // Clipboard chords (phase 4): copy / cut / paste on the focused input.
+                if (CmdOrCtrl() && key is Key.C or Key.X or Key.V)
+                {
+                    var val = HtmlFormControls.Value(focusedInput);
+                    if (key == Key.C)
+                    {
+                        NativeClipboard.Set(glfwHandle, val);
+                    }
+                    else if (key == Key.X)
+                    {
+                        NativeClipboard.Set(glfwHandle, val);
+                        HtmlFormControls.SetValue(focusedInput, "");
+                        page.Scripting?.DispatchEvent(focusedInput,
+                            new InputEvent("input", new EventInit(Bubbles: true)) { InputType = "deleteByCut" });
+                        RefreshLayout();
+                    }
+                    else // V
+                    {
+                        var clip = NativeClipboard.Get(glfwHandle);
+                        if (!string.IsNullOrEmpty(clip))
+                        {
+                            HtmlFormControls.SetValue(focusedInput, val + clip);
+                            page.Scripting?.DispatchEvent(focusedInput,
+                                new InputEvent("input", new EventInit(Bubbles: true)) { Data = clip, InputType = "insertFromPaste" });
+                            RefreshLayout();
+                        }
+                    }
+                    return;
+                }
 
                 if (key == Key.Backspace)
                 {

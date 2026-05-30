@@ -24,6 +24,8 @@
     <PackageReference Include="Silk.NET.Input.Common" />
     <PackageReference Include="Silk.NET.Input.Glfw" />
     <PackageReference Include="Silk.NET.Maths" />
+    <!-- Phase 4 native service: GLFW clipboard (copy/cut/paste). -->
+    <PackageReference Include="Silk.NET.GLFW" />
     <PackageReference Include="Silk.NET.WebGPU" />
   </ItemGroup>
 </Project>
