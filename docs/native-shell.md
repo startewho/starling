@@ -73,24 +73,33 @@ Run it: `dotnet run --project src/Starling.Shell.Native -- --browser`. The flags
 `--spike` (clear-and-present only) and `--frames N` (auto-close after N frames)
 help with smoke tests.
 
-## The remaining native-services tail (phase 4)
+## Native services (phase 4)
 
-These are the things the Avalonia shell gives for free and the native shell must
-still build. They are tracked so the work is resumable.
+These are the things the Avalonia shell gives for free. The native shell builds
+them incrementally. Status below; the rest is tracked so it stays resumable.
 
-- **Input method editor (IME).** Composition for Chinese, Japanese, Korean, and
-  dead keys. Silk.NET does not provide this. It is native and per-platform. Easy
-  to underestimate. Tracked as `wp:NS-01-ime`.
-- **Accessibility.** Avalonia exposes a platform accessibility tree for free.
-  Rebuilding it is the largest single item and the hardest. Decide early whether
-  it is required. Tracked as `wp:NS-02-accessibility`.
-- **Shell parity.** Tabs, history navigation in the UI, the find bar, the
+- **Clipboard — done.** Copy, cut, and paste on the focused field, through GLFW.
+- **Accessibility — managed core + macOS bridge done; native tuning open.** The
+  accessibility tree (roles, names, values, bounds, focus) is a tested,
+  engine-agnostic builder in `Starling.Gui.Core` (`AccessibilityTreeBuilder`,
+  13 tests). A macOS `NSAccessibility` bridge exposes it on the content view and
+  is pushed on load/navigation/relayout. The role and label path is exact; the
+  on-screen frame conversion is best-effort and wants VoiceOver tuning on a real
+  Mac. Tracked as `wp:NS-02-accessibility`.
+- **Input method editor (IME) — commit works; preedit open.** Commit-style IME
+  already reaches a focused field, because GLFW delivers committed composed
+  characters through its character callback. The composition model
+  (`Starling.Gui.Core.Text.ImeComposition`, 9 tests) is built and shaped like
+  `NSTextInputClient`. The remaining native work is the preedit driver (a custom
+  `NSView` or swizzling, since GLFW has no preedit callback) and inline preedit
+  rendering. Tracked as `wp:NS-01-ime`.
+- **Shell parity — open.** Tabs, history navigation in the UI, the find bar, the
   devtools panels, context menus, drag and drop, and multi-window. Most of this
   can be engine-rendered chrome, which is the elegant part of owning the window.
   Tracked as `wp:NS-03-chrome-parity`.
-- **Render fidelity parity.** The native shell does not yet apply `:hover` style
-  overrides or sample CSS animations into the layer tree the way the Avalonia
-  `WebviewPanel` does. The hooks are in place (`styleOverride`,
+- **Render fidelity parity — open.** The native shell does not yet apply `:hover`
+  style overrides or sample CSS animations into the layer tree the way the
+  Avalonia `WebviewPanel` does. The hooks are in place (`styleOverride`,
   `isAnimatingLayerRoot`); they need wiring. Tracked as `wp:NS-04-style-parity`.
 
 ## Notes and limits

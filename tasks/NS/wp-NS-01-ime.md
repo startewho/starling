@@ -21,17 +21,30 @@ Support text composition (Chinese, Japanese, Korean, and dead keys) in the
 native shell's focused fields. Silk.NET does not provide this, so it is native
 per-platform work.
 
-## Scope
+## What already works
 
-- A composition state on the focused field: a preedit string with an underline,
-  then commit on accept.
-- macOS first: `NSTextInputClient` on the content view, or GLFW preedit hooks if
-  they suffice. Then Windows (`WM_IME_*`) and Linux (IBus/`xim`).
-- Feed committed text through the same path the `KeyChar` handler uses today
-  (`HtmlFormControls.SetValue` + an `input` event + relayout).
+- **Commit-style IME works today.** Standard GLFW (the shell's windowing)
+  delivers *committed* composed characters through its character callback, which
+  the shell's `KeyChar` handler already inserts. So selecting a character with the
+  macOS input method reaches a focused field. The missing piece is only the
+  inline preedit display.
+- **The composition model is built and tested.**
+  `Starling.Gui.Core.Text.ImeComposition` models committed text plus an active
+  preedit (marked text), shaped like `NSTextInputClient` (set-marked-text /
+  insert / delete-backward). Nine unit tests cover it. A native driver feeds it.
+
+## Remaining scope
+
+- The native preedit driver. Standard GLFW exposes no preedit callback, so we
+  need a native `NSTextInputClient` on the window's content view. That means a
+  custom `NSView` (replacing GLFW's text input) or method swizzling on the GLFW
+  view — the hard part. It calls `ImeComposition.SetMarkedText` as the user
+  composes and `Insert` on commit.
+- Render the preedit inline (underlined) in the focused field.
+- Then Windows (`WM_IME_*`) and Linux (IBus / `xim`).
 
 ## Acceptance
 
-- Typing a multi-key composition into a focused `<input>` shows the preedit and
-  commits the final string.
-- No regression to plain Latin typing.
+- Typing a multi-key composition into a focused `<input>` shows the underlined
+  preedit and commits the final string.
+- No regression to plain Latin typing (still works) or to commit-style IME.
