@@ -54,6 +54,7 @@ agent sees the state.
 ```
 starling/
 ├── AGENTS.md                  ← you are here
+├── .mcp.json                  ← Aspire Model Context Protocol wiring (`aspire agent mcp`)
 ├── README.md                  ← human-facing intro
 ├── browser-plan/              ← the design (immutable except by deliberate edit)
 │   ├── 00_INDEX.md            ← start here for design context
@@ -65,21 +66,46 @@ starling/
 │   ├── INDEX.md               ← current status of all packages
 │   ├── lib/claim.sh           ← atomic claim/release helper
 │   └── M<n>/wp-*.md           ← one file per work package
-├── src/                       ← engine + Headless CLI + Avalonia Gui (win/mac/linux)
+├── lib/starling-regexp/       ← JS RegExp engine submodule used by Starling.Js
+├── src/                       ← engine + native decode seam + hosts + tools
 │   ├── Starling.AppHost/          ← Aspire AppHost (orchestrates Gui + Headless)
-│   └── Starling.ServiceDefaults/  ← Aspire OTel + health-check shared bootstrap
-├── tests/                     ← one xUnit project per src/ module + E2E
+│   ├── Starling.Codecs/           ← OS-native image decode interop seam
+│   ├── Starling.Mcp/              ← loopback MCP server + shared tool plumbing
+│   ├── Starling.ServiceDefaults/  ← Aspire OTel + health-check shared bootstrap
+│   └── Starling.Telemetry/        ← OpenTelemetry bootstrap + in-memory sinks
+├── tests/                     ← MSTest projects per module, plus Avalonia headless xUnit
 ├── bench/Starling.Bench/      ← BenchmarkDotNet + frame replay (see bench/README.md)
 └── testdata/                  ← fixtures + golden PNGs + WPT subsets
 ```
 
 ## Build + test (must be green before merge)
 
+Before the first restore, make sure the `Starling.RegExp` submodule is present.
+`src/Starling.Js` references `lib/starling-regexp/src/Starling.RegExp/`, so an
+empty submodule breaks restore and build.
+
+```bash
+git submodule update --init --recursive
+```
+
+Paint and raster paths need a Six Labors license. Local builds read
+`sixlabors.lic` from the repo root through `Directory.Build.props`. CI uses the
+`SIXLABORS_LICENSE_KEY` secret.
+
 ```bash
 dotnet --version            # expect 10.0.x
 dotnet restore
 dotnet build -c Debug
 dotnet test  -c Debug
+```
+
+Most test projects use MSTest 4 on Microsoft Testing Platform. The exception is
+`tests/Starling.Gui.Headless.Tests`, which uses `xunit.v3` because
+`Avalonia.Headless.XUnit` requires it. Run GUI checks with:
+
+```bash
+dotnet test tests/Starling.Gui.Tests           # needs a display
+dotnet test tests/Starling.Gui.Headless.Tests  # no display needed
 ```
 
 If `dotnet build` errors with permission-denied apphost deletions in a
@@ -93,6 +119,22 @@ unexpected span — pull traces from the Aspire dashboard's telemetry API instea
 of adding `Console.WriteLine`. **This only works while the AppHost is running**
 (`aspire run` against `src/Starling.AppHost`, or via the `aspire` skill); the
 telemetry API is served by that running dashboard.
+
+The repo-root `aspire.config.json` points at `src/Starling.AppHost`, so
+`aspire run` from the repo root starts the `gui` resource and the `sites` static
+resource. `headless` is registered with explicit start and is launched from the
+dashboard when needed. `sites` serves `testdata/sites/` at
+`http://localhost:8088/`. Restart the resource after editing those fixtures.
+
+Runtime selection flags go after `aspire run --` and are forwarded to both GUI
+and headless resources:
+
+```bash
+aspire run -- --jint --imagesharp     # Jint JS backend + CPU paint
+aspire run -- --starling --gpu        # Starling JS backend + WebGPU paint
+```
+
+Flags win over `STARLING_JS_ENGINE` and `STARLING_PAINT_BACKEND`.
 
 There are three ways in, listed in the order you should reach for them.
 
@@ -133,6 +175,13 @@ programmatically, hit the dashboard directly (auth via the dashboard API token):
 `GET /api/telemetry/traces/{traceId}` for one full trace. The CLI and MCP tools
 are wrappers over these.
 
+Starling also exposes its own Model Context Protocol (MCP) server. The GUI
+serves browser-control tools from `src/Starling.Gui/Mcp/` plus telemetry tools
+from `src/Starling.Mcp/Telemetry/`. Direct GUI runs default to
+`http://127.0.0.1:3077/mcp`. AppHost sets `STARLING_MCP_URL` to
+`http://127.0.0.1:3078/mcp`. Headless only starts its telemetry MCP server when
+`STARLING_HEADLESS_MCP_URL` is set.
+
 ## Spec coverage & the bug-fix workflow
 
 Most bugs in this engine are a spec compliance gap wearing a disguise. Before
@@ -162,12 +211,20 @@ There is **one** way spec tests are tracked: real test methods tagged with
 `[Spec]` + `[SpecFact]`/`[PendingFact]` from `Starling.Spec.Common`. There is
 no stub generation. See `tests/Starling.Spec.Common/README.md`.
 
+The large upstream suites are opt-in because their corpora are not committed.
+Use `tools/fetch-test262.sh` before `dotnet test tests/Starling.Js.Test262.Tests`
+and `tools/fetch-wpt.sh` before `dotnet test tests/Starling.Wpt.Tests`. If a
+corpus is absent, those tests skip or report inconclusive instead of failing the
+normal build.
+
 ## Interop policy — managed-first, native at vetted seams
 
 Native interop (`[LibraryImport]`/`[DllImport]`) is confined to one
 **designated interop project**: `src/Starling.Codecs` (image decode). Every
-other engine module under
-`src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Loop,Engine}/`
+platform backend lives there: ImageIO on macOS, WIC on Windows, and
+libpng/libjpeg/libwebp on Linux. It is also the only engine project with
+`AllowUnsafeBlocks=true`. Every other engine module under
+`src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Mcp,Telemetry,Engine}/`
 stays **pure managed** — no P/Invoke, no native dependencies beyond what the
 .NET BCL ships. **TLS path: BouncyCastle.** `Starling.Net` uses
 `BouncyCastle.Cryptography` (pure-managed, no P/Invoke) for TLS 1.3 via

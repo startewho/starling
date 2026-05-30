@@ -32,7 +32,10 @@ internal static class DisplayListContentHash
         var h = FnvOffset;
         var items = list.Items;
         for (var i = 0; i < items.Count; i++)
+        {
             HashItem(ref h, items[i]);
+        }
+
         return unchecked((long)h);
     }
 
