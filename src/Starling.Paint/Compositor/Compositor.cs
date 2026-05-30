@@ -106,6 +106,41 @@ internal sealed class Compositor
         return new RenderedBitmap(width, height, output);
     }
 
+    /// <summary>
+    /// Blends the layer tree straight onto a window's wgpu swapchain via
+    /// <paramref name="presenter"/> — the zero-copy present path
+    /// (wp:M12-13-gpu-composite-blend). Builds the exact same paint-ordered blend
+    /// ops as <see cref="Render"/>, but instead of an offscreen target + readback
+    /// it hands them to the surface presenter, which blends into the swapchain
+    /// texture and presents. Returns <c>false</c> if the frame could not be
+    /// presented (e.g. the surface needs reconfiguring). No <see cref="RenderedBitmap"/>
+    /// is produced — nothing crosses back to the CPU.
+    /// </summary>
+    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(presenter);
+        if (viewport.Width <= 0 || viewport.Height <= 0)
+            throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        if (!(scale > 0f))
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+
+        var ops = new List<LayerBlend>();
+        var keepAlive = new List<RenderedBitmap>();
+        CollectOps(root, ops, keepAlive, viewport, scale,
+            ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
+
+        var presented = presenter.Present(width, height, ops);
+
+        foreach (var bmp in keepAlive)
+            bmp.Dispose();
+
+        return presented;
+    }
+
     private void CollectOps(
         CompositorLayer layer,
         List<LayerBlend> ops,
