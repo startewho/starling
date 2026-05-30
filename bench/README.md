@@ -44,7 +44,9 @@ The classes today:
 | `StyleInvalidationBench` | re-cascade after a DOM change |
 | `LayoutBench` / `IncrementalLayoutBench` | box tree and incremental relayout |
 | `PaintBench` | display-list build |
-| `RasterBench` | draw the paint list to pixels (pure-CPU backend) |
+| `RasterBench` | draw the paint list to pixels (WebGPU backend) |
+| `CompositorBench` | layer-tree paint, warm vs cold layer cache |
+| `WebGpuFrameBench` | per-frame backend cost, WebGPU vs CPU |
 | `SsimBench` | render similarity score |
 | `H1ResponseBench` | HTTP/1 response parsing |
 | `EndToEndBench` | parse through raster for a whole page |
@@ -73,15 +75,36 @@ dotnet run -c Release --project bench/Starling.Bench -- replay flex-status
 Pages: `flex-status`, `list`, `nginx`.
 
 ```
-replay <page> [--frames N] [--warmup N] [--incremental | --full] [--no-raster]
+replay <page> [--frames N] [--warmup N] [--incremental | --full] [--no-raster] [--scale S]
 ```
 
 The layout path defaults to incremental. Pass `--full` to A/B against the
 full-rebuild path (or `--incremental` to be explicit).
 
+`--scale S` sets the device pixel ratio the frames raster at. The default is
+`1.0`. Pass `--scale 2.0` for the Retina path the GUI runs at. A 2x run
+quadruples the raster surface and its readback. It gets its own result file
+(`flex-status-full-2.0x.json`), so it does not overwrite the 1x run.
+
 Each run saves a result to `bench/results/<date>/<page>-<scope>.json`. The scope
 is `incremental` or `full`. Unlike the microbenchmark reports, these are dated,
 so they do not overwrite each other.
+
+## Animations trace
+
+The `animtrace` mode answers one question: does the live Animations page re-shape
+its text every frame? It drives `testdata/sites/animations` through N animation
+frames the way the GUI does (full relayout each frame, the live measurer, the
+WebGPU backend) and reads the `raster.text.shaped_reused` and
+`raster.text.shaped_rebuilt` counters straight off the `paint.raster.command_record`
+span. A high `shaped_rebuilt` would mean the page re-shapes text at paint time.
+
+```bash
+dotnet run -c Release --project bench/Starling.Bench -- animtrace [--frames N] [--warmup N] [--scale S]
+```
+
+The default scale is `2.0`, the Retina ratio the GUI runs at. The reuse counts
+do not depend on scale.
 
 ## Compare two runs
 

@@ -201,4 +201,35 @@ internal static class Fixtures
         body { margin: 0; }
         .s { display: inline-block; width: 48px; height: 48px; background: #4080c0; }
         """;
+
+    // ---- Compositor fixtures (CompositorBench) ----
+    // A grid of promoted "cards", each its own compositor layer. `transform`
+    // forces a stacking context (CSS-Transforms-1 §5), so LayerTreeBuilder gives
+    // every card a layer with a picture cache. That makes the warm-vs-cold cache
+    // split meaningful: a warm frame re-blits each cached layer, a cold frame
+    // re-rasterizes all of them through the backend.
+
+    /// <summary>A grid of <paramref name="cards"/> promoted cards (each a layer
+    /// via <c>transform</c>), every card carrying a heading + paragraph of text
+    /// so a cold re-raster pays real text + fill cost per layer.</summary>
+    public static string PromotedCards(int cards)
+    {
+        var sb = new System.Text.StringBuilder(cards * 96 + 96);
+        sb.Append("<!doctype html><html><body><main>");
+        for (var i = 0; i < cards; i++)
+            sb.Append("<div class=\"card\" id=\"card-").Append(i).Append("\"><h3>Card ").Append(i)
+              .Append("</h3><p>Card ").Append(i)
+              .Append(" body text that the layer must shape and fill when its cache is cold.</p></div>");
+        sb.Append("</main></body></html>");
+        return sb.ToString();
+    }
+
+    public const string PromotedCardsCss = """
+        body { margin: 0; }
+        .card { display: inline-block; width: 200px; height: 120px; margin: 6px;
+                padding: 8px; background: #eef; border: 1px solid #336699;
+                transform: translateZ(0); }
+        .card h3 { margin: 0 0 6px; font-size: 16px; color: #224; }
+        .card p { margin: 0; font-size: 13px; color: #446; }
+        """;
 }
