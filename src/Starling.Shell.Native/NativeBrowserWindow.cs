@@ -13,7 +13,9 @@ using Starling.Layout.Box;
 using Starling.Layout.Text;
 using LayoutSize = Starling.Layout.Size;
 using Starling.Paint.Compositor;
+using Starling.Gui.Core.Accessibility;
 using Starling.Gui.Core.Rendering;
+using Starling.Shell.Native.Mac;
 
 namespace Starling.Shell.Native;
 
@@ -165,6 +167,9 @@ internal sealed class NativeBrowserWindow : IDisposable
         using var renderer = new NativeViewportRenderer();
         using var session  = new BrowserSession();
 
+        // macOS accessibility bridge (phase 4) — null off macOS / no content view.
+        var a11y = MacAccessibilityBridge.TryCreate(window.Native?.Cocoa ?? 0);
+
         // ── State ────────────────────────────────────────────────────────────
         float         logicalW   = window.FramebufferSize.X / dpr;
         float         logicalH   = window.FramebufferSize.Y / dpr;
@@ -198,6 +203,16 @@ internal sealed class NativeBrowserWindow : IDisposable
         page = result.Value;
         lastLayoutVersion = page.Document.LayoutInvalidationVersion;
         Console.WriteLine($"browser: loaded {page.Url}  height={page.DocumentHeight:F0}px");
+
+        // Push the accessibility tree to the OS after a (re)layout or navigation.
+        void PushA11y()
+        {
+            if (a11y is null || page is null) return;
+            var tree = AccessibilityTreeBuilder.Build(page.Root, page.Document);
+            a11y.Update(tree, ChromeHeightCss, scrollY, logicalH);
+        }
+
+        PushA11y();
 
         // ── Input ─────────────────────────────────────────────────────────────
         var input = window.CreateInput();
@@ -304,6 +319,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                                 page = navResult.Value;
                                 lastLayoutVersion = page.Document.LayoutInvalidationVersion;
                                 Console.WriteLine($"browser: navigated to {page.Url}");
+                                PushA11y();
                             }
                             else
                             {
@@ -504,6 +520,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             page.Dispose();
             page = successor;
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
+            PushA11y();
         }
     }
 
