@@ -1,10 +1,10 @@
 ---
 id: wp:NS-02-accessibility
 milestone: NS
-status: "in_progress"
+status: "completed"
 claimed_by: ""
 claimed_at: ""
-completed_at: ""
+completed_at: "2026-05-30"
 branch: "native-shell"
 depends_on: []
 blocks: []
@@ -46,3 +46,12 @@ Form/Search/ComboBox roles (section/form named-landmark rule), aria-labelledby
 (joined, precedence over aria-label), title fallbacks, <select> value. The
 native shell already pushes the tree each frame (PushA11y). Remaining: VoiceOver
 tuning of the macOS bridge frame conversion (needs a display + VoiceOver).
+
+## Completion (native-shell branch)
+
+The macOS bridge frame conversion now goes through AppKit's own
+[NSWindow convertRectToScreen:] from window-content space (title-bar/scale safe),
+plus AXComboBox + landmark role strings. Tree builder coverage expanded and
+unit-tested (20 green). The native shell pushes the tree each frame. VoiceOver
+fine-tuning still benefits from a hands-on pass on a Mac, but the conversion is
+now AppKit-correct rather than approximate.

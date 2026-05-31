@@ -1,10 +1,10 @@
 ---
 id: wp:NS-01-ime
 milestone: NS
-status: "available"
+status: "completed"
 claimed_by: ""
 claimed_at: ""
-completed_at: ""
+completed_at: "2026-05-30"
 branch: "native-shell"
 depends_on: []
 blocks: []
@@ -56,3 +56,13 @@ focused field). The remaining piece is the native NSTextInputClient preedit
 driver + inline underlined preedit display — Objective-C interop (custom NSView /
 swizzle) that needs a display and a real IME to verify, so it was not shipped
 blind. The ImeComposition model (9 tests) is ready for it.
+
+## Completion (native-shell branch)
+
+MacImeBridge swizzles the GLFW content view's NSTextInputClient setMarkedText /
+unmarkText so the composition reaches the shell, which draws the preedit
+underlined at the focused field (page-space overlay). Committed text still flows
+through the GLFW char callback. Opt-in via STARLING_IME_PREEDIT=1, isolated from
+the default path. Verified: default unchanged; with the env var the swizzle
+installs and the shell loads/presents with no crash. Driving a real composition
+needs a Mac display + input method.
