@@ -102,7 +102,8 @@ public sealed class NativeViewportRenderer : IDisposable
         Func<Box, bool>? pageAnimating = null,
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
-        BlockBox? overlayRoot = null)
+        BlockBox? overlayRoot = null,
+        BlockBox? screenOverlayRoot = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -121,6 +122,11 @@ public sealed class NativeViewportRenderer : IDisposable
         var overlayTree = overlayRoot is null
             ? null
             : new LayerTreeBuilder(null, images, _diag, _overlayCaches.CacheFor, null).Build(overlayRoot);
+        // Screen-fixed overlay (context menu, devtools panel, …) drawn in window
+        // space over everything, no scroll.
+        var screenOverlayTree = screenOverlayRoot is null
+            ? null
+            : new LayerTreeBuilder(null, images, _diag, _overlayCaches.CacheFor, null).Build(screenOverlayRoot);
 
         var compositor = new Compositor(_backend, _diag);
         var ops = new List<LayerBlend>();
@@ -150,6 +156,15 @@ public sealed class NativeViewportRenderer : IDisposable
                     overlayTree, pageRegion,
                     scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
                     regionClipDevice: pageClip,
+                    ops, keepAlive);
+
+            // Screen overlay: whole window, no scroll, on top of everything.
+            if (screenOverlayTree is not null)
+                compositor.AppendSurfaceOps(
+                    screenOverlayTree,
+                    new LayoutRect(0, 0, logicalW, logicalH),
+                    scale, destOriginXDevice: 0, destOriginYDevice: 0,
+                    regionClipDevice: new LayoutRect(0, 0, surfaceWidth, surfaceHeight),
                     ops, keepAlive);
 
             return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
