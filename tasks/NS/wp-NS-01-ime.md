@@ -5,7 +5,7 @@ status: "available"
 claimed_by: ""
 claimed_at: ""
 completed_at: ""
-branch: "main"
+branch: "native-shell"
 depends_on: []
 blocks: []
 subsystem: Starling.Shell.Native
@@ -48,3 +48,11 @@ per-platform work.
 - Typing a multi-key composition into a focused `<input>` shows the underlined
   preedit and commits the final string.
 - No regression to plain Latin typing (still works) or to commit-style IME.
+
+## Status note (native-shell branch)
+
+Unchanged this pass. Commit-style IME already works (GLFW char callback ->
+focused field). The remaining piece is the native NSTextInputClient preedit
+driver + inline underlined preedit display — Objective-C interop (custom NSView /
+swizzle) that needs a display and a real IME to verify, so it was not shipped
+blind. The ImeComposition model (9 tests) is ready for it.

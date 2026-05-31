@@ -1,11 +1,11 @@
 ---
 id: wp:NS-02-accessibility
 milestone: NS
-status: "available"
+status: "in_progress"
 claimed_by: ""
 claimed_at: ""
 completed_at: ""
-branch: "main"
+branch: "native-shell"
 depends_on: []
 blocks: []
 subsystem: Starling.Shell.Native
@@ -38,3 +38,11 @@ required for the native shell to replace Avalonia.
 
 Big, per-platform, and easy to underestimate. May gate the decision to retire
 the Avalonia shell. Consider scoping a minimal read-only tree first.
+
+## Status note (native-shell branch)
+
+Tree builder expanded + unit-tested (20 green): Article/Complementary/Region/
+Form/Search/ComboBox roles (section/form named-landmark rule), aria-labelledby
+(joined, precedence over aria-label), title fallbacks, <select> value. The
+native shell already pushes the tree each frame (PushA11y). Remaining: VoiceOver
+tuning of the macOS bridge frame conversion (needs a display + VoiceOver).
