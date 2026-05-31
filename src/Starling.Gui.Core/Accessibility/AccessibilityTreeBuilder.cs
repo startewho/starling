@@ -98,6 +98,12 @@ public static class AccessibilityTreeBuilder
                 case "contentinfo": return AccessibilityRole.ContentInfo;
                 case "main": return AccessibilityRole.Main;
                 case "group": return AccessibilityRole.Group;
+                case "article": return AccessibilityRole.Article;
+                case "region": return AccessibilityRole.Region;
+                case "complementary": return AccessibilityRole.Complementary;
+                case "form": return AccessibilityRole.Form;
+                case "search": return AccessibilityRole.Search;
+                case "combobox": case "listbox": return AccessibilityRole.ComboBox;
             }
         }
 
@@ -129,10 +135,31 @@ public static class AccessibilityTreeBuilder
                 return AccessibilityRole.ContentInfo;
             case "main":
                 return AccessibilityRole.Main;
+            case "select":
+                return AccessibilityRole.ComboBox;
+            case "article":
+                return AccessibilityRole.Article;
+            case "aside":
+                return AccessibilityRole.Complementary;
+            case "search":
+                return AccessibilityRole.Search;
+            // A section/form is a landmark only when it carries an accessible
+            // name (ARIA); otherwise it is presentational and flattens away.
+            case "section":
+                return HasAccessibleName(element) ? AccessibilityRole.Region : null;
+            case "form":
+                return HasAccessibleName(element) ? AccessibilityRole.Form : null;
             default:
                 return null;
         }
     }
+
+    /// <summary>True when the element carries an explicit accessible name
+    /// (<c>aria-label</c> or <c>aria-labelledby</c>) — the ARIA test for whether a
+    /// <c>section</c>/<c>form</c> is a named landmark.</summary>
+    private static bool HasAccessibleName(Element element)
+        => !string.IsNullOrWhiteSpace(element.GetAttribute("aria-label"))
+           || !string.IsNullOrWhiteSpace(element.GetAttribute("aria-labelledby"));
 
     private static AccessibilityRole? InputRole(Element element)
     {
@@ -149,6 +176,10 @@ public static class AccessibilityTreeBuilder
 
     private static string ComputeName(Element element, Document document, AccessibilityRole role)
     {
+        // aria-labelledby (references other elements' text) wins, then aria-label.
+        var labelledBy = LabelledByText(element, document);
+        if (!string.IsNullOrWhiteSpace(labelledBy)) return Collapse(labelledBy);
+
         var ariaLabel = element.GetAttribute("aria-label");
         if (!string.IsNullOrWhiteSpace(ariaLabel)) return Collapse(ariaLabel);
 
@@ -161,25 +192,60 @@ public static class AccessibilityTreeBuilder
             case AccessibilityRole.TextField:
             case AccessibilityRole.CheckBox:
             case AccessibilityRole.RadioButton:
+            case AccessibilityRole.ComboBox:
                 var labelled = AssociatedLabel(element, document);
                 if (!string.IsNullOrWhiteSpace(labelled)) return Collapse(labelled);
                 var placeholder = element.GetAttribute("placeholder");
-                return Collapse(placeholder ?? "");
+                if (!string.IsNullOrWhiteSpace(placeholder)) return Collapse(placeholder);
+                return Collapse(element.GetAttribute("title") ?? "");
 
             case AccessibilityRole.Button:
                 // A submit/button input's name is its value attribute; otherwise text.
-                if (element.LocalName == "input")
-                    return Collapse(element.GetAttribute("value") ?? "");
-                return Collapse(element.TextContent);
+                var btn = element.LocalName == "input"
+                    ? element.GetAttribute("value") ?? ""
+                    : element.TextContent;
+                if (!string.IsNullOrWhiteSpace(btn)) return Collapse(btn);
+                return Collapse(element.GetAttribute("title") ?? "");
 
             default:
-                // Headings, links, list items, paragraphs: the element's text.
-                return Collapse(element.TextContent);
+                // Headings, links, list items, paragraphs, landmarks: the element's
+                // text, falling back to title when it has none.
+                var text = element.TextContent;
+                if (!string.IsNullOrWhiteSpace(text)) return Collapse(text);
+                return Collapse(element.GetAttribute("title") ?? "");
         }
     }
 
+    /// <summary>Resolves <c>aria-labelledby</c> — a space-separated list of element
+    /// IDs — to the concatenated text of those elements.</summary>
+    private static string LabelledByText(Element element, Document document)
+    {
+        var ids = element.GetAttribute("aria-labelledby");
+        if (string.IsNullOrWhiteSpace(ids)) return "";
+
+        var wanted = ids.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (wanted.Length == 0) return "";
+
+        // One pass over the document, gathering each referenced element's text in
+        // the order the attribute lists them.
+        var byId = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var el in document.DescendantElements())
+        {
+            var id = el.Id;
+            if (!string.IsNullOrEmpty(id) && Array.IndexOf(wanted, id) >= 0 && !byId.ContainsKey(id))
+                byId[id] = el.TextContent;
+        }
+
+        var parts = new List<string>(wanted.Length);
+        foreach (var id in wanted)
+            if (byId.TryGetValue(id, out var t) && !string.IsNullOrWhiteSpace(t)) parts.Add(t.Trim());
+        return string.Join(" ", parts);
+    }
+
     private static string? ComputeValue(Element element, AccessibilityRole role)
-        => role == AccessibilityRole.TextField ? HtmlFormControls.Value(element) : null;
+        => role is AccessibilityRole.TextField or AccessibilityRole.ComboBox
+            ? HtmlFormControls.Value(element)
+            : null;
 
     /// <summary>Finds a <c>&lt;label for="id"&gt;</c> associated with the control.</summary>
     private static string AssociatedLabel(Element control, Document document)

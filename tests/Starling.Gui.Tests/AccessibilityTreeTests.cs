@@ -151,4 +151,73 @@ public sealed class AccessibilityTreeTests
         h.Bounds.Width.Should().BeGreaterThan(0);
         h.Bounds.Height.Should().BeGreaterThan(0);
     }
+
+    [TestMethod]
+    public void Article_and_aside_are_landmarks()
+    {
+        var nodes = Nodes("<body><article><p>post</p></article><aside><p>side</p></aside></body>").ToList();
+        nodes.Should().Contain(n => n.Role == AccessibilityRole.Article);
+        nodes.Should().Contain(n => n.Role == AccessibilityRole.Complementary);
+    }
+
+    [TestMethod]
+    public void Section_is_a_region_only_when_named()
+    {
+        Nodes("<body><section aria-label=\"Promotions\"><p>x</p></section></body>")
+            .Should().ContainSingle(n => n.Role == AccessibilityRole.Region && n.Name == "Promotions");
+
+        // An unnamed section is presentational and flattens away.
+        Nodes("<body><section><p>x</p></section></body>")
+            .Should().NotContain(n => n.Role == AccessibilityRole.Region);
+    }
+
+    [TestMethod]
+    public void Form_is_a_landmark_only_when_named()
+    {
+        Nodes("<body><form aria-label=\"Login\"><input type=\"text\"></form></body>")
+            .Should().ContainSingle(n => n.Role == AccessibilityRole.Form && n.Name == "Login");
+
+        Nodes("<body><form><input type=\"text\"></form></body>")
+            .Should().NotContain(n => n.Role == AccessibilityRole.Form);
+    }
+
+    [TestMethod]
+    public void Select_is_a_combobox_with_its_value()
+    {
+        var combo = Nodes(
+            "<body><label for=\"s\">Country</label>" +
+            "<select id=\"s\"><option value=\"us\">US</option>" +
+            "<option value=\"ca\" selected>Canada</option></select></body>")
+            .Single(n => n.Role == AccessibilityRole.ComboBox);
+        combo.Name.Should().Be("Country");
+        combo.Value.Should().Be("ca");
+    }
+
+    [TestMethod]
+    public void Aria_labelledby_resolves_referenced_text()
+    {
+        var field = Nodes(
+            "<body><span id=\"lbl\">Username</span>" +
+            "<input aria-labelledby=\"lbl\" type=\"text\"></body>")
+            .Single(n => n.Role == AccessibilityRole.TextField);
+        field.Name.Should().Be("Username");
+    }
+
+    [TestMethod]
+    public void Aria_labelledby_joins_multiple_references_in_order()
+    {
+        var field = Nodes(
+            "<body><span id=\"a\">Billing</span><span id=\"b\">address</span>" +
+            "<input aria-labelledby=\"a b\" type=\"text\"></body>")
+            .Single(n => n.Role == AccessibilityRole.TextField);
+        field.Name.Should().Be("Billing address");
+    }
+
+    [TestMethod]
+    public void Button_with_no_text_falls_back_to_title()
+    {
+        var btn = Nodes("<body><button title=\"Save changes\"></button></body>")
+            .Single(n => n.Role == AccessibilityRole.Button);
+        btn.Name.Should().Be("Save changes");
+    }
 }

@@ -28,6 +28,12 @@ public enum AccessibilityRole
     Banner,
     ContentInfo,
     Main,
+    Article,
+    Region,
+    Complementary,
+    Form,
+    Search,
+    ComboBox,
 }
 
 /// <summary>
