@@ -72,10 +72,12 @@ internal sealed class NativeBrowserWindow : IDisposable
     // ── Fields ───────────────────────────────────────────────────────────────
 
     private readonly int _maxFrames;
+    private readonly string? _startUrl;
 
-    public NativeBrowserWindow(int maxFrames = 0)
+    public NativeBrowserWindow(int maxFrames = 0, string? startUrl = null)
     {
         _maxFrames = maxFrames;
+        _startUrl  = startUrl;
     }
 
     public void Dispose() { }
@@ -94,9 +96,16 @@ internal sealed class NativeBrowserWindow : IDisposable
         File.WriteAllText(page1Path, Page1Html.Replace("PAGE2URL", page2Url));
         File.WriteAllText(page2Path, Page2Html.Replace("PAGE1URL", page1Url));
 
+        // A --url argument opens that address at launch (normalized like the URL
+        // bar, so `--url example.com` becomes https://example.com). Otherwise the
+        // built-in demo page loads.
+        var startUrl = _startUrl is { Length: > 0 }
+            ? UrlBarInputNormalizer.Normalize(_startUrl) ?? _startUrl
+            : page1Url;
+
         try
         {
-            return RunWindow(page1Url);
+            return RunWindow(startUrl);
         }
         finally
         {
@@ -113,19 +122,28 @@ internal sealed class NativeBrowserWindow : IDisposable
     /// Uses the layout engine directly (no <see cref="BrowserSession"/>), the same
     /// pattern as <see cref="NativePresentDemo"/>.
     /// </summary>
-    private static BlockBox BuildChromeBox(float logicalW, string url)
+    private static BlockBox BuildChromeBox(float logicalW, string url, bool focused)
     {
+        // Show a text caret at the end while the bar is focused. Appended before
+        // escaping so it can never be read as markup.
+        var shown = focused ? url + "│" : url;
+
         // HTML-escape the URL for safe inline display.
-        var safeUrl = url
+        var safeUrl = shown
             .Replace("&", "&amp;")
             .Replace("<", "&lt;")
             .Replace(">", "&gt;")
             .Replace("\"", "&quot;");
 
+        // Focused: lighter field + a blue focus ring, matching the Avalonia bar.
+        var field = focused
+            ? "background:#454545;border:1px solid #5b9dd9"
+            : "background:#3d3d3d;border:1px solid #3d3d3d";
+
         var html =
             $"<body style=\"margin:0;padding:0;background:#2b2b2b;width:{logicalW}px;height:{ChromeHeightCss}px;display:flex;align-items:center\">" +
-            $"<div style=\"flex:1;margin:6px 12px;padding:6px 12px;" +
-            $"background:#3d3d3d;border-radius:6px;font-family:sans-serif;" +
+            $"<div style=\"flex:1;margin:6px 12px;padding:6px 11px;" +
+            $"{field};border-radius:6px;font-family:sans-serif;" +
             $"font-size:13px;color:#e0e0e0;white-space:nowrap;overflow:hidden;" +
             $"text-overflow:ellipsis\">{safeUrl}</div>" +
             "</body>";
@@ -184,10 +202,17 @@ internal sealed class NativeBrowserWindow : IDisposable
         // Text-input state
         Element? focusedInput = null;
 
-        // Chrome state — rebuilt only when url or logicalW changes.
-        BlockBox? chromeBox    = null;
-        string    chromeUrl    = "";
-        float     chromeWidth  = 0f;
+        // URL-bar edit state. When focused, keystrokes edit urlBarText instead of
+        // the page and Enter navigates. Click the chrome strip or press Cmd/Ctrl+L
+        // to focus; Esc or navigating clears it.
+        bool   urlBarFocused = false;
+        string urlBarText    = "";
+
+        // Chrome state — rebuilt only when the shown text, focus, or width changes.
+        BlockBox? chromeBox     = null;
+        string    chromeUrl     = "";
+        bool      chromeFocused = false;
+        float     chromeWidth   = 0f;
 
         // ── Load the initial page (blocking — safe: we're not on a GPU thread yet) ──
         // Page viewport is the window minus the chrome strip at the top.
@@ -259,9 +284,23 @@ internal sealed class NativeBrowserWindow : IDisposable
 
                 var pos = m.Position;
 
-                // Click is over the chrome strip — do nothing for now.
+                // Click is over the chrome strip — focus + select the URL bar.
                 if (pos.Y < ChromeHeightCss)
+                {
+                    if (focusedInput is not null)
+                    {
+                        page.Scripting?.DispatchEvent(focusedInput,
+                            new FocusEvent("blur", new EventInit(Bubbles: false)));
+                        focusedInput = null;
+                        page.Document.FocusedElement = null;
+                    }
+                    urlBarFocused = true;
+                    urlBarText    = page.Url ?? "";
                     return;
+                }
+
+                // Click landed in the page — drop URL-bar focus.
+                urlBarFocused = false;
 
                 var pageX = pos.X;
                 var pageY = (pos.Y - ChromeHeightCss) + scrollY;
@@ -302,29 +341,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                         var resolved = LinkResolver.Resolve(href, page.Url);
                         if (resolved is not null)
                         {
-                            var oldPage = page;
-                            page = null;
-                            renderer.ResetForNavigation();
-                            scrollY = 0;
-                            focusedInput = null;
-
-                            var navOpts = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
-                            var navResult = session.NavigateInteractiveAsync(resolved, navOpts)
-                                                   .GetAwaiter().GetResult();
-
-                            oldPage.Dispose();
-
-                            if (navResult.IsOk)
-                            {
-                                page = navResult.Value;
-                                lastLayoutVersion = page.Document.LayoutInvalidationVersion;
-                                Console.WriteLine($"browser: navigated to {page.Url}");
-                                PushA11y();
-                            }
-                            else
-                            {
-                                Console.Error.WriteLine($"browser: nav failed: {navResult.Error.Message}");
-                            }
+                            Navigate(resolved);
                             return;
                         }
                     }
@@ -358,8 +375,17 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             keyboard.KeyChar += (_, c) =>
             {
-                if (page is null || focusedInput is null) return;
+                if (page is null) return;
                 if (CmdOrCtrl()) return; // a clipboard/shortcut chord, not text
+
+                // URL bar takes text first when it owns focus.
+                if (urlBarFocused)
+                {
+                    urlBarText += c;
+                    return;
+                }
+
+                if (focusedInput is null) return;
                 var current = HtmlFormControls.Value(focusedInput);
                 HtmlFormControls.SetValue(focusedInput, current + c);
                 page.Scripting?.DispatchEvent(focusedInput,
@@ -373,7 +399,66 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             keyboard.KeyDown += (_, key, _) =>
             {
-                if (page is null || focusedInput is null) return;
+                if (page is null) return;
+
+                // Cmd/Ctrl+L — focus + select the URL bar (standard browser chord).
+                if (CmdOrCtrl() && key == Key.L)
+                {
+                    if (focusedInput is not null)
+                    {
+                        page.Scripting?.DispatchEvent(focusedInput,
+                            new FocusEvent("blur", new EventInit(Bubbles: false)));
+                        focusedInput = null;
+                        page.Document.FocusedElement = null;
+                    }
+                    urlBarFocused = true;
+                    urlBarText    = page.Url ?? "";
+                    return;
+                }
+
+                // URL-bar editing owns the keyboard while it has focus.
+                if (urlBarFocused)
+                {
+                    if (CmdOrCtrl())
+                    {
+                        if (key == Key.V)
+                        {
+                            var clip = NativeClipboard.Get(glfwHandle);
+                            if (!string.IsNullOrEmpty(clip)) urlBarText += clip;
+                        }
+                        else if (key is Key.C or Key.X)
+                        {
+                            NativeClipboard.Set(glfwHandle, urlBarText);
+                            if (key == Key.X) urlBarText = "";
+                        }
+                        else if (key == Key.A)
+                        {
+                            // Select-all is implicit (we have no caret model yet);
+                            // the next typed char replaces. Treat as a no-op clear.
+                        }
+                        return;
+                    }
+
+                    switch (key)
+                    {
+                        case Key.Backspace:
+                            if (urlBarText.Length > 0) urlBarText = urlBarText[..^1];
+                            break;
+                        case Key.Escape:
+                            urlBarFocused = false;
+                            break;
+                        case Key.Enter:
+                        case Key.KeypadEnter:
+                            var target = UrlBarInputNormalizer.Normalize(urlBarText);
+                            urlBarFocused = false;
+                            if (target is not null) Navigate(target);
+                            else Console.Error.WriteLine($"browser: '{urlBarText}' is not a URL");
+                            break;
+                    }
+                    return;
+                }
+
+                if (focusedInput is null) return;
 
                 // Clipboard chords (phase 4): copy / cut / paste on the focused input.
                 if (CmdOrCtrl() && key is Key.C or Key.X or Key.V)
@@ -476,13 +561,16 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             if (page is null) return;
 
-            // Build (or reuse) the chrome BlockBox.
-            var currentUrl = page.Url ?? "";
-            if (chromeBox is null || currentUrl != chromeUrl || logicalW != chromeWidth)
+            // Build (or reuse) the chrome BlockBox. While the URL bar is focused it
+            // shows the edit buffer; otherwise the loaded page URL.
+            var shownUrl = urlBarFocused ? urlBarText : (page.Url ?? "");
+            if (chromeBox is null || shownUrl != chromeUrl
+                || urlBarFocused != chromeFocused || logicalW != chromeWidth)
             {
-                chromeBox   = BuildChromeBox(logicalW, currentUrl);
-                chromeUrl   = currentUrl;
-                chromeWidth = logicalW;
+                chromeBox     = BuildChromeBox(logicalW, shownUrl, urlBarFocused);
+                chromeUrl     = shownUrl;
+                chromeFocused = urlBarFocused;
+                chromeWidth   = logicalW;
             }
 
             var ok = renderer.PresentComposited(
@@ -520,6 +608,32 @@ internal sealed class NativeBrowserWindow : IDisposable
             page.Dispose();
             page = successor;
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
+            PushA11y();
+        }
+
+        // Load a fully-qualified URL, swapping the page in on success. On failure
+        // the old page stays visible (and the bar reverts to its URL) — a blank
+        // window on a typo would be worse. Blocking on the window thread matches
+        // the existing link-click path; async navigation is NS-03 follow-up.
+        void Navigate(string url)
+        {
+            if (page is null) return;
+            var navOpts = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
+            var navResult = session.NavigateInteractiveAsync(url, navOpts).GetAwaiter().GetResult();
+            if (navResult.IsErr)
+            {
+                Console.Error.WriteLine($"browser: nav failed: {navResult.Error.Message}");
+                return;
+            }
+
+            var oldPage = page;
+            renderer.ResetForNavigation();
+            scrollY      = 0;
+            focusedInput = null;
+            page         = navResult.Value;
+            oldPage.Dispose();
+            lastLayoutVersion = page.Document.LayoutInvalidationVersion;
+            Console.WriteLine($"browser: navigated to {page.Url}");
             PushA11y();
         }
     }
