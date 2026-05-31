@@ -3,6 +3,7 @@ using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using SixLabors.ImageSharp;
+using Starling.Common;
 using Starling.Css.Cascade;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -397,9 +398,21 @@ internal sealed class NativeBrowserWindow : IDisposable
                 RefreshLayout();
             };
 
+            bool Alt() =>
+                keyboard.IsKeyPressed(Key.AltLeft) || keyboard.IsKeyPressed(Key.AltRight);
+
             keyboard.KeyDown += (_, key, _) =>
             {
                 if (page is null) return;
+
+                // Global history chords: Cmd/Ctrl+[ back, +] forward, +R reload,
+                // and Alt+Left / Alt+Right back / forward. Handled before URL-bar
+                // editing so they work no matter what has focus.
+                if (CmdOrCtrl() && key == Key.LeftBracket)  { GoBack();    return; }
+                if (CmdOrCtrl() && key == Key.RightBracket) { GoForward(); return; }
+                if (CmdOrCtrl() && key == Key.R)            { Reload();    return; }
+                if (Alt() && key == Key.Left)               { GoBack();    return; }
+                if (Alt() && key == Key.Right)              { GoForward(); return; }
 
                 // Cmd/Ctrl+L — focus + select the URL bar (standard browser chord).
                 if (CmdOrCtrl() && key == Key.L)
@@ -611,15 +624,17 @@ internal sealed class NativeBrowserWindow : IDisposable
             PushA11y();
         }
 
-        // Load a fully-qualified URL, swapping the page in on success. On failure
-        // the old page stays visible (and the bar reverts to its URL) — a blank
-        // window on a typo would be worse. Blocking on the window thread matches
-        // the existing link-click path; async navigation is NS-03 follow-up.
-        void Navigate(string url)
+        // The page viewport is the window minus the chrome strip at the top.
+        RenderOptions NavOpts() =>
+            new(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
+
+        // Swap a freshly-laid-out page in on success. On failure the old page
+        // stays visible (and the bar reverts to its URL) — a blank window on a
+        // typo or dead link would be worse. Blocking on the window thread matches
+        // the established pattern; async navigation is NS-03 follow-up.
+        void ApplyNav(Result<LaidOutPage, RenderError> navResult)
         {
             if (page is null) return;
-            var navOpts = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
-            var navResult = session.NavigateInteractiveAsync(url, navOpts).GetAwaiter().GetResult();
             if (navResult.IsErr)
             {
                 Console.Error.WriteLine($"browser: nav failed: {navResult.Error.Message}");
@@ -628,14 +643,33 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             var oldPage = page;
             renderer.ResetForNavigation();
-            scrollY      = 0;
-            focusedInput = null;
-            page         = navResult.Value;
+            scrollY       = 0;
+            focusedInput  = null;
+            urlBarFocused = false;
+            page          = navResult.Value;
             oldPage.Dispose();
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
             Console.WriteLine($"browser: navigated to {page.Url}");
             PushA11y();
         }
+
+        void Navigate(string url) =>
+            ApplyNav(session.NavigateInteractiveAsync(url, NavOpts()).GetAwaiter().GetResult());
+
+        void GoBack()
+        {
+            if (session.History.CanGoBack)
+                ApplyNav(session.BackInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+        }
+
+        void GoForward()
+        {
+            if (session.History.CanGoForward)
+                ApplyNav(session.ForwardInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+        }
+
+        void Reload() =>
+            ApplyNav(session.ReloadInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
     }
 
     // ── Per-frame layer-promotion predicate (mirrors WebviewPanel) ────────────
