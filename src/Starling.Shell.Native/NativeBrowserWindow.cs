@@ -286,6 +286,12 @@ internal sealed class NativeBrowserWindow : IDisposable
         var       menuItems  = new List<(string Label, Action Run)>();
         BlockBox? menuOverlay = null;
 
+        // Devtools (NS-03): F12 toggles a read-only DOM-tree inspector panel on the
+        // right, an engine-rendered screen-fixed overlay rebuilt when the DOM or
+        // window size changes.
+        bool      devtoolsActive  = false;
+        BlockBox? devtoolsOverlay = null;
+
         // The native loop drives Update + Render every iteration. needsPresent
         // gates the actual swapchain present so a settled page doesn't re-blend
         // every frame (NS-04). Set true whenever something visible changes; the
@@ -561,6 +567,15 @@ internal sealed class NativeBrowserWindow : IDisposable
                     return;
                 }
 
+                // F12 toggles the devtools DOM inspector.
+                if (key == Key.F12)
+                {
+                    devtoolsActive  = !devtoolsActive;
+                    devtoolsOverlay = null;
+                    needsPresent    = true;
+                    return;
+                }
+
                 // Global history chords: Cmd/Ctrl+[ back, +] forward, +R reload,
                 // and Alt+Left / Alt+Right back / forward. Handled before URL-bar
                 // editing so they work no matter what has focus.
@@ -817,6 +832,12 @@ internal sealed class NativeBrowserWindow : IDisposable
                 chromeSig = sig;
             }
 
+            // Screen-fixed overlay: a context menu wins over the devtools panel.
+            if (devtoolsActive && devtoolsOverlay is null) devtoolsOverlay = BuildDevtoolsOverlay();
+            var screenOverlay = menuActive ? menuOverlay
+                              : devtoolsActive ? devtoolsOverlay
+                              : null;
+
             var ok = renderer.PresentComposited(
                 presenter,
                 surfaceWidth:    fb.X,
@@ -831,7 +852,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 styleOverride:     StyleOverride,
                 images:            page.ImageResolver,
                 overlayRoot:       findActive ? findOverlay : null,
-                screenOverlayRoot: menuActive ? menuOverlay : null);
+                screenOverlayRoot: screenOverlay);
 
             if (ok) { presented++; needsPresent = false; } else failures++;
 
@@ -856,10 +877,12 @@ internal sealed class NativeBrowserWindow : IDisposable
             page.Dispose();
             page = successor;
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
-            // Fragment geometry changed — drop the stale find index and highlight.
-            findFragments = null;
-            findOverlay   = null;
-            needsPresent  = true;
+            // Fragment geometry changed — drop the stale find index and highlight,
+            // and the devtools panel (size / DOM may have changed).
+            findFragments   = null;
+            findOverlay     = null;
+            devtoolsOverlay = null;
+            needsPresent    = true;
             PushA11y();
         }
 
@@ -885,10 +908,13 @@ internal sealed class NativeBrowserWindow : IDisposable
             scrollY        = 0;
             focusedInput   = null;
             urlBarFocused  = false;
-            findActive     = false;
-            findOverlay    = null;
-            findFragments  = null;
-            hoverElement   = null;
+            findActive      = false;
+            findOverlay     = null;
+            findFragments   = null;
+            devtoolsOverlay = null;
+            menuActive      = false;
+            menuOverlay     = null;
+            hoverElement    = null;
             hoverOverrides = null;
             hoverScope.Clear();
             page           = navResult.Value;
@@ -951,6 +977,9 @@ internal sealed class NativeBrowserWindow : IDisposable
             findActive        = false;
             findOverlay       = null;
             findFragments     = null;
+            devtoolsOverlay   = null;
+            menuActive        = false;
+            menuOverlay       = null;
             renderer.ResetForNavigation();
             needsPresent      = true;
             PushA11y();
@@ -1136,6 +1165,47 @@ internal sealed class NativeBrowserWindow : IDisposable
             menuOverlay  = BuildMenuOverlay();
             menuActive   = true;
             needsPresent = true;
+        }
+
+        // ── Devtools (read-only DOM inspector) ───────────────────────────────
+
+        BlockBox BuildDevtoolsOverlay()
+        {
+            const double panelW = 380;
+            var panelX  = Math.Max(0, logicalW - panelW);
+            var panelH  = logicalH - ChromeHeightCss;
+            var maxRows = Math.Max(0, (int)((panelH - 30) / 16));
+
+            var sb = new StringBuilder();
+            sb.Append($"<body style=\"margin:0;padding:0;position:relative;" +
+                      $"width:{logicalW}px;height:{logicalH}px\">");
+            sb.Append($"<div style=\"position:absolute;left:{panelX}px;top:{ChromeHeightCss}px;" +
+                      $"width:{panelW}px;height:{panelH}px;background:#1b1b1b;border-left:1px solid #444;" +
+                      "font-family:monospace;font-size:12px;color:#cfcfcf;overflow:hidden\">");
+            sb.Append("<div style=\"padding:4px 10px;color:#888;border-bottom:1px solid #333\">DOM</div>");
+
+            var rows = 0;
+            void Walk(Element el, int depth)
+            {
+                if (rows >= maxRows) return;
+                var tag = el.TagName.ToLowerInvariant();
+                var label = "<" + tag;
+                if (!string.IsNullOrEmpty(el.Id)) label += "#" + el.Id;
+                var cls = el.GetAttribute("class");
+                if (!string.IsNullOrWhiteSpace(cls))
+                    label += "." + string.Join('.', cls.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                label += ">";
+                sb.Append($"<div style=\"padding:1px 10px 1px {10 + depth * 14}px;" +
+                          $"white-space:nowrap;overflow:hidden\">{EscapeHtml(label)}</div>");
+                rows++;
+                for (var c = el.FirstChild; c is not null; c = c.NextSibling)
+                    if (c is Element ce) Walk(ce, depth + 1);
+            }
+            if (page?.Document.DocumentElement is { } root) Walk(root, 0);
+
+            sb.Append("</div></body>");
+            return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+                .LayoutDocument(HtmlParser.Parse(sb.ToString()), new LayoutSize(logicalW, logicalH));
         }
 
         // ── Hover + animation styling (NS-04, mirrors WebviewPanel) ────────────
