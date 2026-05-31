@@ -585,6 +585,9 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (Alt() && key == Key.Left)               { GoBack();    return; }
                 if (Alt() && key == Key.Right)              { GoForward(); return; }
 
+                // Cmd/Ctrl+N opens a new browser window (a fresh process).
+                if (CmdOrCtrl() && key == Key.N) { LaunchNewWindow(); return; }
+
                 // Tab chords: Cmd/Ctrl+T new, +W close, +1..9 select, +Tab next.
                 if (CmdOrCtrl() && key == Key.T)   { NewTab(startUrl);           return; }
                 if (CmdOrCtrl() && key == Key.W)   { CloseTab(activeIndex);      return; }
@@ -1330,6 +1333,40 @@ internal sealed class NativeBrowserWindow : IDisposable
         foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) return true;
         foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
         return false;
+    }
+
+    // ── Multi-window (process per window) ─────────────────────────────────────
+
+    /// <summary>
+    /// Opens another browser window by relaunching this shell as a fresh process.
+    /// A new OS process owns its own GLFW window and main thread, which sidesteps
+    /// macOS's requirement that windowing stay on the main thread (per-thread
+    /// windows are not an option there). Each window is independent — its own tabs,
+    /// history, and session.
+    /// </summary>
+    private static void LaunchNewWindow()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe)) return;
+
+            var psi = new System.Diagnostics.ProcessStartInfo { FileName = exe, UseShellExecute = false };
+
+            // Under `dotnet run`/`dotnet App.dll`, ProcessPath is the dotnet host —
+            // re-pass the managed entry dll so the child runs this app, not the host.
+            var argv0 = Environment.GetCommandLineArgs() is { Length: > 0 } a ? a[0] : "";
+            if (Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                && argv0.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                psi.ArgumentList.Add(argv0);
+
+            psi.ArgumentList.Add("--browser");
+            System.Diagnostics.Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"browser: new window failed: {ex.Message}");
+        }
     }
 
     // ── Cursor mapping ────────────────────────────────────────────────────────
