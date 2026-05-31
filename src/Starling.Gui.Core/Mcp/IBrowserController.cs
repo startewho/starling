@@ -12,4 +12,7 @@ public interface IBrowserController
     Task<BrowserControlResult> MoveMouseFromToolAsync(double x, double y, CancellationToken ct);
     Task<BrowserControlResult> TypeTextFromToolAsync(string text, bool submit, CancellationToken ct);
     Task<BrowserControlResult> ResizeFromToolAsync(double width, double height, CancellationToken ct);
+    Task<BrowserControlResult> HighlightFromToolAsync(string selector, string? color, CancellationToken ct);
+    Task<BrowserControlResult> SelectElementFromToolAsync(string selector, CancellationToken ct);
+    Task<BrowserControlResult> FocusElementFromToolAsync(string selector, CancellationToken ct);
 }

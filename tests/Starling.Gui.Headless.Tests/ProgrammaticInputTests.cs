@@ -159,6 +159,90 @@ public class ProgrammaticInputTests
         finally { Teardown(window, panel); }
     }
 
+    // ---- highlight / select / focus by CSS selector (browser_highlight/select/focus) ----
+
+    [AvaloniaFact]
+    public async Task HighlightElement_marks_matching_elements()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body><p class=\"a\">one</p><p class=\"a\">two</p><p>three</p></body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var hit = panel.HighlightElement("p.a", "red");
+            hit.Ok.Should().BeTrue();
+            hit.Detail.Should().Contain("highlighted 2");
+
+            var none = panel.HighlightElement("p.missing", null);
+            none.Ok.Should().BeTrue();
+            none.Detail.Should().Contain("no elements matched");
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task SelectBySelector_selects_an_elements_text()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body><p id=\"t\">hello world</p></body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.SelectBySelector("#t");
+            r.Ok.Should().BeTrue();
+            r.Detail.Should().Contain("selected <p>");
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task FocusBySelector_focuses_a_text_input()
+    {
+        var (engine, page, input) = await LoadAsync(
+            "<!doctype html><html><body><input type=\"text\" id=\"q\"></body></html>", "q");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.FocusBySelector("#q");
+            r.Ok.Should().BeTrue();
+            page.Document.FocusedElement.Should().BeSameAs(input, "focusing the field sets document focus");
+
+            // Focus via selector should leave the field ready for browser_type.
+            panel.TypeText("hi").Ok.Should().BeTrue();
+            input.InputValue.Should().Be("hi");
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task FocusBySelector_focuses_a_non_input_element()
+    {
+        var (engine, page, btn) = await LoadAsync(
+            "<!doctype html><html><body><button id=\"b\">go</button></body></html>", "b");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.FocusBySelector("#b");
+            r.Ok.Should().BeTrue();
+            page.Document.FocusedElement.Should().BeSameAs(btn);
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task Selector_tools_reject_an_empty_selector()
+    {
+        var (engine, page) = await LoadStaticAsync("<!doctype html><html><body><p>x</p></body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            panel.HighlightElement("", null).Ok.Should().BeFalse();
+            panel.SelectBySelector("   ").Ok.Should().BeFalse();
+            panel.FocusBySelector("").Ok.Should().BeFalse();
+        }
+        finally { Teardown(window, panel); }
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static InputResult Click(WebviewPanel panel, (double X, double Y) p) => panel.ClickAt(p.X, p.Y);

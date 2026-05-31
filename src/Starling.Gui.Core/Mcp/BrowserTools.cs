@@ -31,7 +31,10 @@ public sealed class BrowserTools : IMcpToolGroup
             or "browser_click"
             or "browser_move"
             or "browser_type"
-            or "browser_resize" => true,
+            or "browser_resize"
+            or "browser_highlight"
+            or "browser_select"
+            or "browser_focus" => true,
         _ => false,
     };
 
@@ -66,6 +69,14 @@ public sealed class BrowserTools : IMcpToolGroup
                 McpArgumentReader.ReadDouble(arguments, "width"),
                 McpArgumentReader.ReadDouble(arguments, "height"),
                 ct).ConfigureAwait(false),
+            "browser_highlight" => await _browser.HighlightAsync(
+                McpArgumentReader.ReadString(arguments, "selector"),
+                McpArgumentReader.ReadOptionalString(arguments, "color"),
+                ct).ConfigureAwait(false),
+            "browser_select" => await _browser.SelectElementAsync(
+                McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
+            "browser_focus" => await _browser.FocusElementAsync(
+                McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
             _ => throw new ArgumentException($"Unknown browser tool: {name}", nameof(name)),
         };
 
@@ -195,6 +206,40 @@ public sealed class BrowserTools : IMcpToolGroup
                 "height": { "type": "number", "description": "Window height in DIPs. Clamped to the window's MinHeight." }
               },
               "required": ["width", "height"]
+            }
+          },
+          {
+            "name": "browser_highlight",
+            "description": "Draw a translucent highlight box over every element matching a CSS selector on the current page (non-destructive; clears the previous highlight and resets on navigation). Use it to point out elements visually. The matched count is returned in `detail`.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "selector": { "type": "string", "description": "A CSS selector, for example \"a.nav\", \"#main h2\", or \"button[type=submit]\"." },
+                "color": { "type": "string", "description": "Optional CSS colour for the highlight (for example \"red\", \"#ff8800\", or \"rgba(0,128,255,.4)\"). An opaque colour is dimmed to translucent. Defaults to translucent yellow." }
+              },
+              "required": ["selector"]
+            }
+          },
+          {
+            "name": "browser_select",
+            "description": "Select the first element matching a CSS selector: draws a selection box over it and makes its text the active selection (copyable). The selected element and character count are returned in `detail`.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "selector": { "type": "string", "description": "A CSS selector. The first element in document order that matches is selected." }
+              },
+              "required": ["selector"]
+            }
+          },
+          {
+            "name": "browser_focus",
+            "description": "Focus the first element matching a CSS selector. A text field gets keyboard focus + caret (follow with browser_type); any other element gets DOM focus so :focus styling and JS focus handlers run. The focused element is returned in `detail`.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "selector": { "type": "string", "description": "A CSS selector. The first element in document order that matches is focused." }
+              },
+              "required": ["selector"]
             }
           }
         ]

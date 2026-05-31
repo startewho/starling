@@ -345,6 +345,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // Reset interaction state.
         ClearSelection();
         ClearFindHighlight();
+        ClearHighlightOverlays();
         _hoverAnchor = null;
         _hoverOverrides = null;
 
@@ -1444,6 +1445,130 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         return new InputResult(true, clean.Length == 0
             ? "nothing to type (text was empty or control-only)"
             : $"typed \"{clean}\"; value=\"{CurrentValue()}\"");
+    }
+
+    // ---- MCP element-targeting tools: highlight / select / focus by selector ----
+
+    private readonly List<Control> _highlightOverlays = new();
+
+    /// <summary>
+    /// Draws a translucent highlight box over every element matching
+    /// <paramref name="selector"/> (a CSS selector). Non-destructive — clears the
+    /// previous highlight first and on navigation. <paramref name="color"/> is an
+    /// optional CSS colour; an opaque colour is made translucent so the element
+    /// shows through.
+    /// </summary>
+    public InputResult HighlightElement(string selector, string? color)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        ClearHighlightOverlays();
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var brush = HighlightBrush(color);
+        var count = 0;
+        foreach (var el in els)
+        {
+            if (FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is not { } loc) continue;
+            var overlay = MakeOverlay(brush, loc.X, loc.Y, loc.Box.Frame.Width, loc.Box.Frame.Height);
+            _pageCanvas.Children.Add(overlay);
+            _highlightOverlays.Add(overlay);
+            count++;
+        }
+        return new InputResult(true, $"highlighted {count} of {els.Count} element(s) matching '{selector}'");
+    }
+
+    /// <summary>
+    /// Selects the first element matching <paramref name="selector"/>: draws a
+    /// selection box over it and makes its text the copyable selection (⌘C).
+    /// </summary>
+    public InputResult SelectBySelector(string selector)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var el = els[0];
+        if (FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is not { } loc)
+            return new InputResult(false, $"matched <{el.LocalName}> has no rendered box to select");
+
+        ClearSelection();
+        var brush = new SolidColorBrush(AvColor.FromArgb(80, 51, 144, 255));
+        var overlay = MakeOverlay(brush, loc.X, loc.Y, loc.Box.Frame.Width, loc.Box.Frame.Height);
+        _pageCanvas.Children.Add(overlay);
+        _selectionOverlays.Add(overlay);
+        _selectionText = el.TextContent ?? string.Empty;
+        return new InputResult(true, $"selected <{el.LocalName}> ({_selectionText.Length} chars) — ⌘C to copy");
+    }
+
+    /// <summary>
+    /// Focuses the first element matching <paramref name="selector"/>: a text
+    /// field gets keyboard focus + caret (then <c>browser_type</c> works); any
+    /// other element gets DOM focus so <c>:focus</c> styling and JS focus handlers
+    /// run.
+    /// </summary>
+    public InputResult FocusBySelector(string selector)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var el = els[0];
+        if (HtmlFormControls.IsTextControl(el) && !el.HasAttribute("disabled")
+            && FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is { } loc)
+        {
+            // Focus through the input path so the caret + DOM events are set up;
+            // aim the synthetic click at the field centre.
+            var cx = loc.X + loc.Box.Frame.Width / 2;
+            var cy = loc.Y + loc.Box.Frame.Height / 2;
+            FocusInput(el, (cx, cy));
+            return new InputResult(true, $"focused text field <{el.LocalName}> matching '{selector}'");
+        }
+
+        // Any other element: clear input focus, set document focus, fire events,
+        // and relayout so :focus styling applies.
+        BlurInput();
+        _currentPage!.Document.FocusedElement = el;
+        DispatchDom(el, new FocusEvent("focus"));
+        DispatchDom(el, new FocusEvent("focusin", new EventInit(Bubbles: true)));
+        RefreshFocusedLayout();
+        return new InputResult(true, $"focused <{el.LocalName}> matching '{selector}'");
+    }
+
+    /// <summary>Resolves a CSS selector to the matching elements, in document order.</summary>
+    private (List<DomElement> Elements, string? Error) QueryAll(string selector)
+    {
+        if (_currentPage is null) return (new List<DomElement>(), "no page is loaded");
+        if (string.IsNullOrWhiteSpace(selector)) return (new List<DomElement>(), "selector is empty");
+
+        SelectorList list;
+        try { list = SelectorParser.ParseSelectorList(selector); }
+        catch (Exception ex) { return (new List<DomElement>(), $"invalid selector '{selector}': {ex.Message}"); }
+        if (list.Selectors.Count == 0) return (new List<DomElement>(), $"invalid selector '{selector}'");
+
+        var matched = new List<DomElement>();
+        foreach (var el in _currentPage.Document.DescendantElements())
+            if (SelectorMatcher.Matches(list, el)) matched.Add(el);
+        return (matched, null);
+    }
+
+    private void ClearHighlightOverlays()
+    {
+        foreach (var o in _highlightOverlays)
+            _pageCanvas.Children.Remove(o);
+        _highlightOverlays.Clear();
+    }
+
+    private static IBrush HighlightBrush(string? color)
+    {
+        if (!string.IsNullOrWhiteSpace(color) && AvColor.TryParse(color, out var c))
+        {
+            // An opaque colour is dimmed to a translucent highlight so the element
+            // shows through; a colour given with alpha is honoured as-is.
+            if (c.A == 255) c = AvColor.FromArgb(110, c.R, c.G, c.B);
+            return new SolidColorBrush(c);
+        }
+        return new SolidColorBrush(AvColor.FromArgb(120, 255, 224, 0)); // translucent yellow
     }
 
     /// <summary>Dispatches DOM mouse-move events for a synthetic move to
