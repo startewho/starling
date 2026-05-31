@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
@@ -32,7 +33,13 @@ internal sealed class NativeBrowserWindow : IDisposable
 {
     // ── Chrome ───────────────────────────────────────────────────────────────
 
-    private const double ChromeHeightCss = 44;
+    // Chrome is two stacked rows: a tab strip on top, the URL bar below. The page
+    // viewport is the window minus the whole chrome, so ChromeHeightCss stays the
+    // single offset every hit-test / present uses.
+    private const double TabStripHeightCss = 32;
+    private const double UrlBarHeightCss   = 44;
+    private const double ChromeHeightCss   = TabStripHeightCss + UrlBarHeightCss;
+    private const double NewTabBtnW        = 28;
 
     // ── Demo HTML written to temp files ─────────────────────────────────────
 
@@ -118,40 +125,61 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     // ── Chrome layout ────────────────────────────────────────────────────────
 
+    private static string EscapeHtml(string s) => s
+        .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+
     /// <summary>
-    /// Lays out a minimal toolbar HTML document at <paramref name="logicalW"/> ×
-    /// <see cref="ChromeHeightCss"/> CSS px and returns the root <see cref="BlockBox"/>.
-    /// Uses the layout engine directly (no <see cref="BrowserSession"/>), the same
-    /// pattern as <see cref="NativePresentDemo"/>.
+    /// Width of one tab in the strip: the available width (minus the new-tab
+    /// button) split evenly across the open tabs, clamped to a sane range. Both
+    /// the renderer and the click hit-test use this so they never drift.
     /// </summary>
-    private static BlockBox BuildChromeBox(float logicalW, string url, bool focused)
+    private static double TabWidth(float logicalW, int tabCount) =>
+        Math.Clamp((logicalW - NewTabBtnW) / Math.Max(1, tabCount), 60, 220);
+
+    /// <summary>
+    /// Lays out the chrome as one HTML document — a tab strip stacked over the URL
+    /// bar — at <paramref name="logicalW"/> × <see cref="ChromeHeightCss"/> CSS px.
+    /// Uses the layout engine directly, the same pattern as the page demo.
+    /// </summary>
+    private static BlockBox BuildChrome(
+        float logicalW, List<string> tabLabels, int activeIndex,
+        double tabWidth, string url, bool urlFocused)
     {
-        // Show a text caret at the end while the bar is focused. Appended before
-        // escaping so it can never be read as markup.
-        var shown = focused ? url + "│" : url;
+        var multi = tabLabels.Count > 1;
+        var sb = new StringBuilder();
+        sb.Append($"<body style=\"margin:0;padding:0;background:#1f1f1f;width:{logicalW}px;" +
+                  $"height:{ChromeHeightCss}px;font-family:sans-serif\">");
 
-        // HTML-escape the URL for safe inline display.
-        var safeUrl = shown
-            .Replace("&", "&amp;")
-            .Replace("<", "&lt;")
-            .Replace(">", "&gt;")
-            .Replace("\"", "&quot;");
+        // Tab strip.
+        sb.Append($"<div style=\"display:flex;height:{TabStripHeightCss}px;align-items:stretch\">");
+        for (var i = 0; i < tabLabels.Count; i++)
+        {
+            var bg = i == activeIndex ? "#3d3d3d" : "#2b2b2b";
+            var fg = i == activeIndex ? "#ffffff" : "#bbbbbb";
+            sb.Append($"<div style=\"width:{tabWidth:F0}px;background:{bg};color:{fg};font-size:12px;" +
+                      "padding:0 8px;display:flex;align-items:center;border-right:1px solid #1f1f1f;" +
+                      "white-space:nowrap;overflow:hidden\">");
+            sb.Append($"<span style=\"flex:1;overflow:hidden;text-overflow:ellipsis\">{EscapeHtml(tabLabels[i])}</span>");
+            if (multi) sb.Append("<span style=\"margin-left:6px;color:#888\">&#215;</span>");
+            sb.Append("</div>");
+        }
+        sb.Append($"<div style=\"width:{NewTabBtnW:F0}px;color:#bbb;font-size:18px;" +
+                  "display:flex;align-items:center;justify-content:center\">+</div>");
+        sb.Append("</div>");
 
-        // Focused: lighter field + a blue focus ring, matching the Avalonia bar.
-        var field = focused
+        // URL bar. A caret is appended (before escaping) while it is focused.
+        var shown = urlFocused ? url + "│" : url;
+        var field = urlFocused
             ? "background:#454545;border:1px solid #5b9dd9"
             : "background:#3d3d3d;border:1px solid #3d3d3d";
-
-        var html =
-            $"<body style=\"margin:0;padding:0;background:#2b2b2b;width:{logicalW}px;height:{ChromeHeightCss}px;display:flex;align-items:center\">" +
-            $"<div style=\"flex:1;margin:6px 12px;padding:6px 11px;" +
-            $"{field};border-radius:6px;font-family:sans-serif;" +
-            $"font-size:13px;color:#e0e0e0;white-space:nowrap;overflow:hidden;" +
-            $"text-overflow:ellipsis\">{safeUrl}</div>" +
-            "</body>";
+        sb.Append($"<div style=\"height:{UrlBarHeightCss}px;background:#2b2b2b;display:flex;align-items:center\">");
+        sb.Append($"<div style=\"flex:1;margin:6px 12px;padding:6px 11px;{field};border-radius:6px;" +
+                  "font-size:13px;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">" +
+                  $"{EscapeHtml(shown)}</div>");
+        sb.Append("</div></body>");
 
         return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
-            .LayoutDocument(HtmlParser.Parse(html),
+            .LayoutDocument(HtmlParser.Parse(sb.ToString()),
                 new LayoutSize(logicalW, ChromeHeightCss));
     }
 
@@ -185,7 +213,6 @@ internal sealed class NativeBrowserWindow : IDisposable
         }
         using var _p = presenter;
         using var renderer = new NativeViewportRenderer();
-        using var session  = new BrowserSession();
 
         // macOS accessibility bridge (phase 4) — null off macOS / no content view.
         var a11y = MacAccessibilityBridge.TryCreate(window.Native?.Cocoa ?? 0);
@@ -193,13 +220,20 @@ internal sealed class NativeBrowserWindow : IDisposable
         // ── State ────────────────────────────────────────────────────────────
         float         logicalW   = window.FramebufferSize.X / dpr;
         float         logicalH   = window.FramebufferSize.Y / dpr;
-        double        scrollY    = 0;
-        LaidOutPage?  page       = null;
-        int           lastLayoutVersion = -1;
         var           clock      = Stopwatch.StartNew();
         var           lastFb     = window.FramebufferSize;
         int           presented  = 0;
         int           failures   = 0;
+
+        // Tabs. Each Tab owns its session + view state; the live locals below
+        // mirror the active tab and are swapped in/out by SwitchTab so every input
+        // handler can keep using `page` / `session` / `scrollY` unchanged.
+        var          tabs        = new List<Tab>();
+        int          activeIndex = 0;
+        BrowserSession session    = null!;   // assigned from the first tab below
+        double        scrollY     = 0;
+        LaidOutPage?  page        = null;
+        int           lastLayoutVersion = -1;
 
         // Text-input state
         Element? focusedInput = null;
@@ -210,11 +244,10 @@ internal sealed class NativeBrowserWindow : IDisposable
         bool   urlBarFocused = false;
         string urlBarText    = "";
 
-        // Chrome state — rebuilt only when the shown text, focus, or width changes.
-        BlockBox? chromeBox     = null;
-        string    chromeUrl     = "";
-        bool      chromeFocused = false;
-        float     chromeWidth   = 0f;
+        // Chrome state — rebuilt only when its signature (tabs / active index /
+        // labels / URL text / focus / width) changes.
+        BlockBox? chromeBox = null;
+        string    chromeSig = "";
 
         // Hover + animation styling (NS-04). hoverElement is the innermost element
         // under the pointer; hoverOverrides maps each affected element to its
@@ -235,16 +268,25 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         // ── Load the initial page (blocking — safe: we're not on a GPU thread yet) ──
         // Page viewport is the window minus the chrome strip at the top.
+        var firstSession = new BrowserSession();
         var options = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
-        var result  = session.NavigateInteractiveAsync(startUrl, options)
-                             .GetAwaiter().GetResult();
+        var result  = firstSession.NavigateInteractiveAsync(startUrl, options)
+                                  .GetAwaiter().GetResult();
 
         if (result.IsErr)
         {
             Console.Error.WriteLine($"browser: navigation failed: {result.Error.Message}");
+            firstSession.Dispose();
             return 1;
         }
-        page = result.Value;
+        tabs.Add(new Tab(firstSession)
+        {
+            Page = result.Value,
+            LastLayoutVersion = result.Value.Document.LayoutInvalidationVersion,
+        });
+        activeIndex       = 0;
+        session           = firstSession;
+        page              = result.Value;
         lastLayoutVersion = page.Document.LayoutInvalidationVersion;
         Console.WriteLine($"browser: loaded {page.Url}  height={page.DocumentHeight:F0}px");
 
@@ -312,7 +354,24 @@ internal sealed class NativeBrowserWindow : IDisposable
 
                 var pos = m.Position;
 
-                // Click is over the chrome strip — focus + select the URL bar.
+                // Click is over the tab strip — switch / close / new tab.
+                if (pos.Y < TabStripHeightCss)
+                {
+                    var n = tabs.Count;
+                    var tw = TabWidth(logicalW, n);
+                    var x = pos.X;
+                    if (x >= n * tw && x < n * tw + NewTabBtnW) { NewTab(startUrl); return; }
+                    var idx = (int)(x / tw);
+                    if (idx >= 0 && idx < n)
+                    {
+                        // Right ~18px of a tab is its close affordance when >1 tab.
+                        if (n > 1 && x - idx * tw > tw - 18) CloseTab(idx);
+                        else SwitchTab(idx);
+                    }
+                    return;
+                }
+
+                // Click is over the URL bar — focus + select it.
                 if (pos.Y < ChromeHeightCss)
                 {
                     if (focusedInput is not null)
@@ -442,6 +501,16 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (CmdOrCtrl() && key == Key.R)            { Reload();    return; }
                 if (Alt() && key == Key.Left)               { GoBack();    return; }
                 if (Alt() && key == Key.Right)              { GoForward(); return; }
+
+                // Tab chords: Cmd/Ctrl+T new, +W close, +1..9 select, +Tab next.
+                if (CmdOrCtrl() && key == Key.T)   { NewTab(startUrl);           return; }
+                if (CmdOrCtrl() && key == Key.W)   { CloseTab(activeIndex);      return; }
+                if (CmdOrCtrl() && key == Key.Tab) { SwitchTab((activeIndex + 1) % tabs.Count); return; }
+                if (CmdOrCtrl() && key >= Key.Number1 && key <= Key.Number9)
+                {
+                    SwitchTab((int)(key - Key.Number1));
+                    return;
+                }
 
                 // Cmd/Ctrl+L — focus + select the URL bar (standard browser chord).
                 if (CmdOrCtrl() && key == Key.L)
@@ -618,15 +687,17 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (_maxFrames == 0 && !needsPresent) return;
 
             // Build (or reuse) the chrome BlockBox. While the URL bar is focused it
-            // shows the edit buffer; otherwise the loaded page URL.
+            // shows the edit buffer; otherwise the active page URL.
             var shownUrl = urlBarFocused ? urlBarText : (page.Url ?? "");
-            if (chromeBox is null || shownUrl != chromeUrl
-                || urlBarFocused != chromeFocused || logicalW != chromeWidth)
+            var labels = new List<string>(tabs.Count);
+            for (var i = 0; i < tabs.Count; i++) labels.Add(LabelOf(i));
+            var sig = $"{activeIndex}|{string.Join((char)1, labels)}|{shownUrl}|{urlBarFocused}|{logicalW}";
+            if (chromeBox is null || sig != chromeSig)
             {
-                chromeBox     = BuildChromeBox(logicalW, shownUrl, urlBarFocused);
-                chromeUrl     = shownUrl;
-                chromeFocused = urlBarFocused;
-                chromeWidth   = logicalW;
+                chromeBox = BuildChrome(
+                    logicalW, labels, activeIndex,
+                    TabWidth(logicalW, tabs.Count), shownUrl, urlBarFocused);
+                chromeSig = sig;
             }
 
             var ok = renderer.PresentComposited(
@@ -651,7 +722,8 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         window.Run();
 
-        page?.Dispose();
+        SaveActive();
+        foreach (var t in tabs) t.Dispose();
         Console.WriteLine(
             $"BROWSER OK: {presented} frames presented zero-copy ({failures} surface-reconfig frames)");
         return presented > 0 ? 0 : 1;
@@ -719,6 +791,96 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         void Reload() =>
             ApplyNav(session.ReloadInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+
+        // ── Tabs ───────────────────────────────────────────────────────────────
+
+        // Copy the live view state back into the active Tab record.
+        void SaveActive()
+        {
+            if (tabs.Count == 0) return;
+            var t = tabs[activeIndex];
+            t.Page              = page;
+            t.ScrollY           = scrollY;
+            t.FocusedInput      = focusedInput;
+            t.HoverElement      = hoverElement;
+            t.HoverOverrides    = hoverOverrides;
+            t.HoverScope        = hoverScope;
+            t.LastLayoutVersion = lastLayoutVersion;
+        }
+
+        // Load the active Tab record into the live locals. Layer caches key on the
+        // document, so a tab switch resets them. URL-bar focus does not survive a
+        // switch.
+        void LoadActive()
+        {
+            var t = tabs[activeIndex];
+            session           = t.Session;
+            page              = t.Page;
+            scrollY           = t.ScrollY;
+            focusedInput      = t.FocusedInput;
+            hoverElement      = t.HoverElement;
+            hoverOverrides    = t.HoverOverrides;
+            hoverScope        = t.HoverScope;
+            lastLayoutVersion = t.LastLayoutVersion;
+            urlBarFocused     = false;
+            renderer.ResetForNavigation();
+            needsPresent      = true;
+            PushA11y();
+        }
+
+        void SwitchTab(int i)
+        {
+            if (i < 0 || i >= tabs.Count || i == activeIndex) return;
+            SaveActive();
+            activeIndex = i;
+            LoadActive();
+        }
+
+        void NewTab(string url)
+        {
+            SaveActive();
+            var s = new BrowserSession();
+            var r = s.NavigateInteractiveAsync(url, NavOpts()).GetAwaiter().GetResult();
+            if (r.IsErr)
+            {
+                Console.Error.WriteLine($"browser: new-tab nav failed: {r.Error.Message}");
+                s.Dispose();
+                return;
+            }
+            tabs.Add(new Tab(s)
+            {
+                Page = r.Value,
+                LastLayoutVersion = r.Value.Document.LayoutInvalidationVersion,
+            });
+            activeIndex = tabs.Count - 1;
+            LoadActive();
+        }
+
+        void CloseTab(int i)
+        {
+            if (i < 0 || i >= tabs.Count) return;
+            if (tabs.Count == 1) { window.Close(); return; } // closing the last tab closes the window
+
+            var closingActive = i == activeIndex;
+            if (!closingActive) SaveActive(); // keep the still-active tab's live state
+
+            var t = tabs[i];
+            tabs.RemoveAt(i);
+            t.Dispose();
+
+            if (i < activeIndex) activeIndex--;
+            else if (activeIndex >= tabs.Count) activeIndex = tabs.Count - 1;
+            LoadActive();
+        }
+
+        // The active tab's label tracks the live page; others use their saved page.
+        string LabelOf(int i)
+        {
+            var p = i == activeIndex ? page : tabs[i].Page;
+            if (!string.IsNullOrWhiteSpace(p?.Title)) return p!.Title!;
+            var u = p?.Url;
+            return string.IsNullOrEmpty(u) ? "New Tab" : u;
+        }
 
         // ── Hover + animation styling (NS-04, mirrors WebviewPanel) ────────────
 
@@ -803,6 +965,33 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (p.Element is { } pel && overrides.TryGetValue(pel, out var inherited))
                     return inherited;
             return null;
+        }
+    }
+
+    // ── Tab ───────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// One browser tab: its own <see cref="BrowserSession"/> (independent history
+    /// + connection pool) plus the per-tab view state the window mirrors into its
+    /// live locals while the tab is active.
+    /// </summary>
+    private sealed class Tab : IDisposable
+    {
+        public Tab(BrowserSession session) => Session = session;
+
+        public BrowserSession Session { get; }
+        public LaidOutPage?   Page;
+        public double         ScrollY;
+        public Element?       FocusedInput;
+        public Element?       HoverElement;
+        public Dictionary<Element, ComputedStyle>? HoverOverrides;
+        public HashSet<Element> HoverScope = new();
+        public int            LastLayoutVersion = -1;
+
+        public void Dispose()
+        {
+            Page?.Dispose();
+            Session.Dispose();
         }
     }
 
