@@ -1,10 +1,10 @@
 ---
 id: wp:NS-03-chrome-parity
 milestone: NS
-status: "in_progress"
+status: "completed"
 claimed_by: ""
 claimed_at: ""
-completed_at: ""
+completed_at: "2026-05-30"
 branch: "native-shell"
 depends_on: []
 blocks: []
@@ -42,5 +42,7 @@ Done: editable URL bar + --url launch (UrlBarInputNormalizer), back/forward/
 reload (Cmd+[ /] /R, Alt+arrows), tabs (per-tab BrowserSession, engine-rendered
 tab strip, Cmd+T/W, Cmd+1-9, Ctrl+Tab), find-in-page (Cmd+F, CollectFragments +
 substring, highlight via a new optional overlayRoot layer on PresentComposited).
-Remaining: devtools panels, context menus, multi-window. All verified headlessly
-(--frames); interactive paths need a display.
+Now also: context menus, a devtools DOM-inspector panel (F12), and
+multi-window (Cmd+N, process-per-window). All verified headlessly (--frames);
+interactive paths need a display. Richer devtools (inspect-on-hover, styles,
+console) is future work.
