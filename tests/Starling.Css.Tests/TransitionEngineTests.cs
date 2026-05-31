@@ -149,4 +149,35 @@ public sealed class TransitionEngineTests
         engine.ActiveCount.Should().Be(0);
         engine.GetEffective(el, PropertyId.Opacity).Should().BeNull();
     }
+
+    [TestMethod]
+    public void Re_cascading_the_same_target_each_frame_does_not_restart_the_transition()
+    {
+        // Regression: the live hover loop re-runs the cascade every animation
+        // frame, calling OnComputedValueChanged with the SAME target while a
+        // transition is in flight. The transition must keep its original start
+        // and settle after its duration — restarting StartMs every frame means it
+        // never completes, which flickers the hovered element (see the animations
+        // page :hover tiles).
+        var engine = new TransitionEngine();
+        var el = new Element("div");
+        var props = Props(duration: new CssTime(200, CssTimeUnit.Milliseconds));
+
+        engine.OnComputedValueChanged(el, PropertyId.Opacity, new CssNumber(0), props); // prime base
+        engine.OnComputedValueChanged(el, PropertyId.Opacity, new CssNumber(1), props); // start 0 -> 1
+        engine.ActiveCount.Should().Be(1);
+
+        // Per-frame re-cascade to the same target (1) across the 200ms duration.
+        for (double t = 16; t <= 200; t += 16)
+        {
+            engine.Tick(t);
+            engine.OnComputedValueChanged(el, PropertyId.Opacity, new CssNumber(1), props);
+        }
+
+        engine.Tick(220);
+        engine.ActiveCount.Should().Be(0,
+            "a transition re-cascaded to the same target must still settle, not restart every frame");
+        ((CssNumber)engine.GetEffective(el, PropertyId.Opacity)!).Value
+            .Should().BeApproximately(1, 1e-6, "the settled value is the target");
+    }
 }
