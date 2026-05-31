@@ -32,6 +32,7 @@ public sealed class NativeViewportRenderer : IDisposable
     private readonly IPaintBackend _backend;
     private readonly LayerCacheStore _layerCaches;
     private readonly LayerCacheStore _chromeCaches;
+    private readonly LayerCacheStore _overlayCaches;
     private bool _disposed;
 
     public NativeViewportRenderer(IDiagnostics? diagnostics = null)
@@ -40,6 +41,7 @@ public sealed class NativeViewportRenderer : IDisposable
         _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
         _layerCaches = new LayerCacheStore(_diag);
         _chromeCaches = new LayerCacheStore(_diag);
+        _overlayCaches = new LayerCacheStore(_diag);
     }
 
     /// <summary>
@@ -99,7 +101,8 @@ public sealed class NativeViewportRenderer : IDisposable
         double scrollY = 0,
         Func<Box, bool>? pageAnimating = null,
         Func<Box, ComputedStyle?>? styleOverride = null,
-        IImageResolver? images = null)
+        IImageResolver? images = null,
+        BlockBox? overlayRoot = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -113,6 +116,11 @@ public sealed class NativeViewportRenderer : IDisposable
 
         var chromeTree = new LayerTreeBuilder(null, null, _diag, _chromeCaches.CacheFor, null).Build(chromeRoot);
         var pageTree = new LayerTreeBuilder(styleOverride, images, _diag, _layerCaches.CacheFor, pageAnimating).Build(pageRoot);
+        // Optional overlay (find highlight, context menu, …) drawn in page space,
+        // scrolling and clipping with the page content region.
+        var overlayTree = overlayRoot is null
+            ? null
+            : new LayerTreeBuilder(null, images, _diag, _overlayCaches.CacheFor, null).Build(overlayRoot);
 
         var compositor = new Compositor(_backend, _diag);
         var ops = new List<LayerBlend>();
@@ -128,12 +136,21 @@ public sealed class NativeViewportRenderer : IDisposable
                 ops, keepAlive);
 
             // Page: below the chrome, scrolled, clipped to the content region.
+            var pageRegion = new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss);
+            var pageClip = new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH);
             compositor.AppendSurfaceOps(
-                pageTree,
-                new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss),
+                pageTree, pageRegion,
                 scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
-                regionClipDevice: new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH),
+                regionClipDevice: pageClip,
                 ops, keepAlive);
+
+            // Overlay: same region/offset as the page so it tracks scroll.
+            if (overlayTree is not null)
+                compositor.AppendSurfaceOps(
+                    overlayTree, pageRegion,
+                    scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+                    regionClipDevice: pageClip,
+                    ops, keepAlive);
 
             return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
         }
@@ -144,7 +161,11 @@ public sealed class NativeViewportRenderer : IDisposable
     }
 
     /// <summary>Drops all per-layer caches — call on navigation to a new document.</summary>
-    public void ResetForNavigation() => _layerCaches.Clear();
+    public void ResetForNavigation()
+    {
+        _layerCaches.Clear();
+        _overlayCaches.Clear();
+    }
 
     public void Dispose()
     {
