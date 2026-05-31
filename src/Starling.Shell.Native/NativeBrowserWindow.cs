@@ -5,6 +5,7 @@ using Silk.NET.Windowing;
 using SixLabors.ImageSharp;
 using Starling.Common;
 using Starling.Css.Cascade;
+using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Engine;
@@ -215,6 +216,23 @@ internal sealed class NativeBrowserWindow : IDisposable
         bool      chromeFocused = false;
         float     chromeWidth   = 0f;
 
+        // Hover + animation styling (NS-04). hoverElement is the innermost element
+        // under the pointer; hoverOverrides maps each affected element to its
+        // :hover computed style; hoverScope tracks which elements the current hover
+        // touches so the next change can register reverse transitions. animClockMs
+        // is the shared animation/transition clock, read by the styleOverride at
+        // paint time. Mirrors WebviewPanel.
+        Element?                            hoverElement   = null;
+        Dictionary<Element, ComputedStyle>? hoverOverrides = null;
+        HashSet<Element>                    hoverScope     = new();
+        long                                animClockMs    = 0;
+
+        // The native loop drives Update + Render every iteration. needsPresent
+        // gates the actual swapchain present so a settled page doesn't re-blend
+        // every frame (NS-04). Set true whenever something visible changes; the
+        // --frames smoke-test mode always presents so it can reach its count.
+        bool needsPresent = true;
+
         // ── Load the initial page (blocking — safe: we're not on a GPU thread yet) ──
         // Page viewport is the window minus the chrome strip at the top.
         var options = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
@@ -251,17 +269,20 @@ internal sealed class NativeBrowserWindow : IDisposable
             {
                 if (page is null) return;
                 var maxScroll = Math.Max(0, page.DocumentHeight - (logicalH - ChromeHeightCss));
-                scrollY = Math.Clamp(scrollY - wheel.Y * 40, 0, maxScroll);
+                var newScroll = Math.Clamp(scrollY - wheel.Y * 40, 0, maxScroll);
+                if (newScroll != scrollY) { scrollY = newScroll; needsPresent = true; }
             };
 
             mouse.MouseMove += (m, pos) =>
             {
                 if (page is null) return;
 
-                // Pointer is over the chrome strip — use default cursor, skip page hit-test.
+                // Pointer is over the chrome strip — use default cursor, drop any
+                // page hover, skip the page hit-test.
                 if (pos.Y < ChromeHeightCss)
                 {
                     SetCursor(m.Cursor, "default");
+                    UpdateHover(null);
                     return;
                 }
 
@@ -277,6 +298,12 @@ internal sealed class NativeBrowserWindow : IDisposable
                     scrollOffsets: null);
                 var cursor = BoxHitTester.ResolveCursor(hit);
                 SetCursor(m.Cursor, cursor);
+
+                // Drive CSS :hover from the innermost element under the pointer.
+                Element? hoverEl = null;
+                for (var b = hit.Box; b is not null; b = b.Parent)
+                    if (b.Element is { } e) { hoverEl = e; break; }
+                UpdateHover(hoverEl);
             };
 
             mouse.MouseDown += (m, button) =>
@@ -297,11 +324,12 @@ internal sealed class NativeBrowserWindow : IDisposable
                     }
                     urlBarFocused = true;
                     urlBarText    = page.Url ?? "";
+                    needsPresent  = true;
                     return;
                 }
 
                 // Click landed in the page — drop URL-bar focus.
-                urlBarFocused = false;
+                if (urlBarFocused) { urlBarFocused = false; needsPresent = true; }
 
                 var pageX = pos.X;
                 var pageY = (pos.Y - ChromeHeightCss) + scrollY;
@@ -383,6 +411,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (urlBarFocused)
                 {
                     urlBarText += c;
+                    needsPresent = true;
                     return;
                 }
 
@@ -426,12 +455,14 @@ internal sealed class NativeBrowserWindow : IDisposable
                     }
                     urlBarFocused = true;
                     urlBarText    = page.Url ?? "";
+                    needsPresent  = true;
                     return;
                 }
 
                 // URL-bar editing owns the keyboard while it has focus.
                 if (urlBarFocused)
                 {
+                    needsPresent = true;
                     if (CmdOrCtrl())
                     {
                         if (key == Key.V)
@@ -553,9 +584,16 @@ internal sealed class NativeBrowserWindow : IDisposable
                 RefreshLayout();
             }
 
-            // Animation frame
+            // Animation frame: advance the clock, re-sample the hovered scope at
+            // the new time so a hover transition progresses, and present.
             if (session.HasActiveAnimations(page))
+            {
                 session.PrepareAnimationFrame(page, clockMs);
+                animClockMs = clockMs;
+                if (hoverElement is not null)
+                    hoverOverrides = BuildHoverOverrides(hoverElement, clockMs);
+                needsPresent = true;
+            }
         };
 
         window.Render += _ =>
@@ -573,6 +611,11 @@ internal sealed class NativeBrowserWindow : IDisposable
             }
 
             if (page is null) return;
+
+            // Nothing visible changed — skip the present and let the last frame
+            // stand. The --frames smoke test always presents so it can reach its
+            // target count.
+            if (_maxFrames == 0 && !needsPresent) return;
 
             // Build (or reuse) the chrome BlockBox. While the URL bar is focused it
             // shows the edit buffer; otherwise the loaded page URL.
@@ -597,9 +640,10 @@ internal sealed class NativeBrowserWindow : IDisposable
                 scrollX:         0,
                 scrollY:         scrollY,
                 pageAnimating:   box => IsAnimatingLayerRoot(page, box),
+                styleOverride:   StyleOverride,
                 images:          page.ImageResolver);
 
-            if (ok) presented++; else failures++;
+            if (ok) { presented++; needsPresent = false; } else failures++;
 
             if (_maxFrames > 0 && presented >= _maxFrames)
                 window.Close();
@@ -621,6 +665,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             page.Dispose();
             page = successor;
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
+            needsPresent = true;
             PushA11y();
         }
 
@@ -643,12 +688,16 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             var oldPage = page;
             renderer.ResetForNavigation();
-            scrollY       = 0;
-            focusedInput  = null;
-            urlBarFocused = false;
-            page          = navResult.Value;
+            scrollY        = 0;
+            focusedInput   = null;
+            urlBarFocused  = false;
+            hoverElement   = null;
+            hoverOverrides = null;
+            hoverScope.Clear();
+            page           = navResult.Value;
             oldPage.Dispose();
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
+            needsPresent = true;
             Console.WriteLine($"browser: navigated to {page.Url}");
             PushA11y();
         }
@@ -670,6 +719,91 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         void Reload() =>
             ApplyNav(session.ReloadInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+
+        // ── Hover + animation styling (NS-04, mirrors WebviewPanel) ────────────
+
+        // Re-cascade the hovered element's subtree plus its ancestor chain under a
+        // :hover context, sampling any triggered transition at nowMs. Returns the
+        // per-element override styles the painter overlays, or null when nothing
+        // is hovered.
+        Dictionary<Element, ComputedStyle>? BuildHoverOverrides(Element? hovered, long nowMs)
+        {
+            if (hovered is null || page is null) return null;
+            var style = page.Style;
+            var ctx = new SelectorMatchContext { HoveredElement = hovered };
+            var result = new Dictionary<Element, ComputedStyle>();
+
+            Recurse(hovered);
+            // Hovering an element also hovers its ancestors (`.ancestor:hover`).
+            for (var n = hovered.ParentNode; n is not null; n = n.ParentNode)
+                if (n is Element p) result[p] = style.ComputeWithAnimations(p, nowMs, ctx);
+            return result;
+
+            void Recurse(Element el)
+            {
+                result[el] = style.ComputeWithAnimations(el, nowMs, ctx);
+                for (var child = el.FirstChild; child is not null; child = child.NextSibling)
+                    if (child is Element c) Recurse(c);
+            }
+        }
+
+        // Pointer moved onto a new element (or off the page). Advance the clock,
+        // rebuild the overrides, and re-cascade elements leaving the hover scope so
+        // their reverse transition registers.
+        void UpdateHover(Element? newHover)
+        {
+            if (page is null || ReferenceEquals(newHover, hoverElement)) return;
+            hoverElement = newHover;
+
+            var nowMs = clock.ElapsedMilliseconds;
+            session.PrepareAnimationFrame(page, nowMs); // tick before re-cascade
+            animClockMs = nowMs;
+
+            var newOverrides = BuildHoverOverrides(hoverElement, nowMs);
+            var newScope = newOverrides is null ? null : new HashSet<Element>(newOverrides.Keys);
+
+            if (hoverScope.Count > 0)
+            {
+                var newCtx = hoverElement is null
+                    ? null
+                    : new SelectorMatchContext { HoveredElement = hoverElement };
+                foreach (var el in hoverScope)
+                {
+                    if (newScope is not null && newScope.Contains(el)) continue;
+                    page.Style.ComputeWithAnimations(el, nowMs, newCtx);
+                }
+            }
+
+            hoverScope     = newScope ?? new HashSet<Element>();
+            hoverOverrides = newOverrides;
+            needsPresent   = true;
+        }
+
+        // Per-box style the painter overlays: the :hover override if any, else the
+        // sampled animation/transition style, else null (use the box's own style).
+        ComputedStyle? StyleOverride(Box box)
+        {
+            if (hoverOverrides is not null && ResolveOverride(box, hoverOverrides) is { } ov)
+                return ov;
+            if (page is null || box.Element is not { } el) return null;
+            foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el))
+                return page.Style.ComputeWithAnimations(el, animClockMs);
+            foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el))
+                return page.Style.ComputeWithAnimations(el, animClockMs);
+            return null;
+        }
+
+        // Look up a box's hover override; text/anonymous boxes inherit from the
+        // nearest ancestor box whose element is in the map.
+        static ComputedStyle? ResolveOverride(Box box, Dictionary<Element, ComputedStyle> overrides)
+        {
+            if (box.Element is { } el && overrides.TryGetValue(el, out var direct))
+                return direct;
+            for (var p = box.Parent; p is not null; p = p.Parent)
+                if (p.Element is { } pel && overrides.TryGetValue(pel, out var inherited))
+                    return inherited;
+            return null;
+        }
     }
 
     // ── Per-frame layer-promotion predicate (mirrors WebviewPanel) ────────────
