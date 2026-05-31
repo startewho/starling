@@ -12,5 +12,8 @@ public interface IBrowserControlDispatcher
     Task<BrowserControlResult> MoveMouseAsync(double x, double y, CancellationToken ct);
     Task<BrowserControlResult> TypeTextAsync(string text, bool submit, CancellationToken ct);
     Task<BrowserControlResult> ResizeAsync(double width, double height, CancellationToken ct);
+    Task<BrowserControlResult> HighlightAsync(string selector, string? color, CancellationToken ct);
+    Task<BrowserControlResult> SelectElementAsync(string selector, CancellationToken ct);
+    Task<BrowserControlResult> FocusElementAsync(string selector, CancellationToken ct);
 }
 
