@@ -139,7 +139,18 @@ public sealed class TransitionEngine
         // a transition-in-progress doesn't snap back to its original start.
         var fromValue = previous;
         if (_active.TryGetValue(key, out var prior))
+        {
+            // A transition is already heading to this exact target. The live host
+            // re-runs the cascade every animation frame (e.g. re-sampling a hover
+            // override), so OnComputedValueChanged fires with the same target
+            // repeatedly. Restarting it each frame resets StartMs, so it never
+            // settles — the hovered element flickers between its base and target
+            // state. Leave the in-flight transition running; only a genuinely new
+            // target (below) starts a fresh one (Transitions 1 §3 "reversing").
+            if (Equals(prior.To, newValue))
+                return;
             fromValue = Sample(prior, _nowMs);
+        }
 
         _active[key] = new ActiveTransition(
             Element: element,
