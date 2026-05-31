@@ -1,11 +1,11 @@
 ---
 id: wp:NS-04-style-parity
 milestone: NS
-status: "available"
+status: "completed"
 claimed_by: ""
 claimed_at: ""
-completed_at: ""
-branch: "main"
+completed_at: "2026-05-30"
+branch: "native-shell"
 depends_on: []
 blocks: []
 subsystem: Starling.Shell.Native
@@ -36,3 +36,11 @@ just are not wired in `NativeBrowserWindow` yet.
 - A `:hover` rule visibly changes an element under the pointer in the native
   shell, and a CSS transition or animation plays, both matching the Avalonia
   shell within the SSIM tolerance.
+
+## Status note (native-shell branch)
+
+Done: styleOverride wired in NativeBrowserWindow for :hover (BuildHoverOverrides
+mirroring WebviewPanel) and CSS animations/transitions (ComputeWithAnimations at
+the shared animClockMs). A needsPresent dirty flag now gates the present.
+Verified headlessly via an auto-running @keyframes page; hover visual parity
+needs an interactive display.
