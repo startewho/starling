@@ -235,7 +235,12 @@ public static class SelectorMatcher
             "has" => MatchesHas(selector.Argument, element, context),
             "lang" => selector.Argument is string lang && MatchesLanguage(element, lang),
             "dir" => selector.Argument is string dir && MatchesDirection(element, dir),
-            "hover" => context.HoveredElement == element,
+            // An element is :hover when the pointer is over it OR any of its
+            // descendants, so the hovered element and every ancestor match
+            // (mirrors :focus-within). The host passes the innermost hovered
+            // element as HoveredElement.
+            "hover" => context.HoveredElement is not null &&
+                (context.HoveredElement == element || Ancestors(context.HoveredElement).Contains(element)),
             "active" => context.ActiveElement == element,
             "focus" => context.FocusedElement == element,
             "focus-visible" => context.FocusedElement == element,
