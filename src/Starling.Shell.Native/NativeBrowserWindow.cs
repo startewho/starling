@@ -286,6 +286,11 @@ internal sealed class NativeBrowserWindow : IDisposable
         var       menuItems  = new List<(string Label, Action Run)>();
         BlockBox? menuOverlay = null;
 
+        // IME preedit (NS-01). On macOS with STARLING_IME_PREEDIT=1 the MacImeBridge
+        // feeds the active composition string here; it is drawn underlined at the
+        // focused field. Committed text still arrives via the GLFW char callback.
+        string preedit = "";
+
         // Devtools (NS-03): F12 toggles a read-only DOM-tree inspector panel on the
         // right, an engine-rendered screen-fixed overlay rebuilt when the DOM or
         // window size changes.
@@ -747,6 +752,13 @@ internal sealed class NativeBrowserWindow : IDisposable
             };
         }
 
+        // IME preedit driver (NS-01, experimental, opt-in). Off by default — the
+        // commit-style path already works; this adds the inline composing display.
+        if (Environment.GetEnvironmentVariable("STARLING_IME_PREEDIT") == "1")
+            MacImeBridge.Install(
+                s  => { preedit = s;  needsPresent = true; },
+                () => { preedit = ""; needsPresent = true; });
+
         // ── Window events ─────────────────────────────────────────────────────
         window.FramebufferResize += sz =>
         {
@@ -854,7 +866,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 pageAnimating:   box => IsAnimatingLayerRoot(page, box),
                 styleOverride:     StyleOverride,
                 images:            page.ImageResolver,
-                overlayRoot:       findActive ? findOverlay : null,
+                overlayRoot:       findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
                 screenOverlayRoot: screenOverlay);
 
             if (ok) { presented++; needsPresent = false; } else failures++;
@@ -910,6 +922,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             renderer.ResetForNavigation();
             scrollY        = 0;
             focusedInput   = null;
+            preedit        = "";
             urlBarFocused  = false;
             findActive      = false;
             findOverlay     = null;
@@ -977,6 +990,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             hoverScope        = t.HoverScope;
             lastLayoutVersion = t.LastLayoutVersion;
             urlBarFocused     = false;
+            preedit           = "";
             findActive        = false;
             findOverlay       = null;
             findFragments     = null;
@@ -1108,6 +1122,25 @@ internal sealed class NativeBrowserWindow : IDisposable
                 break;
             }
             needsPresent = true;
+        }
+
+        // Underlined preedit drawn at the focused field's position, in document
+        // space so it scrolls with the page. Approximate placement (field start);
+        // glyph-accurate caret tracking is a refinement.
+        BlockBox? BuildPreeditOverlay()
+        {
+            if (page is null || focusedInput is null || preedit.Length == 0) return null;
+            if (FindAbs(page.Root, focusedInput, 0, 0) is not { } pos) return null;
+
+            var html =
+                $"<body style=\"margin:0;padding:0;position:relative;" +
+                $"width:{logicalW}px;height:{page.DocumentHeight}px\">" +
+                $"<div style=\"position:absolute;left:{pos.X + 4}px;top:{pos.Y + 2}px;" +
+                "background:#fff3c4;color:#000;font-size:13px;text-decoration:underline;" +
+                $"padding:0 2px;white-space:nowrap\">{EscapeHtml(preedit)}</div></body>";
+            return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+                .LayoutDocument(HtmlParser.Parse(html),
+                    new LayoutSize(logicalW, (float)Math.Max(1, page.DocumentHeight)));
         }
 
         // ── Context menu ─────────────────────────────────────────────────────
@@ -1325,6 +1358,19 @@ internal sealed class NativeBrowserWindow : IDisposable
     }
 
     // ── Per-frame layer-promotion predicate (mirrors WebviewPanel) ────────────
+
+    /// <summary>Finds an element's box and its absolute document position by
+    /// accumulating parent-relative frames. Used to place the IME preedit at the
+    /// focused field.</summary>
+    private static (double X, double Y)? FindAbs(Starling.Layout.Box.Box box, Element el, double ox, double oy)
+    {
+        var x = ox + box.Frame.X;
+        var y = oy + box.Frame.Y;
+        if (ReferenceEquals(box.Element, el)) return (x, y);
+        foreach (var child in box.Children)
+            if (FindAbs(child, el, x, y) is { } found) return found;
+        return null;
+    }
 
     private static bool IsAnimatingLayerRoot(LaidOutPage page, Starling.Layout.Box.Box box)
     {

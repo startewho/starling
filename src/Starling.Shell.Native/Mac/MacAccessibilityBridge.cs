@@ -51,14 +51,11 @@ internal sealed class MacAccessibilityBridge
     {
         try
         {
-            // Window screen frame (bottom-left origin, points).
-            var winFrame = ObjC.SendRectRet(_nsWindow, ObjC.Sel("frame"));
-
             var array = ObjC.Send(ObjC.GetClass("NSMutableArray"), ObjC.Sel("array"));
             if (array == 0) return;
 
             foreach (var node in Flatten(tree))
-                AddElement(array, node, winFrame, chromeHeightCss, scrollY, windowHeightCss);
+                AddElement(array, node, chromeHeightCss, scrollY, windowHeightCss);
 
             ObjC.SendVoid(_contentView, ObjC.Sel("setAccessibilityChildren:"), array);
         }
@@ -68,7 +65,7 @@ internal sealed class MacAccessibilityBridge
         }
     }
 
-    private void AddElement(nint array, AccessibilityNode node, CGRect winFrame,
+    private void AddElement(nint array, AccessibilityNode node,
         double chromeHeightCss, double scrollY, double windowHeightCss)
     {
         var element = ObjC.New("NSAccessibilityElement");
@@ -77,17 +74,24 @@ internal sealed class MacAccessibilityBridge
         ObjC.SendVoid(element, ObjC.Sel("setAccessibilityRole:"), ObjC.NSString(AxRole(node.Role)));
 
         var label = node.Name;
-        if (node.Role == AccessibilityRole.TextField && !string.IsNullOrEmpty(node.Value))
+        if ((node.Role is AccessibilityRole.TextField or AccessibilityRole.ComboBox)
+            && !string.IsNullOrEmpty(node.Value))
             label = string.IsNullOrEmpty(label) ? node.Value! : $"{label}: {node.Value}";
         if (!string.IsNullOrEmpty(label))
             ObjC.SendVoid(element, ObjC.Sel("setAccessibilityLabel:"), ObjC.NSString(label));
 
-        // Document top-left CSS px -> AppKit bottom-left screen points.
+        // Document top-left CSS px -> the window's content space (AppKit bottom-left
+        // origin, points; CSS px == points at the logical level), then to screen via
+        // AppKit so the title bar and window position are handled for us. topInWindow
+        // is the element's distance below the window-content top.
         var topInWindow = chromeHeightCss + (node.Bounds.Y - scrollY);
-        var screenX = winFrame.X + node.Bounds.X;
-        var screenY = winFrame.Y + (windowHeightCss - topInWindow - node.Bounds.Height);
-        ObjC.SendRect(element, ObjC.Sel("setAccessibilityFrame:"),
-            new CGRect(screenX, screenY, node.Bounds.Width, node.Bounds.Height));
+        var winRect = new CGRect(
+            node.Bounds.X,
+            windowHeightCss - topInWindow - node.Bounds.Height,
+            node.Bounds.Width,
+            node.Bounds.Height);
+        var screenRect = ObjC.ConvertRectToScreen(_nsWindow, winRect);
+        ObjC.SendRect(element, ObjC.Sel("setAccessibilityFrame:"), screenRect);
 
         ObjC.SendVoid(element, ObjC.Sel("setAccessibilityParent:"), _contentView);
         ObjC.SendVoid(array, ObjC.Sel("addObject:"), element);
@@ -118,10 +122,16 @@ internal sealed class MacAccessibilityBridge
         AccessibilityRole.List => "AXList",
         AccessibilityRole.ListItem => "AXStaticText",
         AccessibilityRole.Paragraph => "AXStaticText",
+        AccessibilityRole.ComboBox => "AXComboBox",
         AccessibilityRole.Navigation => "AXGroup",
         AccessibilityRole.Banner => "AXGroup",
         AccessibilityRole.ContentInfo => "AXGroup",
         AccessibilityRole.Main => "AXGroup",
+        AccessibilityRole.Article => "AXGroup",
+        AccessibilityRole.Region => "AXGroup",
+        AccessibilityRole.Complementary => "AXGroup",
+        AccessibilityRole.Form => "AXGroup",
+        AccessibilityRole.Search => "AXGroup",
         AccessibilityRole.Document => "AXGroup",
         _ => "AXGroup",
     };
