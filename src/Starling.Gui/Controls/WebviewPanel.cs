@@ -1797,6 +1797,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (!_liveStopwatch.IsRunning) _liveStopwatch.Restart();
     }
 
+    /// <summary>Test hook: true when <paramref name="el"/> is in the current hover
+    /// override set. Used to assert hover only overrides the genuinely
+    /// :hover-affected elements, not the whole hovered subtree.</summary>
+    internal bool HoverScopeContainsForTest(DomElement el)
+        => _hoverOverrides is not null && _hoverOverrides.ContainsKey(el);
+
+    /// <summary>Test hook: number of elements in the current hover override set.</summary>
+    internal int HoverOverrideCountForTest => _hoverOverrides?.Count ?? 0;
+
     /// <summary>
     /// Re-cascades the hovered element's subtree plus its ancestor chain under a
     /// <c>:hover</c> context, returning the per-element computed styles to overlay
