@@ -41,6 +41,10 @@ internal sealed class NativeBrowserWindow : IDisposable
     private const double ChromeHeightCss   = TabStripHeightCss + UrlBarHeightCss;
     private const double NewTabBtnW        = 28;
 
+    // Context menu geometry (one shared definition for render + click hit-test).
+    private const double MenuItemH = 26;
+    private const double MenuW     = 200;
+
     // ── Demo HTML written to temp files ─────────────────────────────────────
 
     private const string Page1Html = """
@@ -217,6 +221,10 @@ internal sealed class NativeBrowserWindow : IDisposable
         // macOS accessibility bridge (phase 4) — null off macOS / no content view.
         var a11y = MacAccessibilityBridge.TryCreate(window.Native?.Cocoa ?? 0);
 
+        // GLFW window handle for the native clipboard (phase 4). Declared up here
+        // so the menu/clipboard local functions can capture it definitely-assigned.
+        var glfwHandle = window.Native?.Glfw ?? 0;
+
         // ── State ────────────────────────────────────────────────────────────
         float         logicalW   = window.FramebufferSize.X / dpr;
         float         logicalH   = window.FramebufferSize.Y / dpr;
@@ -269,6 +277,14 @@ internal sealed class NativeBrowserWindow : IDisposable
         int       findCursor     = -1;  // index of the current match fragment, -1 none
         int       findMatchTotal = 0;
         BlockBox? findOverlay    = null;
+
+        // Context menu (NS-03). Right-click opens a menu of actions whose items
+        // depend on what is under the pointer (a link adds Open/Copy Link). Drawn
+        // as a screen-fixed overlay; the next click runs an item or dismisses.
+        bool      menuActive = false;
+        double    menuX = 0, menuY = 0;
+        var       menuItems  = new List<(string Label, Action Run)>();
+        BlockBox? menuOverlay = null;
 
         // The native loop drives Update + Render every iteration. needsPresent
         // gates the actual swapchain present so a settled page doesn't re-blend
@@ -360,9 +376,38 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             mouse.MouseDown += (m, button) =>
             {
-                if (page is null || button != MouseButton.Left) return;
+                if (page is null) return;
 
                 var pos = m.Position;
+
+                // An open context menu eats the next click: run the item under it,
+                // else dismiss.
+                if (menuActive)
+                {
+                    var n = menuItems.Count;
+                    if (button == MouseButton.Left
+                        && pos.X >= menuX && pos.X <= menuX + MenuW
+                        && pos.Y >= menuY && pos.Y < menuY + n * MenuItemH)
+                    {
+                        var idx = (int)((pos.Y - menuY) / MenuItemH);
+                        CloseMenu();
+                        if (idx >= 0 && idx < n) menuItems[idx].Run();
+                    }
+                    else
+                    {
+                        CloseMenu();
+                    }
+                    return;
+                }
+
+                // Right-click opens the context menu.
+                if (button == MouseButton.Right)
+                {
+                    OpenMenuAt(pos.X, pos.Y);
+                    return;
+                }
+
+                if (button != MouseButton.Left) return;
 
                 // Click is over the tab strip — switch / close / new tab.
                 if (pos.Y < TabStripHeightCss)
@@ -459,9 +504,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             };
         }
 
-        // GLFW window handle for the native clipboard (phase 4).
-        var glfwHandle = window.Native?.Glfw ?? 0;
-
         if (input.Keyboards.Count > 0)
         {
             var keyboard = input.Keyboards[0];
@@ -511,6 +553,13 @@ internal sealed class NativeBrowserWindow : IDisposable
             keyboard.KeyDown += (_, key, _) =>
             {
                 if (page is null) return;
+
+                // An open context menu swallows Escape (dismiss).
+                if (menuActive)
+                {
+                    if (key == Key.Escape) CloseMenu();
+                    return;
+                }
 
                 // Global history chords: Cmd/Ctrl+[ back, +] forward, +R reload,
                 // and Alt+Left / Alt+Right back / forward. Handled before URL-bar
@@ -779,9 +828,10 @@ internal sealed class NativeBrowserWindow : IDisposable
                 scrollX:         0,
                 scrollY:         scrollY,
                 pageAnimating:   box => IsAnimatingLayerRoot(page, box),
-                styleOverride:   StyleOverride,
-                images:          page.ImageResolver,
-                overlayRoot:     findActive ? findOverlay : null);
+                styleOverride:     StyleOverride,
+                images:            page.ImageResolver,
+                overlayRoot:       findActive ? findOverlay : null,
+                screenOverlayRoot: menuActive ? menuOverlay : null);
 
             if (ok) { presented++; needsPresent = false; } else failures++;
 
@@ -1025,6 +1075,66 @@ internal sealed class NativeBrowserWindow : IDisposable
                 findOverlay = BuildFindOverlay(f, logicalW, page.DocumentHeight);
                 break;
             }
+            needsPresent = true;
+        }
+
+        // ── Context menu ─────────────────────────────────────────────────────
+
+        void CloseMenu()
+        {
+            menuActive  = false;
+            menuOverlay = null;
+            needsPresent = true;
+        }
+
+        BlockBox BuildMenuOverlay()
+        {
+            var sb = new StringBuilder();
+            sb.Append($"<body style=\"margin:0;padding:0;position:relative;" +
+                      $"width:{logicalW}px;height:{logicalH}px\">");
+            sb.Append($"<div style=\"position:absolute;left:{menuX}px;top:{menuY}px;width:{MenuW}px;" +
+                      "background:#2b2b2b;border:1px solid #555;border-radius:4px;" +
+                      "font-family:sans-serif;font-size:13px;color:#e0e0e0;overflow:hidden\">");
+            foreach (var it in menuItems)
+                sb.Append($"<div style=\"height:{MenuItemH}px;padding:0 12px;" +
+                          $"display:flex;align-items:center\">{EscapeHtml(it.Label)}</div>");
+            sb.Append("</div></body>");
+            return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+                .LayoutDocument(HtmlParser.Parse(sb.ToString()), new LayoutSize(logicalW, logicalH));
+        }
+
+        void OpenMenuAt(double x, double y)
+        {
+            if (page is null) return;
+            menuItems.Clear();
+
+            // Link under the pointer (page area only) adds link actions.
+            if (y >= ChromeHeightCss)
+            {
+                var hit = BoxHitTester.HitTest(
+                    page.Root, x, (y - ChromeHeightCss) + scrollY,
+                    viewportX: 0, viewportY: scrollY, scrollOffsets: null);
+                if (hit.LinkAnchor is { } a)
+                {
+                    var href = a.GetAttribute("href");
+                    var target = string.IsNullOrEmpty(href) ? null : LinkResolver.Resolve(href, page.Url);
+                    if (target is not null)
+                    {
+                        menuItems.Add(("Open Link", () => Navigate(target)));
+                        menuItems.Add(("Copy Link Address", () => NativeClipboard.Set(glfwHandle, target)));
+                    }
+                }
+            }
+
+            if (session.History.CanGoBack)    menuItems.Add(("Back", GoBack));
+            if (session.History.CanGoForward) menuItems.Add(("Forward", GoForward));
+            menuItems.Add(("Reload", Reload));
+
+            var n = menuItems.Count;
+            menuX = Math.Clamp(x, 0, Math.Max(0, logicalW - MenuW));
+            menuY = Math.Clamp(y, 0, Math.Max(0, logicalH - n * MenuItemH));
+            menuOverlay  = BuildMenuOverlay();
+            menuActive   = true;
             needsPresent = true;
         }
 
