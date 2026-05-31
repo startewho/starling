@@ -260,6 +260,16 @@ internal sealed class NativeBrowserWindow : IDisposable
         HashSet<Element>                    hoverScope     = new();
         long                                animClockMs    = 0;
 
+        // Find-in-page (NS-03). Cmd/Ctrl+F opens; keystrokes edit findQuery; Enter
+        // and Shift+Enter step matches; Esc closes. The current match is drawn by
+        // an overlay document composited over the page in document space.
+        bool      findActive     = false;
+        string    findQuery      = "";
+        List<BoxHitTester.PlacedFragment>? findFragments = null;
+        int       findCursor     = -1;  // index of the current match fragment, -1 none
+        int       findMatchTotal = 0;
+        BlockBox? findOverlay    = null;
+
         // The native loop drives Update + Render every iteration. needsPresent
         // gates the actual swapchain present so a settled page doesn't re-blend
         // every frame (NS-04). Set true whenever something visible changes; the
@@ -466,7 +476,16 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (page is null) return;
                 if (CmdOrCtrl()) return; // a clipboard/shortcut chord, not text
 
-                // URL bar takes text first when it owns focus.
+                // Find-in-page takes text first when open.
+                if (findActive)
+                {
+                    findQuery += c;
+                    findCursor = -1;
+                    RunFind(1);
+                    return;
+                }
+
+                // URL bar takes text next when it owns focus.
                 if (urlBarFocused)
                 {
                     urlBarText += c;
@@ -509,6 +528,37 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (CmdOrCtrl() && key >= Key.Number1 && key <= Key.Number9)
                 {
                     SwitchTab((int)(key - Key.Number1));
+                    return;
+                }
+
+                // Cmd/Ctrl+F — open find-in-page.
+                if (CmdOrCtrl() && key == Key.F) { OpenFind(); return; }
+
+                // Find-in-page editing owns the keyboard while it is open.
+                if (findActive)
+                {
+                    needsPresent = true;
+                    if (CmdOrCtrl() && key == Key.V)
+                    {
+                        var clip = NativeClipboard.Get(glfwHandle);
+                        if (!string.IsNullOrEmpty(clip)) { findQuery += clip; findCursor = -1; RunFind(1); }
+                        return;
+                    }
+                    if (CmdOrCtrl()) return;
+                    switch (key)
+                    {
+                        case Key.Backspace:
+                            if (findQuery.Length > 0) { findQuery = findQuery[..^1]; findCursor = -1; RunFind(1); }
+                            break;
+                        case Key.Escape:
+                            CloseFind();
+                            break;
+                        case Key.Enter:
+                        case Key.KeypadEnter:
+                            var back = keyboard.IsKeyPressed(Key.ShiftLeft) || keyboard.IsKeyPressed(Key.ShiftRight);
+                            RunFind(back ? -1 : 1);
+                            break;
+                    }
                     return;
                 }
 
@@ -686,17 +736,35 @@ internal sealed class NativeBrowserWindow : IDisposable
             // target count.
             if (_maxFrames == 0 && !needsPresent) return;
 
-            // Build (or reuse) the chrome BlockBox. While the URL bar is focused it
-            // shows the edit buffer; otherwise the active page URL.
-            var shownUrl = urlBarFocused ? urlBarText : (page.Url ?? "");
+            // Build (or reuse) the chrome BlockBox. The URL-bar row shows the find
+            // query while find is open, else the edit buffer when focused, else the
+            // active page URL.
+            string shownUrl;
+            bool   urlFocusVisual;
+            if (findActive)
+            {
+                var status = findQuery.Length == 0
+                    ? ""
+                    : findMatchTotal == 0
+                        ? "  (no matches)"
+                        : $"  ({findMatchTotal} match{(findMatchTotal == 1 ? "" : "es")})";
+                shownUrl = $"Find: {findQuery}{status}";
+                urlFocusVisual = true;
+            }
+            else
+            {
+                shownUrl = urlBarFocused ? urlBarText : (page.Url ?? "");
+                urlFocusVisual = urlBarFocused;
+            }
+
             var labels = new List<string>(tabs.Count);
             for (var i = 0; i < tabs.Count; i++) labels.Add(LabelOf(i));
-            var sig = $"{activeIndex}|{string.Join((char)1, labels)}|{shownUrl}|{urlBarFocused}|{logicalW}";
+            var sig = $"{activeIndex}|{string.Join((char)1, labels)}|{shownUrl}|{urlFocusVisual}|{logicalW}";
             if (chromeBox is null || sig != chromeSig)
             {
                 chromeBox = BuildChrome(
                     logicalW, labels, activeIndex,
-                    TabWidth(logicalW, tabs.Count), shownUrl, urlBarFocused);
+                    TabWidth(logicalW, tabs.Count), shownUrl, urlFocusVisual);
                 chromeSig = sig;
             }
 
@@ -712,7 +780,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                 scrollY:         scrollY,
                 pageAnimating:   box => IsAnimatingLayerRoot(page, box),
                 styleOverride:   StyleOverride,
-                images:          page.ImageResolver);
+                images:          page.ImageResolver,
+                overlayRoot:     findActive ? findOverlay : null);
 
             if (ok) { presented++; needsPresent = false; } else failures++;
 
@@ -737,7 +806,10 @@ internal sealed class NativeBrowserWindow : IDisposable
             page.Dispose();
             page = successor;
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
-            needsPresent = true;
+            // Fragment geometry changed — drop the stale find index and highlight.
+            findFragments = null;
+            findOverlay   = null;
+            needsPresent  = true;
             PushA11y();
         }
 
@@ -763,6 +835,9 @@ internal sealed class NativeBrowserWindow : IDisposable
             scrollY        = 0;
             focusedInput   = null;
             urlBarFocused  = false;
+            findActive     = false;
+            findOverlay    = null;
+            findFragments  = null;
             hoverElement   = null;
             hoverOverrides = null;
             hoverScope.Clear();
@@ -823,6 +898,9 @@ internal sealed class NativeBrowserWindow : IDisposable
             hoverScope        = t.HoverScope;
             lastLayoutVersion = t.LastLayoutVersion;
             urlBarFocused     = false;
+            findActive        = false;
+            findOverlay       = null;
+            findFragments     = null;
             renderer.ResetForNavigation();
             needsPresent      = true;
             PushA11y();
@@ -880,6 +958,74 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (!string.IsNullOrWhiteSpace(p?.Title)) return p!.Title!;
             var u = p?.Url;
             return string.IsNullOrEmpty(u) ? "New Tab" : u;
+        }
+
+        // ── Find-in-page ─────────────────────────────────────────────────────
+
+        void OpenFind()
+        {
+            if (page is null) return;
+            findActive    = true;
+            findQuery     = "";
+            findCursor    = -1;
+            findMatchTotal = 0;
+            findOverlay   = null;
+            findFragments = BoxHitTester.CollectFragments(page.Root);
+            urlBarFocused = false;
+            needsPresent  = true;
+        }
+
+        void CloseFind()
+        {
+            findActive    = false;
+            findOverlay   = null;
+            findFragments = null;
+            needsPresent  = true;
+        }
+
+        // A semi-transparent highlight box at the matched fragment, in document
+        // space, composited over the page (so it scrolls with the page).
+        BlockBox BuildFindOverlay(BoxHitTester.PlacedFragment f, float contentW, double docH)
+        {
+            var html =
+                $"<body style=\"margin:0;padding:0;position:relative;width:{contentW}px;height:{docH}px\">" +
+                $"<div style=\"position:absolute;left:{f.X}px;top:{f.Y}px;" +
+                $"width:{f.Width}px;height:{f.Height}px;background:rgba(255,213,0,0.45)\"></div></body>";
+            return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+                .LayoutDocument(HtmlParser.Parse(html), new LayoutSize(contentW, (float)Math.Max(1, docH)));
+        }
+
+        // Step to the next (dir +1) or previous (dir -1) fragment whose text
+        // contains the query, scroll it into view, and build its highlight.
+        void RunFind(int dir)
+        {
+            findOverlay = null;
+            if (page is null || findQuery.Length == 0) { findMatchTotal = 0; needsPresent = true; return; }
+            findFragments ??= BoxHitTester.CollectFragments(page.Root);
+            var frags = findFragments;
+            var n = frags.Count;
+
+            findMatchTotal = 0;
+            foreach (var fr in frags)
+                if (fr.Text.Contains(findQuery, StringComparison.OrdinalIgnoreCase)) findMatchTotal++;
+
+            if (n == 0 || findMatchTotal == 0) { findCursor = -1; needsPresent = true; return; }
+
+            var start = findCursor + dir;
+            for (var step = 0; step < n; step++)
+            {
+                var idx = ((start + dir * step) % n + n) % n;
+                if (!frags[idx].Text.Contains(findQuery, StringComparison.OrdinalIgnoreCase)) continue;
+
+                findCursor = idx;
+                var f = frags[idx];
+                var viewportH = logicalH - ChromeHeightCss;
+                var maxScroll = Math.Max(0, page.DocumentHeight - viewportH);
+                scrollY = Math.Clamp(f.Y - viewportH / 3, 0, maxScroll);
+                findOverlay = BuildFindOverlay(f, logicalW, page.DocumentHeight);
+                break;
+            }
+            needsPresent = true;
         }
 
         // ── Hover + animation styling (NS-04, mirrors WebviewPanel) ────────────
