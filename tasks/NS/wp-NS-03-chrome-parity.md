@@ -1,11 +1,11 @@
 ---
 id: wp:NS-03-chrome-parity
 milestone: NS
-status: "available"
+status: "in_progress"
 claimed_by: ""
 claimed_at: ""
 completed_at: ""
-branch: "main"
+branch: "native-shell"
 depends_on: []
 blocks: []
 subsystem: Starling.Shell.Native
@@ -35,3 +35,12 @@ already exists (`NativeViewportRenderer.PresentComposited` +
 
 - A user can type a URL, open and switch tabs, and go back and forward, all
   through engine-rendered chrome in the native shell.
+
+## Status note (native-shell branch)
+
+Done: editable URL bar + --url launch (UrlBarInputNormalizer), back/forward/
+reload (Cmd+[ /] /R, Alt+arrows), tabs (per-tab BrowserSession, engine-rendered
+tab strip, Cmd+T/W, Cmd+1-9, Ctrl+Tab), find-in-page (Cmd+F, CollectFragments +
+substring, highlight via a new optional overlayRoot layer on PresentComposited).
+Remaining: devtools panels, context menus, multi-window. All verified headlessly
+(--frames); interactive paths need a display.
