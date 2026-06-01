@@ -298,10 +298,11 @@ internal sealed class NativeBrowserWindow : IDisposable
         bool      devtoolsActive  = false;
         BlockBox? devtoolsOverlay = null;
 
-        // The native loop drives Update + Render every iteration. needsPresent
-        // gates the actual swapchain present so a settled page doesn't re-blend
-        // every frame (NS-04). Set true whenever something visible changes; the
-        // --frames smoke-test mode always presents so it can reach its count.
+        // "Something visible changed this frame" signal, set wherever state that
+        // affects the picture changes. It does NOT gate the present today — the
+        // loop presents every frame so the macOS surface stays flushed (gating it
+        // left the window gray). It is kept up to date for a future damage-based
+        // present that skips the re-raster while still flushing the surface.
         bool needsPresent = true;
 
         // ── Load the initial page (blocking — safe: we're not on a GPU thread yet) ──
