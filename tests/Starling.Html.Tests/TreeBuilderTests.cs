@@ -248,6 +248,43 @@ public sealed class TreeBuilderTests
         doc.DescendantElements().Should().Contain(e => e.LocalName == "div");
     }
 
+    // ----------------------------------------------------------------- template
+    // WHATWG HTML §13.2.6.4.5 "after head" forwards <template> start tags to the
+    // "in head" insertion mode (§13.2.6.4.4). If "in head" doesn't recognize
+    // <template>, it falls back through "anything else" — which puts the parser
+    // back into "after head" with the same token, looping forever. A real-world
+    // Astro/Starlight docs page (netclaw.dev/getting-started/installation/)
+    // crashed Starling with a stack overflow before this case was handled.
+
+    [Spec("html", "https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead",
+        "13.2.6.4.4 in head — template start tag")]
+    [SpecFact]
+    public void Template_after_head_does_not_stack_overflow()
+    {
+        // The minimal reproduction: head closes, then a <template> appears
+        // before <body>. Before the fix this looped between InHead ↔ AfterHead.
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head></head><template id=\"t\"></template><body>x</body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.TextContent.Should().Be("x");
+    }
+
+    [Spec("html", "https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead",
+        "13.2.6.4.4 in head — template start tag")]
+    [SpecFact]
+    public void Template_inside_head_does_not_stack_overflow()
+    {
+        // The same loop fires when <template> appears directly inside <head>:
+        // InHead's "anything else" falls through to AfterHead, which forwards
+        // template back to InHead.
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head><template id=\"t\"></template></head><body>x</body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.TextContent.Should().Be("x");
+    }
+
     [Spec("html", "https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead",
         "13.2.6.4.4 in head — noscript / scripting flag")]
     [SpecFact]
