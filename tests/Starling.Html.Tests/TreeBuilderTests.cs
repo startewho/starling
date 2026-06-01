@@ -263,4 +263,40 @@ public sealed class TreeBuilderTests
         var noscript = doc.Body!.DescendantElements().Single(e => e.LocalName == "noscript");
         noscript.TextContent.Should().Be("HIDDEN");
     }
+
+    // Regression: <template> after </head> used to bounce between the "after head"
+    // and "in head" insertion modes forever (stack overflow), because "after head"
+    // delegated it to "in head" and "in head" had no case for it. The token must be
+    // consumed and parsing must finish with the body content intact.
+    [TestMethod]
+    public void Template_after_head_does_not_overflow()
+    {
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head><title>t</title></head>" +
+            "<template><div>tpl</div></template><body><p>VISIBLE</p></body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
+        doc.DocumentElement!.DescendantElements().Should().Contain(e => e.LocalName == "template");
+    }
+
+    [TestMethod]
+    public void Template_in_head_does_not_overflow()
+    {
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head><template><div>tpl</div></template></head>" +
+            "<body><p>VISIBLE</p></body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
+    }
+
+    [TestMethod]
+    public void Template_in_body_is_parsed()
+    {
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><body><template><span>tpl</span></template><p>VISIBLE</p></body></html>");
+
+        doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
+    }
 }

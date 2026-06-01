@@ -449,6 +449,19 @@ public sealed class HtmlTreeBuilder
                 InsertElement(start);
                 _openElements.Pop(); // Void element.
                 return;
+            case StartTagToken start when start.Name == "template":
+                // The "in template" insertion mode and a template's separate content
+                // document are not modelled (see the class remarks). Insert the
+                // element and pop it so the token is CONSUMED. Without a case here,
+                // "after head" delegates <template> to "in head" (the list below),
+                // "in head" fell through to its "anything else" tail — switch back
+                // to "after head" and reprocess — and the two modes bounced on the
+                // same token forever (a stack overflow on any page with a
+                // <template>). Its contents are not modelled, so they parse as
+                // ordinary following content rather than an inert fragment.
+                InsertElement(start);
+                _openElements.Pop();
+                return;
             case StartTagToken start when start.Name == "title":
                 InsertElement(start);
                 _originalMode = _mode;
