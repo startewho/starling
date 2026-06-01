@@ -766,6 +766,15 @@ internal sealed class NativeBrowserWindow : IDisposable
             presenter.Configure(Math.Max(1, sz.X), Math.Max(1, sz.Y));
         };
 
+        // Animation pacing. Cap continuous animation/transition frames to a target
+        // rate so a fast page does not spin the present at hundreds of fps.
+        // STARLING_REDUCE_MOTION freezes animation entirely — heavy pages (a tall
+        // page with a page-wide animation) then render once and stay responsive
+        // instead of re-rasterizing every frame.
+        var          reduceMotion      = Environment.GetEnvironmentVariable("STARLING_REDUCE_MOTION") == "1";
+        long         lastAnimMs        = long.MinValue;
+        const double animFrameBudgetMs = 1000.0 / 60; // 60 fps
+
         window.Update += _ =>
         {
             if (page is null) return;
@@ -784,9 +793,13 @@ internal sealed class NativeBrowserWindow : IDisposable
             }
 
             // Animation frame: advance the clock, re-sample the hovered scope at
-            // the new time so a hover transition progresses, and present.
-            if (session.HasActiveAnimations(page))
+            // the new time so a hover transition progresses, and present. Paced to
+            // the frame budget; reduced-motion skips it entirely.
+            if (!reduceMotion
+                && clockMs - lastAnimMs >= animFrameBudgetMs
+                && session.HasActiveAnimations(page))
             {
+                lastAnimMs = clockMs;
                 session.PrepareAnimationFrame(page, clockMs);
                 animClockMs = clockMs;
                 if (hoverElement is not null)
@@ -812,9 +825,15 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (page is null) return;
 
             // Nothing visible changed — skip the present and let the last frame
-            // stand. The --frames smoke test always presents so it can reach its
-            // target count.
-            if (_maxFrames == 0 && !needsPresent) return;
+            // stand. Sleep briefly so the loop idles at ~70 Hz instead of free-
+            // running a CPU core (Silk's own FramesPerSecond cap is not honored
+            // with manual present + VSync off). The --frames smoke test always
+            // presents so it can reach its target count.
+            if (_maxFrames == 0 && !needsPresent)
+            {
+                System.Threading.Thread.Sleep(14);
+                return;
+            }
 
             // Build (or reuse) the chrome BlockBox. The URL-bar row shows the find
             // query while find is open, else the edit buffer when focused, else the
