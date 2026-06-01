@@ -886,6 +886,9 @@ public sealed class MainWindow : Window, IBrowserController
     public Task<BrowserControlResult> FocusElementFromToolAsync(string selector, CancellationToken ct)
         => InputTool("focus", () => _webview.FocusBySelector(selector));
 
+    public Task<BrowserControlResult> ComputedStyleFromToolAsync(string selector, CancellationToken ct)
+        => InputTool("computed_style", () => _webview.InspectComputedStyle(selector));
+
     public Task<BrowserControlResult> ResizeFromToolAsync(double width, double height, CancellationToken ct)
     {
         if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)

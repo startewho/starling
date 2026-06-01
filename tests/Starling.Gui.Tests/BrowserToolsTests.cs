@@ -63,5 +63,6 @@ public sealed class BrowserToolsTests
         public Task<BrowserControlResult> HighlightAsync(string selector, string? color, CancellationToken ct) => throw new NotSupportedException();
         public Task<BrowserControlResult> SelectElementAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
         public Task<BrowserControlResult> FocusElementAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ComputedStyleAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
     }
 }

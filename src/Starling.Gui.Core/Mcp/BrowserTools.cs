@@ -34,7 +34,8 @@ public sealed class BrowserTools : IMcpToolGroup
             or "browser_resize"
             or "browser_highlight"
             or "browser_select"
-            or "browser_focus" => true,
+            or "browser_focus"
+            or "browser_computed_style" => true,
         _ => false,
     };
 
@@ -76,6 +77,8 @@ public sealed class BrowserTools : IMcpToolGroup
             "browser_select" => await _browser.SelectElementAsync(
                 McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
             "browser_focus" => await _browser.FocusElementAsync(
+                McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
+            "browser_computed_style" => await _browser.ComputedStyleAsync(
                 McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
             _ => throw new ArgumentException($"Unknown browser tool: {name}", nameof(name)),
         };
@@ -238,6 +241,17 @@ public sealed class BrowserTools : IMcpToolGroup
               "type": "object",
               "properties": {
                 "selector": { "type": "string", "description": "A CSS selector. The first element in document order that matches is focused." }
+              },
+              "required": ["selector"]
+            }
+          },
+          {
+            "name": "browser_computed_style",
+            "description": "Report the EFFECTIVE painted style for every element matching a CSS selector (up to 10): opacity, transform, color, background, plus hoverOverride and animating flags. Uses the same precedence the painter does (live hover override, else animation/transition sample, else laid-out style). Use it to debug why content renders wrong or goes invisible — for example to catch a hover override unexpectedly shadowing an animation.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "selector": { "type": "string", "description": "A CSS selector. Every matching element's effective style is reported, in document order." }
               },
               "required": ["selector"]
             }

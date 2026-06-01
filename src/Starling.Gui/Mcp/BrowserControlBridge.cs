@@ -65,6 +65,9 @@ public sealed class BrowserControlBridge : IBrowserControlDispatcher
     public Task<BrowserControlResult> FocusElementAsync(string selector, CancellationToken ct)
         => InvokeAsync(controller => controller.FocusElementFromToolAsync(selector, ct), ct);
 
+    public Task<BrowserControlResult> ComputedStyleAsync(string selector, CancellationToken ct)
+        => InvokeAsync(controller => controller.ComputedStyleFromToolAsync(selector, ct), ct);
+
     private async Task<BrowserControlResult> InvokeAsync(
         Func<IBrowserController, Task<BrowserControlResult>> action,
         CancellationToken ct)

@@ -15,4 +15,5 @@ public interface IBrowserController
     Task<BrowserControlResult> HighlightFromToolAsync(string selector, string? color, CancellationToken ct);
     Task<BrowserControlResult> SelectElementFromToolAsync(string selector, CancellationToken ct);
     Task<BrowserControlResult> FocusElementFromToolAsync(string selector, CancellationToken ct);
+    Task<BrowserControlResult> ComputedStyleFromToolAsync(string selector, CancellationToken ct);
 }
