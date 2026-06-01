@@ -116,7 +116,8 @@ internal sealed class Compositor
     /// presented (e.g. the surface needs reconfiguring). No <see cref="RenderedBitmap"/>
     /// is produced — nothing crosses back to the CPU.
     /// </summary>
-    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter)
+    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter,
+        IReadOnlyList<SurfaceOverlayRect>? overlays = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -133,6 +134,11 @@ internal sealed class Compositor
         CollectOps(root, ops, keepAlive, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
 
+        // Overlays (caret, selection, find flash) blend on top of the page as
+        // solid-colour quads. Appended last so they draw over every page layer.
+        if (overlays is { Count: > 0 })
+            AppendOverlayOps(ops, viewport, scale, overlays);
+
         var presented = presenter.PresentOps(width, height, ops);
 
         foreach (var bmp in keepAlive)
@@ -140,6 +146,42 @@ internal sealed class Compositor
 
         return presented;
     }
+
+    // Solid-colour overlay quads the surface present path draws on top of the page
+    // (the caret, selection highlight, and find-match flash the readback path draws
+    // as Avalonia controls over the bitmap). Each distinct colour reuses ONE resident
+    // 1×1 straight-RGBA texture: the swatch bitmap is cached here so no per-frame
+    // allocation happens, and the GPU keeps the texture resident across frames (keyed
+    // by the colour-derived content hash). The overlay rides the same textured-quad
+    // blend as the layers — a 1×1 sample is effectively free, so a dedicated
+    // solid-colour pipeline would add code for no measurable win.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, RenderedBitmap> _overlaySwatches = new();
+
+    private static void AppendOverlayOps(
+        List<LayerBlend> ops, LayoutRect viewport, float scale, IReadOnlyList<SurfaceOverlayRect> overlays)
+    {
+        var s = (double)scale;
+        // Same page→device map the layer ops use, so overlays align with page content.
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        foreach (var o in overlays)
+        {
+            if (o.W <= 0 || o.H <= 0 || o.A == 0) continue;
+            var packed = ((uint)o.R << 24) | ((uint)o.G << 16) | ((uint)o.B << 8) | o.A;
+            var swatch = _overlaySwatches.GetOrAdd(packed, static p =>
+                new RenderedBitmap(1, 1, new byte[] { (byte)(p >> 24), (byte)(p >> 16), (byte)(p >> 8), (byte)p }));
+            // The 1×1 swatch's local space is the unit square; map it onto the
+            // overlay's page rect, then to device.
+            var localToDevice = pageToDevice
+                .Multiply(Matrix2D.Translate(o.X, o.Y))
+                .Multiply(Matrix2D.Scale(o.W, o.H));
+            ops.Add(new LayerBlend(swatch, OverlayContentHash(packed), localToDevice, 1f, clipDevice: null));
+        }
+    }
+
+    // Tag overlay content hashes into a high range so a swatch never collides with a
+    // real layer's slice hash (which would make the engine evict + re-upload both).
+    private static long OverlayContentHash(uint packedRgba)
+        => unchecked((long)(0xC0FFEE0000000000UL | packedRgba));
 
     /// <summary>
     /// Appends one layer tree's blend ops into a shared list for a surface frame

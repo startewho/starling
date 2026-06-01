@@ -58,7 +58,8 @@ public sealed class NativeViewportRenderer : IDisposable
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         LayoutRect? viewport = null,
-        Func<Box, bool>? isAnimatingLayerRoot = null)
+        Func<Box, bool>? isAnimatingLayerRoot = null,
+        IReadOnlyList<SurfaceOverlayRect>? overlays = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -71,7 +72,7 @@ public sealed class NativeViewportRenderer : IDisposable
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
             var compositor = new Compositor(_backend, _diag);
-            return compositor.RenderToSurface(tree, region, scale, presenter);
+            return compositor.RenderToSurface(tree, region, scale, presenter, overlays);
         }
         catch (Exception ex)
         {
