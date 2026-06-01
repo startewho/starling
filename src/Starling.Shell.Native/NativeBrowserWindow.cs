@@ -810,6 +810,8 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         window.Render += _ =>
         {
+            var frameStart = clock.ElapsedMilliseconds;
+
             var fb = window.FramebufferSize;
             if (fb.X <= 0 || fb.Y <= 0) return;
 
@@ -824,16 +826,12 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             if (page is null) return;
 
-            // Nothing visible changed — skip the present and let the last frame
-            // stand. Sleep briefly so the loop idles at ~70 Hz instead of free-
-            // running a CPU core (Silk's own FramesPerSecond cap is not honored
-            // with manual present + VSync off). The --frames smoke test always
-            // presents so it can reach its target count.
-            if (_maxFrames == 0 && !needsPresent)
-            {
-                System.Threading.Thread.Sleep(14);
-                return;
-            }
+            // Present every frame. The present is what keeps the on-screen surface
+            // live — skipping it (an earlier "only present when changed"
+            // optimization) left the macOS swapchain unflushed and the whole window
+            // gray. The loop is instead paced by a short sleep AFTER the present
+            // (below), once the frame is already on screen, so the CPU stays bounded
+            // without ever starving the display.
 
             // Build (or reuse) the chrome BlockBox. The URL-bar row shows the find
             // query while find is open, else the edit buffer when focused, else the
@@ -893,6 +891,18 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             if (_maxFrames > 0 && presented >= _maxFrames)
                 window.Close();
+
+            // Pace to ~60 Hz AFTER presenting, so a cheap frame doesn't spin a CPU
+            // core. The frame is already on screen, so this never starves the
+            // display. A heavy frame that already took longer than the budget just
+            // doesn't sleep. Skipped in --frames smoke mode.
+            if (_maxFrames == 0)
+            {
+                const long frameBudgetMs = 16;
+                var spent = clock.ElapsedMilliseconds - frameStart;
+                if (spent < frameBudgetMs)
+                    System.Threading.Thread.Sleep((int)(frameBudgetMs - spent));
+            }
         };
 
         window.Run();
