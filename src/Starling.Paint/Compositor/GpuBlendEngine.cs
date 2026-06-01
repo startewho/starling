@@ -138,6 +138,58 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Surface-compatible device bound to a host-owned <c>CAMetalLayer</c> (macOS)
+    /// — the Avalonia zero-copy page surface. Builds the wgpu surface straight from
+    /// the layer via <c>SurfaceDescriptorFromMetalLayer</c> (so it embeds in a child
+    /// NSView's layer instead of seizing the NSWindow), requests a surface-compatible
+    /// adapter, and returns the surface plus its preferred colour format. Null on no
+    /// GPU or a null layer. The engine keeps the instance alive for the surface's
+    /// lifetime, the same lease as <see cref="CreateForSurface"/>.
+    /// </summary>
+    internal static GpuBlendEngine? CreateForMetalLayer(nint caMetalLayer, out nint surface, out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (caMetalLayer == 0) return null;
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+
+            var metal = new SurfaceDescriptorFromMetalLayer
+            {
+                Chain = new ChainedStruct { Next = null, SType = SType.SurfaceDescriptorFromMetalLayer },
+                Layer = (void*)caMetalLayer,
+            };
+            var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&metal };
+            var surf = api.InstanceCreateSurface(instance, in desc);
+            if (surf == null) { api.InstanceRelease(instance); return null; }
+
+            if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
+            {
+                api.SurfaceRelease(surf);
+                api.InstanceRelease(instance);
+                return null;
+            }
+
+            var caps = default(SurfaceCapabilities);
+            api.SurfaceGetCapabilities(surf, GetAdapterForCaps(api, instance, surf), ref caps);
+            format = PickFormat(caps);
+
+            // Instance intentionally NOT released: wgpu ties the surface to it (leaked
+            // for the process lifetime, one per presenter — see CreateForSurface).
+            surface = (nint)surf;
+            return new GpuBlendEngine(api, poll, device, queue);
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
     // Requesting capabilities needs an adapter; rather than thread it out of
     // RequestDevice we re-request a (cheap, cached by wgpu) compatible adapter.
     private static Adapter* GetAdapterForCaps(WebGPU api, Instance* instance, Surface* surf)

@@ -27,6 +27,7 @@ public sealed class OtelDiagnostics : IDiagnostics
     private readonly ILoggerFactory _loggerFactory;
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Counter<double>> _counters = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Gauge<double>> _gauges = new(StringComparer.Ordinal);
 
     public OtelDiagnostics(ILoggerFactory loggerFactory)
     {
@@ -69,6 +70,14 @@ public sealed class OtelDiagnostics : IDiagnostics
     {
         var counter = _counters.GetOrAdd(name, n => Meter.CreateCounter<double>(n));
         counter.Add(value);
+    }
+
+    public void Gauge(string name, double value)
+    {
+        // Synchronous Gauge (.NET 9+): records the last-set value, so the
+        // dashboard plots the level itself (e.g. live FPS) rather than a sum.
+        var gauge = _gauges.GetOrAdd(name, n => Meter.CreateGauge<double>(n));
+        gauge.Record(value);
     }
 
     public void Snapshot(string label, ReadOnlySpan<byte> bytes)

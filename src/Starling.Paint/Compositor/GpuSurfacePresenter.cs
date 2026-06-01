@@ -49,6 +49,20 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
+    /// <summary>
+    /// Builds a surface-compatible GPU device bound to a host-owned
+    /// <c>CAMetalLayer</c> (the Avalonia page surface's click-through child-view
+    /// layer) and a presenter for its swapchain. Returns <c>null</c> when no GPU
+    /// adapter is available or <paramref name="caMetalLayer"/> is zero. macOS only.
+    /// </summary>
+    public static GpuSurfacePresenter? CreateForMetalLayer(nint caMetalLayer)
+    {
+        if (caMetalLayer == 0) return null;
+        var engine = GpuBlendEngine.CreateForMetalLayer(caMetalLayer, out var surface, out var format);
+        if (engine is null || surface == 0) return null;
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
+    }
+
     /// <summary>The swapchain colour format wgpu chose for this surface.</summary>
     public TextureFormat Format => _format;
 
