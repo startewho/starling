@@ -1552,6 +1552,57 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         return new InputResult(true, $"focused <{el.LocalName}> matching '{selector}'");
     }
 
+    /// <summary>
+    /// Debug report for the <c>browser_computed_style</c> MCP tool: for every
+    /// element matching <paramref name="selector"/>, reports the EFFECTIVE painted
+    /// style using the same precedence the painter does — a live hover override
+    /// first, then an animation/transition sample, otherwise the laid-out style —
+    /// plus whether a hover override or a live animation is currently driving it.
+    /// Built to diagnose "renders wrong / goes invisible" bugs: it surfaces the
+    /// opacity / transform / colour actually on screen and the flag that explains
+    /// them (e.g. an unexpected hover override shadowing an animation).
+    /// </summary>
+    public InputResult InspectComputedStyle(string selector)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var page = _currentPage;
+        var sb = new System.Text.StringBuilder();
+        const int Max = 10;
+        var shown = 0;
+        foreach (var el in els)
+        {
+            if (shown >= Max) { sb.Append($"; … (+{els.Count - Max} more)"); break; }
+
+            var hovered = _hoverOverrides is not null && _hoverOverrides.ContainsKey(el);
+            var animating = IsAnimating(el);
+            var s = hovered ? _hoverOverrides![el]
+                : animating ? page.Style.ComputeWithAnimations(el, _animClockMs)
+                : page.Style.Compute(el);
+
+            var color = s.GetColor(PropertyId.Color);
+            var bg = s.GetColor(PropertyId.BackgroundColor);
+            if (shown > 0) sb.Append("; ");
+            sb.Append($"<{el.LocalName}> opacity={s.Get(PropertyId.Opacity)} " +
+                $"transform={s.Get(PropertyId.Transform)} " +
+                $"color=rgba({color.R},{color.G},{color.B},{color.A}) " +
+                $"bg=rgba({bg.R},{bg.G},{bg.B},{bg.A}) " +
+                $"hoverOverride={(hovered ? "yes" : "no")} animating={(animating ? "yes" : "no")}");
+            shown++;
+        }
+        return new InputResult(true, sb.ToString());
+
+        bool IsAnimating(DomElement el)
+        {
+            foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) return true;
+            foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
+            return false;
+        }
+    }
+
     /// <summary>Resolves a CSS selector to the matching elements, in document order.</summary>
     private (List<DomElement> Elements, string? Error) QueryAll(string selector)
     {
@@ -1806,6 +1857,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// <summary>Test hook: number of elements in the current hover override set.</summary>
     internal int HoverOverrideCountForTest => _hoverOverrides?.Count ?? 0;
 
+    /// <summary>Test hook: drive the CSS <c>:hover</c> re-cascade for
+    /// <paramref name="el"/> directly (no hit-test), exactly as a real pointer move
+    /// onto it would — so a test can assert which elements the hover overrides.</summary>
+    internal void HoverElementForTest(DomElement el)
+    {
+        _hoverElement = el;
+        ApplyHoverState();
+    }
+
     /// <summary>
     /// Re-cascades the hovered element's subtree plus its ancestor chain under a
     /// <c>:hover</c> context, returning the per-element computed styles to overlay
@@ -1830,16 +1890,36 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // target a non-hovered sibling subtree are not recomputed — a bounded
         // approximation that covers the common cases.)
         for (var n = hovered.ParentNode; n is not null; n = n.ParentNode)
-            if (n is DomElement p) result[p] = Compose(p);
+            if (n is DomElement p && Compose(p) is { } ps) result[p] = ps;
 
-        return result;
+        // Only elements whose :hover cascade actually changes a paint-relevant
+        // property are overridden. Without this, hovering a big container (or the
+        // body while the pointer sweeps) re-cascaded and overrode its WHOLE
+        // subtree on every move — shadowing each element's AnimatedStyle with the
+        // hover sample, so animated/just-styled content flashed to its base state
+        // (invisible) until the pointer stopped. Pruning to the genuinely
+        // :hover-affected elements lets everyone else keep their laid-out /
+        // animated style.
+        return result.Count == 0 ? null : result;
 
-        ComputedStyle Compose(DomElement el)
-            => animate ? style.ComputeWithAnimations(el, nowMs, ctx) : style.Compute(el, ctx);
+        // The override style for `el` when :hover changes its paint, else null.
+        // Relevance is judged from the STATIC cascade (with vs. without the :hover
+        // context) so a running animation's per-frame sample doesn't make every
+        // animating element look "changed"; the stored style still carries the
+        // animation sample via ComputeWithAnimations.
+        ComputedStyle? Compose(DomElement el)
+        {
+            var hoverStatic = style.Compute(el, ctx);
+            // Compare the element's cascade with vs. without :hover; prune it when
+            // nothing the painter emits changed (SamePaintProperties value-compares,
+            // so identical cascades from two runs match).
+            if (SamePaintProperties(style.Compute(el), hoverStatic)) return null;
+            return animate ? style.ComputeWithAnimations(el, nowMs, ctx) : hoverStatic;
+        }
 
         void Recurse(DomElement el)
         {
-            result[el] = Compose(el);
+            if (Compose(el) is { } s) result[el] = s;
             for (var child = el.FirstChild; child is not null; child = child.NextSibling)
                 if (child is DomElement c) Recurse(c);
         }
@@ -1872,10 +1952,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (a.GetColor(PropertyId.BorderRightColor) != b.GetColor(PropertyId.BorderRightColor)) return false;
         if (a.GetColor(PropertyId.BorderBottomColor) != b.GetColor(PropertyId.BorderBottomColor)) return false;
         if (a.GetColor(PropertyId.BorderLeftColor) != b.GetColor(PropertyId.BorderLeftColor)) return false;
-        // Reference-compare the decoration value — different cascade outputs
-        // for the same `underline` keyword still produce reference-equal
-        // CssKeyword.Underline singletons in the engine.
-        if (!ReferenceEquals(a.Get(PropertyId.TextDecoration), b.Get(PropertyId.TextDecoration))) return false;
+        // Value-compare the decoration: two independent cascade runs (with vs.
+        // without :hover) produce non-identical CssKeyword instances for the same
+        // keyword, so ReferenceEquals would always report a spurious change — which
+        // pulled every element into the hover override set (the invisibility bug).
+        if (!Equals(a.Get(PropertyId.TextDecoration), b.Get(PropertyId.TextDecoration))) return false;
         // Transform / opacity are paint-on-self too (the painter reads them off
         // the override style), so a hover that only moves or fades an element —
         // the common case for the demo's tiles — must still repaint.

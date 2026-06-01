@@ -6,6 +6,7 @@ using Silk.NET.Windowing;
 using SixLabors.ImageSharp;
 using Starling.Common;
 using Starling.Css.Cascade;
+using Starling.Css.Properties;
 using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -1260,14 +1261,56 @@ internal sealed class NativeBrowserWindow : IDisposable
             Recurse(hovered);
             // Hovering an element also hovers its ancestors (`.ancestor:hover`).
             for (var n = hovered.ParentNode; n is not null; n = n.ParentNode)
-                if (n is Element p) result[p] = style.ComputeWithAnimations(p, nowMs, ctx);
-            return result;
+                if (n is Element p && Compose(p) is { } ps) result[p] = ps;
+
+            // Only elements whose :hover cascade actually changes a paint-relevant
+            // property are overridden. Without this, hovering a big container (or the
+            // body while the pointer sweeps) re-cascaded and overrode its WHOLE
+            // subtree on every move — shadowing each element's animated style with the
+            // hover sample, so animated/just-styled content flashed to its base state
+            // (invisible) until the pointer stopped. Pruning to the genuinely
+            // :hover-affected elements lets everyone else keep their animated style.
+            return result.Count == 0 ? null : result;
+
+            // The override style for `el` when :hover changes its paint, else null.
+            // Relevance is judged from the STATIC cascade (with vs. without :hover) so a
+            // running animation's per-frame sample doesn't make every animating element
+            // look "changed"; the stored style still carries the animation sample.
+            ComputedStyle? Compose(Element el)
+            {
+                var hoverStatic = style.Compute(el, ctx);
+                // Prune the element when nothing the painter emits changes under
+                // :hover (SamePaint value-compares, so identical cascades match).
+                if (SamePaint(style.Compute(el), hoverStatic)) return null;
+                return style.ComputeWithAnimations(el, nowMs, ctx);
+            }
 
             void Recurse(Element el)
             {
-                result[el] = style.ComputeWithAnimations(el, nowMs, ctx);
+                if (Compose(el) is { } s) result[el] = s;
                 for (var child = el.FirstChild; child is not null; child = child.NextSibling)
                     if (child is Element c) Recurse(c);
+            }
+
+            // True when a and b paint identically for the properties the painter
+            // emits (mirrors WebviewPanel.SamePaintProperties). Lets :hover relevance
+            // be judged without re-rendering on CssValue identity churn.
+            static bool SamePaint(ComputedStyle a, ComputedStyle b)
+            {
+                if (a.GetColor(PropertyId.Color) != b.GetColor(PropertyId.Color)) return false;
+                if (a.GetColor(PropertyId.BackgroundColor) != b.GetColor(PropertyId.BackgroundColor)) return false;
+                if (a.GetColor(PropertyId.BorderTopColor) != b.GetColor(PropertyId.BorderTopColor)) return false;
+                if (a.GetColor(PropertyId.BorderRightColor) != b.GetColor(PropertyId.BorderRightColor)) return false;
+                if (a.GetColor(PropertyId.BorderBottomColor) != b.GetColor(PropertyId.BorderBottomColor)) return false;
+                if (a.GetColor(PropertyId.BorderLeftColor) != b.GetColor(PropertyId.BorderLeftColor)) return false;
+                // Value-compare: two independent cascade runs (with vs. without
+                // :hover) produce non-identical CssKeyword instances for the same
+                // keyword, so ReferenceEquals would report a spurious change and
+                // pull every element into the override set (the invisibility bug).
+                if (!Equals(a.Get(PropertyId.TextDecoration), b.Get(PropertyId.TextDecoration))) return false;
+                if (!Equals(a.Get(PropertyId.Transform), b.Get(PropertyId.Transform))) return false;
+                if (!Equals(a.Get(PropertyId.Opacity), b.Get(PropertyId.Opacity))) return false;
+                return true;
             }
         }
 
