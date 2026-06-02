@@ -7,9 +7,9 @@ namespace Starling.Js.Runtime;
 /// (<c>ObjectCtor.Install(realm)</c>, etc.).
 /// </summary>
 /// <remarks>
-/// Today the realm is constructed with bare-bones slots — prototypes are empty
-/// objects, error constructors return plain objects with a <c>message</c>
-/// property. The full intrinsic surface lands incrementally in B2+.
+/// The constructor creates the prototype graph and host queues. Intrinsic
+/// installers fill in constructors, prototype methods, and namespace objects in
+/// dependency order during <see cref="JsRuntime"/> startup.
 /// </remarks>
 public sealed class JsRealm
 {

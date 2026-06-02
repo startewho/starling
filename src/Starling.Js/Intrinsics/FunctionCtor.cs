@@ -9,13 +9,12 @@ namespace Starling.Js.Intrinsics;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The constructor itself (called as <c>Function(src)</c> or
-/// <c>new Function(src)</c>) currently raises a <c>TypeError</c> — dynamic
-/// code evaluation is deferred to B-9999. The constructor object still has
-/// to exist with a correct <c>prototype</c> slot so feature-detection and
-/// <c>x instanceof Function</c> checks work.
+/// The constructor itself, called as <c>Function(src)</c> or
+/// <c>new Function(src)</c>, assembles the parameter list and body into a
+/// global-scope function expression, then compiles it through the shared eval
+/// path.
 /// </para>
-/// <para><b>Two footguns this install fixes (per B2-2 hand-off):</b></para>
+/// <para><b>Callable shape guarantees:</b></para>
 /// <list type="number">
 ///   <item><c>Function.prototype</c> is now populated with
 ///   <c>call</c>/<c>apply</c>/<c>bind</c>/<c>toString</c>, so every callable
@@ -25,11 +24,6 @@ namespace Starling.Js.Intrinsics;
 ///   (see <c>JsFunction.CreateInstance</c>) and carry their own
 ///   <c>prototype</c>/<c>name</c>/<c>length</c> data slots.</item>
 /// </list>
-/// <para><b>@@hasInstance deferral (B3-1):</b> the spec installs
-/// <c>Function.prototype[@@hasInstance]</c>; we skip it because Symbol does
-/// not exist yet, and the VM's <c>instanceof</c> short-circuits via the
-/// <c>prototype</c> own property of the right-hand operand. Re-wire when
-/// Symbol lands.</para>
 /// </remarks>
 public static class FunctionCtor
 {
@@ -176,7 +170,7 @@ public static class FunctionCtor
 
     /// <summary>Spec 20.2.3.5 — Function.prototype.toString. Yields a feature-
     /// detection-friendly source string. We don't keep raw source bytes
-    /// around, so user functions get a placeholder that still matches the
+    /// around, so user functions get synthetic text that still matches the
     /// <c>function name() { … }</c> shape that sniffers regex against.</summary>
     private static JsValue ProtoToString(JsValue thisV, JsValue[] args)
     {

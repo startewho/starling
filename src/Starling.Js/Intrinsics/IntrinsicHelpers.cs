@@ -3,11 +3,9 @@ using Starling.Js.Runtime;
 namespace Starling.Js.Intrinsics;
 
 /// <summary>
-/// Shared helpers used by every intrinsic install path. The B2-2 follow-up
-/// migrated <see cref="JsNativeFunction"/> construction to the realm-aware
-/// overload so every built-in method inherits from
-/// <c>realm.FunctionPrototype</c> and therefore exposes
-/// <c>call</c>/<c>apply</c>/<c>bind</c> out of the box.
+/// Shared helpers used by intrinsic install paths. Built-in methods created
+/// here inherit from <c>realm.FunctionPrototype</c>, so they expose
+/// <c>call</c>, <c>apply</c>, and <c>bind</c>.
 /// </summary>
 internal static class IntrinsicHelpers
 {

@@ -20,13 +20,12 @@ namespace Starling.Js.Intrinsics;
 /// </para>
 /// <para>
 /// <c>AggregateError</c>'s <c>errors</c> argument is currently accepted as an
-/// array-like (own <c>length</c> + integer-indexed slots). Full iterable
-/// support arrives once the iterator protocol lands (B3-2).
+/// array-like object with an own <c>length</c> and integer-indexed slots. It
+/// does not consume general iterables yet.
 /// </para>
 /// <para>
-/// No <c>stack</c> capture yet — that ties into B3-4 / B5-* and the eventual
-/// debugger story. The prototype methods + descriptor flags below are spec
-/// compliant and won't need to change when stacks arrive.
+/// Error objects do not capture <c>stack</c> yet. The prototype methods and
+/// descriptor flags below are independent of stack capture.
 /// </para>
 /// </remarks>
 public static class ErrorCtor
@@ -244,8 +243,7 @@ public static class ErrorCtor
 
     /// <summary>Shallow-copy an array-like (own <c>length</c> + integer-indexed
     /// slots) into a fresh array-like ordinary object. Throws TypeError if
-    /// <paramref name="value"/> is not array-like. Full iterator-protocol
-    /// support lands in B3-2.</summary>
+    /// <paramref name="value"/> is not array-like.</summary>
     private static JsValue CopyErrorsArrayLike(JsRealm realm, JsValue value)
     {
         if (!value.IsObject)

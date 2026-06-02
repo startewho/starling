@@ -9,9 +9,8 @@ using Starling.Net.Http.Cookies;
 namespace Starling.Bindings;
 
 /// <summary>
-/// B5-1 — install <c>window</c> / <c>document</c> / <c>location</c> /
-/// <c>navigator</c> on a <see cref="JsRuntime"/>. Replaces the
-/// <c>DomBindingHost</c> placeholder.
+/// Installs the browser global object and core Web API bindings on a
+/// <see cref="JsRuntime"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Window-as-global:</b> the realm's <see cref="JsRealm.GlobalObject"/>
@@ -23,12 +22,10 @@ namespace Starling.Bindings;
 /// <para><b>Footprints (simplifications):</b></para>
 /// <list type="bullet">
 ///   <item><c>location</c> setters (assigning to <c>href</c> /
-///   <c>location.href = ...</c>) currently log and no-op. Navigation is wired
-///   in B5-3+.</item>
-///   <item><c>DOMContentLoaded</c> / <c>load</c> are not fired by this code.
-///   The host engine calls <see cref="FireDomContentLoaded"/> /
-///   <see cref="FireLoad"/> when document loading completes — wiring lives in
-///   the layout-engine driver, not here.</item>
+///   <c>location.href = ...</c>) mutate session history for same-document URLs.
+///   Cross-document navigation is still reported to the console and ignored.</item>
+///   <item>The host engine calls <see cref="FireDomContentLoaded"/> and
+///   <see cref="FireLoad"/> when document loading completes.</item>
 ///   <item><c>innerWidth</c> / <c>innerHeight</c> default to 0 unless the host
 ///   supplies a viewport via <see cref="WindowInstallOptions"/>.</item>
 /// </list>
@@ -118,7 +115,8 @@ public static class WindowBinding
         // VM's LoadGlobal now routes through AbstractOperations.Get so the
         // getter is invoked correctly (was previously a data-property
         // workaround for the gap:opcode-fast-path-bypasses-accessors bug).
-        // Cross-document navigation via assignment is wired in B5-3+.
+        // Cross-document navigation is outside this binding. Same-document
+        // updates go through HistoryBinding and may dispatch hashchange.
         EventTargetBinding.DefineAccessor(realm, global, "location",
             (_, _) => JsValue.Object(LocationObjectFor(realm, document)),
             (_, args) =>
@@ -483,9 +481,8 @@ public static class WindowBinding
         return nav;
     }
 
-    /// <summary>TODO callable for the engine: dispatches <c>DOMContentLoaded</c>
-    /// on the document and bubbles to window. Wire this from the layout engine
-    /// when DOM parsing completes.</summary>
+    /// <summary>Dispatches <c>DOMContentLoaded</c> on the document and mirrors
+    /// it to the window target for host-driven document loading.</summary>
     public static void FireDomContentLoaded(JsRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
@@ -504,8 +501,8 @@ public static class WindowBinding
         windowTarget?.DispatchEvent(new Event("DOMContentLoaded", new EventInit(Bubbles: false, Cancelable: false)));
     }
 
-    /// <summary>TODO callable for the engine: dispatches <c>load</c> on the
-    /// window. Wire from the layout engine when all subresources have loaded.</summary>
+    /// <summary>Dispatches <c>load</c> on the window target after host-driven
+    /// document loading completes.</summary>
     public static void FireLoad(JsRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);

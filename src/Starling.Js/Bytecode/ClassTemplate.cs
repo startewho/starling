@@ -51,12 +51,11 @@ public sealed class ClassTemplate
     public int ClassId { get; }
 
     /// <summary>True for class <em>declarations</em>: the constructor is bound
-    /// to its <see cref="Name"/> (currently the global binding, a B1b
-    /// simplification) <em>before</em> static fields/blocks run, so static
+    /// to its <see cref="Name"/> before static fields and blocks run, so static
     /// elements can reference the class by name (§15.7.14 ClassDefinition
     /// Evaluation binds the class name before static element evaluation). Named
-    /// class <em>expressions</em> leave this false — their name stays scoped to
-    /// the body and must not leak to the global.</summary>
+    /// class <em>expressions</em> leave this false because their name stays
+    /// scoped to the body.</summary>
     public bool BindNameToGlobal { get; }
 
     public ClassTemplate(

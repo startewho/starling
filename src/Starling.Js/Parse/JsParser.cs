@@ -4,16 +4,15 @@ using Starling.Js.Lex;
 namespace Starling.Js.Parse;
 
 /// <summary>
-/// Recursive-descent ES2024 parser. This slice (wp:M3-02a) implements
-/// expression-level parsing only; statements + declarations land in
-/// wp:M3-02b.
+/// Recursive-descent ES2024 parser for scripts, modules, statements,
+/// declarations, expressions, functions, classes, and early errors.
 /// </summary>
 /// <remarks>
 /// Operator precedence mirrors ES2024 §13.16. Methods are named by
 /// precedence level (e.g. <c>ParseAdditive</c>, <c>ParseMultiplicative</c>)
 /// so cross-referencing the spec is line-of-sight. Right-associative
 /// operators (assignment, exponentiation, conditional) recurse on the
-/// right side; left-associative ones loop.
+/// right side, and left-associative ones loop.
 /// </remarks>
 public sealed partial class JsParser
 {

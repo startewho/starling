@@ -13,9 +13,10 @@ namespace Starling.Paint.DisplayList;
 /// Walks a laid-out box tree and emits a display list in paint order.
 /// </summary>
 /// <remarks>
-/// v1 paint order is the simple tree-walk order: background → children. Full
-/// stacking-context order (z-index, positioned ancestors, opacity boundaries)
-/// is M5+ work. The painter handles plain block backgrounds and inline text.
+/// Emits paint items for backgrounds, borders, images, text, shadows,
+/// transforms, scroll clips, and compositor layer slices. The compositor can
+/// split the same display list into cached layers without changing the paint
+/// commands.
 /// </remarks>
 public sealed class DisplayListBuilder
 {
@@ -614,8 +615,8 @@ public sealed class DisplayListBuilder
     /// composes it with the (centre-of-box) transform-origin into a single
     /// document-space matrix. Returns <c>null</c> when no transform applies
     /// (<c>none</c>, identity, or unparseable). The hardcoded centre origin
-    /// is a known limitation tracked in the WP follow-ups; full
-    /// <c>transform-origin</c> value parsing is its own work item.
+    /// is a known limitation. Full <c>transform-origin</c> value parsing is
+    /// tracked as separate work.
     /// </summary>
     internal static Matrix2D? TryGetTransformMatrix(Box box, Func<Box, ComputedStyle?>? styleOverride, double frameX, double frameY)
     {

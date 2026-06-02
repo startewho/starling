@@ -11,14 +11,13 @@ namespace Starling.Js.Runtime;
 /// </summary>
 /// <remarks>
 /// <para>
-/// gap:closure-write-back (wp:M3-04c2): closures use <em>live binding</em>
-/// semantics. At <see cref="Opcode.MakeClosure"/> time, the parent frame
-/// pushes references to the shared <see cref="Cell"/> objects that hold
-/// each captured binding's value; the VM constructs a fresh
-/// <see cref="JsFunction"/> whose <see cref="Upvalues"/> array stores
-/// those cell references (wrapped as <c>JsValue.Object(cell)</c>). Reads
-/// and writes from both the outer and the inner function go through the
-/// same cell, so writes propagate as the spec requires.
+/// Closures use <em>live binding</em> semantics. At
+/// <see cref="Opcode.MakeClosure"/> time, the parent frame pushes references to
+/// the shared <see cref="Cell"/> objects that hold each captured binding's
+/// value. The VM constructs a fresh <see cref="JsFunction"/> whose
+/// <see cref="Upvalues"/> array stores those cell references, wrapped as
+/// <c>JsValue.Object(cell)</c>. Reads and writes from both the outer and inner
+/// function go through the same cell.
 /// </para>
 /// <para>
 /// A "template" JsFunction is what the compiler stuffs into the
@@ -67,9 +66,9 @@ public sealed class JsFunction : JsObject
     /// pre-instantiated zero-arg <see cref="JsFunction"/> invoked with
     /// <c>this</c> = the new instance after the (possibly synthesized)
     /// <c>super(...)</c> returns, in declaration order. The
-    /// <see cref="InstanceFieldInit.FieldKey"/> selects the slot to write —
-    /// null entries indicate computed keys (not yet supported by
-    /// B1b-2a).</summary>
+    /// <see cref="InstanceFieldInit.FieldKey"/> selects static and private
+    /// slots. Public computed keys use
+    /// <see cref="InstanceFieldInit.ComputedKey"/>.</summary>
     public IReadOnlyList<InstanceFieldInit>? InstanceFieldInitializers { get; set; }
 
     /// <summary>Mangled private-name keys for this class's <em>instance</em>
