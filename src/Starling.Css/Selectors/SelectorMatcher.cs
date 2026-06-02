@@ -382,7 +382,6 @@ public static class SelectorMatcher
         {
             SelectorCombinator.Child when onePart => ChildElements(scope),
             SelectorCombinator.NextSibling when onePart => SingleElement(NextElementSibling(scope)),
-            SelectorCombinator.NextSibling => NextElementSiblingAndDescendants(scope),
             SelectorCombinator.SubsequentSibling when onePart => NextElementSiblings(scope),
             SelectorCombinator.NextSibling or SelectorCombinator.SubsequentSibling =>
                 NextElementSiblingsAndDescendants(scope),
@@ -401,16 +400,6 @@ public static class SelectorMatcher
     {
         if (element is not null)
             yield return element;
-    }
-
-    private static IEnumerable<Element> NextElementSiblingAndDescendants(Element scope)
-    {
-        var sibling = NextElementSibling(scope);
-        if (sibling is null)
-            yield break;
-        yield return sibling;
-        foreach (var d in sibling.Descendants().OfType<Element>())
-            yield return d;
     }
 
     private static IEnumerable<Element> NextElementSiblingsAndDescendants(Element scope)

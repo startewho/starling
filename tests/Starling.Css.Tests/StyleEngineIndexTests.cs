@@ -15,7 +15,7 @@ namespace Starling.Css.Tests;
 public sealed class StyleEngineIndexTests
 {
     [TestMethod]
-    public void Compute_uses_selector_index_to_skip_non_candidate_rules()
+    public void Compute_applies_candidate_rule_without_hot_path_counters()
     {
         var css = new StringBuilder();
         for (var i = 0; i < 1000; i++)
@@ -32,8 +32,8 @@ public sealed class StyleEngineIndexTests
         var style = engine.Compute(article);
 
         style.GetColor(PropertyId.Color).Should().Be(new CssColor(0, 0, 255));
-        diag.CounterValue("css.rule_candidates").Should().Be(1);
-        diag.CounterValue("css.selector_tests").Should().Be(1);
+        diag.CounterValue("css.rule_candidates").Should().Be(0);
+        diag.CounterValue("css.selector_tests").Should().Be(0);
     }
 
     [TestMethod]
@@ -65,7 +65,32 @@ public sealed class StyleEngineIndexTests
     }
 
     [TestMethod]
-    public void Structural_candidate_bypasses_style_sharing_for_matching_element_type()
+    public void Style_sharing_revalidates_sibling_dependent_selectors()
+    {
+        var doc = new Document();
+        var root = doc.CreateElement("div");
+        doc.AppendChild(root);
+        var markedPrevious = doc.CreateElement("i");
+        markedPrevious.ClassList.Add("marker");
+        root.AppendChild(markedPrevious);
+        var first = doc.CreateElement("span");
+        root.AppendChild(first);
+        root.AppendChild(doc.CreateElement("i"));
+        var second = doc.CreateElement("span");
+        root.AppendChild(second);
+
+        var engine = new StyleEngine(includeUserAgentStyleSheet: false);
+        engine.AddStyleSheet(CssParser.ParseStyleSheet(".marker + span { color: red; }"));
+
+        var cache = new CascadeCache();
+        engine.PrecomputeTree(root, cache);
+
+        engine.Compute(first, context: null, cache).GetColor(PropertyId.Color).Should().Be(new CssColor(255, 0, 0));
+        engine.Compute(second, context: null, cache).GetColor(PropertyId.Color).Should().Be(CssColor.Black);
+    }
+
+    [TestMethod]
+    public void Style_sharing_revalidates_nth_child_selectors()
     {
         var doc = new Document();
         var root = doc.CreateElement("div");
@@ -88,7 +113,7 @@ public sealed class StyleEngineIndexTests
     }
 
     [TestMethod]
-    public void Empty_candidate_bypasses_style_sharing()
+    public void Style_sharing_revalidates_empty_selectors()
     {
         var doc = new Document();
         var root = doc.CreateElement("div");
@@ -109,6 +134,44 @@ public sealed class StyleEngineIndexTests
 
         engine.Compute(empty, context: null, cache).GetColor(PropertyId.Color).Should().Be(new CssColor(255, 0, 0));
         engine.Compute(nonEmpty, context: null, cache).GetColor(PropertyId.Color).Should().Be(CssColor.Black);
+    }
+
+    [TestMethod]
+    public void Style_sharing_revalidates_container_query_conditions()
+    {
+        var doc = new Document();
+        var root = doc.CreateElement("div");
+        doc.AppendChild(root);
+        root.AppendChild(doc.CreateElement("i"));
+        var wide = doc.CreateElement("div");
+        var wideChild = doc.CreateElement("p");
+        wide.AppendChild(wideChild);
+        root.AppendChild(wide);
+        root.AppendChild(doc.CreateElement("i"));
+        var narrow = doc.CreateElement("div");
+        var narrowChild = doc.CreateElement("p");
+        narrow.AppendChild(narrowChild);
+        root.AppendChild(narrow);
+
+        var engine = new StyleEngine(includeUserAgentStyleSheet: false)
+        {
+            ContainerSizeLookup = el => el == wide
+                ? (500, 200)
+                : el == narrow
+                    ? (300, 200)
+                    : null,
+        };
+        engine.AddStyleSheet(CssParser.ParseStyleSheet("""
+            @container (min-width: 400px) {
+                p { color: red; }
+            }
+            """));
+
+        var cache = new CascadeCache();
+        engine.PrecomputeTree(root, cache);
+
+        engine.Compute(wideChild, context: null, cache).GetColor(PropertyId.Color).Should().Be(new CssColor(255, 0, 0));
+        engine.Compute(narrowChild, context: null, cache).GetColor(PropertyId.Color).Should().Be(CssColor.Black);
     }
 
     private sealed class CountingDiagnostics : IDiagnostics
