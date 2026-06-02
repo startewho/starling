@@ -113,13 +113,12 @@ internal sealed class ImageSharpBackend : IPaintBackend
             // maxTextureDimension2D crashes the entire process before any
             // C# try/catch can intercept it. Real pages (e.g. tall scrolling
             // articles like netclaw.dev) routinely exceed the WebGPU spec
-            // default of 8192 px in the long axis, so guard the GPU path and
-            // fall back to the pure-managed CPU rasterizer for this frame
-            // rather than aborting. The GPU path remains available for the
-            // next frame if the page reflows back under the limit.
-            _diag.Counter("paint.webgpu.fallback_cpu.oversize", 1);
-            Activity.Current?.SetTag("raster.webgpu.fallback_reason", "exceeds_max_texture_dimension");
-            return RenderCpu(list, width, height, scale, viewportTransform, opaqueBackground, webGpuFallbackReason: "exceeds_max_texture_dimension");
+            // default of 8192 px in the long axis. GPU sessions are strict: an
+            // oversize GPU texture is a render failure, not a CPU fallback.
+            Activity.Current?.SetTag("raster.webgpu.failure_reason", "exceeds_max_texture_dimension");
+            throw new InvalidOperationException(
+                $"WebGPU paint target {width}x{height} exceeds the supported " +
+                $"{MaxWebGpuTextureDimension}x{MaxWebGpuTextureDimension} texture limit.");
         }
 
         return _useWebGpu
@@ -133,7 +132,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
     // anything, so detect the overflow before allocating a texture.
     private const int MaxWebGpuTextureDimension = 8192;
 
-    private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool opaqueBackground = true, string? webGpuFallbackReason = null)
+    private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool opaqueBackground = true)
     {
         using (_diag.Span("paint", "raster.context_init"))
         {
@@ -156,8 +155,6 @@ internal sealed class ImageSharpBackend : IPaintBackend
 
             using (_diag.Span("paint", "raster.command_record"))
             {
-                if (webGpuFallbackReason is not null)
-                    Activity.Current?.SetTag("raster.webgpu.fallback_reason", webGpuFallbackReason);
                 // The CPU image is allocated pre-filled with the background color, so
                 // the replay must not clear it again (clearWhite: false). ImageSharp
                 // rasterizes lazily when the Paint scope unwinds — no explicit flush.

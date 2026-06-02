@@ -75,7 +75,12 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     /// </summary>
     public void Configure(int width, int height)
     {
-        if (width <= 0 || height <= 0) return;
+        if (width <= 0 || height <= 0)
+        {
+            throw new ArgumentException("Surface dimensions must be positive.");
+        }
+
+        GpuBlendEngine.ThrowIfTextureOversized("WebGPU surface target", width, height);
         lock (_gate)
         {
             var config = new SurfaceConfiguration
@@ -99,44 +104,67 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     /// Blends <paramref name="ops"/> into the surface's current texture and
     /// presents it. The render target is <paramref name="width"/>×<paramref
     /// name="height"/> device pixels (must match the last <see cref="Configure"/>).
-    /// Returns <c>false</c> if the frame could not be presented (e.g. the surface
-    /// is outdated and needs reconfiguring).
+    /// Returns <c>true</c> after a successful present. Surface and GPU failures
+    /// throw; a GPU session must not fall back to a CPU frame.
     /// </summary>
     internal bool PresentOps(int width, int height, IReadOnlyList<LayerBlend> ops)
     {
-        if (width <= 0 || height <= 0) return false;
+        if (width <= 0 || height <= 0)
+        {
+            throw new ArgumentException("Surface present target must have positive dimensions.");
+        }
+
         lock (_gate)
         {
             if (!_configured || _width != width || _height != height)
                 Configure(width, height);
 
             var api = _engine.Api;
-            try
+            // Acquire the swapchain's next drawable. Under PresentMode.Fifo this is
+            // the call that blocks when the drawable pool is starved (on a
+            // CAMetalLayer it bottoms out in Metal's nextDrawable, which waits up to
+            // ~1s). Wrapped in its own span so a present stall is attributed here
+            // rather than vanishing into gui.render's self-time.
+            SurfaceTexture st = default;
+            using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentAcquireOp))
+                api.SurfaceGetCurrentTexture(_surface, ref st);
+            if (st.Status != SurfaceGetCurrentTextureStatus.Success)
             {
-                // Acquire the swapchain's next drawable. Under PresentMode.Fifo this is
-                // the call that blocks when the drawable pool is starved (on a
-                // CAMetalLayer it bottoms out in Metal's nextDrawable, which waits up to
-                // ~1s). Wrapped in its own span so a present stall is attributed here
-                // rather than vanishing into gui.render's self-time.
-                SurfaceTexture st = default;
-                using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentAcquireOp))
-                    api.SurfaceGetCurrentTexture(_surface, ref st);
-                if (st.Status != SurfaceGetCurrentTextureStatus.Success)
+                if (st.Texture != null)
                 {
-                    // Outdated/Lost: reconfigure so the next frame succeeds.
-                    if (st.Texture != null) api.TextureRelease(st.Texture);
-                    Configure(width, height);
-                    return false;
+                    api.TextureRelease(st.Texture);
                 }
 
+                throw new InvalidOperationException($"GPU surface acquire failed with status {st.Status}.");
+            }
+            if (st.Texture == null)
+            {
+                throw new InvalidOperationException("GPU surface acquire succeeded without a texture.");
+            }
+
+            TextureView* view = null;
+            CommandEncoder* encoder = null;
+            RenderPassEncoder* pass = null;
+            CommandBuffer* cmd = null;
+            try
+            {
                 using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentEncodeOp))
                 {
                     _engine.BeginFrame();
                     _engine.UploadLayerTextures(ops);
                     var vertexCount = _engine.BuildAndUploadVertices(ops, width, height);
 
-                    var view = api.TextureCreateView(st.Texture, (TextureViewDescriptor*)null);
-                    var encoder = api.DeviceCreateCommandEncoder(_engine.Device, (CommandEncoderDescriptor*)null);
+                    view = api.TextureCreateView(st.Texture, (TextureViewDescriptor*)null);
+                    if (view == null)
+                    {
+                        throw new InvalidOperationException("GPU surface texture view creation failed.");
+                    }
+
+                    encoder = api.DeviceCreateCommandEncoder(_engine.Device, (CommandEncoderDescriptor*)null);
+                    if (encoder == null)
+                    {
+                        throw new InvalidOperationException("GPU surface command encoder creation failed.");
+                    }
 
                     var colorAttachment = new RenderPassColorAttachment
                     {
@@ -147,31 +175,54 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                         ClearValue = new Color { R = 1, G = 1, B = 1, A = 1 }, // opaque white base
                     };
                     var passDesc = new RenderPassDescriptor { ColorAttachmentCount = 1, ColorAttachments = &colorAttachment };
-                    var pass = api.CommandEncoderBeginRenderPass(encoder, in passDesc);
+                    pass = api.CommandEncoderBeginRenderPass(encoder, in passDesc);
+                    if (pass == null)
+                    {
+                        throw new InvalidOperationException("GPU surface render pass creation failed.");
+                    }
 
                     _engine.RecordBlend(pass, ops, _format, vertexCount, width, height);
 
                     api.RenderPassEncoderEnd(pass);
 
-                    var cmd = api.CommandEncoderFinish(encoder, (CommandBufferDescriptor*)null);
+                    cmd = api.CommandEncoderFinish(encoder, (CommandBufferDescriptor*)null);
+                    if (cmd == null)
+                    {
+                        throw new InvalidOperationException("GPU surface command buffer creation failed.");
+                    }
+
                     api.QueueSubmit(_engine.Queue, 1, &cmd);
-
-                    using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentSwapOp))
-                        api.SurfacePresent(_surface);
-
-                    api.CommandBufferRelease(cmd);
-                    api.RenderPassEncoderRelease(pass);
-                    api.CommandEncoderRelease(encoder);
-                    api.TextureViewRelease(view);
-                    api.TextureRelease(st.Texture);
                 }
+
+                using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentSwapOp))
+                    api.SurfacePresent(_surface);
 
                 _engine.EvictStale();
                 return true;
             }
-            catch
+            finally
             {
-                return false;
+                if (cmd != null)
+                {
+                    api.CommandBufferRelease(cmd);
+                }
+
+                if (pass != null)
+                {
+                    api.RenderPassEncoderRelease(pass);
+                }
+
+                if (encoder != null)
+                {
+                    api.CommandEncoderRelease(encoder);
+                }
+
+                if (view != null)
+                {
+                    api.TextureViewRelease(view);
+                }
+
+                api.TextureRelease(st.Texture);
             }
         }
     }

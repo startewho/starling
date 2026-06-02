@@ -27,6 +27,7 @@ public sealed class NativeViewportRenderer : IDisposable
 {
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
+    private readonly bool _ownsBackend;
     // One session tile cache for all composited documents (chrome / page / overlay):
     // their layer-root elements are distinct objects, so they never collide on a
     // layer id within the shared grid.
@@ -34,9 +35,21 @@ public sealed class NativeViewportRenderer : IDisposable
     private bool _disposed;
 
     public NativeViewportRenderer(IDiagnostics? diagnostics = null)
+        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diagnostics), diagnostics, ownsBackend: true)
     {
+    }
+
+    internal NativeViewportRenderer(IPaintBackend backend, IDiagnostics? diagnostics = null)
+        : this(backend, diagnostics, ownsBackend: false)
+    {
+    }
+
+    private NativeViewportRenderer(IPaintBackend backend, IDiagnostics? diagnostics, bool ownsBackend)
+    {
+        ArgumentNullException.ThrowIfNull(backend);
         _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
+        _backend = backend;
+        _ownsBackend = ownsBackend;
         _tiles = new TileGrid(_diag);
     }
 
@@ -117,7 +130,14 @@ public sealed class NativeViewportRenderer : IDisposable
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(chromeRoot);
         ArgumentNullException.ThrowIfNull(pageRoot);
-        if (surfaceWidth <= 0 || surfaceHeight <= 0 || scale <= 0) return false;
+        if (surfaceWidth <= 0 || surfaceHeight <= 0)
+        {
+            throw new ArgumentException("Surface dimensions must be positive.");
+        }
+        if (scale <= 0)
+        {
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+        }
 
         var chromeDevH = (int)Math.Ceiling(chromeHeightCss * scale);
         var logicalW = surfaceWidth / scale;
@@ -184,7 +204,10 @@ public sealed class NativeViewportRenderer : IDisposable
         }
         finally
         {
-            foreach (var bmp in keepAlive) bmp.Dispose();
+            foreach (var bmp in keepAlive)
+            {
+                bmp.Dispose();
+            }
         }
     }
 
@@ -196,8 +219,15 @@ public sealed class NativeViewportRenderer : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
-        _backend.Dispose();
+        if (_ownsBackend)
+        {
+            _backend.Dispose();
+        }
     }
 }

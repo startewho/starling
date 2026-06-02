@@ -33,7 +33,7 @@ public sealed class GpuCompositeParityTests
     private static (RenderedBitmap cpu, RenderedBitmap gpu) RenderBothPaths(string html, int w, int h, float scale)
     {
         var root = Layout(html, w, h);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         // Independent trees so neither path's per-layer picture cache perturbs the
         // other. Both feed the same geometry to CPU BlendOp vs GPU blend.
@@ -170,7 +170,7 @@ public sealed class GpuCompositeParityTests
             "<div style=\"opacity:0.5;position:absolute;left:80px;top:20px;width:100px;height:120px;background-color:#aa33aa\"></div>" +
             "</body>";
 
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         RenderedBitmap RenderGpu(string html)
         {

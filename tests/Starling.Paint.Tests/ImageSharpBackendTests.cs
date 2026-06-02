@@ -136,15 +136,15 @@ public sealed class ImageSharpBackendTests
 
     /// <summary>
     /// Pages that exceed wgpu's <c>maxTextureDimension2D</c> default (8192 px)
-    /// must not crash the host: the GPU path falls back to the CPU rasterizer
-    /// for that frame because wgpu's default uncaptured-error handler turns
-    /// a CreateTexture validation error into a process <c>abort()</c>, which
-    /// no C# try/catch can intercept. Regression: loading netclaw.dev under
-    /// the AppHost default (<c>STARLING_PAINT_BACKEND=imagesharp-gpu</c>)
-    /// aborted Starling.Gui inside <c>wgpuDeviceCreateTexture</c>.
+    /// must fail before invoking <c>wgpuDeviceCreateTexture</c>. wgpu's default
+    /// uncaptured-error handler turns a CreateTexture validation error into a
+    /// process <c>abort()</c>, which no C# try/catch can intercept. Regression:
+    /// loading netclaw.dev under the AppHost default
+    /// (<c>STARLING_PAINT_BACKEND=imagesharp-gpu</c>) aborted Starling.Gui inside
+    /// <c>wgpuDeviceCreateTexture</c>.
     /// </summary>
     [TestMethod]
-    public void Oversized_viewport_falls_back_to_cpu_instead_of_aborting()
+    public void Oversized_viewport_fails_before_allocating_gpu_texture()
     {
         var list = new PaintList();
         list.Add(new FillRect(new LayoutRect(0, 0, 100, 100), new Starling.Css.Values.CssColor(0, 0, 255, 255), FillRectPixelAlignment.Preserve));
@@ -156,7 +156,8 @@ public sealed class ImageSharpBackendTests
             using var bmp = backend.Render(list, new LayoutSize(1024, 9000));
         };
 
-        act.Should().NotThrow("a viewport taller than maxTextureDimension2D must fall back to CPU, not invoke wgpuDeviceCreateTexture");
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*exceeds*8192*");
     }
 
     /// <summary>
@@ -324,4 +325,3 @@ public sealed class ImageSharpBackendTests
     }
 
 }
-

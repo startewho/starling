@@ -64,8 +64,8 @@ internal sealed unsafe class GpuLayerCompositor : IDisposable
 
     /// <summary>
     /// Probes for a GPU adapter and builds the device once. Returns <c>null</c> on
-    /// any failure so the caller can fall back to the CPU blend — a host with no
-    /// GPU (CI, a sandbox) must still composite.
+    /// any failure. WebGPU sessions treat that as a render failure; tests can skip
+    /// when the host has no adapter.
     /// </summary>
     internal static GpuLayerCompositor? TryCreate()
     {
@@ -76,29 +76,26 @@ internal sealed unsafe class GpuLayerCompositor : IDisposable
     /// <summary>
     /// Blends <paramref name="ops"/> into <paramref name="output"/> (a
     /// width×height straight-alpha RGBA8 buffer pre-filled opaque white) on the
-    /// GPU. Returns <c>false</c> on any GPU failure so the caller can fall back to
-    /// the CPU blend for this frame.
+    /// GPU. GPU failures are render failures; callers do not fall back to the CPU
+    /// blend for a WebGPU session.
     /// </summary>
-    public bool Composite(byte[] output, int width, int height, IReadOnlyList<LayerBlend> ops)
+    public void Composite(byte[] output, int width, int height, IReadOnlyList<LayerBlend> ops)
     {
-        if (width <= 0 || height <= 0) return false;
+        if (width <= 0 || height <= 0)
+        {
+            throw new ArgumentException("Composite target must have positive dimensions.");
+        }
+
+        GpuBlendEngine.ThrowIfTextureOversized("WebGPU composite target", width, height);
         lock (_gate)
         {
-            try
-            {
-                _engine.BeginFrame();
-                EnsureTarget(width, height);
-                _engine.UploadLayerTextures(ops);
-                var vertexCount = _engine.BuildAndUploadVertices(ops, width, height);
-                RenderPass(width, height, ops, vertexCount);
-                Readback(output, width, height);
-                _engine.EvictStale();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            _engine.BeginFrame();
+            EnsureTarget(width, height);
+            _engine.UploadLayerTextures(ops);
+            var vertexCount = _engine.BuildAndUploadVertices(ops, width, height);
+            RenderPass(width, height, ops, vertexCount);
+            Readback(output, width, height);
+            _engine.EvictStale();
         }
     }
 

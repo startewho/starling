@@ -12,10 +12,8 @@ using Starling.Gui.Core.Rendering;
 using Starling.Gui.Imaging;
 using Starling.Gui.Theme;
 using Starling.Paint.Backend;
-using Starling.Paint.Compositor;
 using System.Diagnostics;
 using Starling.Common.Diagnostics;
-using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Selectors;
@@ -45,7 +43,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly IDiagnostics _diag;
     private readonly Action<string> _onLinkActivated;
     private readonly Action<string, bool> _onStatus;
-    private readonly PageRendererHost _renderer;
+    private readonly IRenderSession _renderSession;
 
     // Given the current page and a new viewport size, reflows the page (reusing
     // its document/resources, no network) and returns the successor — or null
@@ -60,26 +58,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Image _pageImage;
     private readonly Canvas _pageCanvas;
 
-    // Zero-copy present path: when the WebGPU paint backend is available, the page
-    // is composited straight onto a GPU swapchain embedded in the page region. This
-    // skips the GPU-to-CPU readback and WriteableBitmap re-upload that _pageImage
-    // requires. It uses the same layer-tree compositor as the native shell. Each
-    // promoted layer's raster is cached as a GPU texture keyed by slice content hash,
-    // so an animation-only frame re-blits resident textures with new transform and
-    // opacity in one pass. Null or inactive on hosts without a GPU surface, where
-    // _pageImage plus RenderPageBitmap remain the fallback.
-    private readonly NativeViewportRenderer? _nativeRenderer;
-    private GpuSurfacePresenter? _presenter;
+    // Zero-copy present path: when the selected render session supports a GPU
+    // surface, the page is composited straight onto a swapchain embedded in the page
+    // region. The bitmap image path is used only when the session has no surface.
+    private SurfaceFrameTarget? _surfaceTarget;
     private readonly PageSurfaceHost? _pageSurfaceHost;
     private bool _useSurface;
-
-    // The zero-copy GPU surface is the preferred present path whenever a GPU is
-    // available. The readback bitmap path (_pageImage + RenderPageBitmap) is used
-    // only when there is no GPU adapter or surface, or when a developer explicitly
-    // opts in with STARLING_FORCE_READBACK=1 for debugging. See
-    // docs/rendering-present-paths.md.
-    private static readonly bool s_forceReadback =
-        Environment.GetEnvironmentVariable("STARLING_FORCE_READBACK") == "1";
     // Set while a batch of overlay/page mutations runs (notably ShowPage) so the
     // surface path coalesces them into ONE present at the end instead of firing a
     // full layer-tree present per overlay change. Without it a single relayout tick
@@ -185,7 +169,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         _tm = tm;
         _diag = diag;
-        _renderer = new PageRendererHost(diag);
+        _renderSession = RenderSessionFactory.Create(diag);
         _onLinkActivated = onLinkActivated;
         _onStatus = onStatus;
         _relayout = relayout;
@@ -326,14 +310,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         rootGrid.Children.Add(_scroll); Grid.SetRow(_scroll, 1);
 
         // Zero-copy GPU present surface. Stand it up only where it can work: macOS
-        // (the CAMetalLayer host is the only wired platform) with the WebGPU paint
-        // backend active. The actual GPU device is created lazily in OnSurfaceReady;
-        // if no adapter is present there we drop back to the readback path. The host
-        // is a click-through overlay pinned to the viewport's top-left so the chrome
-        // and the ScrollViewer's scrollbars/input keep working underneath.
-        if (OperatingSystem.IsMacOS() && PaintBackendSelector.Selected == PaintBackendKind.ImageSharpWebGpu)
+        // with a render session that supports surface targets. The actual surface
+        // target is created lazily in OnSurfaceReady.
+        if (OperatingSystem.IsMacOS() && _renderSession.SupportsSurfaceTargets)
         {
-            _nativeRenderer = new NativeViewportRenderer(diag);
             _pageSurfaceHost = new PageSurfaceHost
             {
                 Scale = _currentScale,
@@ -411,14 +391,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var isNavigation = !ReferenceEquals(_scrollOffsetsDocument, page.Document);
         if (isNavigation)
         {
-            _renderer.ResetForNavigation();
-            // The surface present path keeps its own per-layer caches (separate from
-            // the readback _renderer's), so drop them on navigation too. On an
-            // in-place relayout they survive because they are content-hash keyed.
-            _nativeRenderer?.ResetForNavigation();
+            _renderSession.ResetForNavigation();
         }
         else
-            _renderer.InvalidateCache();
+            _renderSession.InvalidateBitmapCache();
 
 
         // Coalesce the surface present across this whole swap. ShowPage mutates
@@ -543,7 +519,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // Zero-copy path: present the viewport straight to the GPU surface. The
         // overlay is pinned at the viewport's top-left and sized to the visible
         // region; on scroll we re-present at the new page-coord offset (the surface
-        // itself does not scroll). Falls through to the readback path on any failure.
+        // itself does not scroll). GPU failures throw instead of falling back.
         if (TryPresentSurface(rect))
         {
             _pageSurfaceHost!.Width = rect.Width;
@@ -553,10 +529,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             return;
         }
 
-        // Readback fallback, used when there is no GPU surface or surface setup
-        // failed. Overflow scroll offsets are now threaded into the GPU path, so
-        // scrolled pages no longer force this path. Hide the GPU surface overlay
-        // first because it is pinned on top and a stale frame would occlude the bitmap.
+        // Bitmap path, used only when this session did not start with an active
+        // GPU surface. Hide the GPU surface overlay first because it is pinned on
+        // top and a stale frame would occlude the bitmap.
         if (_pageSurfaceHost is { IsVisible: true }) _pageSurfaceHost.IsVisible = false;
         if (!_pageImage.IsVisible) _pageImage.IsVisible = true;
 
@@ -578,71 +553,65 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// </summary>
     private void OnSurfaceReady()
     {
-        if (_pageSurfaceHost is null || _nativeRenderer is null) return;
-
-        // Developer opt-in: STARLING_FORCE_READBACK=1 keeps the readback fallback
-        // even on a GPU host. Off by default.
-        if (s_forceReadback)
+        if (_pageSurfaceHost is null || !_renderSession.SupportsSurfaceTargets)
         {
-            _diag.Log(DiagLevel.Info, "gui",
-                "STARLING_FORCE_READBACK=1 — using the legacy readback present path (GPU surface disabled).");
             return;
         }
 
         var layer = _pageSurfaceHost.MetalLayerPtr;
-        if (layer == 0) return;
+        if (layer == 0)
+        {
+            return;
+        }
 
         try
         {
-            // Build the GPU device + swapchain bound to the host's CAMetalLayer. Null
-            // means no adapter — keep the readback path.
-            _presenter = GpuSurfacePresenter.CreateForMetalLayer(layer, _diag);
-            if (_presenter is null)
+            // Build the surface target bound to the host's CAMetalLayer.
+            _surfaceTarget = MetalLayerFrameTarget.TryCreate(layer, _diag);
+            if (_surfaceTarget is null)
             {
-                _diag.Log(DiagLevel.Info, "gui", "GPU page surface unavailable; using readback present path");
-                return;
+                throw new InvalidOperationException("GPU page surface unavailable.");
             }
 
             var rect = CurrentViewportRect();
             var (w, h) = DeviceSize(rect);
-            _presenter.Configure(w, h);
+            _surfaceTarget.Configure(w, h);
             _useSurface = true;
             _diag.Log(DiagLevel.Info, "gui", $"zero-copy GPU page surface active ({w}x{h} device px)");
         }
         catch (Exception ex)
         {
-            // Any managed failure standing up the swapchain → drop to the readback
-            // path rather than leaving the panel half-initialized. (A non-unwinding
-            // wgpu panic from an invalid surface config can't be caught here, but the
-            // config is built from surface-advertised caps + a RenderAttachment-only
-            // usage + a positive size, so it is valid by construction.)
-            _diag.LogException("gui", ex, "GPU page surface setup failed; using readback present path");
-            _presenter?.Dispose();
-            _presenter = null;
+            // The selected GPU session must not silently switch to the bitmap path.
+            _diag.LogException("gui", ex, "GPU page surface setup failed");
+            _surfaceTarget?.Dispose();
+            _surfaceTarget = null;
             _useSurface = false;
-            return;
+            throw;
         }
 
-        // Outside the try: the first present routes through TryPresentSurface, which
-        // already has its own fall-back-to-readback guard.
         if (_currentPage is not null)
+        {
             RenderViewportRegion();
+        }
     }
 
     /// <summary>
     /// Presents <paramref name="rect"/> (page-coord viewport) straight to the GPU
-    /// surface — no readback, no WriteableBitmap. Returns false when the surface
-    /// isn't active/ready or the frame couldn't be presented, so the caller falls
-    /// back to <see cref="RenderPageBitmap"/>.
+    /// surface — no readback, no WriteableBitmap. Returns false only when the
+    /// surface is not active or not ready yet.
     /// </summary>
     private bool TryPresentSurface(Starling.Layout.Rect rect)
     {
-        if (!_useSurface || _presenter is null || _nativeRenderer is null
+        if (!_useSurface || _surfaceTarget is null
             || _pageSurfaceHost is null || !_pageSurfaceHost.HasSurface || _currentPage is null)
+        {
             return false;
+        }
 
         if (Activity.Current is { IsStopped: true })
+        {
             Activity.Current = null;
+        }
 
         var (styleOverride, scrollLookup) = BuildRenderInputs();
 
@@ -650,29 +619,42 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         bool ok;
         try
         {
-            // Present at the current viewport: the presenter (re)configures its
+            // Present at the current viewport: the surface target configures its
             // swapchain to ceil(rect × scale) device px as needed, so no explicit
             // Resize call is required. The scroll lookup threads per-container
             // (overflow:scroll) offsets into the layer tree so inner-scrolled pages
             // present on the zero-copy surface instead of dropping to readback.
             using (_diag.Span("gui", "render"))
-                ok = _nativeRenderer.Present(_currentPage.Root, _presenter, (float)_currentScale,
-                    styleOverride, _currentPage.ImageResolver, rect, IsElementAnimatingLayerRoot, overlays,
-                    scrollLookup);
+            using (var frame = _renderSession.Render(new PageFrameRequest
+            {
+                Root = _currentPage.Root,
+                Scale = (float)_currentScale,
+                StyleOverride = styleOverride,
+                Images = _currentPage.ImageResolver,
+                Viewport = rect,
+                IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
+                Overlays = overlays,
+                ScrollOffsets = scrollLookup,
+            }, _surfaceTarget))
+            {
+                ok = frame.Presented;
+            }
         }
         catch (Exception ex)
         {
-            // A hard GPU failure (device lost, surface creation) — drop to the
-            // readback path for the rest of the session instead of throwing on the
-            // UI thread. A merely-outdated surface returns false (not an exception)
-            // and is retried next frame.
-            _diag.LogException("gui", ex, "GPU surface present failed; falling back to readback");
-            _useSurface = false;
-            return false;
+            _diag.LogException("gui", ex, "GPU surface present failed");
+            throw;
         }
 
         if (ok)
+        {
             RecordPresentedFrame();
+        }
+        else
+        {
+            throw new InvalidOperationException("GPU surface did not present the frame.");
+        }
+
         return ok;
     }
 
@@ -2137,14 +2119,24 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             ? unchecked(_currentPage.DisplayListVersion + (int)_animClockMs)
             : _currentPage.DisplayListVersion;
 
-        using var rendered = _renderer.Render(_currentPage.Root, (float)_currentScale,
-            styleOverride, _currentPage.ImageResolver, rect, pageVersion, scrollLookup);
+        using var rendered = _renderSession.Render(new PageFrameRequest
+        {
+            Root = _currentPage.Root,
+            Scale = (float)_currentScale,
+            StyleOverride = styleOverride,
+            Images = _currentPage.ImageResolver,
+            Viewport = rect,
+            PageVersion = pageVersion,
+            ScrollOffsets = scrollLookup,
+        }, CpuBitmapFrameTarget.Instance);
+        var cpuFrame = rendered.Bitmap
+            ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
         var dir = Path.GetDirectoryName(full);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
-            rendered.Rgba, rendered.Width, rendered.Height);
+            cpuFrame.Rgba.Span, cpuFrame.Width, cpuFrame.Height);
         SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, full);
-        return new InputResult(true, $"wrote {full} ({rendered.Width}x{rendered.Height})");
+        return new InputResult(true, $"wrote {full} ({cpuFrame.Width}x{cpuFrame.Height})");
     }
 
     /// <summary>
@@ -2591,7 +2583,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _hoverOverrides = null;
             if (hadOverrides)
             {
-                _renderer.InvalidateCache();
+                _renderSession.InvalidateBitmapCache();
                 RenderViewportRegion();
             }
             return;
@@ -2602,7 +2594,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // (non-hover) pixels. Wholesale invalidation keeps the cache simple:
         // any display-list change is a full miss.
         _hoverOverrides = newOverrides;
-        _renderer.InvalidateCache();
+        _renderSession.InvalidateBitmapCache();
         // While a hover transition runs, hand off to the live loop: it ticks the
         // clock, re-samples the overrides, and repaints each frame until the
         // transition settles. _animating lets this immediate paint already overlay
@@ -2763,7 +2755,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var animate = _animating && _currentPage is not null;
         var (styleOverride, scrollLookup) = BuildRenderInputs();
 
-        RenderedBitmap rendered;
         // While animating, the painted pixels change every frame even though the
         // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
         // key by the animation clock to force a fresh raster each frame.
@@ -2773,23 +2764,30 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // scroll offsets fall back to the flat path because RenderViaLayerTree does
         // not thread those offsets yet.
         var useLayerTree = scrollLookup is null && _animating;
+        RenderFrame rendered;
         using (_diag.Span("gui", "render"))
         {
-            if (useLayerTree)
+            var pageVersion = animate
+                ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
+                : _currentPage!.DisplayListVersion;
+            rendered = _renderSession.Render(new PageFrameRequest
             {
-                rendered = _renderer.RenderViaLayerTree(_currentPage!.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver, viewport, IsElementAnimatingLayerRoot);
-            }
-            else
-            {
-                var pageVersion = animate
-                    ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
-                    : _currentPage!.DisplayListVersion;
-                rendered = _renderer.Render(_currentPage.Root, (float)_currentScale, styleOverride, _currentPage.ImageResolver, viewport, pageVersion, scrollLookup);
-            }
+                Root = _currentPage!.Root,
+                Scale = (float)_currentScale,
+                StyleOverride = styleOverride,
+                Images = _currentPage.ImageResolver,
+                Viewport = viewport,
+                PageVersion = pageVersion,
+                IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
+                ScrollOffsets = scrollLookup,
+                UseLayerTree = useLayerTree,
+            }, CpuBitmapFrameTarget.Instance);
         }
+        var cpuFrame = rendered.Bitmap
+            ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
         WriteableBitmap bmp;
         using (rendered)
-            bmp = BitmapBridge.ToWriteableBitmap(rendered, _currentScale);
+            bmp = BitmapBridge.ToWriteableBitmap(cpuFrame, _currentScale);
 
         (_pageImage.Source as IDisposable)?.Dispose();
         _pageImage.Source = bmp;
@@ -3060,9 +3058,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _relayoutTimer.Stop();
         _caretBlinkTimer.Stop();
         _liveTimer.Stop();
-        _presenter?.Dispose();
-        _nativeRenderer?.Dispose();
-        _renderer.Dispose();
+        _surfaceTarget?.Dispose();
+        _renderSession.Dispose();
         _currentPage?.Dispose();
         // Detach the bitmap before disposing it: a teardown layout pass can
         // otherwise measure the Image against an already-disposed bitmap.
