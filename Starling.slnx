@@ -11,6 +11,7 @@
     <Project Path="src/Starling.Shell.Native/Starling.Shell.Native.csproj" />
     <Project Path="src/Starling.Mcp/Starling.Mcp.csproj" />
     <Project Path="src/Starling.Telemetry/Starling.Telemetry.csproj" />
+    <Project Path="src/Starling.Telemetry.Daemon/Starling.Telemetry.Daemon.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="bench/Starling.Bench/Starling.Bench.csproj" />
@@ -31,6 +32,7 @@
     <Project Path="tests/Starling.Mcp.Tests/Starling.Mcp.Tests.csproj" />
     <Project Path="tests/Starling.Net.Tests/Starling.Net.Tests.csproj" />
     <Project Path="tests/Starling.Paint.Tests/Starling.Paint.Tests.csproj" />
+    <Project Path="tests/Starling.Telemetry.Daemon.Tests/Starling.Telemetry.Daemon.Tests.csproj" />
     <Project Path="tests/Starling.Spec.Common/Starling.Spec.Common.csproj" />
     <Project Path="tests/Starling.Url.Tests/Starling.Url.Tests.csproj" />
     <Project Path="tests/Starling.Wpt.Tests/Starling.Wpt.Tests.csproj" />

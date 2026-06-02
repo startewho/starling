@@ -17,7 +17,7 @@
          nuget.org. -->
     <PackageVersion Include="SixLabors.ImageSharp.Drawing" Version="3.0.1-alpha.0.2" />
     <PackageVersion Include="SixLabors.ImageSharp.Drawing.WebGPU" Version="1.0.*" />
-    <PackageVersion Include="SixLabors.Fonts"              Version="3.*" />
+    <PackageVersion Include="SixLabors.Fonts" Version="3.*" />
 
     <!-- Direct WebGPU bindings for the GPU layer-composite blend
          (wp:M12-13-gpu-composite-blend). They already arrive transitively via
@@ -26,7 +26,7 @@
          pipeline, texture cache) directly to blend cached layers on the GPU.
          Same native wgpu binary WgpuNativeLoader already loads — no new native
          dependency. -->
-    <PackageVersion Include="Silk.NET.WebGPU"                Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.WebGPU" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.WebGPU.Extensions.WGPU" Version="2.23.0" />
 
     <!-- Native windowing + input for the Silk.NET browser shell
@@ -34,29 +34,41 @@
          presents the GPU compositor zero-copy to a wgpu swapchain. Sub-packages
          pinned at the versions on disk (the metapackages lag a point release). -->
     <PackageVersion Include="Silk.NET.Windowing.Common" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.Windowing.Glfw"   Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.Input.Common"     Version="2.22.0" />
-    <PackageVersion Include="Silk.NET.Input.Glfw"       Version="2.22.0" />
-    <PackageVersion Include="Silk.NET.Maths"            Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.GLFW"             Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Windowing.Glfw" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Input.Common" Version="2.22.0" />
+    <PackageVersion Include="Silk.NET.Input.Glfw" Version="2.22.0" />
+    <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.GLFW" Version="2.23.0" />
 
-    <PackageVersion Include="ModelContextProtocol"         Version="1.3.0" />
+    <PackageVersion Include="ModelContextProtocol" Version="1.3.0" />
+
+    <!-- Standalone telemetry daemon (Starling.Telemetry.Daemon): an OTLP
+         receiver that ingests the browser's spans/metrics/logs over gRPC
+         (:4317) and HTTP/protobuf (:4318). Grpc.Tools compiles the vendored
+         opentelemetry-proto contract under Protos/; Google.Protobuf parses the
+         export requests; Grpc.AspNetCore hosts the collector services. Host app
+         only — not referenced by any engine project, so the managed-first
+         interop policy is unaffected. -->
+    <PackageVersion Include="Grpc.AspNetCore" Version="2.80.0" />
+    <PackageVersion Include="Grpc.Tools" Version="2.81.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.35.0" />
 
     <!-- Avalonia 12 GUI experiment (Starling.Gui). Plain net10.0
          desktop exe, no Catalyst bundle. Avalonia.Diagnostics intentionally
          omitted — no 12.x release yet. -->
-    <PackageVersion Include="Avalonia"               Version="12.0.3" />
-    <PackageVersion Include="Avalonia.Desktop"       Version="12.0.3" />
+    <PackageVersion Include="Avalonia" Version="12.0.3" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.0.3" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.3" />
-    <PackageVersion Include="Avalonia.Skia"          Version="12.0.3" />
+    <PackageVersion Include="Avalonia.Skia" Version="12.0.3" />
     <!-- Headless platform + xUnit adapter for GUI control/render tests
          (must match the Avalonia core version). -->
-    <PackageVersion Include="Avalonia.Headless"       Version="12.0.3" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.0.3" />
     <PackageVersion Include="Avalonia.Headless.XUnit" Version="12.0.3" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+    <!-- 10.0.8+ required transitively by Aspire.Hosting.Yarp 13.4.0 (NU1109 otherwise). -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
 
     <!-- Crypto: pure-managed TLS support (consumed from M2 onward) -->
-    <PackageVersion Include="BouncyCastle.Cryptography"    Version="2.5.0" />
+    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.5.0" />
 
     <!-- Alternative JS engine (Starling.Bindings.Jint). Jint is a pure-managed
          interpreter — its only dependency is Acornima (managed JS parser),
@@ -64,7 +76,7 @@
          the managed-first interop policy holds like BouncyCastle. Selected at
          runtime via STARLING_JS_ENGINE=jint; removable by deleting the backend
          project + this line. -->
-    <PackageVersion Include="Jint"                         Version="4.9.2" />
+    <PackageVersion Include="Jint" Version="4.9.2" />
 
     <!-- Legacy single-byte / CJK encodings (pure-managed; Rule-0 clean).
          Consumed by Starling.Engine for WHATWG-table charset support. -->
@@ -73,29 +85,29 @@
     <!-- Aspire orchestration + observability (Starling.AppHost + Starling.ServiceDefaults). -->
     <!-- YARP hosting integration: serves the repo-root sites/ directory at stable
          localhost paths for engine smoke-testing (Starling.AppHost "sites" resource). -->
-    <PackageVersion Include="Aspire.Hosting.Yarp"                           Version="13.3.5" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.5.0" />
-    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery"         Version="10.5.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol"  Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting"              Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore"      Version="1.15.2" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http"            Version="1.15.1" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime"         Version="1.15.1" />
+    <PackageVersion Include="Aspire.Hosting.Yarp" Version="13.4.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.5.0" />
+    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.1" />
 
     <!-- Tests + bench. Tests use MSTest on Microsoft Testing Platform (MTP);
          each test csproj sets EnableMSTestRunner + OutputType=Exe via
          Directory.Build.props so it produces a runnable MTP host. No
          Microsoft.NET.Test.Sdk reference is needed under MTP. -->
-    <PackageVersion Include="MSTest"                       Version="4.2.3" />
-    <PackageVersion Include="MSTest.TestFramework"         Version="4.2.3" />
+    <PackageVersion Include="MSTest" Version="4.2.3" />
+    <PackageVersion Include="MSTest.TestFramework" Version="4.2.3" />
     <!-- xUnit v3 (native Microsoft Testing Platform) for the Avalonia headless
          GUI tests; Avalonia.Headless.XUnit 12.0.3 targets xunit.v3. -->
-    <PackageVersion Include="xunit.v3"                     Version="3.2.2" />
-    <PackageVersion Include="AwesomeAssertions"             Version="9.4.0" />
-    <PackageVersion Include="BenchmarkDotNet"              Version="0.14.0" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
 
     <!-- Analyzers (PrivateAssets in Directory.Build.props) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.0.0" />
-    <PackageVersion Include="Roslynator.Analyzers"               Version="4.13.1" />
+    <PackageVersion Include="Roslynator.Analyzers" Version="4.13.1" />
   </ItemGroup>
 </Project>

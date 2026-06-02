@@ -29,15 +29,19 @@
   <!-- ImageSharp.Drawing 3.0 is the sole paint backend after the Skia/Graphite
        native shim was removed. ImageSharp 4 + Drawing 3 + Fonts 3 require a
        Six Labors license key at build time; the repo-root sixlabors.lic is
-       picked up via Directory.Build.props' SixLaborsLicenseFile property. -->
+       picked up via Directory.Build.props' SixLaborsLicenseFile property. The
+       WebGPU package supplies the compute-shader raster target (WebGPURenderTarget);
+       the on-screen present is handled by Starling's own Silk.NET.WebGPU compositor
+       (GpuSurfacePresenter), so no patched/local SixLabors source is needed. -->
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" />
+    <PackageReference Include="SixLabors.Fonts" />
     <PackageReference Include="SixLabors.ImageSharp.Drawing" />
     <PackageReference Include="SixLabors.ImageSharp.Drawing.WebGPU" />
-    <PackageReference Include="SixLabors.Fonts" />
     <!-- Direct WebGPU bindings: the GPU layer-composite blend
          (wp:M12-13-gpu-composite-blend) drives wgpu itself to keep cached layer
-         textures resident and blend them in a single pass. -->
+         textures resident and blend them in a single pass — and now to present the
+         page straight onto a host-owned CAMetalLayer swapchain (GpuSurfacePresenter). -->
     <PackageReference Include="Silk.NET.WebGPU" />
     <PackageReference Include="Silk.NET.WebGPU.Extensions.WGPU" />
   </ItemGroup>

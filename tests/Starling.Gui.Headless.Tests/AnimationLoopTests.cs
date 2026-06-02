@@ -109,7 +109,7 @@ public class AnimationLoopTests
         // across frames the layer's CONTENT is unchanged — only the matrix moves.
         // Phase 5 routes the live repaint through RenderViaLayerTree with a
         // clock-free page version, so the second frame re-blits the layer pixels
-        // from cache (paint.cache.hit > 0) instead of re-rasterizing, while the
+        // from cache (paint.tile.cache_hit > 0) instead of re-rasterizing, while the
         // composited output still moves.
         const string html = """
             <!doctype html><html><body>
@@ -139,11 +139,11 @@ public class AnimationLoopTests
         // serve their content from cache — proof the clock-free layer-tree path
         // ran (the flat path's clock-keyed version would miss every frame).
         var near = PixelAtFrame(engine, panel, page, nowMs: 0, x: 40, y: 40);
-        var hitsAfterSeed = diag.CountOf("paint.cache.hit");
+        var hitsAfterSeed = diag.CountOf("paint.tile.cache_hit");
         _ = PixelAtFrame(engine, panel, page, nowMs: 600, x: 40, y: 40);
         var farLeft = PixelAtFrame(engine, panel, page, nowMs: 999, x: 40, y: 40);
 
-        diag.CountOf("paint.cache.hit").Should().BeGreaterThan(hitsAfterSeed,
+        diag.CountOf("paint.tile.cache_hit").Should().BeGreaterThan(hitsAfterSeed,
             "the transform-only frame re-blits each layer's content from cache");
 
         // x=40 starts inside the red box (translateX≈0). Red is rgb(255,0,0), so

@@ -160,6 +160,27 @@ public static class OtelBootstrap
         return new OtelHandle(tracerProvider, meterProvider, loggerFactory, telemetryStream);
     }
 
+    /// <summary>
+    /// Convenience bridge for the standalone telemetry daemon. When
+    /// <c>STARLING_TELEMETRY_DAEMON</c> is set (e.g. <c>http://localhost:4318</c>)
+    /// this points the standard OTLP exporter at it over HTTP/protobuf, so a host
+    /// only needs that one env var to stream its spans/metrics/logs to the daemon
+    /// — no Aspire AppHost required. Existing explicit
+    /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>/<c>_PROTOCOL</c> values win (so Aspire
+    /// runs are untouched). Call this once at the very top of <c>Main</c>, before
+    /// <see cref="AddStarlingTelemetry"/> / <see cref="Initialize"/>.
+    /// </summary>
+    public static void ConfigureDaemonExportFromEnv()
+    {
+        var daemon = Environment.GetEnvironmentVariable("STARLING_TELEMETRY_DAEMON");
+        if (string.IsNullOrWhiteSpace(daemon)) return;
+
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")))
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", daemon);
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")))
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
+    }
+
     private static bool HasOtlpEndpoint()
         => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
 

@@ -1,7 +1,5 @@
-using Starling.Common.Diagnostics;
 using Starling.Css.Values;
 using Starling.Layout;
-using Starling.Paint.Cache;
 using PaintList = Starling.Paint.DisplayList.DisplayList;
 
 namespace Starling.Paint.Compositor;
@@ -30,9 +28,8 @@ internal sealed class CompositorLayer
         float opacity,
         Rect? clip,
         IReadOnlyList<CompositorLayer> children,
-        IDiagnostics? diagnostics = null,
-        PictureCache? cache = null,
-        long contentHash = 0)
+        long contentHash = 0,
+        long layerId = 0)
     {
         Items = items;
         Bounds = bounds;
@@ -41,12 +38,7 @@ internal sealed class CompositorLayer
         Clip = clip;
         Children = children;
         ContentHash = contentHash;
-        // A persistent cache (keyed by layer identity across frames) is supplied
-        // by the compositing session so a transform/opacity-only change re-blits
-        // the layer from cache instead of re-rasterizing it (plan Phase 5). When
-        // none is supplied the layer owns a fresh per-call cache (the original
-        // M12-04 behaviour, used by one-shot renders and tests).
-        Cache = cache ?? new PictureCache(diagnostics);
+        LayerId = layerId;
     }
 
     /// <summary>Page-coord union of the painted items in this layer's slice.</summary>
@@ -78,8 +70,12 @@ internal sealed class CompositorLayer
     /// </summary>
     public IReadOnlyList<CompositorLayer> Children { get; }
 
-    /// <summary>One picture cache per layer (generalizes the M12-02 single cache).</summary>
-    public PictureCache Cache { get; }
+    /// <summary>
+    /// Stable cross-frame id of this layer (from its root element via
+    /// <see cref="TileGrid.LayerIdFor"/>), used as the tile cache key's layer
+    /// component. 0 when the layer has no element (no cross-frame tile reuse).
+    /// </summary>
+    public long LayerId { get; }
 
     /// <summary>
     /// 64-bit content hash of this layer's slice (LTF-02), used as the picture

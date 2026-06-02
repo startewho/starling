@@ -35,14 +35,25 @@ public sealed class InMemoryActivitySink : IDisposable
     private readonly object _gate = new();
     private int _head;
     private int _count;
-    private readonly ActivityListener _listener;
+    private readonly ActivityListener? _listener;
     private readonly HashSet<string> _sources;
     private readonly ConcurrentBag<Channel<ActivityRecord>> _subscribers = [];
     private bool _disposed;
 
-    public InMemoryActivitySink(params string[] sources)
+    public InMemoryActivitySink(params string[] sources) : this(attachListener: true, sources) { }
+
+    /// <summary>
+    /// Construct the sink, optionally skipping the in-process
+    /// <see cref="ActivityListener"/>. Pass <paramref name="attachListener"/> =
+    /// false when the buffer is fed exclusively via <see cref="Ingest"/> (e.g.
+    /// the telemetry daemon receiving spans over OTLP from another process) so
+    /// the daemon's own activities don't leak into the ring buffer.
+    /// </summary>
+    public InMemoryActivitySink(bool attachListener, params string[] sources)
     {
         _sources = new HashSet<string>(sources, StringComparer.Ordinal);
+        if (!attachListener) return;
+
         _listener = new ActivityListener
         {
             ShouldListenTo = src => _sources.Contains(src.Name),
@@ -55,6 +66,14 @@ public sealed class InMemoryActivitySink : IDisposable
         };
         ActivitySource.AddActivityListener(_listener);
     }
+
+    /// <summary>
+    /// Append an externally-sourced span record (e.g. decoded from OTLP) into
+    /// the ring buffer and fan it out to subscribers — the same path the local
+    /// <see cref="ActivityListener"/> uses, so daemon-ingested spans read back
+    /// identically through <see cref="Snapshot"/>.
+    /// </summary>
+    public void Ingest(ActivityRecord record) => Store(record);
 
     public ActivityRecord[] Snapshot()
     {
@@ -98,6 +117,11 @@ public sealed class InMemoryActivitySink : IDisposable
             activity.Status,
             tags);
 
+        Store(record);
+    }
+
+    private void Store(ActivityRecord record)
+    {
         lock (_gate)
         {
             _buffer[_head] = record;
@@ -112,7 +136,7 @@ public sealed class InMemoryActivitySink : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _listener.Dispose();
+        _listener?.Dispose();
         foreach (var subscriber in _subscribers)
             subscriber.Writer.TryComplete();
     }

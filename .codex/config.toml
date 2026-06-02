@@ -1,0 +1,9 @@
+[mcp_servers.aspire]
+command = "aspire"
+args = [
+    "agent",
+    "mcp",
+]
+
+[mcp_servers.starling]
+url = "http://127.0.0.1:3078/mcp"

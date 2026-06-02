@@ -30,18 +30,17 @@ public sealed class NativeViewportRenderer : IDisposable
 {
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
-    private readonly LayerCacheStore _layerCaches;
-    private readonly LayerCacheStore _chromeCaches;
-    private readonly LayerCacheStore _overlayCaches;
+    // One session tile cache for all composited documents (chrome / page / overlay):
+    // their layer-root elements are distinct objects, so they never collide on a
+    // layer id within the shared grid (wp:M12-05).
+    private readonly TileGrid _tiles;
     private bool _disposed;
 
     public NativeViewportRenderer(IDiagnostics? diagnostics = null)
     {
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
-        _layerCaches = new LayerCacheStore(_diag);
-        _chromeCaches = new LayerCacheStore(_diag);
-        _overlayCaches = new LayerCacheStore(_diag);
+        _tiles = new TileGrid(_diag);
     }
 
     /// <summary>
@@ -58,7 +57,9 @@ public sealed class NativeViewportRenderer : IDisposable
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         LayoutRect? viewport = null,
-        Func<Box, bool>? isAnimatingLayerRoot = null)
+        Func<Box, bool>? isAnimatingLayerRoot = null,
+        IReadOnlyList<SurfaceOverlayRect>? overlays = null,
+        Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -66,12 +67,14 @@ public sealed class NativeViewportRenderer : IDisposable
 
         try
         {
-            var tree = new LayerTreeBuilder(styleOverride, images, _diag, _layerCaches.CacheFor, isAnimatingLayerRoot).Build(root);
+            var tree = new LayerTreeBuilder(styleOverride, images, _diag,
+                isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
+                scrollOffsets: scrollOffsets).Build(root);
             var region = viewport ?? new LayoutRect(0, 0,
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
-            var compositor = new Compositor(_backend, _diag);
-            return compositor.RenderToSurface(tree, region, scale, presenter);
+            var compositor = new Compositor(_backend, _diag, _tiles);
+            return compositor.RenderToSurface(tree, region, scale, presenter, overlays);
         }
         catch (Exception ex)
         {
@@ -115,20 +118,21 @@ public sealed class NativeViewportRenderer : IDisposable
         var logicalW = surfaceWidth / scale;
         var logicalH = surfaceHeight / scale;
 
-        var chromeTree = new LayerTreeBuilder(null, null, _diag, _chromeCaches.CacheFor, null).Build(chromeRoot);
-        var pageTree = new LayerTreeBuilder(styleOverride, images, _diag, _layerCaches.CacheFor, pageAnimating).Build(pageRoot);
+        var chromeTree = new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(chromeRoot);
+        var pageTree = new LayerTreeBuilder(styleOverride, images, _diag,
+            isAnimatingLayerRoot: pageAnimating, layerIdFor: _tiles.LayerIdFor).Build(pageRoot);
         // Optional overlay (find highlight, context menu, …) drawn in page space,
         // scrolling and clipping with the page content region.
         var overlayTree = overlayRoot is null
             ? null
-            : new LayerTreeBuilder(null, images, _diag, _overlayCaches.CacheFor, null).Build(overlayRoot);
+            : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(overlayRoot);
         // Screen-fixed overlay (context menu, devtools panel, …) drawn in window
         // space over everything, no scroll.
         var screenOverlayTree = screenOverlayRoot is null
             ? null
-            : new LayerTreeBuilder(null, images, _diag, _overlayCaches.CacheFor, null).Build(screenOverlayRoot);
+            : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(screenOverlayRoot);
 
-        var compositor = new Compositor(_backend, _diag);
+        var compositor = new Compositor(_backend, _diag, _tiles);
         var ops = new List<LayerBlend>();
         var keepAlive = new List<RenderedBitmap>();
         try
@@ -167,6 +171,10 @@ public sealed class NativeViewportRenderer : IDisposable
                     regionClipDevice: new LayoutRect(0, 0, surfaceWidth, surfaceHeight),
                     ops, keepAlive);
 
+            // Emit this frame's tile miss-ratio / rasters-per-frame. The multi-doc
+            // path has no single Render exit to hook, so flush after the last
+            // AppendSurfaceOps (the Compositor is one frame, so the tally is exact).
+            compositor.FlushTileFrameMetrics();
             return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
         }
         finally
@@ -175,11 +183,10 @@ public sealed class NativeViewportRenderer : IDisposable
         }
     }
 
-    /// <summary>Drops all per-layer caches — call on navigation to a new document.</summary>
+    /// <summary>Drops the tile cache — call on navigation to a new document.</summary>
     public void ResetForNavigation()
     {
-        _layerCaches.Clear();
-        _overlayCaches.Clear();
+        _tiles.Clear();
     }
 
     public void Dispose()
