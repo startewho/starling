@@ -150,9 +150,8 @@ public sealed record SpreadElement(
     : Expression(Start, End);
 
 /// <summary>
-/// <c>function () { … }</c> as an expression. Name is optional (named
-/// function expressions bind their own name inside the body — but that
-/// binding is M3-04c closure work; for now the name is informational).
+/// <c>function () { ... }</c> as an expression. Name is optional. Named
+/// function expressions bind their own name inside the body.
 /// </summary>
 public sealed record FunctionExpression(
     Identifier? Name,

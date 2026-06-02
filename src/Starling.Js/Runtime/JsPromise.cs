@@ -19,8 +19,8 @@ public enum PromiseState : byte
 /// Stored as a real subclass (rather than an internal-slot map on a plain
 /// <see cref="JsObject"/>) so the VM and intrinsics can fast-path-check via
 /// <c>is JsPromise</c> — useful for <c>Promise.resolve</c>'s identity
-/// shortcut, future <c>JSON.stringify</c> handling, and async/await
-/// adoption (B1b-2c).
+/// shortcut, async and await adoption, and callers that need Promise-specific
+/// state without property lookups.
 /// </remarks>
 public sealed class JsPromise : JsObject
 {

@@ -10,16 +10,8 @@ namespace Starling.Js.Intrinsics;
 /// <remarks>
 /// <para>
 /// Array-returning methods (<c>keys</c>, <c>values</c>, <c>entries</c>,
-/// <c>getOwnPropertyNames</c>, <c>getOwnPropertySymbols</c>) currently return
-/// ordinary objects with integer-string keys and a <c>length</c> data slot —
-/// the dedicated <c>JsArray</c> exotic object lands in B2-4. Until then the
-/// shape is observationally compatible with array indexing + <c>length</c>.
-/// </para>
-/// <para>
-/// Strict-throw on write to non-writable properties is not yet wired in the
-/// VM — <c>JsObject.Set</c> silently no-ops on rejected writes per
-/// §10.1.9 sloppy semantics. Once strict-mode emission lands, this surface
-/// becomes spec-correct without further changes here.
+/// <c>getOwnPropertyNames</c>, and <c>getOwnPropertySymbols</c>) return real
+/// <see cref="JsArray"/> instances.
 /// </para>
 /// </remarks>
 public static class ObjectCtor
@@ -531,9 +523,9 @@ public static class ObjectCtor
         return JsValue.Boolean(AbstractOperations.SameValue(a, b));
     }
 
-    /// <summary>§20.1.2.7 Object.fromEntries — accepts an array of [k,v] pairs
-    /// represented as our array-like ordinary objects. Full iterator-protocol
-    /// support lands in B3-2.</summary>
+    /// <summary>§20.1.2.7 Object.fromEntries. This implementation accepts an
+    /// array-like object of <c>[key, value]</c> pairs. General iterable input
+    /// is not consumed yet.</summary>
     private static JsValue FromEntries(JsRealm realm, JsValue[] args)
     {
         if (args.Length == 0 || !args[0].IsObject)
@@ -542,7 +534,7 @@ public static class ObjectCtor
         var result = realm.NewOrdinaryObject();
         var lengthV = src.Get("length");
         if (!lengthV.IsNumber)
-            throw new JsThrow(realm.NewTypeError("Object.fromEntries: iterable has no length (full iterator support arrives in B3-2)"));
+            throw new JsThrow(realm.NewTypeError("Object.fromEntries: iterable has no length"));
         var len = (int)lengthV.AsNumber;
         for (var i = 0; i < len; i++)
         {

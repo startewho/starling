@@ -26,7 +26,7 @@ namespace Starling.Js.Intrinsics;
 ///   <item><description>
 ///     Iterable-accepting statics (<c>all</c>, <c>allSettled</c>, <c>any</c>,
 ///     <c>race</c>) take array-likes (length + indexed access) rather than
-///     iterators. Full iterator protocol arrives with B3-2.
+///     general iterables.
 ///   </description></item>
 ///   <item><description>
 ///     <c>Promise.any</c>'s aggregate rejection is a real
@@ -36,9 +36,8 @@ namespace Starling.Js.Intrinsics;
 ///   </description></item>
 ///   <item><description>
 ///     Uncaught microtask exceptions surface through the realm's console
-///     sink (HTML "unhandledrejection" hook). The full event-dispatching
-///     surface (Window.onunhandledrejection, etc.) is deferred to B5-1.
-///     TODO: wire to PromiseRejectionEvent once that lands.
+///     sink. <c>PromiseRejectionEvent</c> dispatch on <c>Window</c> is not wired
+///     yet.
 ///   </description></item>
 /// </list>
 /// </remarks>
@@ -559,9 +558,8 @@ public static class PromiseCtor
     //                              Helpers
     // ====================================================================
 
-    /// <summary>§27.2.1.5 NewPromiseCapability (specialized for the
-    /// Promise constructor itself — generic %Promise%-subclass capability
-    /// build awaits B2-3's full ErrorCtor surface).</summary>
+    /// <summary>§27.2.1.5 NewPromiseCapability, specialized for the
+    /// built-in Promise constructor.</summary>
     private static PromiseCapability NewPromiseCapability(JsRealm realm)
     {
         var promise = new JsPromise(realm.PromisePrototype);
@@ -580,9 +578,8 @@ public static class PromiseCtor
         return fresh;
     }
 
-    /// <summary>Pull items out of an array-like (length + index access). Until
-    /// B3-2 there is no real iterator protocol — this is the documented
-    /// simplification used by all of the Promise iterable-statics.</summary>
+    /// <summary>Pull items out of an array-like (length + index access). Promise
+    /// statics do not consume general iterables yet.</summary>
     private static List<JsValue> ArrayLikeToList(JsRealm realm, JsValue iterable)
     {
         if (!iterable.IsObject)
@@ -590,7 +587,7 @@ public static class PromiseCtor
         var obj = iterable.AsObject;
         var lengthV = obj.Get("length");
         if (!lengthV.IsNumber)
-            throw new JsThrow(realm.NewTypeError("Promise iterable has no length (full iterator support arrives in B3-2)"));
+            throw new JsThrow(realm.NewTypeError("Promise iterable has no length"));
         var len = (int)lengthV.AsNumber;
         var items = new List<JsValue>(len);
         for (var i = 0; i < len; i++)
@@ -598,9 +595,9 @@ public static class PromiseCtor
         return items;
     }
 
-    /// <summary>Build the array-like return object for <c>Promise.all</c> +
-    /// <c>allSettled</c>. Mirrors <c>ObjectCtor.MakeArrayLike</c> — a real
-    /// <c>JsArray</c> lands in B2-4.</summary>
+    /// <summary>Build the array-like return object for <c>Promise.all</c> and
+    /// <c>allSettled</c>. This is still a plain object with
+    /// <c>Array.prototype</c>, not a <see cref="JsArray"/>.</summary>
     private static JsValue MakeArrayLike(JsRealm realm, JsValue[] items)
     {
         var arr = realm.NewObjectWithProto(realm.ArrayPrototype);

@@ -12,10 +12,9 @@ namespace Starling.Js.Runtime;
 /// </summary>
 /// <remarks>
 /// <para>
-/// First-cut VM (wp:M3-04). Single-frame execution — function calls are
-/// limited to host-native callables; user-defined function bodies live
-/// in sub-chunks (deferred to the follow-up wp that wires
-/// FunctionDeclaration through the compiler too).
+/// Executes user-defined functions, native host functions, constructors,
+/// generators, async functions, modules, direct eval, and the core control
+/// flow opcodes emitted by <see cref="JsCompiler"/>.
 /// </para>
 /// <para>
 /// Throws <see cref="JsThrow"/> for uncaught script-level throws; the host
@@ -31,18 +30,9 @@ public sealed class JsVm
     /// <summary>Maximum nested JS call depth before a <c>RangeError</c> is
     /// thrown. Each JS call recurses through <c>Run</c> in C#, so an
     /// unbounded JS recursion would otherwise overflow the native stack and
-    /// crash the process (uncatchable). The spec leaves the limit
-    /// implementation-defined (§"so long as … the implementation … throws a
-    /// RangeError"); this value is conservative to stay safe on a default
-    /// (~1 MB) thread stack while still admitting normal recursion.
-    ///
-    /// Empirically the recursive interpreter (RunInner is a large method, ~4
-    /// native frames per JS call) overflows the render path's thread stack near
-    /// ~300 JS frames — well below the old 1000 limit, so an uncatchable
-    /// StackOverflowException (process crash) won out over the guard. 150 keeps a
-    /// safety margin so the guard reliably wins and throws a catchable RangeError.
-    /// (Proper deep-recursion support — running the VM on a dedicated large-stack
-    /// thread / trampolining — is a follow-up; see wp:M3-13.)</summary>
+    /// crash the process. The spec leaves the limit implementation-defined as
+    /// long as recursion fails with a <c>RangeError</c>. Deep recursion support
+    /// will need a trampoline or a dedicated large-stack execution path.</summary>
     private const int MaxCallDepth = 1000;
     private int _callDepth;
 
@@ -712,7 +702,7 @@ public sealed class JsVm
                             break;
                         }
 
-                    // ----- Captured locals (gap:closure-write-back) -----
+                    // ----- Captured locals -----
                     case Opcode.InitCellLocal:
                         {
                             var slot = ReadU16();
@@ -1494,7 +1484,7 @@ public sealed class JsVm
 
                     case Opcode.LoadUpvalue:
                         {
-                            // gap:closure-write-back — every upvalue is a Cell, so
+                            // Every upvalue is a Cell, so
                             // dereference to push the current bound value. Use
                             // LoadUpvalueCell to push the raw cell (for further
                             // chained captures).

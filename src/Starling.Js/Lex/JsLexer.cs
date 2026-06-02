@@ -10,15 +10,16 @@ namespace Starling.Js.Lex;
 /// </summary>
 /// <remarks>
 /// <para>
-/// First-cut implementation (wp:M3-01-js-lexer). Covers ES2024 lexical
-/// grammar minus three context-sensitive pieces deferred to follow-up:
+/// Covers the ES2024 lexical forms used by the parser, including strings,
+/// numbers, template segments, private identifiers, and regular expression
+/// literals. The parser drives context-sensitive scans such as regex-vs-division
+/// and template continuation.
 /// </para>
 /// <list type="bullet">
-///   <item>Template literals (<c>`...${...}`</c>) — need parser-driven state.</item>
-///   <item>RegExp literals (<c>/foo/gi</c>) — disambiguated from division by
-///         the previous token's grammatical position; that's a parser hook.</item>
-///   <item>Full Unicode IdentifierStart / IdentifierPart classification —
-///         uses a permissive ASCII + non-ASCII-letters subset for now.</item>
+///   <item>Identifier scanning accepts ASCII identifiers, Unicode escapes,
+///   surrogate-pair astral identifiers, and a broad non-ASCII letter subset.</item>
+///   <item>Full Unicode IdentifierStart and IdentifierPart tables are not
+///   generated from the spec data yet.</item>
 /// </list>
 /// <para>
 /// Reserved-word categories are first-class <see cref="JsTokenKind"/> values
