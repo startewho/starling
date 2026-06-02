@@ -6,10 +6,11 @@ using Starling.Telemetry.Daemon.Analysis;
 namespace Starling.Telemetry.Daemon.Api;
 
 /// <summary>
-/// MCP tool group exposing the daemon's lag analysis to driving agents,
-/// alongside the reused raw-telemetry tools (browser_telemetry_*). These are
-/// the "pinpoint the lag" surface: ranked span offenders, the frame-time/budget
-/// report, the latest CPU/memory, and per-span CPU/memory correlation.
+/// MCP tool group exposing the daemon's lag analysis to
+/// driving agents, alongside the reused raw-telemetry tools
+/// (browser_telemetry_*). These are the "pinpoint the lag" surface: ranked span
+/// offenders, the frame-time/budget report, the latest CPU/memory, and per-span
+/// CPU/memory correlation.
 /// </summary>
 internal sealed class TelemetryAnalysisTools(TelemetryAnalyzer analyzer) : IMcpToolGroup
 {

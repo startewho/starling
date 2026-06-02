@@ -19,7 +19,7 @@
 // Starling.Telemetry) OpenTelemetry traces + metrics + logs.
 
 // Resolve selection up front so the flags can be stripped from the args handed
-// to Aspire — left in, they'd be parsed as bogus configuration keys.
+// to Aspire. Left in, they'd be parsed as bogus configuration keys.
 var jsEngine = SelectJsEngine(args) ?? Env("STARLING_JS_ENGINE") ?? "starling";
 var paintBackend = SelectPaintBackend(args) ?? Env("STARLING_PAINT_BACKEND") ?? "imagesharp-gpu";
 
@@ -33,14 +33,15 @@ var repoRoot = LocateRepoRoot();
 
 // Avalonia 12 GUI. Plain net10.0 desktop exe — no Catalyst bundle,
 // no `open -a`, no AssemblyName/_AppBundleName divergence — so the normal
-// AddProject<>() path works and OTLP env vars inherit cleanly.
+// AddProject<>() path works and OpenTelemetry Protocol env vars inherit cleanly.
 //
 // Paint + JS selections (resolved above from flags / env / default) are wired
 // onto the resource. The CPU `imagesharp` backend additionally needs the build
 // to compile it in (`/p:EnableImageSharpDrawing3=true`, auto-on in
 // Directory.Build.props when a Six Labors license is present).
 //
-// MCP port: defaults to http://127.0.0.1:3078/mcp; STARLING_MCP_URL still wins.
+// MCP port defaults to http://127.0.0.1:3078/mcp.
+// STARLING_MCP_URL still wins.
 var gui = builder.AddProject<Projects.Starling_Gui>("gui")
     .WithEnvironment("STARLING_PAINT_BACKEND", paintBackend)
     .WithEnvironment("STARLING_JS_ENGINE", jsEngine)

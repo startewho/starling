@@ -1,8 +1,8 @@
 namespace Starling.Html.Tokenizer;
 
 /// <summary>
-/// Character-reference states from WHATWG HTML §13.2.5.72–.80. Owned by
-/// wp:M1-01g. Resolves <c>&amp;name;</c>, <c>&amp;#NNN;</c>, and
+/// Character-reference states from WHATWG HTML §13.2.5.72–.80. Resolves
+/// <c>&amp;name;</c>, <c>&amp;#NNN;</c>, and
 /// <c>&amp;#xHHHH;</c> forms; falls back to ambiguous-ampersand for
 /// unrecognized inputs (emits the literal chars, matching browser behavior
 /// on typo'd entities).

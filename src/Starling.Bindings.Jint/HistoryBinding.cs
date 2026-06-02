@@ -6,7 +6,7 @@ using Starling.Dom.Events;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J2d — HTML §7.7 <c>window.history</c> + <c>popstate</c> (Jint backend).
+/// HTML §7.7 <c>window.history</c> + <c>popstate</c> on the Jint backend.
 /// Mirrors <c>Starling.Bindings/HistoryBinding.cs</c>: per-session
 /// <see cref="SessionHistory"/> with <c>pushState</c>/<c>replaceState</c>
 /// mutating an entry list, <c>back</c>/<c>forward</c>/<c>go</c> traversing it

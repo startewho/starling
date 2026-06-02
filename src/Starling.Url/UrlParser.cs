@@ -15,10 +15,10 @@ namespace Starling.Url;
 /// section number.
 /// </para>
 /// <para>
-/// Limitations of this slice (wp:M2-01a):
+/// Known gaps:
 /// <list type="bullet">
 ///   <item>IDNA Punycode (xn--) is not performed. ASCII domains pass through.</item>
-///   <item>IPv6 bracketed literals return an error; M2-01b will land them.</item>
+///   <item>IPv6 bracketed literals return an unsupported error.</item>
 ///   <item>Base-URL resolution (relative URLs against a base) is implemented
 ///         for the common cases but not exhaustively spec-compliant.</item>
 /// </list>
@@ -450,7 +450,7 @@ public static class UrlParser
 
         private bool InsideBrackets()
         {
-            // For IPv6 literals we'd track [ ... ]; not yet supported.
+            // IPv6 bracket matching is not implemented yet.
             return _buffer.Length > 0 && _buffer[0] == '[' && !_buffer.ToString().Contains(']');
         }
 

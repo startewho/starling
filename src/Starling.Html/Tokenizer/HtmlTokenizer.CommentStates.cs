@@ -2,8 +2,7 @@ namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Comment + CDATA + BogusComment + MarkupDeclarationOpen states from
-/// WHATWG HTML §13.2.5.41–.58 and the CDATA states §13.2.5.69–.71. Owned
-/// by wp:M1-01e.
+/// WHATWG HTML §13.2.5.41–.58 and the CDATA states §13.2.5.69–.71.
 /// </summary>
 /// <remarks>
 /// MarkupDeclarationOpen does bounded multi-character lookahead (up to 7
@@ -124,7 +123,7 @@ public sealed partial class HtmlTokenizer
         }
         if (cdataViable && p.Length == 7)
         {
-            // No foreign content yet (tree builder lands in M1-02). Spec says
+            // No foreign content yet. Spec says
             // outside foreign content this is cdata-in-html-content parse
             // error → comment "[CDATA[" → bogus comment state.
             _errors.Report(HtmlParseError.CdataInHtmlContent, _line, _column);

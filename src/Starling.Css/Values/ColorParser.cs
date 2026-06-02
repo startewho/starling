@@ -120,54 +120,54 @@ public static class ColorParser
         switch (fn)
         {
             case "rgb" or "rgba":
-            {
-                // rgb() channel keywords are numbers in the 0..255 range.
-                var (r, g, b) = SrgbOf(c);
-                t["r"] = r * 255.0; t["g"] = g * 255.0; t["b"] = b * 255.0;
-                return t;
-            }
+                {
+                    // rgb() channel keywords are numbers in the 0..255 range.
+                    var (r, g, b) = SrgbOf(c);
+                    t["r"] = r * 255.0; t["g"] = g * 255.0; t["b"] = b * 255.0;
+                    return t;
+                }
             case "hsl" or "hsla":
-            {
-                var (r, g, b) = SrgbOf(c);
-                var (h, s, l) = ColorConversion.SrgbToHsl(Math.Clamp(r, 0, 1), Math.Clamp(g, 0, 1), Math.Clamp(b, 0, 1));
-                // s/l keywords carry the 0..100 (percentage) magnitude.
-                t["h"] = h; t["s"] = s * 100.0; t["l"] = l * 100.0;
-                return t;
-            }
+                {
+                    var (r, g, b) = SrgbOf(c);
+                    var (h, s, l) = ColorConversion.SrgbToHsl(Math.Clamp(r, 0, 1), Math.Clamp(g, 0, 1), Math.Clamp(b, 0, 1));
+                    // s/l keywords carry the 0..100 (percentage) magnitude.
+                    t["h"] = h; t["s"] = s * 100.0; t["l"] = l * 100.0;
+                    return t;
+                }
             case "hwb":
-            {
-                var (r, g, b) = SrgbOf(c);
-                var rr = Math.Clamp(r, 0, 1); var gg = Math.Clamp(g, 0, 1); var bb = Math.Clamp(b, 0, 1);
-                var (h, _, _) = ColorConversion.SrgbToHsl(rr, gg, bb);
-                var w = Math.Min(rr, Math.Min(gg, bb));
-                var bk = 1 - Math.Max(rr, Math.Max(gg, bb));
-                t["h"] = h; t["w"] = w * 100.0; t["b"] = bk * 100.0;
-                return t;
-            }
+                {
+                    var (r, g, b) = SrgbOf(c);
+                    var rr = Math.Clamp(r, 0, 1); var gg = Math.Clamp(g, 0, 1); var bb = Math.Clamp(b, 0, 1);
+                    var (h, _, _) = ColorConversion.SrgbToHsl(rr, gg, bb);
+                    var w = Math.Min(rr, Math.Min(gg, bb));
+                    var bk = 1 - Math.Max(rr, Math.Max(gg, bb));
+                    t["h"] = h; t["w"] = w * 100.0; t["b"] = bk * 100.0;
+                    return t;
+                }
             case "lab":
-            {
-                var (L, a, b) = ComponentsIn(ColorSpace.Lab, c);
-                t["l"] = L; t["a"] = a; t["b"] = b;
-                return t;
-            }
+                {
+                    var (L, a, b) = ComponentsIn(ColorSpace.Lab, c);
+                    t["l"] = L; t["a"] = a; t["b"] = b;
+                    return t;
+                }
             case "lch":
-            {
-                var (L, ch, h) = ComponentsIn(ColorSpace.Lch, c);
-                t["l"] = L; t["c"] = ch; t["h"] = h;
-                return t;
-            }
+                {
+                    var (L, ch, h) = ComponentsIn(ColorSpace.Lch, c);
+                    t["l"] = L; t["c"] = ch; t["h"] = h;
+                    return t;
+                }
             case "oklab":
-            {
-                var (L, a, b) = ComponentsIn(ColorSpace.Oklab, c);
-                t["l"] = L; t["a"] = a; t["b"] = b;
-                return t;
-            }
+                {
+                    var (L, a, b) = ComponentsIn(ColorSpace.Oklab, c);
+                    t["l"] = L; t["a"] = a; t["b"] = b;
+                    return t;
+                }
             case "oklch":
-            {
-                var (L, ch, h) = ComponentsIn(ColorSpace.Oklch, c);
-                t["l"] = L; t["c"] = ch; t["h"] = h;
-                return t;
-            }
+                {
+                    var (L, ch, h) = ComponentsIn(ColorSpace.Oklch, c);
+                    t["l"] = L; t["c"] = ch; t["h"] = h;
+                    return t;
+                }
             default:
                 return null;
         }

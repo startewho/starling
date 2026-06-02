@@ -4,7 +4,7 @@ using Jint.Native;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J2d — High Resolution Time Level 3 on the Jint backend.
+/// High Resolution Time Level 3 on the Jint backend.
 /// Mirrors <c>Starling.Bindings/PerformanceBinding.cs</c>: installs
 /// <c>performance.now()</c> (monotonic ms via <see cref="Stopwatch"/>),
 /// <c>performance.timeOrigin</c> (UTC ms at install), and a minimal

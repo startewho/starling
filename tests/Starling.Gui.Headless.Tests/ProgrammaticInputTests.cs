@@ -14,9 +14,9 @@ using EngineSize = SixLabors.ImageSharp.Size;
 namespace Starling.Gui.Headless.Tests;
 
 /// <summary>
-/// Coverage for the synthetic-input surface the MCP server drives —
+/// Coverage for the synthetic-input surface the MCP server drives:
 /// <see cref="WebviewPanel.ClickAt"/> / <see cref="WebviewPanel.TypeText"/> /
-/// <see cref="WebviewPanel.MoveTo"/> — exercised through a real
+/// <see cref="WebviewPanel.MoveTo"/>. Exercised through a real
 /// <see cref="WebviewPanel"/> at document-space coordinates (the same space
 /// browser_screenshot captures). These are the paths browser_click /
 /// browser_type / browser_move bottom out in.
@@ -243,10 +243,212 @@ public class ProgrammaticInputTests
         finally { Teardown(window, panel); }
     }
 
+    [AvaloniaFact]
+    public async Task ScrollBy_moves_the_outer_page_viewport_and_clamps()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body><div style=\"height:2000px\">top</div></body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var first = panel.ScrollBy(0, 250);
+            first.Ok.Should().BeTrue();
+            ScrollOffsetY(panel).Should().Be(250);
+
+            var clamped = panel.ScrollBy(0, 10_000);
+            clamped.Ok.Should().BeTrue();
+            ScrollOffsetY(panel).Should().BeLessThan(2000);
+            clamped.Detail.Should().Contain("max");
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task ClickBySelector_focuses_the_first_rendered_match()
+    {
+        var (engine, page, input) = await LoadAsync(
+            "<!doctype html><html><body><input type=\"text\" id=\"q\"></body></html>", "q");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.ClickBySelector("#q");
+
+            r.Ok.Should().BeTrue();
+            page.Document.FocusedElement.Should().BeSameAs(input);
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task ScrollTo_supports_absolute_offsets_and_selector_targets()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body>"
+            + "<div style=\"height:1400px\">top</div><p id=\"target\">target</p>"
+            + "<div style=\"height:800px\"></div>"
+            + "</body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var absolute = panel.ScrollTo(null, 300, null, null);
+            absolute.Ok.Should().BeTrue();
+            ScrollOffsetY(panel).Should().Be(300);
+
+            var selector = panel.ScrollTo(null, null, "#target", "center");
+            selector.Ok.Should().BeTrue();
+            selector.Detail.Should().Contain("#target");
+            ScrollOffsetY(panel).Should().BeGreaterThan(300);
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task PressKey_edits_focused_inputs_and_tabs_between_controls()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body>"
+            + "<input type=\"text\" id=\"first\"><input type=\"text\" id=\"second\">"
+            + "</body></html>");
+        var first = page.Document.GetElementById("first")!;
+        var second = page.Document.GetElementById("second")!;
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            panel.FocusBySelector("#first").Ok.Should().BeTrue();
+            panel.TypeText("hello").Ok.Should().BeTrue();
+
+            panel.PressKey("Backspace", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            first.InputValue.Should().Be("hell");
+
+            panel.PressKey("Home", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            panel.PressKey("Delete", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            first.InputValue.Should().Be("ell");
+
+            panel.PressKey("Tab", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            page.Document.FocusedElement.Should().BeSameAs(second);
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task PressKey_scrolls_page_navigation_keys_without_a_focused_field()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body><div style=\"height:2200px\">top</div></body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            panel.PressKey("PageDown", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            ScrollOffsetY(panel).Should().BeGreaterThan(0);
+
+            panel.PressKey("Home", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            ScrollOffsetY(panel).Should().Be(0);
+
+            panel.PressKey("End", shift: false, ctrl: false, alt: false, meta: false).Ok.Should().BeTrue();
+            ScrollOffsetY(panel).Should().BeGreaterThan(0);
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task QuerySelector_reports_bounds_text_and_html()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body>"
+            + "<p class=\"hit\">one</p><p class=\"hit\">two</p>"
+            + "</body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.QuerySelector("p.hit", includeText: true, includeHtml: true, limit: 10);
+
+            r.Ok.Should().BeTrue();
+            r.Detail.Should().Contain("matches: 2");
+            r.Detail.Should().Contain("text=\"one\"");
+            r.Detail.Should().Contain("<p");
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task FindText_scrolls_to_the_matching_text_fragment()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body>"
+            + "<div style=\"height:1400px\">top</div><p>needle phrase</p>"
+            + "<div style=\"height:800px\"></div>"
+            + "</body></html>");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.FindText("needle", "next");
+
+            r.Ok.Should().BeTrue();
+            r.Detail.Should().Contain("found 'needle'");
+            ScrollOffsetY(panel).Should().BeGreaterThan(0);
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task ClipboardAsync_reads_selection_and_pastes_given_text()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body>"
+            + "<p id=\"copy\">hello clipboard</p><input type=\"text\" id=\"q\">"
+            + "</body></html>");
+        var input = page.Document.GetElementById("q")!;
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            panel.SelectBySelector("#copy").Ok.Should().BeTrue();
+
+            var selected = await panel.ClipboardAsync("readSelection", null);
+            selected.Ok.Should().BeTrue();
+            selected.Detail.Should().Be("hello clipboard");
+
+            panel.FocusBySelector("#q").Ok.Should().BeTrue();
+            var pasted = await panel.ClipboardAsync("paste", "pasted");
+            pasted.Ok.Should().BeTrue();
+            input.InputValue.Should().Be("pasted");
+        }
+        finally { Teardown(window, panel); }
+    }
+
+    [AvaloniaFact]
+    public async Task CaptureViewportToPng_writes_the_current_viewport()
+    {
+        var (engine, page) = await LoadStaticAsync(
+            "<!doctype html><html><body><p>viewport capture</p></body></html>");
+        var path = Path.Combine(Path.GetTempPath(), $"starling-viewport-{Guid.NewGuid():N}.png");
+        var (window, panel) = ShowPanel(engine, page);
+        try
+        {
+            var r = panel.CaptureViewportToPng(path);
+
+            r.Ok.Should().BeTrue();
+            File.Exists(path).Should().BeTrue();
+            File.ReadAllBytes(path).Take(4).Should().Equal(new byte[] { 137, 80, 78, 71 });
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            Teardown(window, panel);
+        }
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static InputResult Click(WebviewPanel panel, (double X, double Y) p) => panel.ClickAt(p.X, p.Y);
     private static InputResult Move(WebviewPanel panel, (double X, double Y) p) => panel.MoveTo(p.X, p.Y);
+
+    private static double ScrollOffsetY(WebviewPanel panel)
+    {
+        var scroll = (ScrollViewer)typeof(WebviewPanel)
+            .GetField("_scroll", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(panel)!;
+        return scroll.Offset.Y;
+    }
 
     private static (Window Window, WebviewPanel Panel) ShowPanel(StarlingEngine engine, LaidOutPage page)
     {

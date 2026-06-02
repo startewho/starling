@@ -125,7 +125,7 @@ public static class SelectorMatcher
                 MatchesFrom(selector, partIndex - 1, sibling, context),
             SelectorCombinator.SubsequentSibling => PreviousElementSiblings(element)
                 .Any(sibling => MatchesFrom(selector, partIndex - 1, sibling, context)),
-            SelectorCombinator.Column => false, // column combinator '||' stubbed (table-only)
+            SelectorCombinator.Column => false, // column combinator '||' is not implemented yet
             _ => false,
         };
     }

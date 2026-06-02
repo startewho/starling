@@ -11,8 +11,8 @@ public enum DiagLevel
 
 /// <summary>
 /// Single sink for engine logs, traces, counters, and snapshots. Concrete
-/// implementations live in their consumers (Console for dev, Noop for perf,
-/// DevTools later). See 01_ARCHITECTURE.md §H.
+/// implementations live in their consumers, including console, no-op,
+/// OpenTelemetry, and in-memory DevTools sinks. See 01_ARCHITECTURE.md §H.
 /// </summary>
 public interface IDiagnostics
 {
@@ -23,7 +23,7 @@ public interface IDiagnostics
     /// <summary>
     /// Records the latest value of a gauge metric — a sampled level that rises
     /// and falls (FPS, queue depth, memory), unlike <see cref="Counter"/> which
-    /// only ever accumulates. The OTel sink maps this to a synchronous
+    /// only ever accumulates. The OpenTelemetry sink maps this to a synchronous
     /// <c>Gauge</c> instrument so the dashboard graphs the value itself, not a
     /// running sum. Default is a no-op so a sink only implements it if it cares.
     /// </summary>
@@ -32,7 +32,7 @@ public interface IDiagnostics
     void Snapshot(string label, ReadOnlySpan<byte> bytes);
 
     /// <summary>
-    /// Records an exception as a structured error. The OTel sink attaches it to
+    /// Records an exception as a structured error. The OpenTelemetry sink attaches it to
     /// <c>Activity.Current</c> (so it shows up on the active span in the Aspire
     /// dashboard with full stack trace) and emits an error-level log through
     /// <c>ILogger</c>. Console sinks print stack to stderr. Call this for

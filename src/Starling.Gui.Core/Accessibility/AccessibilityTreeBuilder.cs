@@ -109,7 +109,12 @@ public static class AccessibilityTreeBuilder
 
         switch (element.LocalName)
         {
-            case "h1": case "h2": case "h3": case "h4": case "h5": case "h6":
+            case "h1":
+            case "h2":
+            case "h3":
+            case "h4":
+            case "h5":
+            case "h6":
                 return AccessibilityRole.Heading;
             case "a":
                 return element.HasAttribute("href") ? AccessibilityRole.Link : null;
@@ -119,11 +124,13 @@ public static class AccessibilityTreeBuilder
                 return AccessibilityRole.TextField;
             case "input":
                 return InputRole(element);
-            case "img": case "svg":
+            case "img":
+            case "svg":
                 return AccessibilityRole.Image;
             case "p":
                 return AccessibilityRole.Paragraph;
-            case "ul": case "ol":
+            case "ul":
+            case "ol":
                 return AccessibilityRole.List;
             case "li":
                 return AccessibilityRole.ListItem;

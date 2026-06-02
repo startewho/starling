@@ -12,7 +12,7 @@ namespace Starling.Telemetry;
 
 /// <summary>
 /// One-stop OpenTelemetry wiring for Starling host processes. Both flavours
-/// export traces, metrics, and logs over OTLP when
+/// export traces, metrics, and logs over the OpenTelemetry Protocol when
 /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> is set (Aspire's AppHost sets it
 /// automatically for every project resource it launches); without the env
 /// var the providers are wired but exporters drop on the floor, so this
@@ -22,10 +22,10 @@ public static class OtelBootstrap
 {
     /// <summary>
     /// Wire OpenTelemetry into a <see cref="IHostApplicationBuilder"/>-shaped
-    /// host (<c>MauiAppBuilder</c>, <c>HostApplicationBuilder</c>,
-    /// <c>WebApplicationBuilder</c>). Uses the framework's logging/metrics
+    /// host, such as <c>HostApplicationBuilder</c> or
+    /// <c>WebApplicationBuilder</c>. Uses the framework's logging/metrics
     /// builders so anything the app already logs through
-    /// <see cref="ILogger"/> flows out as OTel log records, and registers
+    /// <see cref="ILogger"/> flows out as OpenTelemetry log records, and registers
     /// <see cref="IDiagnostics"/> as a singleton so engine code can resolve
     /// it via DI.
     /// </summary>
@@ -37,7 +37,7 @@ public static class OtelBootstrap
 
         // The in-memory log sink is its own ILoggerProvider, registered
         // alongside OpenTelemetry's so DevTools' ConsolePanel can read recent
-        // entries even when no OTLP endpoint is configured.
+        // entries even when no OpenTelemetry Protocol endpoint is configured.
         var logSink = new InMemoryLogSink();
         builder.Logging.AddProvider(logSink);
         // DevTools' ConsolePanel shows page console.* output (routed via the
@@ -70,8 +70,8 @@ public static class OtelBootstrap
 
         // In-memory sinks feeding DevTools' ConsolePanel / PerformancePanel /
         // InternalsPanel. The activity and meter listeners self-register at
-        // construction; coexists with the OTel SDK's own listeners (multiple
-        // ActivityListeners per source are allowed). One TelemetryStream
+        // construction. It coexists with the OpenTelemetry SDK's own listeners
+        // (multiple ActivityListeners per source are allowed). One TelemetryStream
         // facade aggregates the three for DevTools to subscribe to.
         builder.Services.AddSingleton(logSink);
         builder.Services.AddSingleton(_ =>
@@ -94,7 +94,7 @@ public static class OtelBootstrap
     /// Pass <paramref name="withInMemorySinks"/> = true to additionally
     /// build the same three ring-buffer sinks <see cref="AddStarlingTelemetry"/>
     /// registers via DI — needed when the host wants to read its own
-    /// telemetry back (e.g. to serve it over MCP).
+    /// telemetry back, for example to serve it through MCP.
     /// </summary>
     public static OtelHandle Initialize(string serviceName, bool withInMemorySinks = false)
     {
@@ -163,9 +163,9 @@ public static class OtelBootstrap
     /// <summary>
     /// Convenience bridge for the standalone telemetry daemon. When
     /// <c>STARLING_TELEMETRY_DAEMON</c> is set (e.g. <c>http://localhost:4318</c>)
-    /// this points the standard OTLP exporter at it over HTTP/protobuf, so a host
-    /// only needs that one env var to stream its spans/metrics/logs to the daemon
-    /// — no Aspire AppHost required. Existing explicit
+    /// this points the standard OpenTelemetry Protocol exporter at it over
+    /// HTTP/protobuf, so a host only needs that one env var to stream its
+    /// spans/metrics/logs to the daemon. No Aspire AppHost is required. Existing explicit
     /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>/<c>_PROTOCOL</c> values win (so Aspire
     /// runs are untouched). Call this once at the very top of <c>Main</c>, before
     /// <see cref="AddStarlingTelemetry"/> / <see cref="Initialize"/>.
@@ -209,8 +209,9 @@ public static class OtelBootstrap
         /// <summary>
         /// Non-null when <see cref="Initialize"/> was called with
         /// <c>withInMemorySinks: true</c>. Hosts an in-memory ring-buffer
-        /// snapshot of recent spans/logs/metrics — useful for serving the
-        /// process's own telemetry over MCP without a separate exporter.
+        /// snapshot of recent spans/logs/metrics. Useful for serving the
+        /// process's own telemetry through MCP without a
+        /// separate exporter.
         /// </summary>
         public TelemetryStream? TelemetryStream => _telemetryStream;
 

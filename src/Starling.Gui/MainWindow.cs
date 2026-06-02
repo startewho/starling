@@ -743,7 +743,7 @@ public sealed class MainWindow : Window, IBrowserController
     }
 
     // ---- IBrowserController -------------------------------------------------
-    // Model Context Protocol tool calls land here, marshaled to the UI thread
+    // MCP tool calls land here, marshaled to the UI thread
     // by BrowserControlBridge.
     // Each method drives the same navigation flow as the toolbar buttons and
     // returns a BrowserControlResult so the agent sees the post-state.
@@ -808,6 +808,9 @@ public sealed class MainWindow : Window, IBrowserController
         }
     }
 
+    public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
+        => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
+
     public Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct)
     {
         try
@@ -868,14 +871,111 @@ public sealed class MainWindow : Window, IBrowserController
         }
     }
 
+    public Task<BrowserControlResult> ConsoleFromToolAsync(string? minLevel, int limit, CancellationToken ct)
+    {
+        var floor = ParseLogLevel(minLevel);
+        if (floor is null && !string.IsNullOrWhiteSpace(minLevel))
+            return Task.FromResult(Snapshot(success: false, error: $"Unknown log level '{minLevel}'."));
+
+        var capped = ClampToolLimit(limit, 100, 500);
+        var logs = _telemetry.Logs.Snapshot()
+            .Where(r => r.Category.Contains("engine.js", StringComparison.Ordinal))
+            .Where(r => floor is null || r.Level >= floor)
+            .TakeLast(capped)
+            .ToArray();
+
+        var sb = new StringBuilder();
+        sb.Append("console entries: ").Append(logs.Length).AppendLine();
+        foreach (var r in logs)
+        {
+            sb.Append(r.TimestampUtc.ToString("HH:mm:ss.fff")).Append(" [")
+                .Append(r.Level).Append("] ").AppendLine(r.Message);
+            if (!string.IsNullOrEmpty(r.Exception))
+                sb.AppendLine(r.Exception);
+        }
+        return Task.FromResult(Snapshot(success: true, detail: sb.ToString()));
+    }
+
+    public Task<BrowserControlResult> NetworkFromToolAsync(int limit, CancellationToken ct)
+    {
+        var capped = ClampToolLimit(limit, 100, 500);
+        var sb = new StringBuilder();
+        var activities = _telemetry.Activities.Snapshot()
+            .Where(IsNetworkActivity)
+            .TakeLast(capped)
+            .ToArray();
+        sb.Append("network spans: ").Append(activities.Length).AppendLine();
+        foreach (var a in activities)
+        {
+            sb.Append(a.StartUtc.ToString("HH:mm:ss.fff")).Append(' ')
+                .Append(a.OperationName).Append(" durationMs=")
+                .Append(a.Duration.TotalMilliseconds.ToString("0.#"));
+            if (FindTag(a, "http.url") is { } url) sb.Append(" url=").Append(url);
+            if (FindTag(a, "url") is { } url2) sb.Append(" url=").Append(url2);
+            if (FindTag(a, "http.status_code") is { } status) sb.Append(" status=").Append(status);
+            sb.AppendLine();
+        }
+
+        var logs = _telemetry.Logs.Snapshot()
+            .Where(r => r.Message.Contains("fetch", StringComparison.OrdinalIgnoreCase)
+                || r.Message.Contains("HTTP", StringComparison.OrdinalIgnoreCase)
+                || r.Message.Contains("Network", StringComparison.OrdinalIgnoreCase))
+            .TakeLast(capped)
+            .ToArray();
+        sb.Append("network logs: ").Append(logs.Length).AppendLine();
+        foreach (var r in logs)
+            sb.Append(r.TimestampUtc.ToString("HH:mm:ss.fff")).Append(" [")
+                .Append(r.Level).Append("] ").Append(r.Category).Append(": ")
+                .AppendLine(r.Message);
+
+        return Task.FromResult(Snapshot(success: true, detail: sb.ToString()));
+    }
+
     public Task<BrowserControlResult> ClickFromToolAsync(double x, double y, CancellationToken ct)
         => InputTool("click", () => _webview.ClickAt(x, y));
+
+    public Task<BrowserControlResult> ClickSelectorFromToolAsync(string selector, CancellationToken ct)
+        => InputTool("click selector", () => _webview.ClickBySelector(selector));
 
     public Task<BrowserControlResult> MoveMouseFromToolAsync(double x, double y, CancellationToken ct)
         => InputTool("move", () => _webview.MoveTo(x, y));
 
+    public Task<BrowserControlResult> ScrollFromToolAsync(double deltaX, double deltaY, CancellationToken ct)
+        => InputTool("scroll", () => _webview.ScrollBy(deltaX, deltaY));
+
+    public Task<BrowserControlResult> ScrollToFromToolAsync(double? x, double? y, string? selector, string? position, CancellationToken ct)
+        => InputTool("scroll to", () => _webview.ScrollTo(x, y, selector, position));
+
+    public Task<BrowserControlResult> PressKeyFromToolAsync(string key, bool shift, bool ctrl, bool alt, bool meta, CancellationToken ct)
+        => InputTool("press key", () => _webview.PressKey(key, shift, ctrl, alt, meta));
+
     public Task<BrowserControlResult> TypeTextFromToolAsync(string text, bool submit, CancellationToken ct)
         => InputTool("type", () => _webview.TypeText(text, submit));
+
+    public async Task<BrowserControlResult> WaitFromToolAsync(string state, string? value, int timeoutMs, CancellationToken ct)
+    {
+        var mode = (state ?? string.Empty).Trim().ToLowerInvariant();
+        if (mode.Length == 0)
+            return Snapshot(success: false, error: "browser_wait requires a state.");
+        if (mode is not ("load" or "idle" or "page" or "selector" or "text" or "url"))
+            return Snapshot(success: false, error: "browser_wait state must be load, idle, page, selector, text, or url.");
+        if ((mode is "selector" or "text" or "url") && string.IsNullOrWhiteSpace(value))
+            return Snapshot(success: false, error: $"browser_wait state '{mode}' requires a value.");
+        var capped = Math.Clamp(timeoutMs <= 0 ? 5000 : timeoutMs, 1, 60000);
+        var sw = Stopwatch.StartNew();
+
+        while (true)
+        {
+            if (WaitConditionMet(mode, value, out var detail))
+                return Snapshot(success: true, detail: detail);
+            if (sw.ElapsedMilliseconds >= capped)
+                return Snapshot(success: false, error: $"Timed out after {capped} ms waiting for {mode}.");
+            await Task.Delay(50, ct);
+        }
+    }
+
+    public Task<BrowserControlResult> QueryFromToolAsync(string selector, bool includeText, bool includeHtml, int limit, CancellationToken ct)
+        => InputTool("query", () => _webview.QuerySelector(selector, includeText, includeHtml, limit));
 
     public Task<BrowserControlResult> HighlightFromToolAsync(string selector, string? color, CancellationToken ct)
         => InputTool("highlight", () => _webview.HighlightElement(selector, color));
@@ -885,6 +985,44 @@ public sealed class MainWindow : Window, IBrowserController
 
     public Task<BrowserControlResult> FocusElementFromToolAsync(string selector, CancellationToken ct)
         => InputTool("focus", () => _webview.FocusBySelector(selector));
+
+    public Task<BrowserControlResult> FindFromToolAsync(string query, string direction, CancellationToken ct)
+        => InputTool("find", () => _webview.FindText(query, direction));
+
+    public async Task<BrowserControlResult> ClipboardFromToolAsync(string action, string? text, CancellationToken ct)
+    {
+        if (_lastShownPage is null)
+            return Snapshot(success: false, error: "No page is loaded for clipboard.");
+        try
+        {
+            var r = await _webview.ClipboardAsync(action, text);
+            return r.Ok ? Snapshot(success: true, detail: r.Detail) : Snapshot(success: false, error: r.Detail);
+        }
+        catch (Exception ex)
+        {
+            _diag.Log(DiagLevel.Warn, "gui", $"clipboard failed: {ex.Message}");
+            return Snapshot(success: false, error: $"clipboard failed: {ex.Message}");
+        }
+    }
+
+    public async Task<BrowserControlResult> BookmarksFromToolAsync(string? id, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            var bookmark = Bookmarks.FirstOrDefault(b => b.Id.Equals(id, StringComparison.Ordinal));
+            if (bookmark is null)
+                return Snapshot(success: false, error: $"No bookmark with id '{id}'.");
+            if (string.IsNullOrWhiteSpace(bookmark.Url))
+                return Snapshot(success: false, error: $"Bookmark '{id}' has no URL.");
+            await NavigateAsync(bookmark.Url, ignoreEmpty: false);
+            return Snapshot(success: true, detail: $"opened bookmark {id}: {bookmark.Title}");
+        }
+
+        var sb = new StringBuilder();
+        foreach (var b in Bookmarks)
+            sb.Append(b.Id).Append(" | ").Append(b.Title).Append(" | ").AppendLine(b.Url ?? string.Empty);
+        return Snapshot(success: true, detail: sb.ToString());
+    }
 
     public Task<BrowserControlResult> ComputedStyleFromToolAsync(string selector, CancellationToken ct)
         => InputTool("computed_style", () => _webview.InspectComputedStyle(selector));
@@ -913,6 +1051,90 @@ public sealed class MainWindow : Window, IBrowserController
             _diag.Log(DiagLevel.Warn, "gui", $"resize failed: {ex.Message}");
             return Task.FromResult(Snapshot(success: false, error: $"resize failed: {ex.Message}"));
         }
+    }
+
+    private bool WaitConditionMet(string mode, string? value, out string detail)
+    {
+        switch (mode)
+        {
+            case "load":
+            case "idle":
+                if (!_busy)
+                {
+                    detail = "browser is idle";
+                    return true;
+                }
+                detail = "browser is busy";
+                return false;
+
+            case "page":
+                if (_lastShownPage is not null)
+                {
+                    detail = "page is loaded";
+                    return true;
+                }
+                detail = "no page loaded";
+                return false;
+
+            case "selector":
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    detail = "selector wait requires value";
+                    return false;
+                }
+                var count = _webview.CountSelectorMatches(value);
+                detail = $"selector '{value}' matches {count}";
+                return count > 0;
+
+            case "text":
+                if (string.IsNullOrEmpty(value))
+                {
+                    detail = "text wait requires value";
+                    return false;
+                }
+                detail = $"text '{value}' present";
+                return _webview.PageContainsText(value);
+
+            case "url":
+                if (string.IsNullOrEmpty(value))
+                {
+                    detail = "url wait requires value";
+                    return false;
+                }
+                var url = _session.History.Current ?? string.Empty;
+                detail = $"url is {url}";
+                return url.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+            default:
+                detail = $"unknown wait state '{mode}'";
+                return false;
+        }
+    }
+
+    private static int ClampToolLimit(int requested, int fallback, int max)
+    {
+        if (requested <= 0) return fallback;
+        return Math.Min(requested, max);
+    }
+
+    private static LogLevel? ParseLogLevel(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        return Enum.TryParse<LogLevel>(text, ignoreCase: true, out var level) ? level : null;
+    }
+
+    private static bool IsNetworkActivity(ActivityRecord record)
+        => record.OperationName.Contains("fetch", StringComparison.OrdinalIgnoreCase)
+        || record.OperationName.Contains("http", StringComparison.OrdinalIgnoreCase)
+        || FindTag(record, "http.url") is not null
+        || FindTag(record, "http.status_code") is not null;
+
+    private static string? FindTag(ActivityRecord record, string name)
+    {
+        foreach (var tag in record.Tags)
+            if (tag.Key.Equals(name, StringComparison.Ordinal))
+                return tag.Value?.ToString();
+        return null;
     }
 
     // Shared shell for the synthetic-input tools: guards page presence, runs the

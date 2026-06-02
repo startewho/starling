@@ -10,7 +10,7 @@ namespace Starling.Telemetry;
 /// Bridges <see cref="IDiagnostics"/> calls (Span/Log/Counter/Snapshot) to the
 /// OpenTelemetry primitives that <see cref="OtelBootstrap"/> wires up:
 /// <see cref="ActivitySource"/>, <see cref="Meter"/>, and
-/// <see cref="ILogger"/>. Aspire (or any OTLP collector) sees the result as
+/// <see cref="ILogger"/>. Aspire or any OpenTelemetry Protocol collector sees the result as
 /// proper traces, metrics, and structured logs without engine code referencing
 /// OpenTelemetry types directly.
 /// </summary>
@@ -93,15 +93,15 @@ public sealed class OtelDiagnostics : IDiagnostics
         ArgumentNullException.ThrowIfNull(exception);
         var header = message ?? exception.Message;
 
-        // ILogger.LogError takes the exception object directly so OTLP/Aspire
+        // ILogger.LogError takes the exception object directly so OpenTelemetry/Aspire
         // gets the full structured shape (type, message, stack) rather than a
         // ToString'd string.
         var logger = _loggers.GetOrAdd(area, a => _loggerFactory.CreateLogger($"Starling.{a}"));
         logger.LogError(exception, "{Message}", header);
 
         // Pin the exception on the active span so Aspire's trace view shows the
-        // failure inline. AddException is the OTel-spec'd shape (exception.type,
-        // exception.message, exception.stacktrace as event attributes); plain
+        // failure inline. The event uses the OpenTelemetry exception shape
+        // (exception.type, exception.message, exception.stacktrace); plain
         // AddEvent loses the structured fields. Setting Status=Error also flips
         // the span's UI badge from green to red.
         var current = Activity.Current;

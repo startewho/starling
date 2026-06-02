@@ -43,7 +43,7 @@ public sealed class InMemoryMeterSink : IDisposable
     /// Construct the sink, optionally skipping the in-process
     /// <see cref="MeterListener"/>. Pass <paramref name="attachListener"/> =
     /// false when measurements are fed exclusively via <see cref="Ingest"/>
-    /// (e.g. the telemetry daemon receiving metrics over OTLP).
+    /// (for example, the telemetry daemon receiving metrics over the OpenTelemetry Protocol).
     /// </summary>
     public InMemoryMeterSink(bool attachListener, params string[] meters)
     {
@@ -118,7 +118,7 @@ public sealed class InMemoryMeterSink : IDisposable
     }
 
     /// <summary>
-    /// Append an externally-sourced measurement (e.g. decoded from OTLP) into
+    /// Append an externally-sourced measurement, such as one decoded from the OpenTelemetry Protocol, into
     /// the ring buffer and fan it out to subscribers.
     /// </summary>
     public void Ingest(MeterRecord record) => Store(record);

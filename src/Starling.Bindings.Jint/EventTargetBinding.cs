@@ -9,17 +9,17 @@ using Starling.Dom.Events;
 using DomEvent = Starling.Dom.Events.Event;
 using DomCustomEvent = Starling.Dom.Events.CustomEvent;
 
-// J2c tests drive the internal Install + helpers directly (the public entry
-// point JintBindings.InstallAll pulls in every other Wave-2 family, which the
+// EventTarget tests drive the internal Install + helpers directly (the public
+// entry point JintBindings.InstallAll pulls in every other binding family, which the
 // EventTarget tests do not need).
 [assembly: InternalsVisibleTo("Starling.Bindings.Jint.Tests")]
 
 namespace Starling.Bindings.Jint;
 
-// J2c — EventTarget + Event dispatch (Jint backend).
+// EventTarget + Event dispatch on the Jint backend.
 //
 // Mirrors Starling.Bindings/EventTargetBinding.cs but over the Jint engine and
-// the J2a wrapper registry. Reuses the real Starling.Dom event model
+// the Jint wrapper registry. Reuses the real Starling DOM event model
 // (EventTarget.AddEventListener / DispatchEvent and the spec dispatcher in
 // EventDispatcher) for capturing/bubbling/once/stop semantics — we only bridge
 // JS callbacks to host EventListener delegates and wrap native Events for

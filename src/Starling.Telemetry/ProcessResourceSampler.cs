@@ -5,10 +5,10 @@ namespace Starling.Telemetry;
 
 /// <summary>
 /// Samples this process's CPU and memory use on a fixed cadence and records
-/// them as gauges through <see cref="IDiagnostics"/> (which the OTel sink maps
-/// to OTLP metrics). These are the "local computer" signals the telemetry
+/// them as gauges through <see cref="IDiagnostics"/> (which the OpenTelemetry
+/// sink maps to OpenTelemetry Protocol metrics). These are the "local computer" signals the telemetry
 /// daemon joins to span time-windows so a janky frame can be attributed to CPU
-/// saturation or GC/memory pressure rather than guessed at.
+/// saturation, the garbage collector, or memory pressure rather than guessed at.
 ///
 /// CPU utilization is computed as the process-CPU-time delta over the wall-clock
 /// delta, normalised by logical core count, so the gauge reads 0..1 across the

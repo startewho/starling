@@ -14,7 +14,7 @@ namespace Starling.Common.Encoding;
 /// broken labels such as <c>iso-2022-cn</c>) is intentionally NOT mapped
 /// here. Callers that want to honour the spec's replacement behaviour
 /// should handle those labels explicitly; otherwise the engine will fall
-/// back to UTF-8 (Starling's default). See <c>wp:M2-07d</c> notes.
+/// back to UTF-8, Starling's default.
 /// </remarks>
 public static class WhatwgEncodingLabels
 {
@@ -24,8 +24,8 @@ public static class WhatwgEncodingLabels
     /// <summary>
     /// The canonical encoding names referenced by <see cref="Map"/>. They
     /// are exactly the WHATWG spec names, intentionally not normalised to
-    /// .NET <see cref="System.Text.Encoding.WebName"/> spellings — callers
-    /// that need a BCL encoding instance can use
+    /// .NET <see cref="System.Text.Encoding.WebName"/> spellings. Callers
+    /// that need a .NET base class library encoding instance can use
     /// <see cref="TryGetEncoding(string, out System.Text.Encoding)"/>.
     /// </summary>
     public static class Canonical
@@ -108,7 +108,7 @@ public static class WhatwgEncodingLabels
     }
 
     /// <summary>
-    /// Convenience: resolves a label and returns a BCL
+    /// Convenience: resolves a label and returns a .NET base class library
     /// <see cref="System.Text.Encoding"/> via
     /// <see cref="System.Text.Encoding.GetEncoding(string)"/>. Returns
     /// <c>false</c> for unknown labels or for canonical names not
@@ -256,7 +256,7 @@ public static class WhatwgEncodingLabels
             "unicodefeff", "utf-16", "utf-16le");
 
         // "x-user-defined" is a passthrough single-byte mapping; the .NET
-        // BCL doesn't ship it, so we leave it for the caller to handle.
+        // The .NET base class library doesn't ship it, so we leave it for the caller to handle.
 
         return map;
     }

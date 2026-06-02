@@ -21,17 +21,18 @@ internal static class Program
 
     public static int Main(string[] args)
     {
-        // Wire OTel before we do anything observable. When launched by Aspire
+        // Wire OpenTelemetry before we do anything observable. When launched by Aspire
         // (`dotnet run --project src/Starling.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
         // is set and traces/metrics/logs flow to the Aspire dashboard. When
         // run directly, the providers are still wired but the exporter is a
-        // no-op. We tee the OTel-backed IDiagnostics with ConsoleDiagnostics
+        // no-op. We tee the OpenTelemetry-backed IDiagnostics with ConsoleDiagnostics
         // so plain `dotnet run` still emits stderr trace lines.
         //
         // When STARLING_HEADLESS_MCP_URL is set we also build the in-memory
-        // ring-buffer sinks so the MCP server can hand spans/logs/metrics back
-        // to driving agents.
-        // If STARLING_TELEMETRY_DAEMON is set, route OTLP to the standalone daemon.
+        // ring-buffer sinks so the MCP server can hand
+        // spans/logs/metrics back to driving agents.
+        // If STARLING_TELEMETRY_DAEMON is set, route the OpenTelemetry Protocol
+        // exporter to the standalone daemon.
         OtelBootstrap.ConfigureDaemonExportFromEnv();
 
         var mcpUrl = ResolveMcpUrl();
@@ -39,8 +40,9 @@ internal static class Program
         using var telemetry = OtelBootstrap.Initialize("starling-headless", withInMemorySinks);
         // STARLING_DIAG_TRACE=1 lowers the console-diag floor to Trace so paint
         // span timings ([Trace] paint: - raster.command_record (Xms)) appear
-        // on stderr — useful for backend perf comparisons without spinning up
-        // an OTel collector. Default stays Info to keep normal CLI runs quiet.
+        // on stderr. This is useful for backend perf comparisons without
+        // spinning up an OpenTelemetry collector. Default stays Info to keep
+        // normal CLI runs quiet.
         var traceConsole = Environment.GetEnvironmentVariable("STARLING_DIAG_TRACE") == "1";
         s_diagnostics = new CompositeDiagnostics(
             new ConsoleDiagnostics { MinLevel = traceConsole ? DiagLevel.Trace : DiagLevel.Info },
@@ -70,9 +72,10 @@ internal static class Program
                 _ => UnknownSubcommand(sub),
             };
 
-            // With MCP enabled, hold the process open after the subcommand
-            // finishes so a driving agent can inspect post-mortem telemetry.
-            // Exits on Ctrl+C with the subcommand's return code preserved.
+            // With the MCP enabled, hold the process open
+            // after the subcommand finishes so a driving agent can inspect
+            // post-mortem telemetry. Exits on Ctrl+C with the subcommand's
+            // return code preserved.
             if (mcp is not null)
                 WaitForShutdownSignal(mcp.Endpoint);
             return exitCode;
@@ -141,9 +144,8 @@ internal static class Program
     }
 
     /// <summary>
-    /// Dumps the WHATWG HTML tokenizer's output for the given file. Useful as
-    /// a debugging tool and as a demo of M1-01a–c work. Subsequent agents
-    /// (M1-01d–g) extend coverage as new states land.
+    /// Dumps the WHATWG HTML tokenizer's output for the given file. Useful for
+    /// debugging tokenizer state output.
     /// </summary>
     private static int Tokenize(string[] args)
     {
@@ -182,7 +184,7 @@ internal static class Program
             catch (NotImplementedException ex)
             {
                 Console.WriteLine($"… tokenizer reached an unimplemented state: {ex.Message}");
-                Console.WriteLine($"   (this file exercises tokenizer states the open M1-01* sub-tasks own)");
+                Console.WriteLine("   (this file exercises tokenizer states that are not implemented yet)");
                 break;
             }
             if (tok is null) break;

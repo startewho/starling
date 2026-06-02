@@ -23,7 +23,8 @@ public readonly record struct LogRecord(
 /// In-memory ILoggerProvider that captures every log record into a bounded
 /// ring buffer and replays them to live subscribers. Registered as the first
 /// thing in <see cref="OtelBootstrap.AddStarlingTelemetry"/> so DevTools'
-/// ConsolePanel can subscribe without depending on the OTLP pipeline.
+/// ConsolePanel can subscribe without depending on the OpenTelemetry Protocol
+/// pipeline.
 /// </summary>
 public sealed class InMemoryLogSink : ILoggerProvider
 {
@@ -77,7 +78,7 @@ public sealed class InMemoryLogSink : ILoggerProvider
     }
 
     /// <summary>
-    /// Append an externally-sourced log record (e.g. decoded from OTLP) into
+    /// Append an externally-sourced log record, such as one decoded from the OpenTelemetry Protocol, into
     /// the ring buffer and fan it out to subscribers. Same path as the local
     /// <see cref="ILogger"/> capture.
     /// </summary>

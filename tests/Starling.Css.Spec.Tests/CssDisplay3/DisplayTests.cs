@@ -253,7 +253,8 @@ public sealed class DisplayTests
     // ---------------------------------------------------------------------------
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#valdef-display-run-in", section: "2")]
-    [SpecFact]    public void Parses_run_in()
+    [SpecFact]
+    public void Parses_run_in()
     {
         var decl = ParseDisplay("run-in");
         decl.Id.Should().Be(PropertyId.Display);
@@ -265,7 +266,8 @@ public sealed class DisplayTests
     // ---------------------------------------------------------------------------
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#typedef-display-outside", section: "2.1")]
-    [SpecFact]    public void Two_value_block_flow_parses()
+    [SpecFact]
+    public void Two_value_block_flow_parses()
     {
         // CSS Display 3 §2.1: `block flow` is the canonical two-value form for `display: block`.
         var decl = ParseDisplay("block flow");
@@ -275,7 +277,8 @@ public sealed class DisplayTests
     }
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#typedef-display-outside", section: "2.1")]
-    [SpecFact]    public void Two_value_inline_flow_root_maps_to_inline_block()
+    [SpecFact]
+    public void Two_value_inline_flow_root_maps_to_inline_block()
     {
         // CSS Display 3 §2.1: `inline flow-root` ≡ legacy `inline-block`.
         var decl = ParseDisplay("inline flow-root");
@@ -284,7 +287,8 @@ public sealed class DisplayTests
     }
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#typedef-display-outside", section: "2.1")]
-    [SpecFact]    public void Two_value_block_flex_maps_to_flex()
+    [SpecFact]
+    public void Two_value_block_flex_maps_to_flex()
     {
         // CSS Display 3 §2.1: `block flex` ≡ legacy `flex`.
         var decl = ParseDisplay("block flex");
@@ -293,7 +297,8 @@ public sealed class DisplayTests
     }
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#typedef-display-outside", section: "2.1")]
-    [SpecFact]    public void Two_value_inline_flex_maps_to_inline_flex()
+    [SpecFact]
+    public void Two_value_inline_flex_maps_to_inline_flex()
     {
         // CSS Display 3 §2.1: `inline flex` ≡ legacy `inline-flex`.
         var decl = ParseDisplay("inline flex");
@@ -302,7 +307,8 @@ public sealed class DisplayTests
     }
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#typedef-display-outside", section: "2.1")]
-    [SpecFact]    public void Two_value_block_grid_maps_to_grid()
+    [SpecFact]
+    public void Two_value_block_grid_maps_to_grid()
     {
         // CSS Display 3 §2.1: `block grid` ≡ legacy `grid`.
         var decl = ParseDisplay("block grid");
@@ -311,7 +317,8 @@ public sealed class DisplayTests
     }
 
     [Spec("css-display-3", "https://www.w3.org/TR/css-display-3/#typedef-display-outside", section: "2.1")]
-    [SpecFact]    public void Two_value_inline_grid_maps_to_inline_grid()
+    [SpecFact]
+    public void Two_value_inline_grid_maps_to_inline_grid()
     {
         // CSS Display 3 §2.1: `inline grid` ≡ legacy `inline-grid`.
         var decl = ParseDisplay("inline grid");

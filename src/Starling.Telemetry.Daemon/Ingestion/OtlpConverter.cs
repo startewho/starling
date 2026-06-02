@@ -10,11 +10,11 @@ using OtlpStatusCode = OpenTelemetry.Proto.Trace.V1.Status.Types.StatusCode;
 namespace Starling.Telemetry.Daemon.Ingestion;
 
 /// <summary>
-/// Converts decoded OTLP export requests into the in-memory record types the
-/// rest of Starling already speaks (<see cref="ActivityRecord"/>,
+/// Converts decoded OpenTelemetry Protocol export requests into the in-memory
+/// record types the rest of Starling already speaks (<see cref="ActivityRecord"/>,
 /// <see cref="MeterRecord"/>, <see cref="LogRecord"/>). Keeping the daemon on
-/// the same record shapes means the existing MCP telemetry tools and the
-/// analyzer read daemon-ingested data with zero special-casing.
+/// the same record shapes means the existing MCP telemetry
+/// tools and the analyzer read daemon-ingested data with zero special-casing.
 /// </summary>
 internal static class OtlpConverter
 {
@@ -165,7 +165,8 @@ internal static class OtlpConverter
     private static string HexOrEmpty(Google.Protobuf.ByteString bytes)
         => bytes.IsEmpty ? string.Empty : Convert.ToHexStringLower(bytes.Span);
 
-    // OTLP timestamps are nanoseconds since the Unix epoch; one tick is 100 ns.
+    // OpenTelemetry Protocol timestamps are nanoseconds since the Unix epoch;
+    // one tick is 100 ns.
     private static DateTime UnixNanosToUtc(ulong nanos)
         => nanos == 0 ? DateTime.UtcNow : DateTime.UnixEpoch.AddTicks((long)(nanos / 100));
 
@@ -178,9 +179,10 @@ internal static class OtlpConverter
 
     private static LogLevel MapSeverity(SeverityNumber severity, string? severityText)
     {
-        // SEVERITY_NUMBER_UNSPECIFIED (0) means "unknown" per the OTLP logs spec —
-        // never assume Information. Honor a textual severity if the producer set
-        // one, else treat the record as the lowest level (Trace).
+        // SEVERITY_NUMBER_UNSPECIFIED (0) means "unknown" per the OpenTelemetry
+        // Protocol logs spec. Never assume Information. Honor a textual severity
+        // if the producer set one, else treat the record as the lowest level
+        // (Trace).
         if (severity == SeverityNumber.Unspecified)
             return ParseSeverityText(severityText) ?? LogLevel.Trace;
 

@@ -6,10 +6,10 @@ using OpenTelemetry.Proto.Collector.Trace.V1;
 namespace Starling.Telemetry.Daemon.Ingestion;
 
 /// <summary>
-/// OTLP/gRPC receiver services on the daemon's gRPC port (default :4317 — the
-/// .NET OTLP exporter's default protocol, so a host only needs to point
-/// OTEL_EXPORTER_OTLP_ENDPOINT here). Each just decodes the export request into
-/// the shared record types and hands them to the ingest store; an empty
+/// OpenTelemetry Protocol receiver services on the daemon's gRPC port. This is
+/// the .NET exporter's default protocol, so a host only needs to point
+/// OTEL_EXPORTER_OTLP_ENDPOINT here. Each service decodes the export request
+/// into the shared record types and hands them to the ingest store. An empty
 /// response signals full success.
 /// </summary>
 internal sealed class TraceIngestService(TelemetryIngestStore store) : TraceService.TraceServiceBase

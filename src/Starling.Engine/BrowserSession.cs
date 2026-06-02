@@ -145,7 +145,8 @@ public sealed class BrowserSession : IDisposable
     /// <summary>
     /// Capture <paramref name="page"/> to a PNG at <paramref name="outputPath"/>.
     /// Pass-through to <see cref="StarlingEngine.CaptureToPng"/> — used by the
-    /// shell's MCP screenshot tool. Synchronous: callers marshal to the UI thread.
+    /// shell's MCP screenshot tool. Synchronous: callers
+    /// marshal to the UI thread.
     /// </summary>
     public RenderOutcome CaptureToPng(LaidOutPage page, string outputPath, long nowMs = 0, bool fullPage = true)
         => _engine.CaptureToPng(page, outputPath, nowMs, fullPage);

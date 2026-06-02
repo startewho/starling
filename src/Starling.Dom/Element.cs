@@ -60,7 +60,7 @@ public class Element : Node
 
     public string Namespace { get; }
 
-    /// <summary>Lower-cased tag name; existing M0 parser/tests depend on this shape.</summary>
+    /// <summary>Lower-cased tag name used by HTML parser and layout tests.</summary>
     public string TagName { get; }
 
     public NamedNodeMap Attributes { get; }

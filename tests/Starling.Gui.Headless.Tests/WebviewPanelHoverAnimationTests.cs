@@ -19,7 +19,7 @@ namespace Starling.Gui.Headless.Tests;
 /// infinitely-animating element inside a container that has a :hover rule, then
 /// hovers the container — the animating element must keep being driven by the
 /// animation (not pulled into the hover override set), which is exactly what the
-/// browser_computed_style MCP tool reports.
+/// MCP browser_computed_style tool reports.
 /// </summary>
 public class WebviewPanelHoverAnimationTests
 {

@@ -2,7 +2,7 @@ namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// Tag + attribute states from WHATWG HTML §13.2.5.6 through §13.2.5.40
-/// (the contiguous range of tag-construction states). Owned by wp:M1-01b.
+/// (the contiguous range of tag-construction states).
 /// </summary>
 /// <remarks>
 /// State summary:

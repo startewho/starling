@@ -12,8 +12,8 @@ namespace Starling.Shell.Native.Mac;
 /// Best-effort and macOS-only. The role and label path uses only id/NSString
 /// arguments, whose ABI is exact. The on-screen frame conversion (document
 /// top-left to AppKit bottom-left screen points, minus chrome and scroll) is
-/// approximate and wants tuning against VoiceOver on a real Mac — this harness
-/// has no way to drive the accessibility client. Tracked by `wp:NS-02`.
+/// approximate and wants tuning against VoiceOver on a real Mac. This harness
+/// has no way to drive the accessibility client.
 /// </remarks>
 internal sealed class MacAccessibilityBridge
 {

@@ -1,5 +1,3 @@
-using System;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
@@ -95,7 +93,7 @@ internal static unsafe class MacMetal
     [DllImport(Objc)] private static extern nint objc_allocateClassPair(nint superclass, string name, nint extraBytes);
     [DllImport(Objc)] private static extern void objc_registerClassPair(nint cls);
     [DllImport(Objc)] private static extern nint objc_lookUpClass(string name);
-    [DllImport(Objc)] [return: MarshalAs(UnmanagedType.I1)] private static extern bool class_addMethod(nint cls, nint sel, nint imp, string types);
+    [DllImport(Objc)][return: MarshalAs(UnmanagedType.I1)] private static extern bool class_addMethod(nint cls, nint sel, nint imp, string types);
     [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern nint MsgSend(nint receiver, nint sel);
     [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void MsgSendVoidPtr(nint receiver, nint sel, nint arg);
     [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void MsgSendVoidBool(nint receiver, nint sel, [MarshalAs(UnmanagedType.I1)] bool arg);

@@ -13,7 +13,7 @@ namespace Starling.Net.Http.Cookies;
 /// SameSite filtering is partial in v1: <c>Strict</c>/<c>Lax</c> cookies are
 /// included on every request the engine makes (the headless renderer only
 /// issues top-level navigations, which are same-site by definition).
-/// Cross-origin filtering will land with the <c>fetch</c> binding in M4.
+/// Cross-origin SameSite filtering is not implemented yet.
 /// </remarks>
 public sealed class CookieJar
 {

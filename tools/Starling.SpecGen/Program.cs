@@ -9,9 +9,9 @@ namespace Starling.SpecGen;
 ///   catalog   Read testdata/webref/css/*.json, emit a flat summary of every
 ///             spec found (id, title, # properties, # at-rules, # selectors).
 ///             This is the upstream "what the spec defines" map; conformance
-///             tests themselves are hand-written under tests/*.Tests/ and
+///             tests themselves live under tests/*.Tests/ and
 ///             tagged with [Spec]/[SpecFact]/[PendingFact].
-///   report    (stub) Will rebuild tasks/SPEC_COVERAGE.md from the catalog
+///   report    Not implemented yet. Will rebuild tasks/SPEC_COVERAGE.md from the catalog
 ///             plus discovered test traits. Not implemented yet.
 ///
 /// Run from the repo root:
@@ -79,7 +79,7 @@ public static class Program
 
     private static int RunReport()
     {
-        Console.Error.WriteLine("report: not implemented yet — tracked by wp:spec-tooling-bootstrap.");
+        Console.Error.WriteLine("report: not implemented yet.");
         Console.Error.WriteLine("Update tasks/SPEC_COVERAGE.md by hand until then.");
         return 0;
     }

@@ -12,13 +12,13 @@ namespace Starling.Layout;
 
 /// <summary>
 /// Top-level layout façade. Consumes a parsed <see cref="Document"/>, runs the
-/// style engine, builds a box tree, then performs block + inline formatting.
+/// style engine, builds a box tree, then performs layout.
 /// </summary>
 /// <remarks>
-/// v1 scope is intentionally narrow: block stacking, inline text with
-/// word-wrap, and simple adjacent-sibling margin collapse. Floats, positioning,
-/// flex, grid, and tables are deferred (wp:M5+). The box tree's <c>Frame</c>
-/// values are CSS px in the document's coordinate space.
+/// Current scope covers block and inline layout, floats, positioning, flexbox,
+/// grid, word wrap, and simple adjacent-sibling margin collapse. Table
+/// formatting is still approximated through the user-agent stylesheet. The box
+/// tree's <c>Frame</c> values are CSS px in the document's coordinate space.
 /// </remarks>
 public sealed class LayoutEngine
 {
@@ -44,8 +44,8 @@ public sealed class LayoutEngine
     }
 
     /// <summary>
-    /// Phase 0d dual-run verification. When set, every <c>LayoutDocument</c>
-    /// call lays the document out a second time and asserts the two outputs are
+    /// Dual-run layout verification. When set, every <c>LayoutDocument</c>
+    /// call lays the document out a second time and checks that the two outputs are
     /// geometrically identical, logging the first divergence. Defaults to the
     /// <see cref="LayoutVerifier.EnvVar"/> env switch; tests set it directly.
     /// Doubles layout cost, so it is a debug/CI tool only.

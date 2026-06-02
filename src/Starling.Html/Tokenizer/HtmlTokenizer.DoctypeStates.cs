@@ -1,7 +1,7 @@
 namespace Starling.Html.Tokenizer;
 
 /// <summary>
-/// DOCTYPE states from WHATWG HTML §13.2.5.53–.68. Owned by wp:M1-01f.
+/// DOCTYPE states from WHATWG HTML §13.2.5.53–.68.
 /// </summary>
 /// <remarks>
 /// The tokenizer builds a doctype incrementally via:

@@ -2,7 +2,7 @@ namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// RCDATA / RAWTEXT / PLAINTEXT states from WHATWG HTML §13.2.5.2, .3, .5,
-/// .9–.11 (RCDATA), and .12–.14 (RAWTEXT). Owned by wp:M1-01c.
+/// .9–.11 (RCDATA), and .12–.14 (RAWTEXT).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -211,8 +211,8 @@ public sealed partial class HtmlTokenizer
     // -----------------------------------------------------------------------
     // Shared body for §13.2.5.11 (RCDATA end tag name) and §13.2.5.14
     // (RAWTEXT end tag name). The state shapes are identical except for
-    // the fall-through return state. Same shape will also apply to
-    // ScriptDataEndTagName in M1-01d.
+    // the fall-through return state. Same shape also applies to
+    // ScriptDataEndTagName.
     // -----------------------------------------------------------------------
     private void StepEndTagNameCommon(int c, TokenizerState returnState)
     {

@@ -4,9 +4,8 @@ using Starling.Html.InputStream;
 namespace Starling.Html.Tokenizer;
 
 /// <summary>
-/// WHATWG HTML tokenizer. Partial class — each sub-task (wp:M1-01a…g) adds
-/// its state cluster as its own partial file so concurrent agents avoid
-/// merge conflicts on shared structure.
+/// WHATWG HTML tokenizer. Partial class split by state family so each cluster
+/// stays readable.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,12 +19,12 @@ namespace Starling.Html.Tokenizer;
 /// </list>
 /// </para>
 /// <para>
-/// State implementation status:
+/// State-family layout:
 /// <list type="bullet">
-///   <item>M1-01a: <c>Data</c>, EOF handling, scaffolding.</item>
-///   <item>M1-01b: tag + attribute states (this partial extends Dispatch).</item>
-///   <item>M1-01c…g: remaining clusters (RCDATA/RAWTEXT, ScriptData,
-///         Comment/CDATA, Doctype, Character references).</item>
+///   <item>Data and shared EOF handling live in this file.</item>
+///   <item>Tag and attribute states live in <c>HtmlTokenizer.TagStates.cs</c>.</item>
+///   <item>RCDATA/RAWTEXT, ScriptData, Comment/CDATA, Doctype, and Character
+///         references each live in their own partial file.</item>
 /// </list>
 /// </para>
 /// </remarks>
@@ -49,7 +48,7 @@ public sealed partial class HtmlTokenizer
     private int _line = 1;
     private int _column = 0;
 
-    // --- Tag/attribute builder (populated by M1-01b states) -----------------
+    // --- Tag/attribute builder ---------------------------------------------
     private bool _tagIsEnd;
     private bool _tagSelfClosing;
     private readonly StringBuilder _tagName = new();
@@ -66,7 +65,7 @@ public sealed partial class HtmlTokenizer
     // reference candidate matching.
     private readonly StringBuilder _tempBuffer = new();
 
-    // --- Comment + doctype builders (populated by M1-01e/f states) ----------
+    // --- Comment + doctype builders ----------------------------------------
     private readonly StringBuilder _commentData = new();
     private readonly StringBuilder _doctypeName = new();
     private bool _doctypeNameSet;
@@ -76,7 +75,7 @@ public sealed partial class HtmlTokenizer
     private bool _doctypeSystemIdSet;
     private bool _doctypeForceQuirks;
 
-    // --- Character-reference state (populated by M1-01g states) -------------
+    // --- Character-reference state -----------------------------------------
     // Spec §13.2.5.72: many states route to CharacterReference; the return
     // state is the state we go back to. When the return state is one of the
     // AttributeValue* variants, decoded chars are appended to the attribute
@@ -97,7 +96,7 @@ public sealed partial class HtmlTokenizer
     /// Tree-builder seam. After the tree builder inserts a <c>&lt;textarea&gt;</c>
     /// or <c>&lt;title&gt;</c>, it must put the tokenizer into RCDATA; for
     /// <c>&lt;style&gt;</c>/<c>&lt;xmp&gt;</c>/<c>&lt;iframe&gt;</c>/<c>&lt;noembed&gt;</c>,
-    /// RAWTEXT; for <c>&lt;script&gt;</c>, ScriptData (owned by M1-01d). The tokenizer
+    /// RAWTEXT; for <c>&lt;script&gt;</c>, ScriptData. The tokenizer
     /// has no schema of its own, so the trigger lives with the consumer.
     /// </summary>
     public void SetState(TokenizerState state) => _state = state;
@@ -167,7 +166,7 @@ public sealed partial class HtmlTokenizer
                 StepData(c);
                 return;
 
-            // M1-01b: tag + attribute states.
+            // Tag + attribute states.
             case TokenizerState.TagOpen:
             case TokenizerState.EndTagOpen:
             case TokenizerState.TagName:
@@ -183,7 +182,7 @@ public sealed partial class HtmlTokenizer
                 DispatchTagState(state, c);
                 return;
 
-            // M1-01c: RCDATA / RAWTEXT / PLAINTEXT clusters.
+            // RCDATA / RAWTEXT / PLAINTEXT clusters.
             case TokenizerState.Rcdata:
             case TokenizerState.RcdataLessThanSign:
             case TokenizerState.RcdataEndTagOpen:
@@ -196,7 +195,7 @@ public sealed partial class HtmlTokenizer
                 DispatchRawState(state, c);
                 return;
 
-            // M1-01d: ScriptData cluster.
+            // ScriptData cluster.
             case TokenizerState.ScriptData:
             case TokenizerState.ScriptDataLessThanSign:
             case TokenizerState.ScriptDataEndTagOpen:
@@ -218,7 +217,7 @@ public sealed partial class HtmlTokenizer
                 DispatchScriptState(state, c);
                 return;
 
-            // M1-01e: comment + CDATA + bogus-comment + markup-declaration-open.
+            // Comment + CDATA + bogus-comment + markup-declaration-open.
             case TokenizerState.MarkupDeclarationOpen:
             case TokenizerState.CommentStart:
             case TokenizerState.CommentStartDash:
@@ -237,7 +236,7 @@ public sealed partial class HtmlTokenizer
                 DispatchCommentState(state, c);
                 return;
 
-            // M1-01g: character-reference states.
+            // Character-reference states.
             case TokenizerState.CharacterReference:
             case TokenizerState.NamedCharacterReference:
             case TokenizerState.AmbiguousAmpersand:
@@ -250,7 +249,7 @@ public sealed partial class HtmlTokenizer
                 DispatchCharRefState(state, c);
                 return;
 
-            // M1-01f: doctype states.
+            // Doctype states.
             case TokenizerState.Doctype:
             case TokenizerState.BeforeDoctypeName:
             case TokenizerState.DoctypeName:
@@ -272,8 +271,7 @@ public sealed partial class HtmlTokenizer
 
             default:
                 throw new NotImplementedException(
-                    $"Tokenizer state '{state}' not implemented yet. " +
-                    $"See tasks/M1/wp-M1-01{StateOwner(state)}-*.md.");
+                    $"Tokenizer state '{state}' has no dispatch handler.");
         }
     }
 
@@ -286,7 +284,7 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
-            // M1-01b EOF handling (delegated to TagStates partial).
+            // EOF handling delegated to TagStates partial.
             case TokenizerState.TagOpen:
             case TokenizerState.EndTagOpen:
             case TokenizerState.TagName:
@@ -303,7 +301,7 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
-            // M1-01c EOF handling (delegated to RawStates partial).
+            // EOF handling delegated to RawStates partial.
             case TokenizerState.Rcdata:
             case TokenizerState.RcdataLessThanSign:
             case TokenizerState.RcdataEndTagOpen:
@@ -317,7 +315,7 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
-            // M1-01d EOF handling (delegated to ScriptStates partial).
+            // EOF handling delegated to ScriptStates partial.
             case TokenizerState.ScriptData:
             case TokenizerState.ScriptDataLessThanSign:
             case TokenizerState.ScriptDataEndTagOpen:
@@ -340,7 +338,7 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
-            // M1-01e EOF handling.
+            // EOF handling delegated to CommentStates partial.
             case TokenizerState.MarkupDeclarationOpen:
             case TokenizerState.CommentStart:
             case TokenizerState.CommentStartDash:
@@ -360,7 +358,7 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
-            // M1-01g EOF handling.
+            // EOF handling delegated to CharRefStates partial.
             case TokenizerState.CharacterReference:
             case TokenizerState.NamedCharacterReference:
             case TokenizerState.AmbiguousAmpersand:
@@ -374,7 +372,7 @@ public sealed partial class HtmlTokenizer
                 _eofProcessed = true;
                 return true;
 
-            // M1-01f EOF handling.
+            // EOF handling delegated to DoctypeStates partial.
             case TokenizerState.Doctype:
             case TokenizerState.BeforeDoctypeName:
             case TokenizerState.DoctypeName:
@@ -397,7 +395,7 @@ public sealed partial class HtmlTokenizer
 
             default:
                 throw new NotImplementedException(
-                    $"EOF in state '{_state}' not implemented yet.");
+                    $"EOF in state '{_state}' has no handler.");
         }
     }
 
@@ -453,76 +451,4 @@ public sealed partial class HtmlTokenizer
         }
     }
 
-    /// <summary>Maps a state to the sub-task letter that owns it.</summary>
-    private static string StateOwner(TokenizerState s) => s switch
-    {
-        TokenizerState.Rcdata
-            or TokenizerState.Rawtext
-            or TokenizerState.Plaintext
-            or TokenizerState.RcdataLessThanSign
-            or TokenizerState.RcdataEndTagOpen
-            or TokenizerState.RcdataEndTagName
-            or TokenizerState.RawtextLessThanSign
-            or TokenizerState.RawtextEndTagOpen
-            or TokenizerState.RawtextEndTagName => "c",
-        TokenizerState.ScriptData
-            or TokenizerState.ScriptDataLessThanSign
-            or TokenizerState.ScriptDataEndTagOpen
-            or TokenizerState.ScriptDataEndTagName
-            or TokenizerState.ScriptDataEscapeStart
-            or TokenizerState.ScriptDataEscapeStartDash
-            or TokenizerState.ScriptDataEscaped
-            or TokenizerState.ScriptDataEscapedDash
-            or TokenizerState.ScriptDataEscapedDashDash
-            or TokenizerState.ScriptDataEscapedLessThanSign
-            or TokenizerState.ScriptDataEscapedEndTagOpen
-            or TokenizerState.ScriptDataEscapedEndTagName
-            or TokenizerState.ScriptDataDoubleEscapeStart
-            or TokenizerState.ScriptDataDoubleEscaped
-            or TokenizerState.ScriptDataDoubleEscapedDash
-            or TokenizerState.ScriptDataDoubleEscapedDashDash
-            or TokenizerState.ScriptDataDoubleEscapedLessThanSign
-            or TokenizerState.ScriptDataDoubleEscapeEnd => "d",
-        TokenizerState.BogusComment
-            or TokenizerState.MarkupDeclarationOpen
-            or TokenizerState.CommentStart
-            or TokenizerState.CommentStartDash
-            or TokenizerState.Comment
-            or TokenizerState.CommentLessThanSign
-            or TokenizerState.CommentLessThanSignBang
-            or TokenizerState.CommentLessThanSignBangDash
-            or TokenizerState.CommentLessThanSignBangDashDash
-            or TokenizerState.CommentEndDash
-            or TokenizerState.CommentEnd
-            or TokenizerState.CommentEndBang
-            or TokenizerState.CdataSection
-            or TokenizerState.CdataSectionBracket
-            or TokenizerState.CdataSectionEnd => "e",
-        TokenizerState.Doctype
-            or TokenizerState.BeforeDoctypeName
-            or TokenizerState.DoctypeName
-            or TokenizerState.AfterDoctypeName
-            or TokenizerState.AfterDoctypePublicKeyword
-            or TokenizerState.BeforeDoctypePublicIdentifier
-            or TokenizerState.DoctypePublicIdentifierDoubleQuoted
-            or TokenizerState.DoctypePublicIdentifierSingleQuoted
-            or TokenizerState.AfterDoctypePublicIdentifier
-            or TokenizerState.BetweenDoctypePublicAndSystemIdentifiers
-            or TokenizerState.AfterDoctypeSystemKeyword
-            or TokenizerState.BeforeDoctypeSystemIdentifier
-            or TokenizerState.DoctypeSystemIdentifierDoubleQuoted
-            or TokenizerState.DoctypeSystemIdentifierSingleQuoted
-            or TokenizerState.AfterDoctypeSystemIdentifier
-            or TokenizerState.BogusDoctype => "f",
-        TokenizerState.CharacterReference
-            or TokenizerState.NamedCharacterReference
-            or TokenizerState.AmbiguousAmpersand
-            or TokenizerState.NumericCharacterReference
-            or TokenizerState.HexadecimalCharacterReferenceStart
-            or TokenizerState.DecimalCharacterReferenceStart
-            or TokenizerState.HexadecimalCharacterReference
-            or TokenizerState.DecimalCharacterReference
-            or TokenizerState.NumericCharacterReferenceEnd => "g",
-        _ => "?",
-    };
 }

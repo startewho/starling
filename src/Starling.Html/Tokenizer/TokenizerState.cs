@@ -6,10 +6,9 @@ namespace Starling.Html.Tokenizer;
 /// §13.2.5). Names match the spec slugs verbatim.
 /// </summary>
 /// <remarks>
-/// The enum is complete from the start so subsequent agents (M1-01b…g) can
-/// reference states they implement without touching this file. States not yet
-/// implemented throw <see cref="System.NotImplementedException"/> at the
-/// dispatch site — that surfaces gaps loudly during integration tests.
+/// The enum is complete so all state-family partial files can share one set of
+/// names. A missing dispatch handler throws <see cref="System.NotImplementedException"/>,
+/// which surfaces gaps loudly during integration tests.
 /// </remarks>
 public enum TokenizerState
 {

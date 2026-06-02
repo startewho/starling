@@ -11,21 +11,17 @@ using StarlingUrl = global::Starling.Url.Url;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// Jint-backed <see cref="IScriptSession"/>: a parallel implementation of the
-/// same seam the Starling.Js backend satisfies, over the pure-managed Jint
-/// interpreter. Owns the <see cref="global::Jint.Engine"/>, the
-/// <see cref="JintBackendContext"/> the binding families share, and the
-/// simulated <see cref="WebEventLoop"/>; installs all Web-API bindings via
-/// <see cref="JintBindings.InstallAll(JintBackendContext)"/>; runs classic +
-/// module scripts; fires DOMContentLoaded/load; and advances timers/rAF/promise
-/// jobs through <see cref="PumpOnce"/>.
+/// Jint-backed <see cref="IScriptSession"/>. Implements the same host seam as
+/// the Starling JS engine through the pure-managed Jint interpreter. Owns the
+/// <see cref="global::Jint.Engine"/>, the shared <see cref="JintBackendContext"/>,
+/// and the simulated <see cref="WebEventLoop"/>. Installs Web API bindings,
+/// runs classic and module scripts, fires DOMContentLoaded/load, and advances
+/// timers, requestAnimationFrame, and promise jobs through <see cref="PumpOnce"/>.
 /// </summary>
 /// <remarks>
-/// CLR auto-interop is intentionally minimal — Web-IDL surfaces are defined
+/// CLR auto-interop is intentionally minimal. Web IDL surfaces are defined
 /// explicitly by the binding families (see DESIGN.md fidelity rules), not by
-/// reflecting over Starling.Dom types. As Wave 2 fills in the binding stubs the
-/// installed surface grows; J2a ships the seam + a working console + the wrapper
-/// registry so scripts run and DOM wrappers can be proven end-to-end.
+/// reflecting over Starling DOM types.
 /// </remarks>
 internal sealed class JintScriptSession : IScriptSession
 {
@@ -55,7 +51,7 @@ internal sealed class JintScriptSession : IScriptSession
         ArgumentNullException.ThrowIfNull(options);
         _loop = new WebEventLoop();
 
-        // ES module support (J4) must be enabled at engine construction: Jint
+        // ES module support must be enabled at engine construction: Jint
         // requires the IModuleLoader + the import.meta host to be supplied via
         // options.EnableModules(...) / options.UseHostFactory(...) before the
         // realm is built. The loader resolves specifiers against the document
@@ -108,19 +104,18 @@ internal sealed class JintScriptSession : IScriptSession
             (url, token) => options.Fetcher(url, token),
             RunClassicScript, Post);
 
-        // Route the NodeBindings src-set notification (J6b) into the dynamic
+        // Route the NodeBindings src-set notification into the dynamic
         // runner so `script.setAttribute('src', …)` / `script.src = …` from JS
         // runs "prepare a script". Installed before the binding families so the
         // src setter can fire it. OnSrcSet honours the "already started" flag, so
         // re-assigning src on a parser-batch script that already ran is a no-op.
         _ctx.OnScriptSrcSet = _dynamicRunner.OnSrcSet;
 
-        // Minimal console so console.* works before J2d's full Window surface.
-        // J2d may redefine these against the same sink without changing behavior.
+        // Minimal console so console.* works before the full Window surface.
+        // WindowBinding may redefine these against the same sink without changing behavior.
         InstallConsole();
 
-        // Install every Web-API binding family (no-ops until each Wave-2 file is
-        // implemented; the dispatcher order is the frozen J2a contract).
+        // Install every Web API binding family in dependency order.
         JintBindings.InstallAll(_ctx);
     }
 
@@ -230,6 +225,13 @@ internal sealed class JintScriptSession : IScriptSession
             || !_postQueue.IsEmpty
             || _dynamicRunner.HasPending;
     }
+
+    public bool OnlyAnimationFramePending =>
+        _loop.PendingMicrotaskCount == 0
+        && _loop.PendingTimerCount == 0
+        && _postQueue.IsEmpty
+        && !_dynamicRunner.HasPending
+        && _loop.PendingAnimationFrameCount > 0;
 
     /// <summary>Drain every callback the post queue holds <i>now</i>, on the JS
     /// thread. A drained callback may enqueue further work; that lands on a later
@@ -358,7 +360,7 @@ internal sealed class JintScriptSession : IScriptSession
         {
             // DOMContentLoaded targets the document and bubbles through the DOM
             // tree; load targets the window only. Both also dispatch on the
-            // separate window host EventTarget (bound by J2d's WindowBinding via
+            // separate window host EventTarget (bound by WindowBinding via
             // JintDomWrapper.BindExisting on engine.Global) because the window
             // is not in the DOM parent chain that EventDispatcher walks.
             if (!onWindow)

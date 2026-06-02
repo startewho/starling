@@ -121,6 +121,15 @@ public interface IScriptSession : IDisposable
     /// terminate.</summary>
     bool PumpOnce();
 
+    /// <summary>True when the only work still pending is one or more queued
+    /// <c>requestAnimationFrame</c> callbacks — no microtasks/promise jobs, no
+    /// due timers, no in-flight dynamic <c>&lt;script src&gt;</c> work. A
+    /// self-rescheduling rAF loop never reports idle through <see cref="PumpOnce"/>,
+    /// so the load-time pump uses this to grant rAF a small frame budget and then
+    /// stop waiting on it: steady animation belongs to the live
+    /// <see cref="PumpFrame"/> phase, not the navigation settle.</summary>
+    bool OnlyAnimationFramePending { get; }
+
     /// <summary>Route a runtime-injected <c>&lt;script&gt;</c> that was just
     /// connected to the document: inline non-async scripts run synchronously,
     /// external/async scripts are queued for the dynamic pump. Mirrors the

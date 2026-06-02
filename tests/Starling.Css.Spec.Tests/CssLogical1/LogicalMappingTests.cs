@@ -112,7 +112,8 @@ public sealed class LogicalMappingTests
     /// The engine currently always uses the LTR mapping, so this is pending.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_inline_start_maps_to_right_in_horizontal_tb_rtl()
+    [SpecFact]
+    public void Margin_inline_start_maps_to_right_in_horizontal_tb_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; margin-inline-start: 10px;");
         style.GetLength(PropertyId.MarginRight).Should().Be(Px10);
@@ -123,7 +124,8 @@ public sealed class LogicalMappingTests
     /// §4 horizontal-tb + rtl: inline-end should map to left.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_inline_end_maps_to_left_in_horizontal_tb_rtl()
+    [SpecFact]
+    public void Margin_inline_end_maps_to_left_in_horizontal_tb_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; margin-inline-end: 10px;");
         style.GetLength(PropertyId.MarginLeft).Should().Be(Px10);
@@ -163,7 +165,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine ignores writing-mode in logical→physical resolution.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_block_start_maps_to_right_in_vertical_rl()
+    [SpecFact]
+    public void Margin_block_start_maps_to_right_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; direction: ltr; margin-block-start: 10px;");
         style.GetLength(PropertyId.MarginRight).Should().Be(Px10);
@@ -175,7 +178,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine ignores writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_block_end_maps_to_left_in_vertical_rl()
+    [SpecFact]
+    public void Margin_block_end_maps_to_left_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; direction: ltr; margin-block-end: 10px;");
         style.GetLength(PropertyId.MarginLeft).Should().Be(Px10);
@@ -187,7 +191,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine ignores writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_inline_start_maps_to_top_in_vertical_rl()
+    [SpecFact]
+    public void Margin_inline_start_maps_to_top_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; direction: ltr; margin-inline-start: 10px;");
         style.GetLength(PropertyId.MarginTop).Should().Be(Px10);
@@ -199,7 +204,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine ignores writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_inline_end_maps_to_bottom_in_vertical_rl()
+    [SpecFact]
+    public void Margin_inline_end_maps_to_bottom_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; direction: ltr; margin-inline-end: 10px;");
         style.GetLength(PropertyId.MarginBottom).Should().Be(Px10);
@@ -217,7 +223,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine ignores writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_block_start_maps_to_left_in_vertical_lr()
+    [SpecFact]
+    public void Margin_block_start_maps_to_left_in_vertical_lr()
     {
         var style = Compute("writing-mode: vertical-lr; direction: ltr; margin-block-start: 10px;");
         style.GetLength(PropertyId.MarginLeft).Should().Be(Px10);
@@ -229,7 +236,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine ignores writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#margin-properties", section: "4")]
-    [SpecFact]    public void Margin_block_end_maps_to_right_in_vertical_lr()
+    [SpecFact]
+    public void Margin_block_end_maps_to_right_in_vertical_lr()
     {
         var style = Compute("writing-mode: vertical-lr; direction: ltr; margin-block-end: 10px;");
         style.GetLength(PropertyId.MarginRight).Should().Be(Px10);
@@ -293,7 +301,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour direction.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#padding-properties", section: "4")]
-    [SpecFact]    public void Padding_inline_start_maps_to_right_in_horizontal_tb_rtl()
+    [SpecFact]
+    public void Padding_inline_start_maps_to_right_in_horizontal_tb_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; padding-inline-start: 10px;");
         style.GetLength(PropertyId.PaddingRight).Should().Be(Px10);
@@ -305,7 +314,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour direction.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#padding-properties", section: "4")]
-    [SpecFact]    public void Padding_inline_end_maps_to_left_in_horizontal_tb_rtl()
+    [SpecFact]
+    public void Padding_inline_end_maps_to_left_in_horizontal_tb_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; padding-inline-end: 10px;");
         style.GetLength(PropertyId.PaddingLeft).Should().Be(Px10);
@@ -321,7 +331,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#padding-properties", section: "4")]
-    [SpecFact]    public void Padding_block_start_maps_to_right_in_vertical_rl()
+    [SpecFact]
+    public void Padding_block_start_maps_to_right_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; padding-block-start: 10px;");
         style.GetLength(PropertyId.PaddingRight).Should().Be(Px10);
@@ -333,7 +344,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#padding-properties", section: "4")]
-    [SpecFact]    public void Padding_inline_start_maps_to_top_in_vertical_rl()
+    [SpecFact]
+    public void Padding_inline_start_maps_to_top_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; padding-inline-start: 10px;");
         style.GetLength(PropertyId.PaddingTop).Should().Be(Px10);
@@ -349,7 +361,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#padding-properties", section: "4")]
-    [SpecFact]    public void Padding_block_start_maps_to_left_in_vertical_lr()
+    [SpecFact]
+    public void Padding_block_start_maps_to_left_in_vertical_lr()
     {
         var style = Compute("writing-mode: vertical-lr; padding-block-start: 10px;");
         style.GetLength(PropertyId.PaddingLeft).Should().Be(Px10);
@@ -461,7 +474,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#border-style", section: "4")]
-    [SpecFact]    public void Border_block_start_style_maps_to_right_in_vertical_rl()
+    [SpecFact]
+    public void Border_block_start_style_maps_to_right_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; border-block-start-style: solid;");
         style.Get(PropertyId.BorderRightStyle).Should().Be(new CssKeyword("solid"));
@@ -473,7 +487,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#border-style", section: "4")]
-    [SpecFact]    public void Border_inline_start_style_maps_to_top_in_vertical_rl()
+    [SpecFact]
+    public void Border_inline_start_style_maps_to_top_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; border-inline-start-style: dashed;");
         style.Get(PropertyId.BorderTopStyle).Should().Be(new CssKeyword("dashed"));
@@ -585,7 +600,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine always maps inline-size→width regardless of writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#dimension-properties", section: "4")]
-    [SpecFact]    public void Inline_size_maps_to_height_in_vertical_rl()
+    [SpecFact]
+    public void Inline_size_maps_to_height_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; inline-size: 100px;");
         style.Get(PropertyId.Height).Should().Be(Px100);
@@ -597,7 +613,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine always maps block-size→height regardless of writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#dimension-properties", section: "4")]
-    [SpecFact]    public void Block_size_maps_to_width_in_vertical_rl()
+    [SpecFact]
+    public void Block_size_maps_to_width_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; block-size: 200px;");
         style.Get(PropertyId.Width).Should().Be(Px200);
@@ -609,7 +626,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine always maps inline-size→width.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#dimension-properties", section: "4")]
-    [SpecFact]    public void Inline_size_maps_to_height_in_vertical_lr()
+    [SpecFact]
+    public void Inline_size_maps_to_height_in_vertical_lr()
     {
         var style = Compute("writing-mode: vertical-lr; inline-size: 100px;");
         style.Get(PropertyId.Height).Should().Be(Px100);
@@ -621,7 +639,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine always maps block-size→height.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#dimension-properties", section: "4")]
-    [SpecFact]    public void Block_size_maps_to_width_in_vertical_lr()
+    [SpecFact]
+    public void Block_size_maps_to_width_in_vertical_lr()
     {
         var style = Compute("writing-mode: vertical-lr; block-size: 200px;");
         style.Get(PropertyId.Width).Should().Be(Px200);
@@ -685,7 +704,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour direction.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#inset-properties", section: "4")]
-    [SpecFact]    public void Inset_inline_start_maps_to_right_in_horizontal_tb_rtl()
+    [SpecFact]
+    public void Inset_inline_start_maps_to_right_in_horizontal_tb_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; position: absolute; inset-inline-start: 10px;");
         style.Get(PropertyId.Right).Should().Be(Px10);
@@ -697,7 +717,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour direction.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#inset-properties", section: "4")]
-    [SpecFact]    public void Inset_inline_end_maps_to_left_in_horizontal_tb_rtl()
+    [SpecFact]
+    public void Inset_inline_end_maps_to_left_in_horizontal_tb_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; position: absolute; inset-inline-end: 10px;");
         style.Get(PropertyId.Left).Should().Be(Px10);
@@ -713,7 +734,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#inset-properties", section: "4")]
-    [SpecFact]    public void Inset_block_start_maps_to_right_in_vertical_rl()
+    [SpecFact]
+    public void Inset_block_start_maps_to_right_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; position: absolute; inset-block-start: 10px;");
         style.Get(PropertyId.Right).Should().Be(Px10);
@@ -725,7 +747,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#inset-properties", section: "4")]
-    [SpecFact]    public void Inset_inline_start_maps_to_top_in_vertical_rl()
+    [SpecFact]
+    public void Inset_inline_start_maps_to_top_in_vertical_rl()
     {
         var style = Compute("writing-mode: vertical-rl; position: absolute; inset-inline-start: 10px;");
         style.Get(PropertyId.Top).Should().Be(Px10);
@@ -878,7 +901,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour direction.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#propdef-margin-inline", section: "4")]
-    [SpecFact]    public void Margin_inline_two_value_shorthand_maps_start_to_right_in_rtl()
+    [SpecFact]
+    public void Margin_inline_two_value_shorthand_maps_start_to_right_in_rtl()
     {
         var style = Compute("writing-mode: horizontal-tb; direction: rtl; margin-inline: 10px 20px;");
         style.GetLength(PropertyId.MarginRight).Should().Be(Px10);
@@ -1049,7 +1073,8 @@ public sealed class LogicalMappingTests
     /// Pending: engine does not honour writing-mode for corner radii.
     /// </summary>
     [Spec("css-logical-1", "https://www.w3.org/TR/css-logical-1/#border-radius-properties", section: "4")]
-    [SpecFact]    public void Border_start_start_radius_maps_to_top_right_in_vertical_rl_ltr()
+    [SpecFact]
+    public void Border_start_start_radius_maps_to_top_right_in_vertical_rl_ltr()
     {
         var style = Compute("writing-mode: vertical-rl; direction: ltr; border-start-start-radius: 8px;");
         style.GetLength(PropertyId.BorderTopRightRadius).Should().Be(new CssLength(8, CssLengthUnit.Px));

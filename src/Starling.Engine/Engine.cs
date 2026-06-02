@@ -19,13 +19,12 @@ using StarlingUrl = global::Starling.Url.Url;
 namespace Starling.Engine;
 
 /// <summary>
-/// Engine façade. One call: load a URL, parse HTML, run the static
-/// style/layout/paint pipeline, and write a bitmap. The full Browser / Page /
-/// Frame composition per 01_ARCHITECTURE.md §E lands with interactive browsing.
+/// Engine façade. Loads a URL, parses HTML, runs scripts and the
+/// style/layout/paint pipeline, and returns a rendered page or bitmap.
 /// </summary>
 /// <remarks>
-/// As of the M1 static-rendering closure the renderer uses the document-level
-/// pipeline in <see cref="Painter.RenderDocument(Document, Starling.Layout.Size, float?, Starling.Layout.Tree.IImageResolver?, System.Func{Element, Starling.Css.Parser.StyleSheet?}?, FontFaceRegistry?, Starling.Css.Media.ColorScheme)"/> for file and network inputs.
+/// <see cref="BrowserSession"/> layers navigation history, cookies, and
+/// interactive page reuse on top of this engine.
 /// </remarks>
 public sealed class StarlingEngine
 {
@@ -48,7 +47,7 @@ public sealed class StarlingEngine
 
     static StarlingEngine()
     {
-        // Register the BCL CodePages provider once so WHATWG legacy
+        // Register the .NET base class library CodePages provider once so WHATWG legacy
         // single-byte (windows-1250…1258, ISO-8859-2…16, KOI8-*, mac*)
         // and CJK (Shift_JIS, GBK, gb18030, Big5, EUC-KR, …) labels
         // resolve. CodePages is a pure-managed NuGet package.
@@ -148,7 +147,7 @@ public sealed class StarlingEngine
             }
             else
             {
-                return Fail($"Unsupported scheme '{u.Scheme}' for M0.");
+                return Fail($"Unsupported scheme '{u.Scheme}'.");
             }
         }
         catch (IOException ex)
@@ -1324,22 +1323,46 @@ public sealed class StarlingEngine
     /// enqueue their resolve jobs asynchronously and need a slot to land before
     /// we declare the page settled. A generous wall-clock cap accommodates
     /// sequential network bundle chains without hanging a stuck page.
+    /// A self-perpetuating <c>requestAnimationFrame</c> loop is the exception: it
+    /// never reports idle, so it gets a small frame budget and is then handed to
+    /// the live phase rather than holding navigation open for the full cap.
     /// </summary>
     private async Task PumpToQuiescenceAsync(ScriptSession s, CancellationToken ct)
     {
         // Hard wall-clock cap for the whole settle. Overridable via
-        // STARLING_PUMP_MAX_MS for content-heavy SPAs whose data XHRs (e.g.
-        // McMaster's multi-MB ProdPageWebPart) need longer than the default.
+        // STARLING_PUMP_MAX_MS for content-heavy SPAs whose data XHRs need longer than the default.
         var MaxMs = 8000;
         if (int.TryParse(Environment.GetEnvironmentVariable("STARLING_PUMP_MAX_MS"), out var capOverride) && capOverride > 0)
             MaxMs = capOverride;
         const int IdleMs = 60;    // consecutive idle window before declaring done
+
+        // A self-rescheduling requestAnimationFrame loop never reports idle, so
+        // without a bound the pump burns the entire wall-clock cap on every
+        // animated page — first paint lands fast but navigation stays "busy" for
+        // seconds. Give rAF a few frames (bootstrap callbacks like double-rAF
+        // "after paint" hooks and one-shot layout measurers), then stop waiting
+        // on it: steady animation is the live phase's job (PumpFrame), not a
+        // reason to hold the navigation settle. Microtasks, timers, and
+        // dynamic-script fetches still pump to true quiescence, so SPA bundle
+        // chains are unaffected.
+        const int RafFrameBudget = 8;
+
         var wall = System.Diagnostics.Stopwatch.StartNew();
         var idle = System.Diagnostics.Stopwatch.StartNew();
+        var rafFrames = 0;
 
         while (wall.ElapsedMilliseconds < MaxMs)
         {
             ct.ThrowIfCancellationRequested();
+
+            // When the only work left is a steady rAF loop that has already had
+            // its frame budget, declare the page settled and let the live loop
+            // drive the ongoing animation instead of blocking here.
+            var rafOnly = s.Session.OnlyAnimationFramePending;
+            if (rafOnly && rafFrames >= RafFrameBudget)
+                return;
+            if (rafOnly)
+                rafFrames++;   // this PumpOnce advances one animation frame
 
             if (s.Session.PumpOnce())
             {
@@ -1663,7 +1686,7 @@ public sealed class StarlingEngine
         var canonical = WhatwgEncodingLabels.TryGetCanonicalName(trimmed);
         if (canonical is null) return null;
 
-        // Hot-path the BCL singletons; fall back to GetEncoding(name) for
+        // Hot-path the .NET base class library singletons; fall back to GetEncoding(name) for
         // CodePages-backed encodings (registered in the static ctor).
         return canonical switch
         {
