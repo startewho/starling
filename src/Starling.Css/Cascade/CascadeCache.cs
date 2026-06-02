@@ -80,14 +80,15 @@ public sealed class CascadeCache
 /// matching for an element: tag, every attribute (covers id, class, plus
 /// attribute selectors like <c>input[type=text]</c>), the parent's computed
 /// style (for inherited values), and the previous element sibling's tag
-/// (handles <c>+</c>/<c>~</c> combinators and <c>:first-child</c> via null).
+/// (handles <c>:first-child</c> via null, and adjacent-sibling selectors that
+/// only depend on that tag).
 /// <para>
 /// Two elements with the same key must produce the same cascade result. The
 /// signature is intentionally conservative — false negatives (cache miss when
-/// sharing would have been safe) are fine, false positives are not. Pages
-/// using positional pseudo-classes (<c>:nth-child</c>, <c>:last-child</c>,
-/// <c>:has</c>, etc.) disable sharing globally via
-/// <see cref="StyleEngine"/> on stylesheet add.
+/// sharing would have been safe) are fine, false positives are not.
+/// <see cref="StyleEngine"/> bypasses the shared lookup per element when that
+/// element's candidate selectors include structural pseudo-classes such as
+/// <c>:nth-child</c>, <c>:empty</c>, or <c>:has()</c>.
 /// </para>
 /// </summary>
 public readonly struct SharingKey : IEquatable<SharingKey>
