@@ -365,6 +365,12 @@ internal sealed class StarlingScriptSession : IScriptSession
         return false;
     }
 
+    public bool OnlyAnimationFramePending =>
+        _runtime.Realm.Microtasks.PendingCount == 0
+        && _loop.PendingTimerCount == 0
+        && !_dynamicRunner.HasPending
+        && _loop.PendingAnimationFrameCount > 0;
+
     public void OnScriptElementConnected(Node scriptEl)
     {
         ArgumentNullException.ThrowIfNull(scriptEl);

@@ -15,9 +15,9 @@ namespace Starling.Net;
 /// <summary>
 /// Top-level HTTP client. Resolves a URL to a TCP endpoint, opens a transport
 /// (TLS for https, plain for http), and speaks HTTP/2 or HTTP/1.1 depending on
-/// the ALPN protocol negotiated during the TLS handshake. Over HTTP/1.1,
+/// the TLS application protocol negotiated during the handshake. Over HTTP/1.1,
 /// sequential requests to the same origin reuse a pooled TCP+TLS transport when
-/// both sides advertise keep-alive (wp:M2-07c). Over HTTP/2, requests to the
+/// both sides advertise keep-alive. Over HTTP/2, requests to the
 /// same origin are multiplexed onto a single shared connection held by the
 /// <see cref="H2ConnectionManager"/>.
 /// </summary>
@@ -26,7 +26,7 @@ namespace Starling.Net;
 /// <list type="bullet">
 ///   <item><see cref="DnsResolver"/> → A/AAAA records</item>
 ///   <item><see cref="TcpDialer"/> → <see cref="ITcpConnection"/></item>
-///   <item><see cref="BcTlsTransport"/> → ALPN-negotiated TLS stream</item>
+///   <item><see cref="BcTlsTransport"/> → negotiated TLS stream</item>
 ///   <item><see cref="H1RequestWriter"/> → wire bytes onto the stream</item>
 ///   <item><see cref="H1ResponseParser"/> → fully buffered <see cref="HttpResponse"/></item>
 /// </list>

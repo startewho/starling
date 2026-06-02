@@ -342,7 +342,8 @@ public sealed class EasingFunctionTests
     /// <c>linear</c>).
     /// </summary>
     [Spec("css-easing-1", "https://www.w3.org/TR/css-easing-1/#linear-easing-function", "§4")]
-    [SpecFact]    public void LinearFunction_two_stop_is_identity()
+    [SpecFact]
+    public void LinearFunction_two_stop_is_identity()
     {
         // linear(0, 1) → two stops: output 0 at t=0, output 1 at t=1.
         var fn = TimingFunction.FromCss(new CssFunctionValue("linear",
@@ -363,7 +364,8 @@ public sealed class EasingFunctionTests
     /// At t=0.75 (halfway through the second segment [50%→100%]) output ≈ 0.625.
     /// </summary>
     [Spec("css-easing-1", "https://www.w3.org/TR/css-easing-1/#linear-easing-function", "§4")]
-    [SpecFact]    public void LinearFunction_multi_stop_with_position()
+    [SpecFact]
+    public void LinearFunction_multi_stop_with_position()
     {
         // linear(0, 0.25 50%, 1)
         // Segment 1: [0%→50%] maps output [0→0.25]
@@ -385,7 +387,8 @@ public sealed class EasingFunctionTests
     /// So at t=0.25 output ≈ 0.25 and at t=0.75 output ≈ 0.75.
     /// </summary>
     [Spec("css-easing-1", "https://www.w3.org/TR/css-easing-1/#linear-easing-function", "§4")]
-    [SpecFact]    public void LinearFunction_three_evenly_spaced_stops()
+    [SpecFact]
+    public void LinearFunction_three_evenly_spaced_stops()
     {
         // linear(0, 0.5, 1): positions auto-distributed as 0%, 50%, 100%.
         var fn = TimingFunction.FromCss(new CssFunctionValue("linear",
@@ -408,7 +411,8 @@ public sealed class EasingFunctionTests
     /// <c>linear(0 0%, 1 100%)</c> is the canonical two-stop identity form.
     /// </summary>
     [Spec("css-easing-1", "https://www.w3.org/TR/css-easing-1/#linear-easing-function", "§4")]
-    [SpecFact]    public void LinearFunction_explicit_positions_respected()
+    [SpecFact]
+    public void LinearFunction_explicit_positions_respected()
     {
         // linear(0 0%, 1 100%)
         var fn = TimingFunction.FromCss(new CssFunctionValue("linear",

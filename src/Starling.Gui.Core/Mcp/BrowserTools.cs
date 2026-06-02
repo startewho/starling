@@ -5,7 +5,7 @@ using Starling.Mcp;
 namespace Starling.Gui.Mcp;
 
 /// <summary>
-/// Model Context Protocol tool group that drives the visible Starling browser
+/// MCP tool group that drives the visible Starling browser
 /// window. Owns the tool descriptors and dispatches tools/call onto
 /// <see cref="IBrowserControlDispatcher"/>.
 /// </summary>
@@ -27,14 +27,26 @@ public sealed class BrowserTools : IMcpToolGroup
             or "browser_forward"
             or "browser_refresh"
             or "browser_screenshot"
+            or "browser_screenshot_viewport"
             or "browser_inspect"
+            or "browser_console"
+            or "browser_network"
             or "browser_click"
+            or "browser_click_selector"
             or "browser_move"
+            or "browser_scroll"
+            or "browser_scroll_to"
+            or "browser_press_key"
             or "browser_type"
             or "browser_resize"
+            or "browser_wait"
+            or "browser_query"
             or "browser_highlight"
             or "browser_select"
             or "browser_focus"
+            or "browser_find"
+            or "browser_clipboard"
+            or "browser_bookmarks"
             or "browser_computed_style" => true,
         _ => false,
     };
@@ -44,42 +56,93 @@ public sealed class BrowserTools : IMcpToolGroup
         BrowserControlResult result = name switch
         {
             "browser_navigate" => await _browser.NavigateAsync(
-                McpArgumentReader.ReadString(arguments, "url"), ct).ConfigureAwait(false),
+                McpArgumentReader.RequireString(arguments, "url"), ct).ConfigureAwait(false),
             "browser_back" => await _browser.BackAsync(ct).ConfigureAwait(false),
             "browser_forward" => await _browser.ForwardAsync(ct).ConfigureAwait(false),
             "browser_refresh" => await _browser.ReloadAsync(ct).ConfigureAwait(false),
             "browser_screenshot" => await _browser.ScreenshotAsync(
                 McpArgumentReader.ReadString(arguments, "path"), ct).ConfigureAwait(false),
+            "browser_screenshot_viewport" => await _browser.ScreenshotViewportAsync(
+                McpArgumentReader.ReadString(arguments, "path"), ct).ConfigureAwait(false),
             "browser_inspect" => await _browser.InspectAsync(
                 McpArgumentReader.ReadBool(arguments, "includeHtml"),
                 McpArgumentReader.ReadOptionalString(arguments, "logPath"),
                 ct).ConfigureAwait(false),
+            "browser_console" => await _browser.ConsoleAsync(
+                McpArgumentReader.ReadOptionalString(arguments, "minLevel"),
+                McpArgumentReader.ReadIntOr(arguments, "limit", 100),
+                ct).ConfigureAwait(false),
+            "browser_network" => await _browser.NetworkAsync(
+                McpArgumentReader.ReadIntOr(arguments, "limit", 100),
+                ct).ConfigureAwait(false),
             "browser_click" => await _browser.ClickAsync(
-                McpArgumentReader.ReadDouble(arguments, "x"),
-                McpArgumentReader.ReadDouble(arguments, "y"),
+                McpArgumentReader.RequireDouble(arguments, "x"),
+                McpArgumentReader.RequireDouble(arguments, "y"),
+                ct).ConfigureAwait(false),
+            "browser_click_selector" => await _browser.ClickSelectorAsync(
+                McpArgumentReader.RequireString(arguments, "selector"),
                 ct).ConfigureAwait(false),
             "browser_move" => await _browser.MoveMouseAsync(
-                McpArgumentReader.ReadDouble(arguments, "x"),
-                McpArgumentReader.ReadDouble(arguments, "y"),
+                McpArgumentReader.RequireDouble(arguments, "x"),
+                McpArgumentReader.RequireDouble(arguments, "y"),
+                ct).ConfigureAwait(false),
+            "browser_scroll" => await _browser.ScrollAsync(
+                McpArgumentReader.RequireDouble(arguments, "deltaX"),
+                McpArgumentReader.RequireDouble(arguments, "deltaY"),
+                ct).ConfigureAwait(false),
+            "browser_scroll_to" => await _browser.ScrollToAsync(
+                McpArgumentReader.ReadOptionalDouble(arguments, "x"),
+                McpArgumentReader.ReadOptionalDouble(arguments, "y"),
+                McpArgumentReader.ReadOptionalString(arguments, "selector"),
+                McpArgumentReader.ReadOptionalString(arguments, "position"),
+                ct).ConfigureAwait(false),
+            "browser_press_key" => await _browser.PressKeyAsync(
+                McpArgumentReader.RequireString(arguments, "key"),
+                McpArgumentReader.ReadBool(arguments, "shift"),
+                McpArgumentReader.ReadBool(arguments, "ctrl"),
+                McpArgumentReader.ReadBool(arguments, "alt"),
+                McpArgumentReader.ReadBool(arguments, "meta"),
                 ct).ConfigureAwait(false),
             "browser_type" => await _browser.TypeTextAsync(
-                McpArgumentReader.ReadString(arguments, "text"),
+                McpArgumentReader.RequireString(arguments, "text"),
                 McpArgumentReader.ReadBool(arguments, "submit"),
                 ct).ConfigureAwait(false),
             "browser_resize" => await _browser.ResizeAsync(
-                McpArgumentReader.ReadDouble(arguments, "width"),
-                McpArgumentReader.ReadDouble(arguments, "height"),
+                McpArgumentReader.RequireDouble(arguments, "width"),
+                McpArgumentReader.RequireDouble(arguments, "height"),
+                ct).ConfigureAwait(false),
+            "browser_wait" => await _browser.WaitAsync(
+                McpArgumentReader.RequireString(arguments, "state"),
+                McpArgumentReader.ReadOptionalString(arguments, "value"),
+                McpArgumentReader.ReadIntOr(arguments, "timeoutMs", 5000),
+                ct).ConfigureAwait(false),
+            "browser_query" => await _browser.QueryAsync(
+                McpArgumentReader.RequireString(arguments, "selector"),
+                McpArgumentReader.ReadBool(arguments, "includeText"),
+                McpArgumentReader.ReadBool(arguments, "includeHtml"),
+                McpArgumentReader.ReadIntOr(arguments, "limit", 20),
                 ct).ConfigureAwait(false),
             "browser_highlight" => await _browser.HighlightAsync(
-                McpArgumentReader.ReadString(arguments, "selector"),
+                McpArgumentReader.RequireString(arguments, "selector"),
                 McpArgumentReader.ReadOptionalString(arguments, "color"),
                 ct).ConfigureAwait(false),
             "browser_select" => await _browser.SelectElementAsync(
-                McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
+                McpArgumentReader.RequireString(arguments, "selector"), ct).ConfigureAwait(false),
             "browser_focus" => await _browser.FocusElementAsync(
-                McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
+                McpArgumentReader.RequireString(arguments, "selector"), ct).ConfigureAwait(false),
+            "browser_find" => await _browser.FindAsync(
+                McpArgumentReader.RequireString(arguments, "query"),
+                McpArgumentReader.ReadOptionalString(arguments, "direction") ?? "next",
+                ct).ConfigureAwait(false),
+            "browser_clipboard" => await _browser.ClipboardAsync(
+                McpArgumentReader.RequireString(arguments, "action"),
+                McpArgumentReader.ReadOptionalString(arguments, "text"),
+                ct).ConfigureAwait(false),
+            "browser_bookmarks" => await _browser.BookmarksAsync(
+                McpArgumentReader.ReadOptionalString(arguments, "id"),
+                ct).ConfigureAwait(false),
             "browser_computed_style" => await _browser.ComputedStyleAsync(
-                McpArgumentReader.ReadString(arguments, "selector"), ct).ConfigureAwait(false),
+                McpArgumentReader.RequireString(arguments, "selector"), ct).ConfigureAwait(false),
             _ => throw new ArgumentException($"Unknown browser tool: {name}", nameof(name)),
         };
 
@@ -99,7 +162,7 @@ public sealed class BrowserTools : IMcpToolGroup
     };
 
     // The tool catalogue is fully static; the descriptors live as a JSON
-    // literal so the Model Context Protocol server can splice them into
+    // literal so the MCP server can splice them into
     // tools/list and re-parse a fresh tree per request. A JsonNode cannot be
     // re-parented, so a pre-built tree could not be reused.
     private const string ToolDescriptorsJson = """
@@ -147,6 +210,19 @@ public sealed class BrowserTools : IMcpToolGroup
             }
           },
           {
+            "name": "browser_screenshot_viewport",
+            "description": "Capture the currently visible viewport to a PNG file. The written path is returned in `detail`.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Output PNG path. Relative paths resolve against the GUI working directory. Defaults to starling-viewport.png."
+                }
+              }
+            }
+          },
+          {
             "name": "browser_inspect",
             "description": "Inspect the current page: URL, title, live-scripting state, and recent JS console warnings/errors, returned in `detail`. Optionally include the serialized outerHTML and/or dump a full telemetry+HTML report to a logfile.",
             "inputSchema": {
@@ -164,6 +240,27 @@ public sealed class BrowserTools : IMcpToolGroup
             }
           },
           {
+            "name": "browser_console",
+            "description": "Return recent JavaScript console and script error log entries from the visible browser.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "minLevel": { "type": "string", "description": "Minimum log level: Trace, Debug, Information, Warning, Error, or Critical. Defaults to Trace." },
+                "limit": { "type": "integer", "description": "Maximum number of entries to return. Defaults to 100, capped at 500." }
+              }
+            }
+          },
+          {
+            "name": "browser_network",
+            "description": "Return recent network-related spans and log entries from the visible browser.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "limit": { "type": "integer", "description": "Maximum number of entries to return. Defaults to 100, capped at 500." }
+              }
+            }
+          },
+          {
             "name": "browser_click",
             "description": "Left-click a point on the current page. Coordinates are page pixels from the document's top-left (same space browser_screenshot captures, full scroll extent). Clicking a text field focuses it (follow with browser_type); a link/button/checkbox is activated. The outcome is returned in `detail`.",
             "inputSchema": {
@@ -176,6 +273,17 @@ public sealed class BrowserTools : IMcpToolGroup
             }
           },
           {
+            "name": "browser_click_selector",
+            "description": "Left-click the center of the first element matching a CSS selector.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "selector": { "type": "string", "description": "A CSS selector. The first rendered match is clicked." }
+              },
+              "required": ["selector"]
+            }
+          },
+          {
             "name": "browser_move",
             "description": "Move the mouse to a point on the current page, updating hover/cursor state and dispatching DOM mouseover/mousemove/mouseout so JS hover handlers run. Coordinates are page pixels from the document's top-left (same space as browser_screenshot). What is under the cursor is returned in `detail`.",
             "inputSchema": {
@@ -185,6 +293,46 @@ public sealed class BrowserTools : IMcpToolGroup
                 "y": { "type": "number", "description": "Y coordinate in page pixels from the document's top edge." }
               },
               "required": ["x", "y"]
+            }
+          },
+          {
+            "name": "browser_scroll",
+            "description": "Scroll the visible Starling browser viewport by page-pixel deltas. Positive deltaY scrolls down. Positive deltaX scrolls right. The new offset is returned in `detail`.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "deltaX": { "type": "number", "description": "Horizontal scroll delta in page pixels. Positive values scroll right." },
+                "deltaY": { "type": "number", "description": "Vertical scroll delta in page pixels. Positive values scroll down." }
+              },
+              "required": ["deltaX", "deltaY"]
+            }
+          },
+          {
+            "name": "browser_scroll_to",
+            "description": "Scroll the visible Starling browser viewport to an absolute page offset or to an element.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "x": { "type": "number", "description": "Absolute horizontal page offset in page pixels." },
+                "y": { "type": "number", "description": "Absolute vertical page offset in page pixels." },
+                "selector": { "type": "string", "description": "Optional CSS selector. If set, scrolls to the first rendered matching element." },
+                "position": { "type": "string", "description": "For selector scrolls: top, center, or bottom. Defaults to top." }
+              }
+            }
+          },
+          {
+            "name": "browser_press_key",
+            "description": "Press a browser key such as Tab, Enter, Escape, Backspace, Delete, ArrowLeft, PageDown, Home, or End. Use modifier booleans for combinations.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string", "description": "Key name, for example Tab, Enter, Escape, ArrowDown, PageDown, or Backspace." },
+                "shift": { "type": "boolean", "description": "Hold Shift while pressing the key." },
+                "ctrl": { "type": "boolean", "description": "Hold Control while pressing the key." },
+                "alt": { "type": "boolean", "description": "Hold Alt while pressing the key." },
+                "meta": { "type": "boolean", "description": "Hold Command/Meta while pressing the key." }
+              },
+              "required": ["key"]
             }
           },
           {
@@ -209,6 +357,33 @@ public sealed class BrowserTools : IMcpToolGroup
                 "height": { "type": "number", "description": "Window height in DIPs. Clamped to the window's MinHeight." }
               },
               "required": ["width", "height"]
+            }
+          },
+          {
+            "name": "browser_wait",
+            "description": "Wait until the browser reaches a state: load, idle, page, selector, text, or url.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "state": { "type": "string", "description": "One of load, idle, page, selector, text, or url." },
+                "value": { "type": "string", "description": "Required for selector, text, and url waits." },
+                "timeoutMs": { "type": "integer", "description": "Maximum wait time in milliseconds. Defaults to 5000." }
+              },
+              "required": ["state"]
+            }
+          },
+          {
+            "name": "browser_query",
+            "description": "Return matched elements for a CSS selector, including bounds and optional text or HTML.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "selector": { "type": "string", "description": "A CSS selector." },
+                "includeText": { "type": "boolean", "description": "Include each element's text content." },
+                "includeHtml": { "type": "boolean", "description": "Include each element's serialized HTML." },
+                "limit": { "type": "integer", "description": "Maximum number of matches to return. Defaults to 20, capped at 100." }
+              },
+              "required": ["selector"]
             }
           },
           {
@@ -243,6 +418,40 @@ public sealed class BrowserTools : IMcpToolGroup
                 "selector": { "type": "string", "description": "A CSS selector. The first element in document order that matches is focused." }
               },
               "required": ["selector"]
+            }
+          },
+          {
+            "name": "browser_find",
+            "description": "Find text on the current page, flash the match, and scroll it into view.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "query": { "type": "string", "description": "Text to find on the page." },
+                "direction": { "type": "string", "description": "next or previous. Defaults to next." }
+              },
+              "required": ["query"]
+            }
+          },
+          {
+            "name": "browser_clipboard",
+            "description": "Copy selected text, paste text into the focused field, read the clipboard, or read the current page selection.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "action": { "type": "string", "description": "copy, paste, read, or readSelection." },
+                "text": { "type": "string", "description": "Text to paste. If omitted, paste reads from the system clipboard." }
+              },
+              "required": ["action"]
+            }
+          },
+          {
+            "name": "browser_bookmarks",
+            "description": "List sidebar bookmarks, or navigate to one by id.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "description": "Optional bookmark id to open. Omit to list bookmarks." }
+              }
             }
           },
           {

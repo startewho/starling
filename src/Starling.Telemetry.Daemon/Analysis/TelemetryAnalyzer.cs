@@ -3,7 +3,7 @@ using Starling.Telemetry.Daemon.Ingestion;
 
 namespace Starling.Telemetry.Daemon.Analysis;
 
-// ── Report DTOs (serialized to JSON for REST + MCP) ────────────────────────
+// ── Report DTOs (serialized to JSON for REST + MCP) -----
 
 internal sealed record SpanAggregate(
     string Source, string Name, int Count, int Errors,

@@ -1,4 +1,4 @@
-// Hand-written conformance for CSS Text Decoration Module Level 3 (wp:M5-css-15).
+// Conformance coverage for CSS Text Decoration Module Level 3.
 
 using AwesomeAssertions;
 using Starling.Css.Parser;

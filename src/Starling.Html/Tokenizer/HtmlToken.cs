@@ -2,8 +2,7 @@ namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// One emitted by the HTML tokenizer (WHATWG HTML §13.2.5). The discriminated
-/// union mirrors the spec's token categories. Subsequent agents (M1-01b…g)
-/// extend the populating logic; this shape is stable.
+/// union mirrors the spec's token categories.
 /// </summary>
 public abstract record HtmlToken;
 

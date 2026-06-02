@@ -112,12 +112,12 @@ public sealed class StyleEngine
     /// <summary>The animation engine fed by <c>@keyframes</c> rules in every
     /// stylesheet attached via <see cref="AddStyleSheet"/>. Sample with
     /// <see cref="AnimationEngine.GetEffective(Element, PropertyId)"/> after
-    /// the compositor (wp:M5-css-09) feeds cascaded declarations to it. Lives on
-    /// the <see cref="AnimationTimeline"/> so it outlives this engine.</summary>
+    /// cascaded declarations have been fed to it. Lives on the
+    /// <see cref="AnimationTimeline"/> so it outlives this engine.</summary>
     public AnimationEngine AnimationEngine => _timeline.Animations;
 
     /// <summary>The transition engine. Independent from animations but exposed
-    /// here so the compositor (wp:M5-css-09) can route both through one
+    /// here so callers can route both through one
     /// <see cref="StyleEngine"/> instance.</summary>
     public TransitionEngine TransitionEngine => _timeline.Transitions;
 
@@ -865,8 +865,8 @@ public sealed class StyleEngine
     }
 
     // CSS Containment 3 §5: evaluate an `@container` size query against the
-    // element's query container. The optional leading container-name is stripped
-    // (name matching is not yet honored — the nearest container is used); the
+    // element's query container. The optional leading container-name is stripped.
+    // Name matching is not implemented yet, so the nearest container is used. The
     // remaining condition is a size feature query evaluated against the container
     // box (reusing the media-feature evaluator with a container-sized context).
     private bool ContainerQueryMatches(AtRule rule, Element element)

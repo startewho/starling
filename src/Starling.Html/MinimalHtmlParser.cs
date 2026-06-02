@@ -3,10 +3,9 @@ using Starling.Dom;
 namespace Starling.Html;
 
 /// <summary>
-/// M0-only HTML parser. NOT spec-compliant. Just enough to recognize tag open /
-/// close / text content so the rendering pipeline has something to ingest.
-/// The full WHATWG tokenizer + tree builder per 04_HTML_PARSING.md lands in M1
-/// and supersedes this entirely.
+/// Legacy minimal HTML parser used by focused parser tests. It is not
+/// spec-compliant. It recognizes tag open / close / text content so old
+/// fixtures can still exercise the simplest DOM shape.
 /// </summary>
 /// <remarks>
 /// Recognized: start tags, end tags, character data, HTML comments.
@@ -124,7 +123,7 @@ public static class MinimalHtmlParser
     private static void PopUntil(Stack<Node> stack, string tagName)
     {
         // Walk down until we find a matching element. If we don't, ignore the
-        // close tag (this is the spec's "parse error → ignore" fallback for M0).
+        // close tag (this is the spec's "parse error -> ignore" fallback).
         var snapshot = stack.ToArray();
         for (var i = 0; i < snapshot.Length; i++)
         {

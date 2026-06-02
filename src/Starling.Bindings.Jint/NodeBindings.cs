@@ -11,12 +11,12 @@ using Starling.Html.TreeBuilder;
 
 namespace Starling.Bindings.Jint;
 
-// J2b — Node / Element / Document prototypes + methods for the Jint backend.
+// Node / Element / Document prototypes + methods for the Jint backend.
 //
 // Mirrors the semantics (property names, accessor/operation shape, selector
 // grammar, innerHTML parsing) of Starling.Bindings/NodeBindings.cs,
 // DomWrappers.cs, and QuerySelectorEngine.cs — but over the Jint value model
-// and the J2a JintInterop/JintDomWrapper helpers, not the Starling.Js types.
+// and the JintInterop/JintDomWrapper helpers, not the Starling JS engine types.
 //
 // Edits are confined to this file (plus the Starling.Html project reference in
 // the csproj, required for the HTML fragment parser/serializer). Prototype slots
@@ -30,7 +30,7 @@ internal static class NodeBindings
         var engine = ctx.Engine;
 
         // ---- prototype chain -------------------------------------------------
-        // Node => EventTarget (if J2c installed it) => Object.
+        // Node => EventTarget if installed => Object.
         // Element => Node, CharacterData => Node, Text => CharacterData,
         // Document => Node.
         var nodeProto = NewProto(engine, ctx.Wrappers.EventTargetPrototype);
@@ -589,7 +589,7 @@ internal static class NodeBindings
         });
 
         // Layout-readback APIs — route through the session's optional
-        // ILayoutHost (strongly typed on ctx.LayoutHost since J7),
+        // ILayoutHost,
         // exactly as the Starling backend's NodeBindings does. The host's
         // TryGetBoundingClientRect / TryGetOffsetMetrics trigger the engine's
         // lazy pre-script layout and increment its diagnostics counters. With no
@@ -850,9 +850,9 @@ internal static class NodeBindings
             return w.Wrap(d.CreateDocumentFragment());
         }, 0);
         // Minimal createEvent — returns a plain object carrying a settable type +
-        // initEvent. Full Event semantics live in J2c; this keeps legacy
+        // initEvent. Full Event semantics live in EventTargetBinding; this keeps legacy
         // document.createEvent('Event') call sites from throwing.
-        // TODO(J2b): route through J2c's Event prototype once available.
+        // TODO: route through EventTargetBinding's Event prototype once available.
         Method(ctx, proto, "createEvent", (_, _) =>
         {
             var ev = new JsObject(engine);
@@ -1415,13 +1415,12 @@ internal static class NodeBindings
     //                          layout readback
     // =====================================================================
     /// <summary>The session's layout host, or null when none was supplied (bare
-    /// unit-test contexts). Strongly typed end-to-end since J7 moved
-    /// <see cref="ILayoutHost"/> into the engine-neutral hosting seam.</summary>
+    /// unit-test contexts).</summary>
     private static ILayoutHost? LayoutHost(JintBackendContext ctx) => ctx.LayoutHost;
 
     /// <summary>If <paramref name="e"/> is a <c>&lt;script&gt;</c> and the mutated
-    /// attribute is <c>src</c> with a non-empty value, notify the session (via the
-    /// J6b <see cref="JintBackendContext.OnScriptSrcSet"/> hook) so it can run
+    /// attribute is <c>src</c> with a non-empty value, notify the session via
+    /// <see cref="JintBackendContext.OnScriptSrcSet"/> so it can run
     /// HTML §4.12.1 "prepare a script" (fetch + execute + fire load/error).
     /// Scoped strictly to script-element <c>src</c>; every other attribute write
     /// is untouched. No-op when no session installed the hook (bare context).</summary>

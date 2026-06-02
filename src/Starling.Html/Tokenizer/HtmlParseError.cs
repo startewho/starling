@@ -4,11 +4,11 @@ namespace Starling.Html.Tokenizer;
 /// Parse-error codes from WHATWG HTML §13.2.2.
 /// <see href="https://html.spec.whatwg.org/multipage/parsing.html#parse-errors"/>.
 /// The enum names match the spec slugs. Tokenizer states report into an
-/// <c>IParseErrorSink</c>; agent M1-01h drives the list to completeness.
+/// <c>IParseErrorSink</c>.
 /// </summary>
 /// <remarks>
 /// Only entries actively referenced by states implemented so far are listed.
-/// Adding a new state (M1-01b…g) goes hand-in-hand with adding its errors.
+/// Adding a new state goes hand-in-hand with adding its errors.
 /// Avoid renaming entries — golden test fixtures key off the slug.
 /// </remarks>
 public enum HtmlParseError
@@ -31,7 +31,7 @@ public enum HtmlParseError
     /// <summary>NULL character observed. Each state decides what to do with the code point.</summary>
     UnexpectedNullCharacter,
 
-    // M1-01b — tag + attribute states ------------------------------------
+    // Tag + attribute states ----------------------------------------------
 
     /// <summary>EOF before the tag name in <c>&lt;</c> or <c>&lt;/</c>.</summary>
     EofBeforeTagName,
@@ -66,7 +66,7 @@ public enum HtmlParseError
     /// <summary>Stray <c>/</c> in a tag, e.g. <c>&lt;a /b&gt;</c>.</summary>
     UnexpectedSolidusInTag,
 
-    // M1-01e — comment + CDATA states ------------------------------------
+    // Comment + CDATA states ----------------------------------------------
 
     /// <summary><c>&lt;!</c> not followed by <c>--</c>, <c>DOCTYPE</c>, or
     /// <c>[CDATA[</c>. Falls into bogus comment.</summary>
@@ -84,7 +84,7 @@ public enum HtmlParseError
     /// <summary><c>&lt;![CDATA[</c> seen in HTML content (allowed only in foreign content).</summary>
     CdataInHtmlContent,
 
-    // M1-01f — doctype states --------------------------------------------
+    // Doctype states -------------------------------------------------------
 
     /// <summary><c>&lt;!DOCTYPE</c> followed by non-whitespace, non-EOF, non-<c>&gt;</c>.</summary>
     MissingWhitespaceBeforeDoctypeName,
@@ -125,7 +125,7 @@ public enum HtmlParseError
     /// <summary>Doctype name followed by garbage that isn't <c>PUBLIC</c>/<c>SYSTEM</c>.</summary>
     InvalidCharacterSequenceAfterDoctypeName,
 
-    // M1-01g — character reference states ------------------------------
+    // Character reference states ------------------------------------------
 
     /// <summary>Named character reference matched without a trailing semicolon (e.g. <c>&amp;amp foo</c>).</summary>
     MissingSemicolonAfterCharacterReference,

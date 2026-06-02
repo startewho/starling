@@ -6,9 +6,11 @@ using Starling.Telemetry.Daemon.Api;
 using Starling.Telemetry.Daemon.Ingestion;
 
 // ── Configuration ──────────────────────────────────────────────────────────
-// Ports default to the OTLP standards (4317 gRPC, 4318 HTTP/protobuf) so a host
-// only needs OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 (or :4318 with
-// OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf), or simply STARLING_TELEMETRY_DAEMON.
+// Ports default to the OpenTelemetry Protocol standards (4317 gRPC, 4318
+// HTTP/protobuf) so a host only needs
+// OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317, the same variable on
+// :4318 with OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf, or simply
+// STARLING_TELEMETRY_DAEMON.
 var grpcPort = EnvInt("STARLING_DAEMON_GRPC_PORT", 4317);
 var httpPort = EnvInt("STARLING_DAEMON_HTTP_PORT", 4318);
 var mcpUrl = Environment.GetEnvironmentVariable("STARLING_DAEMON_MCP_URL") ?? "http://127.0.0.1:4319/mcp";
@@ -17,7 +19,7 @@ var app = DaemonApp.Build(new DaemonOptions(grpcPort, httpPort));
 var store = app.Services.GetRequiredService<TelemetryIngestStore>();
 var analyzer = app.Services.GetRequiredService<TelemetryAnalyzer>();
 
-// ── MCP query server (reuses the existing telemetry tools + analysis tools) ─
+// ── MCP query server -------------------------------
 StarlingMcpServer? mcp = null;
 try
 {
@@ -31,15 +33,16 @@ try
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"[daemon] MCP server failed to start ({ex.Message}); REST + OTLP still active.");
+    Console.Error.WriteLine(
+        $"[daemon] MCP server failed to start ({ex.Message}); REST + OpenTelemetry Protocol still active.");
 }
 
 Console.WriteLine($"""
     ┌─ Starling Telemetry Daemon ───────────────────────────────────────────
-    │ OTLP gRPC   : http://localhost:{grpcPort}        (point OTEL_EXPORTER_OTLP_ENDPOINT here)
-    │ OTLP HTTP   : http://localhost:{httpPort}/v1/*   (set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf)
+    │ OpenTelemetry Protocol gRPC : http://localhost:{grpcPort}
+    │ OpenTelemetry Protocol HTTP : http://localhost:{httpPort}/v1/*
     │ REST query  : http://localhost:{httpPort}/api/summary
-    │ MCP query   : {mcpUrl}
+    │ MCP query: {mcpUrl}
     │ Browser     : run with STARLING_TELEMETRY_DAEMON=http://localhost:{httpPort}
     └────────────────────────────────────────────────────────────────────────
     """);

@@ -2,7 +2,6 @@ namespace Starling.Html.Tokenizer;
 
 /// <summary>
 /// ScriptData state family from WHATWG HTML §13.2.5.4 and §13.2.5.15–31.
-/// Owned by wp:M1-01d.
 /// </summary>
 public sealed partial class HtmlTokenizer
 {

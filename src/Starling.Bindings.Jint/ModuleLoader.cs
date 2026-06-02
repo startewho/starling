@@ -7,19 +7,19 @@ using StarlingUrl = global::Starling.Url.Url;
 
 namespace Starling.Bindings.Jint;
 
-// J4 — ES module loader (static import, top-level await, dynamic import()).
+// ES module loader (static import, top-level await, dynamic import()).
 // Mirrors the Starling backend's StarlingModuleHost: specifiers resolve via
 // Starling.Url against the importing module's URL (or the document base for the
 // entry / inline modules), and module bodies load through the session's shared
 // fetch path (file/data/http). Top-level await + dynamic import() ride Jint's
 // own module machinery once EnableModules is wired at engine construction.
 //
-// Unlike the other Wave-2 families, the module surface cannot be installed onto
+// Unlike other binding families, the module surface cannot be installed onto
 // an already-constructed engine: Jint requires the IModuleLoader (and the
 // import.meta host) to be supplied to the Engine constructor via
 // options.EnableModules(...) / options.UseHostFactory(...). JintScriptSession
 // therefore constructs the loader first and passes it into the engine factory;
-// ModuleLoader.Install stays a no-op so JintBindings.InstallAll keeps its frozen
+// ModuleLoader.Install stays a no-op so JintBindings.InstallAll keeps its stable
 // shape.
 internal static class ModuleLoader
 {
@@ -28,7 +28,7 @@ internal static class ModuleLoader
         // Intentionally empty. The module loader + import.meta host are wired at
         // engine construction (see JintScriptSession + StarlingJintModuleLoader),
         // not onto a live engine. This keeps the InstallAll dispatcher order
-        // (J2a frozen contract) intact while satisfying Jint's requirement that
+        // intact while satisfying Jint's requirement that
         // module support be enabled before the realm is built.
         _ = ctx;
     }

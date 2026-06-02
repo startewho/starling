@@ -8,12 +8,12 @@ using Starling.Common.Diagnostics;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J3d — DOM Standard §4.3 MutationObserver, IntersectionObserver v2,
+/// DOM Standard §4.3 MutationObserver, IntersectionObserver v2, and
 /// ResizeObserver on the Jint backend.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>MutationObserver / ResizeObserver</b> are JS-surface stubs: constructors
+/// <b>MutationObserver / ResizeObserver</b> are surface-only implementations: constructors
 /// accept and store a callback; <c>observe()</c>/<c>unobserve()</c>/
 /// <c>disconnect()</c> are wired but produce no records, and
 /// <c>takeRecords()</c> returns an empty array. This is enough for

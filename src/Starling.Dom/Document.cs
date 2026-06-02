@@ -1,8 +1,8 @@
 namespace Starling.Dom;
 
 /// <summary>
-/// Root of a DOM tree. This M1 core covers node creation, tree lookup helpers,
-/// document convenience accessors, and live-collection invalidation.
+/// Root of a DOM tree. Covers node creation, tree lookup helpers, document
+/// convenience accessors, and live-collection invalidation.
 /// </summary>
 public sealed class Document : Node
 {
@@ -56,7 +56,7 @@ public sealed class Document : Node
         NoteRecentlyMutated(target);
     }
 
-    // ---- LTF-06: recently-mutated element tracker (compositor isolation) ------
+    // ---- Recently-mutated element tracker (compositor isolation) --------------
     //
     // Independent of the layout-mutation batch above (which the incremental
     // layout engine drains each frame). The live compositor reads this to promote
@@ -83,7 +83,7 @@ public sealed class Document : Node
     }
 
     /// <summary>True when <paramref name="element"/>'s subtree was mutated within
-    /// the last few rendered frames (the LTF-06 hysteresis window). The live
+    /// the last few rendered frames (the compositor isolation hysteresis window). The live
     /// compositor promotes such elements so their repaint does not re-raster the
     /// base layer.</summary>
     public bool WasRecentlyMutated(Element element)

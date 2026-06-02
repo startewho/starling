@@ -5,7 +5,7 @@ using Jint.Native;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J2d — Window / global surface (Jint backend).
+/// Window / global surface on the Jint backend.
 /// Mirrors <c>Starling.Bindings/WindowBinding.cs</c>: rewires the realm's
 /// global so its <c>[[Prototype]]</c> is a Window prototype that inherits
 /// EventTarget.prototype (so unqualified <c>addEventListener('load', fn)</c>
@@ -34,8 +34,8 @@ internal static class WindowBinding
 
         if (ctx.Wrappers.WindowPrototype is not null) return; // idempotent
 
-        // 1) WindowPrototype inherits EventTarget.prototype (or, if J2c hasn't
-        //    populated that slot yet, falls back to the default object proto).
+        // 1) WindowPrototype inherits EventTarget.prototype if populated, else
+        //    it falls back to the default object proto.
         var windowProto = new JsObject(engine);
         if (ctx.Wrappers.EventTargetPrototype is { } etp) windowProto.Prototype = etp;
         ctx.Wrappers.WindowPrototype = windowProto;
@@ -101,8 +101,8 @@ internal static class WindowBinding
 
         // getComputedStyle(element, pseudo?) — returns a CSSStyleDeclaration-
         // shaped object whose getPropertyValue(name) + camel/kebab accessors
-        // resolve against the session's layout host (cast from ctx.LayoutHost,
-        // stashed as object? by J2d), exactly like the Starling backend. The
+        // resolve against the session's layout host, exactly like the Starling
+        // backend. The
         // host resolves values from the pre-script cascade snapshot, triggering
         // the lazy pre-script layout. With no host installed every property
         // reads as the empty string (matches an un-styled / never-laid-out doc).
@@ -273,7 +273,7 @@ internal static class WindowBinding
         return loc;
     }
 
-    /// <summary>Resolve the active document URL. HistoryBinding (also J2d)
+    /// <summary>Resolve the active document URL. HistoryBinding
     /// publishes its current entry into the context-bound holder; when none
     /// exists this falls back to the session's BaseUrl.</summary>
     internal static string UrlFor(JintBackendContext ctx)
@@ -291,9 +291,7 @@ internal static class WindowBinding
     }
 
     /// <summary>The session's layout host, or null when none was supplied (bare
-    /// unit-test contexts). Strongly typed end-to-end since J7 moved
-    /// <see cref="Starling.Bindings.ILayoutHost"/> into the engine-neutral hosting
-    /// seam, so this backend no longer references Starling.Bindings.</summary>
+    /// unit-test contexts).</summary>
     private static Starling.Bindings.ILayoutHost? LayoutHost(JintBackendContext ctx)
         => ctx.LayoutHost;
 

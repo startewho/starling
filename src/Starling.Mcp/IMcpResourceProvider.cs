@@ -9,7 +9,7 @@ namespace Starling.Mcp;
 public interface IMcpResourceProvider
 {
     /// <summary>
-    /// JSON array literal of MCP resource descriptors —
+    /// JSON array literal of MCP resource descriptors.
     /// <c>[{"uri": "...", "name": "...", "description": "...", "mimeType": "..."}, ...]</c>.
     /// Returned as a string for the same reason as
     /// <see cref="IMcpToolGroup.GetToolDescriptorsJson"/>.
@@ -21,12 +21,12 @@ public interface IMcpResourceProvider
 
     /// <summary>Read the resource at <paramref name="uri"/>. Implementations
     /// return the content body and the MIME type; the server wraps both into
-    /// the MCP-spec resources/read contents array.</summary>
+    /// the MCP resources/read contents array.</summary>
     Task<McpResourceContent> ReadAsync(string uri, CancellationToken ct);
 }
 
 /// <summary>
-/// Resource read result. The server emits a single content entry —
-/// <c>{uri, mimeType, text}</c> — per the MCP spec's resources/read shape.
+/// Resource read result. The server emits a single content entry,
+/// <c>{uri, mimeType, text}</c>, per the resources/read shape.
 /// </summary>
 public sealed record McpResourceContent(string MimeType, string Text);

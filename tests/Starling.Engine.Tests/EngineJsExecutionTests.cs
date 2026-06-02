@@ -600,6 +600,39 @@ public sealed class EngineJsExecutionTests
         outcome.DisplayText.Should().Contain("L:123");
     }
 
+    [TestMethod]
+    public async Task Infinite_raf_loop_does_not_block_settle_on_the_wall_clock_cap()
+    {
+        // A self-rescheduling requestAnimationFrame loop never reports idle. The
+        // load pump must give it a few frames and then settle — handing the
+        // ongoing animation to the live phase — instead of spinning until the
+        // wall-clock cap (which made every animated page take seconds to "open").
+        // Without the rAF frame budget the pump advances one frame per ~50ms of
+        // simulated time for the full real cap (twice), running hundreds-plus of
+        // frames; the bounded pump runs only a handful, so the frame count is the
+        // observable proof that the loop was capped rather than pumped to the cap.
+        var html = @"<!doctype html><html><head><script>
+  var n = 0;
+  function tick() {
+    n++;
+    document.getElementById('out').textContent = 'frames=' + n;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script></head><body><p id=""out"">frames=0</p></body></html>";
+
+        var outcome = await RenderHtmlAsync(html);
+
+        // rAF ran during load — bootstrap frames are honored, not skipped.
+        var match = System.Text.RegularExpressions.Regex.Match(outcome.DisplayText, @"frames=(\d+)");
+        match.Success.Should().BeTrue();
+        var frames = int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        frames.Should().BeGreaterThan(0);
+        // ...but the loop was bounded. An unbounded pump runs far more than this
+        // before the 8s cap; the budget keeps it to a small handful per pump pass.
+        frames.Should().BeLessThan(100);
+    }
+
     [Spec("html", "https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element", "4.12.1 prepare a script")]
     [SpecFact]
     public async Task Already_run_external_script_does_not_rerun_when_src_reassigned()

@@ -57,7 +57,7 @@ public sealed class CompositeDiagnostics : IDiagnostics
     {
         public void Dispose()
         {
-            // Dispose in reverse order so the outermost OTel-style scope
+            // Dispose in reverse order so the outermost OpenTelemetry-style scope
             // closes after any console end-of-span print.
             for (var i = spans.Length - 1; i >= 0; i--)
                 spans[i].Dispose();

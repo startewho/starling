@@ -292,8 +292,8 @@ public sealed class TransitionEngine
                 // Comma-separated transition-property list (e.g.,
                 // `transition-property: opacity, transform`). We currently
                 // accept any list whose items include `all` or the property
-                // name; per-layer pairing with duration/timing-function is
-                // tracked by wp:M5-css-multi-layer-transitions.
+                // name. Per-layer pairing with duration/timing-function is
+                // not implemented yet.
                 foreach (var v in list.Values)
                 {
                     if (v is CssKeyword item)

@@ -5,7 +5,7 @@ namespace Starling.Url;
 /// <summary>
 /// URL value type modeled on the WHATWG URL spec
 /// (<see href="https://url.spec.whatwg.org/#concept-url"/>). Constructed
-/// either positionally (legacy M0 shape) or via the
+/// either positionally or via the
 /// <see cref="UrlParser.Parse(string)"/> state machine which populates the
 /// optional <see cref="Username"/>/<see cref="Password"/> as well.
 /// </summary>
@@ -70,7 +70,7 @@ public sealed record Url(
 
         // WHATWG: file URLs may have an empty host (file:///foo) or "localhost".
         // For relative file paths supplied as `file://./foo.html` we treat the
-        // path verbatim — this is loose vs spec, fine for M0.
+        // path verbatim. This is loose vs spec, but keeps local file inputs useful.
         var path = Path;
         if (path.StartsWith("//", StringComparison.Ordinal))
             path = path[1..];

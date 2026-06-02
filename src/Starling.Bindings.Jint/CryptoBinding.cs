@@ -8,7 +8,7 @@ using Jint.Runtime;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J3d — Web Crypto API §10.1 on the Jint backend.
+/// Web Crypto API §10.1 on the Jint backend.
 /// Mirrors <c>Starling.Bindings/CryptoBinding.cs</c>.
 /// </summary>
 /// <remarks>

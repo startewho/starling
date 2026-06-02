@@ -13,10 +13,10 @@ namespace Starling.Telemetry.Daemon;
 internal sealed record DaemonOptions(int GrpcPort, int HttpPort);
 
 /// <summary>
-/// Builds the daemon's web host: the OTLP receiver (gRPC + HTTP/protobuf) and
-/// the REST query API, with the ingest store and analyzer in DI. Factored out
-/// of <c>Program</c> so the integration tests can boot the same host on
-/// ephemeral ports and drive it over the wire.
+/// Builds the daemon's web host: the OpenTelemetry Protocol receiver (gRPC +
+/// HTTP/protobuf) and the REST query API, with the ingest store and analyzer in
+/// dependency injection. Factored out of <c>Program</c> so the integration tests
+/// can boot the same host on ephemeral ports and drive it over the wire.
 /// </summary>
 internal static class DaemonApp
 {
@@ -29,10 +29,12 @@ internal static class DaemonApp
 
         builder.WebHost.ConfigureKestrel(k =>
         {
-            // gRPC needs HTTP/2; the OTLP exporter speaks h2c to an http:// endpoint.
+            // gRPC needs HTTP/2. The OpenTelemetry Protocol exporter speaks h2c
+            // to an http:// endpoint.
             k.ListenLocalhost(opts.GrpcPort, o => o.Protocols = HttpProtocols.Http2);
-            // HTTP port carries OTLP/HTTP-protobuf (/v1/*) and the REST query API,
-            // both HTTP/1.1 — gRPC has its own port, so no h2c-without-TLS warning.
+            // HTTP port carries OpenTelemetry Protocol HTTP/protobuf (/v1/*) and
+            // the REST query API, both HTTP/1.1. gRPC has its own port, so no
+            // h2c-without-TLS warning.
             k.ListenLocalhost(opts.HttpPort, o => o.Protocols = HttpProtocols.Http1);
         });
 
@@ -51,13 +53,13 @@ internal static class DaemonApp
 
     private static void MapOtlpReceiver(WebApplication app, TelemetryIngestStore store)
     {
-        // OTLP/gRPC (default exporter protocol).
+        // OpenTelemetry Protocol over gRPC, the default exporter protocol.
         app.MapGrpcService<TraceIngestService>();
         app.MapGrpcService<MetricsIngestService>();
         app.MapGrpcService<LogsIngestService>();
 
-        // OTLP/HTTP-protobuf. A malformed body returns 400 (per the OTLP/HTTP
-        // spec) rather than bubbling to a 500 with a stack trace.
+        // OpenTelemetry Protocol over HTTP/protobuf. A malformed body returns
+        // 400 per the protocol instead of bubbling to a 500 with a stack trace.
         app.MapPost("/v1/traces", async (HttpRequest req, CancellationToken ct) =>
         {
             var body = await ReadBodyAsync(req, ct);
@@ -95,7 +97,7 @@ internal static class DaemonApp
         WebApplication app, TelemetryAnalyzer analyzer, TelemetryIngestStore store, DaemonOptions opts)
     {
         app.MapGet("/", () => Results.Text(
-            $"Starling telemetry daemon. OTLP in on gRPC :{opts.GrpcPort} and HTTP :{opts.HttpPort}/v1/*.\n" +
+            $"Starling telemetry daemon. OpenTelemetry Protocol in on gRPC :{opts.GrpcPort} and HTTP :{opts.HttpPort}/v1/*.\n" +
             "Query: /api/summary  /api/top-offenders  /api/frames  /api/resources  /api/correlate?span=NAME\n"));
 
         app.MapGet("/healthz", () => Results.Json(new

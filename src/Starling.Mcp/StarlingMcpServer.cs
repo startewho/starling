@@ -8,12 +8,11 @@ using System.Text.Json.Nodes;
 namespace Starling.Mcp;
 
 /// <summary>
-/// Loopback HTTP/1.1 + JSON-RPC 2.0 host for the MCP protocol. Generalised
-/// from the original GUI-only server: composes any mix of tool groups and
-/// resource providers, so the same code serves the GUI (browser-control +
-/// telemetry tools) and the headless CLI (telemetry only). Connection-per-
-/// request transport — push/streaming features (resources/subscribe, server-
-/// initiated notifications) are out of scope here.
+/// Loopback HTTP/1.1 + JSON-RPC 2.0 host for MCP. Composes
+/// any mix of tool groups and resource providers, so the same code serves the
+/// GUI (browser-control + telemetry tools) and the headless CLI (telemetry
+/// only). Uses one connection per request. Push and streaming features are out
+/// of scope here.
 /// </summary>
 public sealed class StarlingMcpServer : IAsyncDisposable
 {

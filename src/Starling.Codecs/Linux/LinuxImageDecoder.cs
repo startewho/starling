@@ -14,9 +14,8 @@ namespace Starling.Codecs.Linux;
 /// <remarks>
 /// The libraries are referenced by soname (<c>libpng16.so.16</c> etc.) so the
 /// runtime resolves whatever the distro packaged. CI installs
-/// <c>libpng16-16 libjpeg-turbo8 libwebp7</c> (that apt step lands in
-/// wp:M3-06l-ci-policy). Compile-checked on every OS; runtime-exercised only on
-/// the Linux CI leg.
+/// <c>libpng16-16 libjpeg-turbo8 libwebp7</c>. Compile-checked on every OS;
+/// runtime-exercised only on the Linux CI leg.
 /// </remarks>
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxImageDecoder : IImageDecoder

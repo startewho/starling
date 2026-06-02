@@ -15,8 +15,8 @@ namespace Starling.Codecs.Mac;
 /// <remarks>
 /// All Core Foundation objects created here (<c>CFData</c>, <c>CGImageSource</c>,
 /// <c>CGImage</c>, <c>CGColorSpace</c>, <c>CGContext</c>) are released in a
-/// <c>finally</c> so a decode failure cannot leak. This is one of the two
-/// sanctioned interop seams (see AGENTS.md); <c>LibraryImport</c> is allowed.
+/// <c>finally</c> so a decode failure cannot leak. This lives inside the
+/// designated image-decode interop project. See AGENTS.md.
 /// </remarks>
 internal sealed partial class ImageIODecoder : IImageDecoder
 {

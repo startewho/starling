@@ -11,7 +11,8 @@ public static class UaStyleSheet
           display: block;
         }
 
-        /* Table elements. PLACEHOLDER: a real CSS table layout pass (display:
+        /* Table elements. Starling does not have a table formatting context yet
+           (display:
            table / table-row / table-cell with column-width resolution, row
            grouping, border-collapse, etc.) is not yet implemented. To keep the
            common legacy-footer pattern (Google's footer:

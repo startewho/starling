@@ -8,10 +8,9 @@ namespace Starling.Url;
 /// </summary>
 /// <remarks>
 /// Implements the basic decision tree (opaque host vs domain vs IPv4 numeric)
-/// without IDNA Punycode and without IPv6 bracket parsing — those land in a
-/// follow-up sub-task. Hostnames containing non-ASCII pass through as-is,
-/// which matches what an IDNA-to-ASCII implementation would do for already-
-/// ASCII inputs.
+/// without IDNA Punycode and without IPv6 bracket parsing. Hostnames containing
+/// non-ASCII pass through as-is, which matches what an IDNA-to-ASCII
+/// implementation would do for already-ASCII inputs.
 /// </remarks>
 internal static class HostParser
 {
@@ -39,10 +38,10 @@ internal static class HostParser
     {
         if (input.Length == 0) return Result.Fail(Error.Empty);
 
-        // IPv6 literal (bracketed) — not implemented in this slice.
+        // IPv6 literals are not implemented yet.
         if (input[0] == '[')
         {
-            // Defer to follow-up — return error so caller can decide.
+            // Return an explicit error so the caller can decide.
             return Result.Fail(Error.IPv6NotSupported);
         }
 

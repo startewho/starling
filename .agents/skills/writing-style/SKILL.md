@@ -1,6 +1,6 @@
 ---
 name: writing-style
-description: "Writing-style rules for any prose authored in this project — READMEs, design docs in browser-plan/, commit bodies, PR descriptions, status updates. USE WHEN about to write or edit prose (Markdown text, doc comments meant for humans, commit messages, PR bodies), or when reviewing prose for tone. Enforces: fifth-grade reading level (short sentences, common words), no semicolons unless truly required, no unclear abbreviations (spell out PSL, ALPN, HSTS, TDZ, SSIM, GA/gtag, MCP, VM, GC on first use), no verbose restating, no pointing out the obvious. Project-specific naming: never use the phrase 'hand-written' — name the Starling resource explicitly ('Starling JS engine', 'Starling DOM', 'Starling networking'). DO NOT USE FOR: code logic, identifier naming, or test assertions — only human-facing prose."
+description: "Writing-style rules for any prose authored in this project — READMEs, design docs in browser-plan/, commit bodies, PR descriptions, status updates. USE WHEN about to write or edit prose (Markdown text, doc comments meant for humans, commit messages, PR bodies), or when reviewing prose for tone. Enforces: fifth-grade reading level (short sentences, common words), no semicolons unless truly required, no unclear abbreviations (spell out PSL, ALPN, HSTS, TDZ, SSIM, GA/gtag, VM, GC on first use), no verbose restating, no pointing out the obvious. Project-specific naming: never use the phrase 'hand-written' — name the Starling resource explicitly ('Starling JS engine', 'Starling DOM', 'Starling networking'). DO NOT USE FOR: code logic, identifier naming, or test assertions — only human-facing prose."
 ---
 
 # Writing style
@@ -15,12 +15,13 @@ Apply these rules to every paragraph of prose authored in this project.
 2. **No unclear abbreviations.** Spell out anything most readers won't
    know on first use.
    - Fine as-is in context: HTTP, TLS, DNS, URL, DOM, CSS, JSON, PR, CI,
-     GUI, Test262, WPT (when context is clear), HTML, JS.
+     GUI, Test262, WPT (when context is clear), HTML, JS, MCP, OTEL,
+     OTLP.
    - Spell out or rephrase: TDZ, SSIM ("similarity score"), PSL ("Public
      Suffix List"), ALPN (drop or explain), HSTS (drop or "hardening"),
-     GA/gtag ("Google Analytics"), MCP ("Model Context Protocol"), VM
-     ("virtual machine") on first use, GC ("garbage collector") on first
-     use, BCL (".NET base class library").
+     GA/gtag ("Google Analytics"), VM ("virtual machine") on first use,
+     GC ("garbage collector") on first use, BCL (".NET base class
+     library").
 3. **No semicolons unless truly necessary.** A period almost always reads
    better. Exception: dense table cells where two clauses must share one
    row.

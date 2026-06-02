@@ -4,12 +4,11 @@ using Starling.Common.Diagnostics;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J3d — HTML §6.7.3 <c>document.cookie</c> on the Jint backend.
-/// Mirrors <c>Starling.Bindings/CookieBinding.cs</c>.
+/// HTML §6.7.3 <c>document.cookie</c> on the Jint backend.
 /// </summary>
 /// <remarks>
 /// <see cref="Starling.Js.Hosting.ScriptSessionOptions"/> does not yet expose a
-/// CookieJar to bindings (cookies live in <c>StarlingHttpClient</c> for now).
+/// CookieJar to bindings. Cookies live in <c>StarlingHttpClient</c> for now.
 /// This binding therefore installs a graceful no-op accessor: the getter
 /// returns <c>""</c>; the setter logs a debug diagnostic and discards the
 /// value. When a session-scoped CookieJar lands, this is the only file to
@@ -24,7 +23,7 @@ internal static class CookieBinding
         var documentProto = ctx.Wrappers.DocumentPrototype;
         if (documentProto is null)
         {
-            // J2b NodeBindings hasn't installed a Document prototype slot.
+            // NodeBindings has not installed a Document prototype slot.
             // Without it we have nowhere idempotent to attach the accessor.
             ctx.Diag?.Log(DiagLevel.Debug, "jint.cookie",
                 "DocumentPrototype is null; document.cookie accessor not installed.");

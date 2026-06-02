@@ -7,8 +7,8 @@ using Starling.Telemetry;
 namespace Starling.Mcp.Telemetry;
 
 /// <summary>
-/// MCP tool group that delivers Starling's own OpenTelemetry signal (spans,
-/// logs, metrics) to driving agents. Reads from the in-memory ring buffers
+/// MCP tool group that delivers Starling's own OpenTelemetry
+/// signal (spans, logs, metrics) to driving agents. Reads from the in-memory ring buffers
 /// behind <see cref="TelemetryStream"/> — the same buffers the GUI DevTools
 /// panels render — so calls are pure snapshots with no exporter dependency.
 /// </summary>

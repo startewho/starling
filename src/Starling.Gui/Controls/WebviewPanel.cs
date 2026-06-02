@@ -6,6 +6,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using System.Text;
 using Starling.Gui.Chrome;
 using Starling.Gui.Core.Rendering;
 using Starling.Gui.Imaging;
@@ -21,6 +22,7 @@ using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Engine;
+using Starling.Html;
 using AvColor = Avalonia.Media.Color;
 using DomDocument = Starling.Dom.Document;
 using DomElement = Starling.Dom.Element;
@@ -1698,7 +1700,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         return valid;
     }
 
-    // ---- Programmatic input (Model Context Protocol automation) --------
+    // ---- Programmatic input (MCP automation) --------
     //
     // ClickAt / MoveTo / TypeText let an out-of-process driver synthesize input
     // without a real device. Coordinates are document-space CSS px from the page's
@@ -1735,6 +1737,132 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         return new InputResult(true, $"moved over <{DescribeHit(hit)}>{link}");
     }
 
+    /// <summary>Clicks the center of the first rendered element matching
+    /// <paramref name="selector"/>.</summary>
+    public InputResult ClickBySelector(string selector)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        foreach (var el in els)
+        {
+            if (BoxForElement(el) is not { } loc) continue;
+            var doc = (loc.X + loc.Box.Frame.Width / 2, loc.Y + loc.Box.Frame.Height / 2);
+            return new InputResult(true, PerformClick(doc).Detail);
+        }
+
+        return new InputResult(false, $"matched elements for '{selector}' have no rendered box to click");
+    }
+
+    /// <summary>Scrolls the outer page viewport by document-space deltas. Positive
+    /// <paramref name="deltaY"/> moves down the page. Positive
+    /// <paramref name="deltaX"/> moves right. The offset is clamped to the page
+    /// extent.</summary>
+    public InputResult ScrollBy(double deltaX, double deltaY)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        if (!double.IsFinite(deltaX) || !double.IsFinite(deltaY))
+            return new InputResult(false, $"scroll deltas must be finite, got {deltaX}, {deltaY}");
+
+        var pageW = _pageCanvas.Width > 0 ? _pageCanvas.Width : _currentPage.Root.Frame.Width;
+        var pageH = _pageCanvas.Height > 0 ? _pageCanvas.Height : _currentPage.Root.Frame.Height;
+        var viewport = CurrentViewportSize();
+        var viewportW = _scroll.Viewport.Width > 0 ? _scroll.Viewport.Width : viewport.Width;
+        var viewportH = _scroll.Viewport.Height > 0 ? _scroll.Viewport.Height : viewport.Height;
+        var maxX = Math.Max(0, pageW - viewportW);
+        var maxY = Math.Max(0, pageH - viewportH);
+
+        var current = _scroll.Offset;
+        var nextX = Math.Clamp(current.X + deltaX, 0, maxX);
+        var nextY = Math.Clamp(current.Y + deltaY, 0, maxY);
+        var changed = nextX != current.X || nextY != current.Y;
+        if (changed)
+        {
+            _scroll.Offset = new Vector(nextX, nextY);
+            RenderViewportRegion();
+        }
+
+        var prefix = changed ? "scrolled" : "scroll unchanged";
+        return new InputResult(true, $"{prefix} to x={nextX:0.#}, y={nextY:0.#} (max x={maxX:0.#}, y={maxY:0.#})");
+    }
+
+    /// <summary>Scrolls to an absolute page offset or to the first rendered match
+    /// for <paramref name="selector"/>.</summary>
+    public InputResult ScrollTo(double? x, double? y, string? selector, string? position)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        if (selector is { Length: > 0 })
+        {
+            var (els, error) = QueryAll(selector);
+            if (error is not null) return new InputResult(false, error);
+            foreach (var el in els)
+            {
+                if (BoxForElement(el) is not { } loc) continue;
+                var targetY = position?.Trim().ToLowerInvariant() switch
+                {
+                    "center" => loc.Y - (ViewportHeight() - loc.Box.Frame.Height) / 2,
+                    "bottom" => loc.Y - ViewportHeight() + loc.Box.Frame.Height,
+                    null or "" or "top" => loc.Y,
+                    var p => double.NaN,
+                };
+                if (double.IsNaN(targetY))
+                    return new InputResult(false, "position must be top, center, or bottom");
+                return ScrollToOffset(x ?? _scroll.Offset.X, targetY,
+                    $"scrolled to <{el.LocalName}> matching '{selector}'");
+            }
+            return new InputResult(true, $"no rendered element matched '{selector}'");
+        }
+
+        if (x is null && y is null)
+            return new InputResult(false, "scroll_to requires x/y or selector");
+        return ScrollToOffset(x ?? _scroll.Offset.X, y ?? _scroll.Offset.Y, "scrolled");
+    }
+
+    /// <summary>Presses a key for page automation. Text controls get editing
+    /// behavior. Page keys scroll the outer viewport. Tab moves DOM focus.</summary>
+    public InputResult PressKey(string key, bool shift, bool ctrl, bool alt, bool meta)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var normalized = NormalizeKey(key);
+        if (normalized.Length == 0) return new InputResult(false, "key is empty");
+
+        if (normalized == "Tab")
+            return FocusAdjacent(shift ? -1 : 1);
+
+        if (_focusedInput is not null)
+            return PressFocusedInputKey(normalized, shift, ctrl, alt, meta);
+
+        if (_currentPage.Document.FocusedElement is { } focused)
+        {
+            var down = MakeKeyboardEvent("keydown", normalized, shift, ctrl, alt, meta);
+            var mutated = DispatchDom(focused, down);
+            var detail = $"pressed {normalized} on <{focused.LocalName}>";
+            if (normalized == "Enter" && !down.DefaultPrevented && BoxForElement(focused) is { } loc)
+            {
+                var doc = (loc.X + loc.Box.Frame.Width / 2, loc.Y + loc.Box.Frame.Height / 2);
+                detail = PerformClick(doc).Detail;
+            }
+            mutated |= DispatchDom(focused, MakeKeyboardEvent("keyup", normalized, shift, ctrl, alt, meta));
+            if (mutated) RefreshLiveLayout();
+            return new InputResult(true, detail);
+        }
+
+        return normalized switch
+        {
+            "PageDown" => ScrollBy(0, ViewportHeight() * 0.9),
+            "PageUp" => ScrollBy(0, -ViewportHeight() * 0.9),
+            "Home" => ScrollToOffset(_scroll.Offset.X, 0, "scrolled to top"),
+            "End" => ScrollToOffset(_scroll.Offset.X, double.PositiveInfinity, "scrolled to bottom"),
+            "ArrowDown" => ScrollBy(0, 40),
+            "ArrowUp" => ScrollBy(0, -40),
+            "ArrowRight" => ScrollBy(40, 0),
+            "ArrowLeft" => ScrollBy(-40, 0),
+            "Escape" => new InputResult(true, "pressed Escape"),
+            _ => new InputResult(true, $"pressed {normalized}"),
+        };
+    }
+
     /// <summary>Types literal text into the currently focused text field (focus one
     /// first via <see cref="ClickAt"/>). Control characters are dropped; the text
     /// is inserted at the caret and a DOM <c>input</c> event fires (so
@@ -1767,7 +1895,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             : $"typed \"{clean}\"; value=\"{CurrentValue()}\"");
     }
 
-    // ---- Model Context Protocol element-targeting tools ----------------
+    // ---- MCP element-targeting tools ----------------
 
     private readonly List<Control> _highlightOverlays = new();
 
@@ -1857,8 +1985,170 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         return new InputResult(true, $"focused <{el.LocalName}> matching '{selector}'");
     }
 
+    /// <summary>Reports selector matches with document-space bounds and optional
+    /// text / serialized HTML.</summary>
+    public InputResult QuerySelector(string selector, bool includeText, bool includeHtml, int limit)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        var capped = Math.Clamp(limit <= 0 ? 20 : limit, 1, 100);
+        if (els.Count == 0) return new InputResult(true, $"matches: 0 for '{selector}'");
+
+        var sb = new StringBuilder();
+        sb.Append("matches: ").Append(els.Count).Append(" for '").Append(selector).AppendLine("'");
+        var shown = 0;
+        foreach (var el in els)
+        {
+            if (shown >= capped) break;
+            sb.Append('#').Append(shown + 1).Append(' ').Append(DescribeElement(el));
+            if (BoxForElement(el) is { } loc)
+            {
+                sb.Append(" bounds=(")
+                    .Append(loc.X.ToString("0.#")).Append(',')
+                    .Append(loc.Y.ToString("0.#")).Append(',')
+                    .Append(loc.Box.Frame.Width.ToString("0.#")).Append(',')
+                    .Append(loc.Box.Frame.Height.ToString("0.#")).Append(')');
+            }
+            else
+            {
+                sb.Append(" bounds=(none)");
+            }
+            if (includeText)
+                sb.Append(" text=\"").Append(TrimForTool(el.TextContent, 500)).Append('"');
+            if (includeHtml)
+                sb.Append(" html=\"").Append(TrimForTool(HtmlSerializer.SerializeNode(el), 1000)).Append('"');
+            sb.AppendLine();
+            shown++;
+        }
+        if (els.Count > capped)
+            sb.Append("truncated: ").Append(els.Count - capped).AppendLine(" more");
+        return new InputResult(true, sb.ToString());
+    }
+
+    public int CountSelectorMatches(string selector)
+    {
+        var (els, error) = QueryAll(selector);
+        return error is null ? els.Count : 0;
+    }
+
+    public bool PageContainsText(string value)
+        => _currentPage?.Document.TextContent.Contains(value, StringComparison.OrdinalIgnoreCase) == true;
+
+    /// <summary>Finds text, scrolls the next/previous match into view, and flashes it.</summary>
+    public InputResult FindText(string query, string direction)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var q = (query ?? string.Empty).Trim();
+        if (q.Length == 0) return new InputResult(false, "query is empty");
+        if (_findIndex.Count == 0) return new InputResult(true, $"no text fragments to search for '{q}'");
+
+        var matches = new List<int>();
+        for (var i = 0; i < _findIndex.Count; i++)
+            if (_findIndex[i].Text.Contains(q, StringComparison.OrdinalIgnoreCase))
+                matches.Add(i);
+        if (matches.Count == 0) return new InputResult(true, $"no matches for '{q}'");
+
+        var backwards = direction.Equals("previous", StringComparison.OrdinalIgnoreCase)
+            || direction.Equals("prev", StringComparison.OrdinalIgnoreCase);
+        int matchIndex;
+        if (backwards)
+        {
+            var cursor = _findCursor <= 0 ? _findIndex.Count : _findCursor - 1;
+            matchIndex = matches[^1];
+            for (var i = matches.Count - 1; i >= 0; i--)
+            {
+                if (matches[i] < cursor)
+                {
+                    matchIndex = matches[i];
+                    break;
+                }
+            }
+        }
+        else
+        {
+            matchIndex = matches[0];
+            foreach (var candidate in matches)
+            {
+                if (candidate >= _findCursor)
+                {
+                    matchIndex = candidate;
+                    break;
+                }
+            }
+        }
+
+        _findCursor = matchIndex + 1;
+        ClearFindHighlight();
+        FlashFindMatch(matchIndex);
+        var ordinal = matches.IndexOf(matchIndex) + 1;
+        return new InputResult(true, $"found '{q}' match {ordinal}/{matches.Count}");
+    }
+
+    /// <summary>Clipboard helper for automation. Supports copy, paste, read, and
+    /// readSelection.</summary>
+    public async Task<InputResult> ClipboardAsync(string action, string? text)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var mode = (action ?? string.Empty).Trim().ToLowerInvariant();
+        var tl = TopLevel.GetTopLevel(this);
+        var clip = tl?.Clipboard;
+
+        switch (mode)
+        {
+            case "copy":
+                if (string.IsNullOrEmpty(_selectionText))
+                    return new InputResult(false, "no selected text to copy");
+                if (clip is null)
+                    return new InputResult(false, "clipboard is not available");
+                await clip.SetTextAsync(_selectionText);
+                return new InputResult(true, $"copied {_selectionText.Length} chars");
+
+            case "paste":
+                var paste = text;
+                if (paste is null && clip is not null)
+                    paste = await clip.TryGetTextAsync();
+                if (paste is null && clip is null)
+                    return new InputResult(false, "clipboard is not available and no paste text was provided");
+                if (paste is null) paste = string.Empty;
+                return TypeText(paste);
+
+            case "read":
+                if (clip is null) return new InputResult(false, "clipboard is not available");
+                return new InputResult(true, await clip.TryGetTextAsync() ?? string.Empty);
+
+            case "readselection":
+            case "read_selection":
+                return new InputResult(true, _selectionText);
+
+            default:
+                return new InputResult(false, "action must be copy, paste, read, or readSelection");
+        }
+    }
+
+    /// <summary>Captures the current visible viewport to a PNG.</summary>
+    public InputResult CaptureViewportToPng(string path)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
+        var rect = CurrentViewportRect();
+        var (styleOverride, scrollLookup) = BuildRenderInputs();
+        var pageVersion = _animating
+            ? unchecked(_currentPage.DisplayListVersion + (int)_animClockMs)
+            : _currentPage.DisplayListVersion;
+
+        using var rendered = _renderer.Render(_currentPage.Root, (float)_currentScale,
+            styleOverride, _currentPage.ImageResolver, rect, pageVersion, scrollLookup);
+        var dir = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+            rendered.Rgba, rendered.Width, rendered.Height);
+        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, full);
+        return new InputResult(true, $"wrote {full} ({rendered.Width}x{rendered.Height})");
+    }
+
     /// <summary>
-    /// Debug report for the <c>browser_computed_style</c> Model Context Protocol
+    /// Debug report for the <c>browser_computed_style</c> MCP
     /// tool. For every element matching <paramref name="selector"/>, reports the
     /// EFFECTIVE painted style using the same precedence the painter does: a live
     /// hover override first, then an animation/transition sample, otherwise the
@@ -1906,6 +2196,186 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
             return false;
         }
+    }
+
+    private InputResult ScrollToOffset(double x, double y, string label)
+    {
+        var pageW = _pageCanvas.Width > 0 ? _pageCanvas.Width : _currentPage?.Root.Frame.Width ?? 0;
+        var pageH = _pageCanvas.Height > 0 ? _pageCanvas.Height : _currentPage?.Root.Frame.Height ?? 0;
+        var viewport = CurrentViewportSize();
+        var viewportW = _scroll.Viewport.Width > 0 ? _scroll.Viewport.Width : viewport.Width;
+        var viewportH = _scroll.Viewport.Height > 0 ? _scroll.Viewport.Height : viewport.Height;
+        var maxX = Math.Max(0, pageW - viewportW);
+        var maxY = Math.Max(0, pageH - viewportH);
+        if (double.IsPositiveInfinity(y)) y = maxY;
+        if (double.IsPositiveInfinity(x)) x = maxX;
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+            return new InputResult(false, $"scroll target must be finite, got {x}, {y}");
+
+        var nextX = Math.Clamp(x, 0, maxX);
+        var nextY = Math.Clamp(y, 0, maxY);
+        _scroll.Offset = new Vector(nextX, nextY);
+        RenderViewportRegion();
+        return new InputResult(true, $"{label} x={nextX:0.#}, y={nextY:0.#} (max x={maxX:0.#}, y={maxY:0.#})");
+    }
+
+    private double ViewportHeight()
+        => _scroll.Viewport.Height > 0 ? _scroll.Viewport.Height : CurrentViewportSize().Height;
+
+    private (LayoutBox Box, double X, double Y)? BoxForElement(DomElement el)
+        => _currentPage is null
+            ? null
+            : FindBoxAbs(_currentPage.Root, 0, 0, b => ReferenceEquals(b.Element, el));
+
+    private InputResult FocusAdjacent(int step)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var focusable = FocusableElements().ToArray();
+        if (focusable.Length == 0) return new InputResult(true, "no focusable elements");
+
+        var current = _focusedInput ?? _currentPage.Document.FocusedElement;
+        var idx = current is null ? -1 : Array.IndexOf(focusable, current);
+        var next = idx < 0
+            ? (step > 0 ? 0 : focusable.Length - 1)
+            : (idx + step + focusable.Length) % focusable.Length;
+        FocusElement(focusable[next]);
+        return new InputResult(true, $"focused {DescribeElement(focusable[next])}");
+    }
+
+    private IEnumerable<DomElement> FocusableElements()
+    {
+        if (_currentPage is null) yield break;
+        foreach (var el in _currentPage.Document.DescendantElements())
+        {
+            if (el.HasAttribute("disabled")) continue;
+            if (HtmlFormControls.IsTextControl(el)
+                || el.LocalName is "button" or "select" or "textarea"
+                || (el.LocalName == "input" && (el.GetAttribute("type") ?? "text") != "hidden")
+                || (el.LocalName == "a" && !string.IsNullOrEmpty(el.GetAttribute("href")))
+                || el.HasAttribute("tabindex"))
+            {
+                yield return el;
+            }
+        }
+    }
+
+    private void FocusElement(DomElement el)
+    {
+        if (_currentPage is null) return;
+        if (HtmlFormControls.IsTextControl(el) && !el.HasAttribute("disabled") && BoxForElement(el) is { } loc)
+        {
+            FocusInput(el, (loc.X + loc.Box.Frame.Width / 2, loc.Y + loc.Box.Frame.Height / 2));
+            return;
+        }
+
+        BlurInput();
+        _currentPage.Document.FocusedElement = el;
+        DispatchDom(el, new FocusEvent("focus"));
+        DispatchDom(el, new FocusEvent("focusin", new EventInit(Bubbles: true)));
+        RefreshFocusedLayout();
+    }
+
+    private InputResult PressFocusedInputKey(string key, bool shift, bool ctrl, bool alt, bool meta)
+    {
+        var target = _focusedInput!;
+        if (key == "Enter")
+        {
+            var fired = PressEnterOnFocused();
+            return new InputResult(true, $"pressed Enter; submit {(fired ? "fired" : "no-op")}");
+        }
+
+        var down = MakeKeyboardEvent("keydown", key, shift, ctrl, alt, meta);
+        var mutated = DispatchDom(target, down);
+        if (!down.DefaultPrevented && !ctrl && !alt && !meta)
+        {
+            var val = CurrentValue();
+            var idx = Math.Clamp(_caretIndex, 0, val.Length);
+            switch (key)
+            {
+                case "Backspace":
+                    if (idx > 0) CommitValue(val.Remove(idx - 1, 1), idx - 1);
+                    break;
+                case "Delete":
+                    if (idx < val.Length) CommitValue(val.Remove(idx, 1), idx);
+                    break;
+                case "ArrowLeft":
+                    MoveCaret(idx - 1);
+                    break;
+                case "ArrowRight":
+                    MoveCaret(idx + 1);
+                    break;
+                case "Home":
+                    MoveCaret(0);
+                    break;
+                case "End":
+                    MoveCaret(val.Length);
+                    break;
+                case "Escape":
+                    BlurInput();
+                    break;
+                case " ":
+                    return TypeText(" ");
+            }
+        }
+        mutated |= DispatchDom(target, MakeKeyboardEvent("keyup", key, shift, ctrl, alt, meta));
+        if (mutated) RefreshLiveLayout();
+        return new InputResult(true, $"pressed {key}");
+    }
+
+    private static KeyboardEvent MakeKeyboardEvent(string type, string key, bool shift, bool ctrl, bool alt, bool meta)
+        => new(type, new EventInit(Bubbles: true, Cancelable: true))
+        {
+            Key = key,
+            Code = key == " " ? "Space" : key,
+            CtrlKey = ctrl,
+            ShiftKey = shift,
+            AltKey = alt,
+            MetaKey = meta,
+        };
+
+    private static string NormalizeKey(string key)
+    {
+        var trimmed = (key ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return string.Empty;
+        return trimmed.ToLowerInvariant() switch
+        {
+            "esc" or "escape" => "Escape",
+            "enter" or "return" => "Enter",
+            "tab" => "Tab",
+            "backspace" or "back" => "Backspace",
+            "delete" or "del" => "Delete",
+            "left" or "arrowleft" => "ArrowLeft",
+            "right" or "arrowright" => "ArrowRight",
+            "up" or "arrowup" => "ArrowUp",
+            "down" or "arrowdown" => "ArrowDown",
+            "home" => "Home",
+            "end" => "End",
+            "pagedown" or "page_down" => "PageDown",
+            "pageup" or "page_up" => "PageUp",
+            "space" or "spacebar" => " ",
+            _ when trimmed.Length == 1 => trimmed,
+            _ => trimmed,
+        };
+    }
+
+    private static string DescribeElement(DomElement el)
+    {
+        var sb = new StringBuilder();
+        sb.Append('<').Append(el.LocalName);
+        if (!string.IsNullOrEmpty(el.Id))
+            sb.Append('#').Append(el.Id);
+        if (el.GetAttribute("class") is { Length: > 0 } cls)
+            sb.Append('.').Append(cls.Replace(' ', '.'));
+        sb.Append('>');
+        return sb.ToString();
+    }
+
+    private static string TrimForTool(string text, int max)
+    {
+        var compact = text.ReplaceLineEndings(" ").Trim();
+        while (compact.Contains("  ", StringComparison.Ordinal))
+            compact = compact.Replace("  ", " ", StringComparison.Ordinal);
+        return compact.Length <= max ? compact : compact[..max] + "...";
     }
 
     /// <summary>Resolves a CSS selector to the matching elements, in document order.</summary>

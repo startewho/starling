@@ -107,8 +107,8 @@ public sealed class UrlBarInputNormalizerTests
     [DataRow("foo_bar")]
     public void Bare_word_with_no_dot_or_port_returns_null(string input)
     {
-        // A real browser would route this to its search provider. This
-        // engine has no search provider yet, so the shell surfaces an error
+        // A search-backed browser would route this to its search provider.
+        // Starling has no search provider yet, so the shell surfaces an error
         // rather than navigating to a guessed URL.
         UrlBarInputNormalizer.Normalize(input).Should().BeNull();
     }

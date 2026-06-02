@@ -23,7 +23,7 @@ public readonly record struct ActivityRecord(
 /// <summary>
 /// Captures completed activities into a bounded ring buffer + observable.
 /// Registers an <see cref="ActivityListener"/> at construction so it's
-/// always-on (one listener can coexist with OTel's own — both receive the
+/// always-on. One listener can coexist with OpenTelemetry's own, and both receive the
 /// stop event). Subscribers see activities only after Stopped fires, which
 /// matches Aspire's trace timeline.
 /// </summary>
@@ -46,7 +46,7 @@ public sealed class InMemoryActivitySink : IDisposable
     /// Construct the sink, optionally skipping the in-process
     /// <see cref="ActivityListener"/>. Pass <paramref name="attachListener"/> =
     /// false when the buffer is fed exclusively via <see cref="Ingest"/> (e.g.
-    /// the telemetry daemon receiving spans over OTLP from another process) so
+    /// the telemetry daemon receiving spans over the OpenTelemetry Protocol from another process) so
     /// the daemon's own activities don't leak into the ring buffer.
     /// </summary>
     public InMemoryActivitySink(bool attachListener, params string[] sources)
@@ -68,7 +68,7 @@ public sealed class InMemoryActivitySink : IDisposable
     }
 
     /// <summary>
-    /// Append an externally-sourced span record (e.g. decoded from OTLP) into
+    /// Append an externally-sourced span record, such as one decoded from the OpenTelemetry Protocol, into
     /// the ring buffer and fan it out to subscribers — the same path the local
     /// <see cref="ActivityListener"/> uses, so daemon-ingested spans read back
     /// identically through <see cref="Snapshot"/>.

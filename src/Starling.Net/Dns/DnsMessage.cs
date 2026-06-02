@@ -105,7 +105,7 @@ public static class DnsMessage
             {
                 if (ch >= 0x80)
                     throw new FormatException(
-                        "Non-ASCII label — IDNA Punycode conversion is M2-01b work.");
+                        "Non-ASCII labels require IDNA Punycode conversion, which is not implemented yet.");
                 buf[o++] = (byte)ch;
             }
         }

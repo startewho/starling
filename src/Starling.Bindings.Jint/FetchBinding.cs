@@ -9,7 +9,7 @@ using StarlingUrlParser = global::Starling.Url.UrlParser;
 
 namespace Starling.Bindings.Jint;
 
-// J3b — fetch() + Request/Response/Headers (+ minimal AbortController/AbortSignal).
+// fetch() + Request/Response/Headers (+ minimal AbortController/AbortSignal).
 // Mirrors Starling.Bindings/FetchBinding.cs for init parsing + body semantics,
 // reusing Starling.Net (StarlingHttpClient/HttpRequest/HttpResponse) for the wire.
 //
@@ -28,7 +28,7 @@ namespace Starling.Bindings.Jint;
 // fetch() returns a Jint ManualPromise (Engine.Advanced.RegisterPromise()). The
 // HTTP send runs on a thread-pool Task; its continuation MUST NOT touch Jint
 // from the background thread. Instead each completion is marshalled back onto the
-// JS thread via ctx.Post(...) (the J3a "post to JS thread" hook):
+// JS thread via ctx.Post(...):
 // JintScriptSession.PumpOnce() drains the post queue on the JS thread, invoking
 // resolve/reject there, and reports "not idle" while the queue is non-empty — so
 // the pump keeps turning until every fetch promise settles.

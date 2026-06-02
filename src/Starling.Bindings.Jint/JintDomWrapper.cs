@@ -9,13 +9,13 @@ namespace Starling.Bindings.Jint;
 /// <summary>
 /// Per-engine identity map between real DOM <see cref="EventTarget"/>s and their
 /// Jint <see cref="ObjectInstance"/> wrappers, plus the per-engine prototype
-/// slots Wave-2 families populate and consult. Mirrors
+/// slots binding families populate and consult. Mirrors
 /// <c>Starling.Bindings/DomWrappers.cs</c>: one wrapper per node per engine, so
 /// <c>document.body === document.body</c> holds and listener bookkeeping is
 /// stable.
 /// </summary>
 /// <remarks>
-/// FROZEN J2a contract. Wave-2 families:
+/// Stable wrapper contract for binding families:
 /// <list type="bullet">
 /// <item>set their prototype slot once in their <c>Install</c> (e.g.
 /// <see cref="NodePrototype"/>), then</item>
@@ -25,7 +25,7 @@ namespace Starling.Bindings.Jint;
 /// The wrapper carries the backing CLR object so <see cref="Unwrap"/> /
 /// <see cref="UnwrapNode"/> recover it. Until a family installs its prototype,
 /// <see cref="GetOrCreate"/> falls back to the next slot up the chain (Element →
-/// Node → Object), so partial Wave-2 progress still produces usable wrappers.
+/// Node → Object), so partial binding installs still produce usable wrappers.
 /// </remarks>
 public sealed class JintDomWrapper
 {
@@ -43,24 +43,24 @@ public sealed class JintDomWrapper
         _ctx = ctx;
     }
 
-    // ---- prototype slots (populated by the Wave-2 families) ----
+    // ---- prototype slots --------------------------------------------------
 
-    /// <summary>%EventTargetPrototype% (J2c).</summary>
+    /// <summary>%EventTargetPrototype%.</summary>
     public ObjectInstance? EventTargetPrototype { get; set; }
 
-    /// <summary>%NodePrototype% (J2b). Inherits EventTarget.prototype.</summary>
+    /// <summary>%NodePrototype%. Inherits EventTarget.prototype.</summary>
     public ObjectInstance? NodePrototype { get; set; }
 
-    /// <summary>%ElementPrototype% (J2b). Inherits Node.prototype.</summary>
+    /// <summary>%ElementPrototype%. Inherits Node.prototype.</summary>
     public ObjectInstance? ElementPrototype { get; set; }
 
-    /// <summary>%DocumentPrototype% (J2b). Inherits Node.prototype.</summary>
+    /// <summary>%DocumentPrototype%. Inherits Node.prototype.</summary>
     public ObjectInstance? DocumentPrototype { get; set; }
 
-    /// <summary>%WindowPrototype% (J2d). Inherits EventTarget.prototype.</summary>
+    /// <summary>%WindowPrototype%. Inherits EventTarget.prototype.</summary>
     public ObjectInstance? WindowPrototype { get; set; }
 
-    /// <summary>%EventPrototype% (J2c).</summary>
+    /// <summary>%EventPrototype%.</summary>
     public ObjectInstance? EventPrototype { get; set; }
 
     // ---- identity-mapped wrapping ----
@@ -95,7 +95,7 @@ public sealed class JintDomWrapper
     /// <summary>Bind an existing <paramref name="wrapper"/> (e.g. the realm's
     /// <c>globalThis</c>) to a host <paramref name="backing"/>, so that
     /// <see cref="Unwrap(JsValue)"/> recovers it just like a freshly minted
-    /// wrapper. Used by J2d's WindowBinding to make <c>window.addEventListener</c>
+    /// wrapper. Used by WindowBinding to make <c>window.addEventListener</c>
     /// route through the same EventTarget plumbing as DOM nodes. Idempotent: if
     /// either side is already bound the call is a no-op.</summary>
     public void BindExisting(EventTarget backing, ObjectInstance wrapper)
@@ -128,7 +128,7 @@ public sealed class JintDomWrapper
 
     /// <summary>Pick the most-derived installed prototype for a backing object,
     /// falling back up the inheritance chain (Document/Element → Node →
-    /// EventTarget) so partial Wave-2 progress still yields usable wrappers.</summary>
+    /// EventTarget) so partial installs still yield usable wrappers.</summary>
     private ObjectInstance? SelectPrototype(EventTarget backing) => backing switch
     {
         Document => DocumentPrototype ?? NodePrototype ?? EventTargetPrototype,

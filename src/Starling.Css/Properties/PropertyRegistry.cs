@@ -916,7 +916,7 @@ public static class PropertyRegistry
                 case CssKeyword { Name: "bold" or "bolder" or "lighter" } wv: weight = wv; break;
                 case CssNumber wn: weight = wn; break; // numeric font-weight
                 case CssKeyword k when IsFontStretchKeyword(k.Name): stretch = k; break;
-                // `normal`, `small-caps` (variant) etc. fall through (defaults).
+                    // `normal`, `small-caps` (variant) etc. fall through (defaults).
             }
         }
 

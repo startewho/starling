@@ -7,14 +7,14 @@ using StarlingUrl = global::Starling.Url.Url;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// Per-session state shared by every Jint binding family (J2b…J4). One instance
-/// is created per page render and threaded through
+/// Per-session state shared by every Jint binding family. One instance is
+/// created per page render and threaded through
 /// <see cref="JintBindings.InstallAll(JintBackendContext)"/> into each family's
 /// <c>Install(JintBackendContext)</c>.
 /// </summary>
 /// <remarks>
-/// This is the FROZEN J2a contract Wave 2 depends on — do not change the shape
-/// of the public surface. Wave-2 agents read <see cref="Engine"/>,
+/// This is the stable contract binding families depend on. Do not change the
+/// shape of the public surface lightly. Binding families read <see cref="Engine"/>,
 /// <see cref="Document"/>, <see cref="BaseUrl"/>, <see cref="Http"/>,
 /// <see cref="Diag"/>, <see cref="Loop"/>, and use <see cref="Wrappers"/> +
 /// <see cref="JintInterop"/> helpers; they never construct this directly.
@@ -39,14 +39,14 @@ public sealed class JintBackendContext
     /// <summary>Per-engine Dom↔JS wrapper identity map + prototype slots.</summary>
     public JintDomWrapper Wrappers { get; }
 
-    /// <summary>Simulated event loop driving timers / rAF / the pump
-    /// (J3a installs onto it; the session advances it in PumpOnce).</summary>
+    /// <summary>Simulated event loop driving timers / requestAnimationFrame / the pump.
+    /// The session advances it in PumpOnce.</summary>
     public WebEventLoop Loop { get; }
 
     /// <summary>Layout-readback host, when the engine supplied one. Strongly
     /// typed as <see cref="ILayoutHost"/> — the shared contract now lives in the
     /// engine-neutral hosting seam, so this backend reaches it without
-    /// referencing Starling.Bindings (J7).</summary>
+    /// referencing Starling.Bindings.</summary>
     public ILayoutHost? LayoutHost { get; }
 
     /// <summary>Layout viewport in CSS px, as supplied by the engine via
@@ -60,8 +60,8 @@ public sealed class JintBackendContext
     public int ViewportHeight { get; init; }
 
     /// <summary>Fetch script/module source through the session's shared fetch
-    /// path (file/data/http). Used by the dynamic-script runner (J3a) and the
-    /// module loader (J4).</summary>
+    /// path (file/data/http). Used by the dynamic-script runner and the module
+    /// loader.</summary>
     public Func<StarlingUrl, CancellationToken, Task<string?>> Fetch { get; }
 
     // Default thread-safe post queue, used when no session installs its own Post
@@ -70,7 +70,7 @@ public sealed class JintBackendContext
     private readonly ConcurrentQueue<Action> _defaultPostQueue = new();
 
     /// <summary>
-    /// Thread-safe "post to the JS thread" hook (J3a additive contract). Binding
+    /// Thread-safe "post to the JS thread" hook. Binding
     /// families that complete async work on a background thread (fetch/XHR HTTP
     /// completions, dynamic-script fetches) call <c>Post(action)</c> to enqueue
     /// the action for execution on the JS thread; the action is then drained and
@@ -86,8 +86,8 @@ public sealed class JintBackendContext
     public Action<Action> Post { get; set; }
 
     /// <summary>
-    /// Additive J6b hook: notification that a not-yet-started <c>&lt;script&gt;</c>
-    /// element just had its <c>src</c> (re)assigned from JS — via
+    /// Notification that a not-yet-started <c>&lt;script&gt;</c>
+    /// element just had its <c>src</c> assigned from JS, via
     /// <c>setAttribute('src', …)</c> or the <c>.src</c> IDL property. The session
     /// installs this to route into <c>JintDynamicScriptRunner.OnSrcSet</c>, which
     /// runs HTML §4.12.1 "prepare a script" (fetch + execute + fire load/error)

@@ -5,7 +5,7 @@ using Jint.Native.Object;
 namespace Starling.Bindings.Jint;
 
 /// <summary>
-/// J2d — HTML §12.3 Web Storage (Jint backend).
+/// HTML §12.3 Web Storage on the Jint backend.
 /// Mirrors <c>Starling.Bindings/StorageBinding.cs</c>: per-origin
 /// <c>localStorage</c> (shared across realms targeting the same scheme://host:port),
 /// per-session <c>sessionStorage</c>, insertion-ordered keys, all interface

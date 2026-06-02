@@ -14,7 +14,7 @@ using StarlingUrlParser = global::Starling.Url.UrlParser;
 
 namespace Starling.Bindings.Jint;
 
-// J3c — XMLHttpRequest.
+// XMLHttpRequest.
 // Mirrors Starling.Bindings/XhrBinding.cs (state machine + header handling).
 //
 // State machine: UNSENT(0) → OPENED(1) on open(); → HEADERS_RECEIVED(2) →
@@ -26,17 +26,16 @@ namespace Starling.Bindings.Jint;
 // -----------------------------------
 // The actual HTTP request runs on a thread-pool thread (ctx.Http.SendAsync). The
 // completion MUST be marshalled back onto the JS thread before any handler runs
-// (Jint.Engine is single-threaded). It is marshalled via ctx.Post(...) — the J3a
-// "post to JS thread" hook: the background request posts its completion (the XHR
+// (Jint.Engine is single-threaded). It is marshalled via ctx.Post(...): the background request posts its completion (the XHR
 // state machine + event dispatch) onto the JS thread, where
 // JintScriptSession.PumpOnce drains and runs it. PumpOnce reports "not idle"
 // while the post queue is non-empty, so the pump keeps turning until the request
 // settles. WebEventLoop is touched only on the JS thread; the only cross-thread
 // hand-off is ctx.Post's internal thread-safe queue.
 //
-// FLAG (EventTarget): if ctx.Wrappers.EventTargetPrototype (J2c) is present we
+// EventTarget fallback: if ctx.Wrappers.EventTargetPrototype is present we
 // chain XMLHttpRequest.prototype to it so addEventListener is inherited and
-// `xhr instanceof EventTarget` holds. If J2c hasn't landed we fall back to a
+// `xhr instanceof EventTarget` holds. If not, we fall back to a
 // local listener registry (addEventListener/removeEventListener defined in this
 // file) plus the on* handler slots — same event names / handler shapes, so it is
 // forward-compatible.
@@ -271,7 +270,7 @@ internal static class XhrBinding
         JintInterop.DefineMethod(engine, proto, "overrideMimeType",
             (_, _) => JsValue.Undefined, length: 1);
 
-        // EventTarget surface. When J2c has chained the real EventTargetPrototype
+        // EventTarget surface. When the real EventTargetPrototype is chained,
         // these inherited methods exist already; we still define our own so the
         // local listener registry stays the source of truth for the XHR events the
         // completion path dispatches (that path doesn't go through the Starling.Dom

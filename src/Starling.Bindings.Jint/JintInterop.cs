@@ -10,13 +10,13 @@ namespace Starling.Bindings.Jint;
 /// <summary>
 /// Low-level Jint interop helpers shared by every binding family. These wrap
 /// Jint's <see cref="ClrFunction"/> / <see cref="PropertyDescriptor"/> /
-/// <see cref="GetSetPropertyDescriptor"/> so Wave-2 code defines Web-IDL-correct
+/// <see cref="GetSetPropertyDescriptor"/> so binding code defines Web IDL
 /// methods, accessors, and data properties without re-deriving the descriptor
 /// flags each time.
 /// </summary>
 /// <remarks>
-/// FROZEN J2a contract — the helper signatures below match
-/// <c>DESIGN.md</c> ("Helpers"). We define explicit prototypes/properties rather
+/// The helper signatures below match <c>DESIGN.md</c> ("Helpers"). We define
+/// explicit prototypes/properties rather
 /// than relying on Jint's CLR auto-interop, because reflection over CLR objects
 /// produces wrong property names, enumerability, and identity (see the Web-IDL
 /// fidelity rules in DESIGN.md).
@@ -78,7 +78,7 @@ public static class JintInterop
         target.FastSetProperty(name, new PropertyDescriptor(value, writable, enumerable, configurable));
     }
 
-    // ---- value helpers (thin, so Wave-2 call sites read clearly) ----
+    // ---- value helpers -----------------------------------------------------
 
     public static JsValue Str(string? s) => s is null ? JsValue.Null : new JsString(s);
     public static JsValue Num(double d) => new JsNumber(d);

@@ -3,13 +3,25 @@ using System.Text.Json;
 namespace Starling.Mcp;
 
 /// <summary>
-/// JSON-RPC params.arguments shape helpers shared by tool groups. The MCP
-/// protocol passes arguments as a free-form JSON object; these helpers read
-/// individual fields with sensible default-on-missing behaviour, matching
-/// the original BrowserTools dispatch path.
+/// JSON-RPC params.arguments shape helpers shared by tool groups. Model Context
+/// Protocol passes arguments as a free-form JSON object. These helpers read
+/// individual fields with sensible default-on-missing behaviour, matching the
+/// browser tool dispatch defaults.
 /// </summary>
 public static class McpArgumentReader
 {
+    public static string RequireString(JsonElement arguments, string name)
+    {
+        if (arguments.ValueKind == JsonValueKind.Object &&
+            arguments.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString() ?? string.Empty;
+        }
+
+        throw new ArgumentException($"Missing or invalid string argument '{name}'.");
+    }
+
     public static string ReadString(JsonElement arguments, string name)
         => ReadOptionalString(arguments, name) ?? string.Empty;
 
@@ -29,6 +41,19 @@ public static class McpArgumentReader
         => arguments.ValueKind == JsonValueKind.Object &&
            arguments.TryGetProperty(name, out var value) &&
            value.ValueKind == JsonValueKind.True;
+
+    public static double RequireDouble(JsonElement arguments, string name)
+    {
+        if (arguments.ValueKind == JsonValueKind.Object &&
+            arguments.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.Number &&
+            value.TryGetDouble(out var d))
+        {
+            return d;
+        }
+
+        throw new ArgumentException($"Missing or invalid number argument '{name}'.");
+    }
 
     public static double ReadDouble(JsonElement arguments, string name)
         => arguments.ValueKind == JsonValueKind.Object &&

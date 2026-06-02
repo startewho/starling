@@ -14,7 +14,7 @@ namespace Starling.Mcp;
 public interface IMcpToolGroup
 {
     /// <summary>
-    /// JSON array literal of MCP tool descriptors —
+    /// JSON array literal of MCP tool descriptors.
     /// <c>[{"name": "...", "description": "...", "inputSchema": {...}}, ...]</c>.
     /// Must be valid JSON or the server's startup will throw. Returned as
     /// a string (not JsonNode) so the server can splice multiple groups into
@@ -34,7 +34,7 @@ public interface IMcpToolGroup
 }
 
 /// <summary>
-/// Tool invocation result. The server wraps this into the MCP-spec response
+/// Tool invocation result. The server wraps this into the MCP response
 /// shape (<c>{content: [{type: "text", text: ...}], structuredContent, isError}</c>),
 /// stringifying <see cref="StructuredContent"/> for the text channel.
 /// </summary>

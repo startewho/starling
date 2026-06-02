@@ -1,12 +1,13 @@
 namespace Starling.Telemetry.Daemon.Ingestion;
 
 /// <summary>
-/// The daemon's in-memory home for everything it receives over OTLP. Holds the
-/// three ring-buffer sinks in ingestion-only mode (no local listeners) and the
-/// <see cref="TelemetryStream"/> facade over them, so the existing MCP
-/// telemetry tools and the analyzer read received data exactly as they read a
-/// host's own telemetry. Also tracks lightweight liveness/throughput counters
-/// for the console heartbeat and the /api/summary endpoint.
+/// The daemon's in-memory home for everything it receives over the
+/// OpenTelemetry Protocol. Holds the three ring-buffer sinks in ingestion-only
+/// mode (no local listeners) and the <see cref="TelemetryStream"/> facade over
+/// them, so the existing MCP telemetry tools and the analyzer
+/// read received data exactly as they read a host's own telemetry. Also tracks
+/// lightweight liveness/throughput counters for the console heartbeat and the
+/// /api/summary endpoint.
 /// </summary>
 internal sealed class TelemetryIngestStore : IDisposable
 {
@@ -23,8 +24,9 @@ internal sealed class TelemetryIngestStore : IDisposable
 
     public TelemetryIngestStore()
     {
-        // attachListener: false — these buffers are fed only by OTLP ingest, so
-        // the daemon's own ASP.NET/gRPC activities never pollute the data.
+        // attachListener: false. These buffers are fed only by OpenTelemetry
+        // Protocol ingest, so the daemon's own ASP.NET/gRPC activities never
+        // pollute the data.
         Activities = new InMemoryActivitySink(attachListener: false);
         Metrics = new InMemoryMeterSink(attachListener: false);
         Logs = new InMemoryLogSink();

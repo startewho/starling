@@ -11,8 +11,8 @@ namespace Starling.Net.Tcp;
 /// </summary>
 /// <remarks>
 /// Tries each resolved address in order until one connects or all fail
-/// ("happy eyeballs" sequencing is M2-03b territory). The connect attempt
-/// itself is bounded by <see cref="ConnectTimeout"/>; cancellation tokens
+/// (Happy Eyeballs sequencing is not implemented yet). The connect attempt
+/// itself is bounded by <see cref="ConnectTimeout"/>. Cancellation tokens
 /// passed in by the caller compose with that timeout.
 /// </remarks>
 public sealed class TcpDialer

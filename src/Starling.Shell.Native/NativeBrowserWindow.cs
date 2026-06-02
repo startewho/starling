@@ -38,13 +38,13 @@ internal sealed class NativeBrowserWindow : IDisposable
     // viewport is the window minus the whole chrome, so ChromeHeightCss stays the
     // single offset every hit-test / present uses.
     private const double TabStripHeightCss = 32;
-    private const double UrlBarHeightCss   = 44;
-    private const double ChromeHeightCss   = TabStripHeightCss + UrlBarHeightCss;
-    private const double NewTabBtnW        = 28;
+    private const double UrlBarHeightCss = 44;
+    private const double ChromeHeightCss = TabStripHeightCss + UrlBarHeightCss;
+    private const double NewTabBtnW = 28;
 
     // Context menu geometry (one shared definition for render + click hit-test).
     private const double MenuItemH = 26;
-    private const double MenuW     = 200;
+    private const double MenuW = 200;
 
     // ── Demo HTML written to temp files ─────────────────────────────────────
 
@@ -91,7 +91,7 @@ internal sealed class NativeBrowserWindow : IDisposable
     public NativeBrowserWindow(int maxFrames = 0, string? startUrl = null)
     {
         _maxFrames = maxFrames;
-        _startUrl  = startUrl;
+        _startUrl = startUrl;
     }
 
     public void Dispose() { }
@@ -104,8 +104,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         // as file:// URLs.
         var page1Path = Path.Combine(Path.GetTempPath(), $"starling_p1_{Environment.ProcessId}.html");
         var page2Path = Path.Combine(Path.GetTempPath(), $"starling_p2_{Environment.ProcessId}.html");
-        var page1Url  = "file://" + page1Path.Replace('\\', '/');
-        var page2Url  = "file://" + page2Path.Replace('\\', '/');
+        var page1Url = "file://" + page1Path.Replace('\\', '/');
+        var page2Url = "file://" + page2Path.Replace('\\', '/');
 
         File.WriteAllText(page1Path, Page1Html.Replace("PAGE2URL", page2Url));
         File.WriteAllText(page2Path, Page2Html.Replace("PAGE1URL", page1Url));
@@ -204,7 +204,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             ShouldSwapAutomatically = false,
         };
 
-        using var window   = Window.Create(opts);
+        using var window = Window.Create(opts);
         window.Initialize();
 
         var dpr = window.Size.X > 0 ? (float)window.FramebufferSize.X / window.Size.X : 1f;
@@ -227,22 +227,22 @@ internal sealed class NativeBrowserWindow : IDisposable
         var glfwHandle = window.Native?.Glfw ?? 0;
 
         // ── State ────────────────────────────────────────────────────────────
-        float         logicalW   = window.FramebufferSize.X / dpr;
-        float         logicalH   = window.FramebufferSize.Y / dpr;
-        var           clock      = Stopwatch.StartNew();
-        var           lastFb     = window.FramebufferSize;
-        int           presented  = 0;
-        int           failures   = 0;
+        float logicalW = window.FramebufferSize.X / dpr;
+        float logicalH = window.FramebufferSize.Y / dpr;
+        var clock = Stopwatch.StartNew();
+        var lastFb = window.FramebufferSize;
+        int presented = 0;
+        int failures = 0;
 
         // Tabs. Each Tab owns its session + view state; the live locals below
         // mirror the active tab and are swapped in/out by SwitchTab so every input
         // handler can keep using `page` / `session` / `scrollY` unchanged.
-        var          tabs        = new List<Tab>();
-        int          activeIndex = 0;
-        BrowserSession session    = null!;   // assigned from the first tab below
-        double        scrollY     = 0;
-        LaidOutPage?  page        = null;
-        int           lastLayoutVersion = -1;
+        var tabs = new List<Tab>();
+        int activeIndex = 0;
+        BrowserSession session = null!;   // assigned from the first tab below
+        double scrollY = 0;
+        LaidOutPage? page = null;
+        int lastLayoutVersion = -1;
 
         // In-flight navigation. Loads run off the main thread; the Update loop polls
         // the task and applies the result on the main thread when it completes. The
@@ -251,8 +251,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         // is the tab the load belongs to (it may not be the active one by the time
         // it finishes); loadingUrl drives the URL bar while the first page loads.
         Task<Result<LaidOutPage, RenderError>>? pendingNav = null;
-        int    pendingNavTab = -1;
-        string loadingUrl    = startUrl;
+        int pendingNavTab = -1;
+        string loadingUrl = startUrl;
         BlockBox? loadingBox = null;
 
         // Text-input state
@@ -261,52 +261,52 @@ internal sealed class NativeBrowserWindow : IDisposable
         // URL-bar edit state. When focused, keystrokes edit urlBarText instead of
         // the page and Enter navigates. Click the chrome strip or press Cmd/Ctrl+L
         // to focus; Esc or navigating clears it.
-        bool   urlBarFocused = false;
-        string urlBarText    = "";
+        bool urlBarFocused = false;
+        string urlBarText = "";
 
         // Chrome state — rebuilt only when its signature (tabs / active index /
         // labels / URL text / focus / width) changes.
         BlockBox? chromeBox = null;
-        string    chromeSig = "";
+        string chromeSig = "";
 
-        // Hover + animation styling (NS-04). hoverElement is the innermost element
+        // Hover + animation styling. hoverElement is the innermost element
         // under the pointer; hoverOverrides maps each affected element to its
         // :hover computed style; hoverScope tracks which elements the current hover
         // touches so the next change can register reverse transitions. animClockMs
         // is the shared animation/transition clock, read by the styleOverride at
         // paint time. Mirrors WebviewPanel.
-        Element?                            hoverElement   = null;
+        Element? hoverElement = null;
         Dictionary<Element, ComputedStyle>? hoverOverrides = null;
-        HashSet<Element>                    hoverScope     = new();
-        long                                animClockMs    = 0;
+        HashSet<Element> hoverScope = new();
+        long animClockMs = 0;
 
-        // Find-in-page (NS-03). Cmd/Ctrl+F opens; keystrokes edit findQuery; Enter
+        // Find-in-page. Cmd/Ctrl+F opens; keystrokes edit findQuery; Enter
         // and Shift+Enter step matches; Esc closes. The current match is drawn by
         // an overlay document composited over the page in document space.
-        bool      findActive     = false;
-        string    findQuery      = "";
+        bool findActive = false;
+        string findQuery = "";
         List<BoxHitTester.PlacedFragment>? findFragments = null;
-        int       findCursor     = -1;  // index of the current match fragment, -1 none
-        int       findMatchTotal = 0;
-        BlockBox? findOverlay    = null;
+        int findCursor = -1;  // index of the current match fragment, -1 none
+        int findMatchTotal = 0;
+        BlockBox? findOverlay = null;
 
-        // Context menu (NS-03). Right-click opens a menu of actions whose items
+        // Context menu. Right-click opens a menu of actions whose items
         // depend on what is under the pointer (a link adds Open/Copy Link). Drawn
         // as a screen-fixed overlay; the next click runs an item or dismisses.
-        bool      menuActive = false;
-        double    menuX = 0, menuY = 0;
-        var       menuItems  = new List<(string Label, Action Run)>();
+        bool menuActive = false;
+        double menuX = 0, menuY = 0;
+        var menuItems = new List<(string Label, Action Run)>();
         BlockBox? menuOverlay = null;
 
-        // IME preedit (NS-01). On macOS with STARLING_IME_PREEDIT=1 the MacImeBridge
+        // IME preedit. On macOS with STARLING_IME_PREEDIT=1 the MacImeBridge
         // feeds the active composition string here; it is drawn underlined at the
         // focused field. Committed text still arrives via the GLFW char callback.
         string preedit = "";
 
-        // Devtools (NS-03): F12 toggles a read-only DOM-tree inspector panel on the
+        // Devtools: F12 toggles a read-only DOM-tree inspector panel on the
         // right, an engine-rendered screen-fixed overlay rebuilt when the DOM or
         // window size changes.
-        bool      devtoolsActive  = false;
+        bool devtoolsActive = false;
         BlockBox? devtoolsOverlay = null;
 
         // "Something visible changed this frame" signal, set wherever state that
@@ -324,9 +324,9 @@ internal sealed class NativeBrowserWindow : IDisposable
         var firstSession = new BrowserSession();
         var options = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
         tabs.Add(new Tab(firstSession));
-        activeIndex   = 0;
-        session       = firstSession;
-        pendingNav    = firstSession.NavigateInteractiveAsync(startUrl, options);
+        activeIndex = 0;
+        session = firstSession;
+        pendingNav = firstSession.NavigateInteractiveAsync(startUrl, options);
         pendingNavTab = 0;
         Console.WriteLine($"browser: loading {startUrl} …");
 
@@ -451,8 +451,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                         page.Document.FocusedElement = null;
                     }
                     urlBarFocused = true;
-                    urlBarText    = page.Url ?? "";
-                    needsPresent  = true;
+                    urlBarText = page.Url ?? "";
+                    needsPresent = true;
                     return;
                 }
 
@@ -578,27 +578,27 @@ internal sealed class NativeBrowserWindow : IDisposable
                 // F12 toggles the devtools DOM inspector.
                 if (key == Key.F12)
                 {
-                    devtoolsActive  = !devtoolsActive;
+                    devtoolsActive = !devtoolsActive;
                     devtoolsOverlay = null;
-                    needsPresent    = true;
+                    needsPresent = true;
                     return;
                 }
 
                 // Global history chords: Cmd/Ctrl+[ back, +] forward, +R reload,
                 // and Alt+Left / Alt+Right back / forward. Handled before URL-bar
                 // editing so they work no matter what has focus.
-                if (CmdOrCtrl() && key == Key.LeftBracket)  { GoBack();    return; }
+                if (CmdOrCtrl() && key == Key.LeftBracket) { GoBack(); return; }
                 if (CmdOrCtrl() && key == Key.RightBracket) { GoForward(); return; }
-                if (CmdOrCtrl() && key == Key.R)            { Reload();    return; }
-                if (Alt() && key == Key.Left)               { GoBack();    return; }
-                if (Alt() && key == Key.Right)              { GoForward(); return; }
+                if (CmdOrCtrl() && key == Key.R) { Reload(); return; }
+                if (Alt() && key == Key.Left) { GoBack(); return; }
+                if (Alt() && key == Key.Right) { GoForward(); return; }
 
                 // Cmd/Ctrl+N opens a new browser window (a fresh process).
                 if (CmdOrCtrl() && key == Key.N) { LaunchNewWindow(); return; }
 
                 // Tab chords: Cmd/Ctrl+T new, +W close, +1..9 select, +Tab next.
-                if (CmdOrCtrl() && key == Key.T)   { NewTab(startUrl);           return; }
-                if (CmdOrCtrl() && key == Key.W)   { CloseTab(activeIndex);      return; }
+                if (CmdOrCtrl() && key == Key.T) { NewTab(startUrl); return; }
+                if (CmdOrCtrl() && key == Key.W) { CloseTab(activeIndex); return; }
                 if (CmdOrCtrl() && key == Key.Tab) { SwitchTab((activeIndex + 1) % tabs.Count); return; }
                 if (CmdOrCtrl() && key >= Key.Number1 && key <= Key.Number9)
                 {
@@ -648,8 +648,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                         page.Document.FocusedElement = null;
                     }
                     urlBarFocused = true;
-                    urlBarText    = page.Url ?? "";
-                    needsPresent  = true;
+                    urlBarText = page.Url ?? "";
+                    needsPresent = true;
                     return;
                 }
 
@@ -755,11 +755,11 @@ internal sealed class NativeBrowserWindow : IDisposable
             };
         }
 
-        // IME preedit driver (NS-01, experimental, opt-in). Off by default — the
+        // IME preedit driver. Off by default, since the
         // commit-style path already works; this adds the inline composing display.
         if (Environment.GetEnvironmentVariable("STARLING_IME_PREEDIT") == "1")
             MacImeBridge.Install(
-                s  => { preedit = s;  needsPresent = true; },
+                s => { preedit = s; needsPresent = true; },
                 () => { preedit = ""; needsPresent = true; });
 
         // ── Window events ─────────────────────────────────────────────────────
@@ -773,8 +773,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         // STARLING_REDUCE_MOTION freezes animation entirely — heavy pages (a tall
         // page with a page-wide animation) then render once and stay responsive
         // instead of re-rasterizing every frame.
-        var          reduceMotion      = Environment.GetEnvironmentVariable("STARLING_REDUCE_MOTION") == "1";
-        long         lastAnimMs        = long.MinValue;
+        var reduceMotion = Environment.GetEnvironmentVariable("STARLING_REDUCE_MOTION") == "1";
+        long lastAnimMs = long.MinValue;
         const double animFrameBudgetMs = 1000.0 / 60; // 60 fps
 
         window.Update += _ =>
@@ -842,7 +842,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             // query while find is open, else the edit buffer when focused, else the
             // active page URL (or the loading URL before the first page arrives).
             string shownUrl;
-            bool   urlFocusVisual;
+            bool urlFocusVisual;
             if (findActive)
             {
                 var status = findQuery.Length == 0
@@ -877,12 +877,12 @@ internal sealed class NativeBrowserWindow : IDisposable
                 loadingBox = BuildLoadingPage();
                 var okLoad = renderer.PresentComposited(
                     presenter,
-                    surfaceWidth:  fb.X,
+                    surfaceWidth: fb.X,
                     surfaceHeight: fb.Y,
-                    scale:         dpr,
-                    chromeRoot:      chromeBox,
+                    scale: dpr,
+                    chromeRoot: chromeBox,
                     chromeHeightCss: ChromeHeightCss,
-                    pageRoot:        loadingBox);
+                    pageRoot: loadingBox);
                 if (okLoad) presented++; else failures++;
             }
             else
@@ -895,18 +895,18 @@ internal sealed class NativeBrowserWindow : IDisposable
 
                 var ok = renderer.PresentComposited(
                     presenter,
-                    surfaceWidth:    fb.X,
-                    surfaceHeight:   fb.Y,
-                    scale:           dpr,
-                    chromeRoot:      chromeBox,
+                    surfaceWidth: fb.X,
+                    surfaceHeight: fb.Y,
+                    scale: dpr,
+                    chromeRoot: chromeBox,
                     chromeHeightCss: ChromeHeightCss,
-                    pageRoot:        page!.Root,
-                    scrollX:         0,
-                    scrollY:         scrollY,
-                    pageAnimating:   box => IsAnimatingLayerRoot(page, box),
-                    styleOverride:     StyleOverride,
-                    images:            page.ImageResolver,
-                    overlayRoot:       findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
+                    pageRoot: page!.Root,
+                    scrollX: 0,
+                    scrollY: scrollY,
+                    pageAnimating: box => IsAnimatingLayerRoot(page, box),
+                    styleOverride: StyleOverride,
+                    images: page.ImageResolver,
+                    overlayRoot: findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
                     screenOverlayRoot: screenOverlay);
 
                 if (ok) { presented++; needsPresent = false; } else failures++;
@@ -947,10 +947,10 @@ internal sealed class NativeBrowserWindow : IDisposable
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
             // Fragment geometry changed — drop the stale find index and highlight,
             // and the devtools panel (size / DOM may have changed).
-            findFragments   = null;
-            findOverlay     = null;
+            findFragments = null;
+            findOverlay = null;
             devtoolsOverlay = null;
-            needsPresent    = true;
+            needsPresent = true;
             PushA11y();
         }
 
@@ -971,20 +971,20 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             var oldPage = page;
             renderer.ResetForNavigation();
-            scrollY        = 0;
-            focusedInput   = null;
-            preedit        = "";
-            urlBarFocused  = false;
-            findActive      = false;
-            findOverlay     = null;
-            findFragments   = null;
+            scrollY = 0;
+            focusedInput = null;
+            preedit = "";
+            urlBarFocused = false;
+            findActive = false;
+            findOverlay = null;
+            findFragments = null;
             devtoolsOverlay = null;
-            menuActive      = false;
-            menuOverlay     = null;
-            hoverElement    = null;
+            menuActive = false;
+            menuOverlay = null;
+            hoverElement = null;
             hoverOverrides = null;
             hoverScope.Clear();
-            page           = navResult.Value;
+            page = navResult.Value;
             oldPage?.Dispose();
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
             needsPresent = true;
@@ -997,9 +997,9 @@ internal sealed class NativeBrowserWindow : IDisposable
         void PollNav()
         {
             if (pendingNav is not { IsCompleted: true }) return;
-            var task   = pendingNav;
+            var task = pendingNav;
             var tabIdx = pendingNavTab;
-            pendingNav    = null;
+            pendingNav = null;
             pendingNavTab = -1;
 
             Result<LaidOutPage, RenderError> r;
@@ -1026,28 +1026,28 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         void Navigate(string url)
         {
-            loadingUrl    = url;
-            pendingNav    = session.NavigateInteractiveAsync(url, NavOpts());
+            loadingUrl = url;
+            pendingNav = session.NavigateInteractiveAsync(url, NavOpts());
             pendingNavTab = activeIndex;
         }
 
         void GoBack()
         {
             if (!session.History.CanGoBack) return;
-            pendingNav    = session.BackInteractiveAsync(NavOpts());
+            pendingNav = session.BackInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
         }
 
         void GoForward()
         {
             if (!session.History.CanGoForward) return;
-            pendingNav    = session.ForwardInteractiveAsync(NavOpts());
+            pendingNav = session.ForwardInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
         }
 
         void Reload()
         {
-            pendingNav    = session.ReloadInteractiveAsync(NavOpts());
+            pendingNav = session.ReloadInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
         }
 
@@ -1058,12 +1058,12 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             if (tabs.Count == 0) return;
             var t = tabs[activeIndex];
-            t.Page              = page;
-            t.ScrollY           = scrollY;
-            t.FocusedInput      = focusedInput;
-            t.HoverElement      = hoverElement;
-            t.HoverOverrides    = hoverOverrides;
-            t.HoverScope        = hoverScope;
+            t.Page = page;
+            t.ScrollY = scrollY;
+            t.FocusedInput = focusedInput;
+            t.HoverElement = hoverElement;
+            t.HoverOverrides = hoverOverrides;
+            t.HoverScope = hoverScope;
             t.LastLayoutVersion = lastLayoutVersion;
         }
 
@@ -1073,24 +1073,24 @@ internal sealed class NativeBrowserWindow : IDisposable
         void LoadActive()
         {
             var t = tabs[activeIndex];
-            session           = t.Session;
-            page              = t.Page;
-            scrollY           = t.ScrollY;
-            focusedInput      = t.FocusedInput;
-            hoverElement      = t.HoverElement;
-            hoverOverrides    = t.HoverOverrides;
-            hoverScope        = t.HoverScope;
+            session = t.Session;
+            page = t.Page;
+            scrollY = t.ScrollY;
+            focusedInput = t.FocusedInput;
+            hoverElement = t.HoverElement;
+            hoverOverrides = t.HoverOverrides;
+            hoverScope = t.HoverScope;
             lastLayoutVersion = t.LastLayoutVersion;
-            urlBarFocused     = false;
-            preedit           = "";
-            findActive        = false;
-            findOverlay       = null;
-            findFragments     = null;
-            devtoolsOverlay   = null;
-            menuActive        = false;
-            menuOverlay       = null;
+            urlBarFocused = false;
+            preedit = "";
+            findActive = false;
+            findOverlay = null;
+            findFragments = null;
+            devtoolsOverlay = null;
+            menuActive = false;
+            menuOverlay = null;
             renderer.ResetForNavigation();
-            needsPresent      = true;
+            needsPresent = true;
             PushA11y();
         }
 
@@ -1153,22 +1153,22 @@ internal sealed class NativeBrowserWindow : IDisposable
         void OpenFind()
         {
             if (page is null) return;
-            findActive    = true;
-            findQuery     = "";
-            findCursor    = -1;
+            findActive = true;
+            findQuery = "";
+            findCursor = -1;
             findMatchTotal = 0;
-            findOverlay   = null;
+            findOverlay = null;
             findFragments = BoxHitTester.CollectFragments(page.Root);
             urlBarFocused = false;
-            needsPresent  = true;
+            needsPresent = true;
         }
 
         void CloseFind()
         {
-            findActive    = false;
-            findOverlay   = null;
+            findActive = false;
+            findOverlay = null;
             findFragments = null;
-            needsPresent  = true;
+            needsPresent = true;
         }
 
         // A semi-transparent highlight box at the matched fragment, in document
@@ -1239,7 +1239,7 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         void CloseMenu()
         {
-            menuActive  = false;
+            menuActive = false;
             menuOverlay = null;
             needsPresent = true;
         }
@@ -1283,15 +1283,15 @@ internal sealed class NativeBrowserWindow : IDisposable
                 }
             }
 
-            if (session.History.CanGoBack)    menuItems.Add(("Back", GoBack));
+            if (session.History.CanGoBack) menuItems.Add(("Back", GoBack));
             if (session.History.CanGoForward) menuItems.Add(("Forward", GoForward));
             menuItems.Add(("Reload", Reload));
 
             var n = menuItems.Count;
             menuX = Math.Clamp(x, 0, Math.Max(0, logicalW - MenuW));
             menuY = Math.Clamp(y, 0, Math.Max(0, logicalH - n * MenuItemH));
-            menuOverlay  = BuildMenuOverlay();
-            menuActive   = true;
+            menuOverlay = BuildMenuOverlay();
+            menuActive = true;
             needsPresent = true;
         }
 
@@ -1312,8 +1312,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         BlockBox BuildDevtoolsOverlay()
         {
             const double panelW = 380;
-            var panelX  = Math.Max(0, logicalW - panelW);
-            var panelH  = logicalH - ChromeHeightCss;
+            var panelX = Math.Max(0, logicalW - panelW);
+            var panelH = logicalH - ChromeHeightCss;
             var maxRows = Math.Max(0, (int)((panelH - 30) / 16));
 
             var sb = new StringBuilder();
@@ -1348,7 +1348,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 .LayoutDocument(HtmlParser.Parse(sb.ToString()), new LayoutSize(logicalW, logicalH));
         }
 
-        // ── Hover + animation styling (NS-04, mirrors WebviewPanel) ────────────
+        // ── Hover + animation styling (mirrors WebviewPanel) ──────────────────
 
         // Re-cascade the hovered element's subtree plus its ancestor chain under a
         // :hover context, sampling any triggered transition at nowMs. Returns the
@@ -1444,9 +1444,9 @@ internal sealed class NativeBrowserWindow : IDisposable
                 }
             }
 
-            hoverScope     = newScope ?? new HashSet<Element>();
+            hoverScope = newScope ?? new HashSet<Element>();
             hoverOverrides = newOverrides;
-            needsPresent   = true;
+            needsPresent = true;
         }
 
         // Per-box style the painter overlays: the :hover override if any, else the
@@ -1488,13 +1488,13 @@ internal sealed class NativeBrowserWindow : IDisposable
         public Tab(BrowserSession session) => Session = session;
 
         public BrowserSession Session { get; }
-        public LaidOutPage?   Page;
-        public double         ScrollY;
-        public Element?       FocusedInput;
-        public Element?       HoverElement;
+        public LaidOutPage? Page;
+        public double ScrollY;
+        public Element? FocusedInput;
+        public Element? HoverElement;
         public Dictionary<Element, ComputedStyle>? HoverOverrides;
         public HashSet<Element> HoverScope = new();
-        public int            LastLayoutVersion = -1;
+        public int LastLayoutVersion = -1;
 
         public void Dispose()
         {
@@ -1567,17 +1567,17 @@ internal sealed class NativeBrowserWindow : IDisposable
     {
         var sc = cssKeyword switch
         {
-            "pointer"      => StandardCursor.Hand,
-            "text"         => StandardCursor.IBeam,
-            "crosshair"    => StandardCursor.Crosshair,
-            "wait"         => StandardCursor.Wait,
-            "not-allowed"  => StandardCursor.NotAllowed,
-            "ew-resize"    => StandardCursor.HResize,
-            "ns-resize"    => StandardCursor.VResize,
-            "nwse-resize"  => StandardCursor.NwseResize,
-            "nesw-resize"  => StandardCursor.NeswResize,
-            "move"         => StandardCursor.ResizeAll,
-            _              => StandardCursor.Default,
+            "pointer" => StandardCursor.Hand,
+            "text" => StandardCursor.IBeam,
+            "crosshair" => StandardCursor.Crosshair,
+            "wait" => StandardCursor.Wait,
+            "not-allowed" => StandardCursor.NotAllowed,
+            "ew-resize" => StandardCursor.HResize,
+            "ns-resize" => StandardCursor.VResize,
+            "nwse-resize" => StandardCursor.NwseResize,
+            "nesw-resize" => StandardCursor.NeswResize,
+            "move" => StandardCursor.ResizeAll,
+            _ => StandardCursor.Default,
         };
         try
         {
