@@ -148,8 +148,11 @@ internal sealed class Compositor
 
         var ops = new List<LayerBlend>();
         var keepAlive = new List<RenderedBitmap>();
+        // DIAG (open-time investigation): split raster (CollectOps) vs GPU present.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         CollectOps(root, ops, keepAlive, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
+        var tRaster = sw.ElapsedMilliseconds;
 
         // Overlays (caret, selection, find flash) blend on top of the page as
         // solid-colour quads. Appended last so they draw over every page layer.
@@ -162,6 +165,9 @@ internal sealed class Compositor
             bmp.Dispose();
 
         EmitTileFrameMetrics();
+        if (sw.ElapsedMilliseconds > 100)
+            _diag.Log(DiagLevel.Info, "paint",
+                $"renderToSurface.cold: collectOps(raster)={tRaster}ms presentOps(gpu)={sw.ElapsedMilliseconds - tRaster}ms ops={ops.Count}");
         return presented;
     }
 

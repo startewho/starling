@@ -103,6 +103,10 @@ aspire run
 aspire run -- --jint --imagesharp     # Jint JS engine + CPU paint backend
 ```
 
+**Agent access.** Starling exposes a loopback Model Context Protocol server for
+local agent harnesses. The repo `.mcp.json` registers the AppHost endpoint at
+`http://127.0.0.1:3078/mcp`. See [`docs/mcp.md`](docs/mcp.md).
+
 **Render a live site from the CLI.** The headless renderer fetches and paints a
 real URL straight to a PNG:
 

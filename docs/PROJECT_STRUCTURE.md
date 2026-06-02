@@ -30,6 +30,7 @@ folders and shows how the browser parts fit together.
 | `Starling.Bindings` | Connects JS objects to Starling DOM and CSS code. |
 | `Starling.Net` | Fetches data over the network. |
 | `Starling.Url` | Parses and resolves URLs. |
+| `Starling.Mcp` | Hosts the loopback Model Context Protocol server for agents. |
 | `Starling.Headless` | Runs Starling from the command line. |
 | `Starling.Gui` | Runs the desktop GUI shell. |
 | `Starling.AppHost` | Starts the app pieces together with Aspire. |

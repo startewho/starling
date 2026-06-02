@@ -1176,18 +1176,26 @@ public sealed class StarlingEngine
     /// </summary>
     private async Task RunDeferredScriptsAsync(ScriptSession s, bool deferAsync, CancellationToken ct)
     {
+        // DIAG (open-time investigation): time each sub-step of the deferred phase.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         if (deferAsync)
             RunAsyncScripts(s, ct);
+        var tAsync = sw.ElapsedMilliseconds;
 
         // Pump in-flight async work AND src-triggered dynamic script fetches,
         // re-pumping after each settles. Sequential bundle loaders chain off
         // `load`, so this loop is what lets bundle #2..N run after #1.
         await PumpToQuiescenceAsync(s, ct).ConfigureAwait(false);
+        var tPump1 = sw.ElapsedMilliseconds;
 
         // load event after subresources have settled, then one more drain pass
         // for listeners that schedule further work.
         s.Session.FireLoad();
+        var tFireLoad = sw.ElapsedMilliseconds;
         await PumpToQuiescenceAsync(s, ct).ConfigureAwait(false);
+
+        _diag.Log(DiagLevel.Info, "engine",
+            $"deferred.summary: async={tAsync}ms pump1={tPump1 - tAsync}ms fireLoad={tFireLoad - tPump1}ms pump2={sw.ElapsedMilliseconds - tFireLoad}ms total={sw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -1350,17 +1358,23 @@ public sealed class StarlingEngine
         var wall = System.Diagnostics.Stopwatch.StartNew();
         var idle = System.Diagnostics.Stopwatch.StartNew();
         var rafFrames = 0;
+        var iters = 0;   // DIAG (open-time investigation)
 
         while (wall.ElapsedMilliseconds < MaxMs)
         {
             ct.ThrowIfCancellationRequested();
+            iters++;
 
             // When the only work left is a steady rAF loop that has already had
             // its frame budget, declare the page settled and let the live loop
             // drive the ongoing animation instead of blocking here.
             var rafOnly = s.Session.OnlyAnimationFramePending;
             if (rafOnly && rafFrames >= RafFrameBudget)
+            {
+                _diag.Log(DiagLevel.Info, "engine",
+                    $"pump.settle: {wall.ElapsedMilliseconds}ms wall, {iters} iters, {rafFrames} rAF frames, exit=rafBudget");
                 return;
+            }
             if (rafOnly)
                 rafFrames++;   // this PumpOnce advances one animation frame
 
@@ -1376,12 +1390,16 @@ public sealed class StarlingEngine
             // a slot to enqueue resolve jobs; exit once the idle window elapses
             // with no new work observed.
             if (idle.ElapsedMilliseconds >= IdleMs)
+            {
+                _diag.Log(DiagLevel.Info, "engine",
+                    $"pump.settle: {wall.ElapsedMilliseconds}ms wall, {iters} iters, {rafFrames} rAF frames, exit=quiescent");
                 return;
+            }
             await Task.Delay(20, ct).ConfigureAwait(false);
         }
 
         _diag.Log(DiagLevel.Warn, "engine",
-            "Script pump hit the wall-clock cap before quiescence; rendering current DOM.");
+            $"pump.settle: {wall.ElapsedMilliseconds}ms wall, {iters} iters, {rafFrames} rAF frames, exit=cap (rendering current DOM)");
     }
 
     /// <summary>

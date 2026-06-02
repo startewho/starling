@@ -638,7 +638,14 @@ public sealed class MainWindow : Window, IBrowserController
     /// </summary>
     private void ApplyShownPage(LaidOutPage page, string opLabel, long elapsedMs)
     {
+        // DIAG (open-time investigation): ShowPage synchronously composites +
+        // presents the first frame, so this times when pixels actually hit the
+        // surface, and navElapsed says whether the UI thread got the page early
+        // (first-paint post) or only after the deferred phase finished.
+        var showSw = System.Diagnostics.Stopwatch.StartNew();
         _webview.ShowPage(page);
+        _diag.Log(DiagLevel.Info, "gui",
+            $"show_page: {opLabel} navElapsed={elapsedMs}ms showPage(+firstPresent)={showSw.ElapsedMilliseconds}ms");
         _lastShownPage = page;
         _urlBar.SetSecurity(MapSecurity(page.Security));
         Title = string.IsNullOrWhiteSpace(page.Title) ? string.Empty : page.Title;

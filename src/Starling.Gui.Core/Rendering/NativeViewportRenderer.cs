@@ -64,14 +64,22 @@ public sealed class NativeViewportRenderer : IDisposable
 
         try
         {
+            // DIAG (open-time investigation): split the cold first present into
+            // layer-tree build vs raster+GPU present. Logged only for slow frames.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var tree = new LayerTreeBuilder(styleOverride, images, _diag,
                 isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
                 scrollOffsets: scrollOffsets).Build(root);
+            var tBuild = sw.ElapsedMilliseconds;
             var region = viewport ?? new LayoutRect(0, 0,
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
             var compositor = new Compositor(_backend, _diag, _tiles);
-            return compositor.RenderToSurface(tree, region, scale, presenter, overlays);
+            var ok = compositor.RenderToSurface(tree, region, scale, presenter, overlays);
+            if (sw.ElapsedMilliseconds > 100)
+                _diag.Log(DiagLevel.Info, "shell",
+                    $"present.cold: total={sw.ElapsedMilliseconds}ms layertree.build={tBuild}ms renderToSurface={sw.ElapsedMilliseconds - tBuild}ms");
+            return ok;
         }
         catch (Exception ex)
         {
