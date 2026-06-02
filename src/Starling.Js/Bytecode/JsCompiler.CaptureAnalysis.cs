@@ -3,9 +3,9 @@ using Starling.Js.Ast;
 namespace Starling.Js.Bytecode;
 
 /// <summary>
-/// gap:closure-write-back (wp:M3-04c2). Static analysis that decides which
-/// of a function's own locals must use shared <see cref="Starling.Js.Runtime.Cell"/>
-/// storage rather than plain slot storage.
+/// Static analysis that decides which of a function's own locals must use
+/// shared <see cref="Starling.Js.Runtime.Cell"/> storage rather than plain slot
+/// storage.
 /// </summary>
 /// <remarks>
 /// <para>

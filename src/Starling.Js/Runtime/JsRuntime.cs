@@ -4,13 +4,14 @@ using Starling.Js.Intrinsics;
 namespace Starling.Js.Runtime;
 
 /// <summary>
-/// Host-facing entry point for the JS engine. Owns the active <see cref="JsRealm"/>
-/// and exposes API for registering native functions + running scripts.
+/// Host-facing entry point for the Starling JS engine. Owns one
+/// <see cref="JsRealm"/> and exposes helpers for host globals, native
+/// functions, and microtask pumping.
 /// </summary>
 /// <remarks>
-/// In a real browser the runtime sits behind the Window binding (M4-02 / B5).
-/// For now it's a standalone unit so the headless CLI can run JS scripts
-/// against a configurable host surface.
+/// Browser page execution is driven through <c>IScriptSession</c> and
+/// <c>WindowBinding</c>. Tests and low-level hosts can still use this type
+/// directly with a custom host surface.
 /// </remarks>
 public sealed class JsRuntime
 {

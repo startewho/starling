@@ -7,7 +7,9 @@ namespace Starling.Js.Intrinsics;
 /// <summary>
 /// §22.1 The String constructor and §22.1.3 String.prototype. Strings are
 /// represented as .NET UTF-16 strings, matching ECMAScript's code-unit model.
-/// RegExp-specific branches are intentionally deferred to B4-1.
+/// Methods that accept regular expressions delegate through the standard
+/// <c>Symbol.match</c>, <c>Symbol.replace</c>, <c>Symbol.search</c>, and
+/// <c>Symbol.split</c> hooks when present.
 /// </summary>
 public static class StringCtor
 {
@@ -410,10 +412,9 @@ public static class StringCtor
                 all ? "g" : "");
         if (all)
         {
-            // B4-1-followup-b: return a real RegExp String Iterator instead of
-            // an array. Spec §22.1.3.13 requires matchAll to throw TypeError if
-            // the regex is not global; mirror that here for parity with the
-            // Symbol.matchAll path.
+            // Spec §22.1.3.13 requires matchAll to throw TypeError if the
+            // regex is not global. Mirror that here for parity with the
+            // Symbol.matchAll path before returning the RegExp string iterator.
             if ((re.Flags & Starling.RegExp.RegexFlags.Global) == 0)
                 throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
             var unicode = (re.Flags & Starling.RegExp.RegexFlags.Unicode) != 0;

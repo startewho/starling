@@ -40,8 +40,8 @@ public sealed class JsArray : JsObject
     /// <summary>Append without going through descriptor machinery.</summary>
     public void Push(JsValue value) => _items.Add(value);
 
-    /// <summary>§7.1.21 IsArray — for now only host-side <see cref="JsArray"/>
-    /// counts. Proxies handled when B4-4 lands.</summary>
+    /// <summary>§7.1.21 IsArray. Only host-side <see cref="JsArray"/> instances
+    /// count today, so proxies around arrays are not unwrapped yet.</summary>
     public static bool IsArray(JsValue v) => v.IsObject && v.AsObject is JsArray;
 
     /// <summary>Canonical array index per §6.1.7: a String <c>P</c> such that

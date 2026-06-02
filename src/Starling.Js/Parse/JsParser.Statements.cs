@@ -732,9 +732,8 @@ public sealed partial class JsParser
 
     /// <summary>
     /// Function as an expression: <c>function [name](params) { body }</c>.
-    /// Name is optional; when present it's M3-04c work to bind the name
-    /// inside the body. For now we accept and ignore the inside-name
-    /// binding — outside callers don't see it.
+    /// The optional name is stored on the AST. The compiler binds it inside
+    /// the function body for recursion and self-reference.
     /// </summary>
     private FunctionExpression ParseFunctionExpression()
         => ParseFunctionExpressionInner(_current.Start, isAsync: false);

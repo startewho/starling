@@ -1,10 +1,10 @@
 namespace Starling.Js;
 
 /// <summary>
-/// Placeholder for M0. The real `Starling.Js` lives in a later milestone —
-/// see the per-subsystem doc in browser-plan/.
+/// Compatibility marker kept for older probes that still look for a JS
+/// placeholder. The Starling JS engine now lives in this assembly.
 /// </summary>
 public static class PlaceholderNote
 {
-    public const string Message = "Starling.Js — pending milestone work. See browser-plan/.";
+    public const string Message = "Starling.Js is implemented. See browser-plan/09_JS_ENGINE.md.";
 }

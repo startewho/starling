@@ -5,34 +5,13 @@ namespace Starling.Js.Bytecode;
 
 /// <summary>
 /// Walks a parsed JS <see cref="Program"/> and emits a <see cref="Chunk"/>
-/// of bytecode for the M3-04 VM to execute.
+/// of bytecode for <see cref="JsVm"/> to execute.
 /// </summary>
 /// <remarks>
-/// <para>
-/// First-cut scope (wp:M3-03):
-/// </para>
-/// <list type="bullet">
-///   <item>Literals (numeric / string / boolean / null).</item>
-///   <item>Identifier references — locals if declared in current scope,
-///         else global by name.</item>
-///   <item>Binary, unary, update, logical (with short-circuit jumps).</item>
-///   <item>Conditional (ternary) via JumpIfFalse + Jump.</item>
-///   <item>Assignment to identifier or member.</item>
-///   <item>Property access (dot + computed).</item>
-///   <item>Call expressions.</item>
-///   <item>Statements: ExpressionStatement, BlockStatement, VariableDeclaration,
-///         IfStatement, WhileStatement, ReturnStatement (function compiles to
-///         a separate sub-chunk in M3-04; for now Return at top-level halts).</item>
-/// </list>
-/// <para>
-/// Out of scope (queued as follow-ups):
-/// </para>
-/// <list type="bullet">
-///   <item>FunctionDeclaration sub-chunks + closures (M3-04 VM territory).</item>
-///   <item>TryStatement (M3-05).</item>
-///   <item>SwitchStatement (M3-05).</item>
-///   <item>ForIn/ForOf iteration protocol (M3-04 VM needs iterator support).</item>
-/// </list>
+/// The compiler owns scope binding, Temporal Dead Zone checks, closures,
+/// class bodies, modules, direct eval, control flow, and source-position
+/// metadata. Runtime-only semantics stay in <see cref="JsVm"/> and the
+/// intrinsic helpers.
 /// </remarks>
 public sealed partial class JsCompiler
 {
@@ -112,12 +91,11 @@ public sealed partial class JsCompiler
     /// of the same captured name reuse one upvalue slot.</summary>
     private readonly Dictionary<string, int> _upvalueByName = new(StringComparer.Ordinal);
 
-    /// <summary>gap:closure-write-back — names declared in this compiler's
-    /// function that are referenced from inside one or more nested
-    /// functions. Computed by <see cref="CaptureAnalysis.Compute"/> before
-    /// any bytecode is emitted; consulted at every declaration site to
-    /// decide whether the slot uses <see cref="Starling.Js.Runtime.Cell"/>
-    /// storage.</summary>
+    /// <summary>Names declared in this compiler's function that are referenced
+    /// from inside one or more nested functions. Computed by
+    /// <see cref="CaptureAnalysis.Compute"/> before any bytecode is emitted.
+    /// Declaration sites use this to decide whether the slot needs
+    /// <see cref="Starling.Js.Runtime.Cell"/> storage.</summary>
     private HashSet<string> _capturedNames = new(StringComparer.Ordinal);
 
     /// <summary>§10.2.1.1 / §13.2.5 — synthetic binding name for the captured
@@ -301,12 +279,12 @@ public sealed partial class JsCompiler
         return true;
     }
 
-    /// <summary>gap:closure-write-back — is this name marked for shared-cell
-    /// storage in the current function?</summary>
+    /// <summary>Is this name marked for shared-cell storage in the current
+    /// function?</summary>
     private bool IsNameCaptured(string name) => _capturedNames.Contains(name);
 
-    /// <summary>gap:closure-write-back — convenience: did the compiler box
-    /// the local at this slot? Used by load/store emission sites.</summary>
+    /// <summary>Did the compiler box the local at this slot? Used by load and
+    /// store emission sites.</summary>
     private bool IsSlotCaptured(int slot) => _b.IsCaptured(slot);
 
     /// <summary>TDZ — is <paramref name="name"/> a lexical binding
@@ -528,9 +506,9 @@ public sealed partial class JsCompiler
         _capturedNames = new HashSet<string>(StringComparer.Ordinal);
     }
 
-    /// <summary>gap:closure-write-back — populate <see cref="_capturedNames"/>
-    /// for a function body. Run by the sub-compiler before any bytecode is
-    /// emitted, so declaration sites can pick the right opcode.</summary>
+    /// <summary>Populate <see cref="_capturedNames"/> for a function body. Run
+    /// by the sub-compiler before any bytecode is emitted, so declaration sites
+    /// can pick the right opcode.</summary>
     private void RunCaptureAnalysisForFunction(IReadOnlyList<Expression> parameters, IReadOnlyList<Statement> body)
     {
         _capturedNames = CaptureAnalysis.Compute(parameters, body);
@@ -573,10 +551,9 @@ public sealed partial class JsCompiler
                 _b.EmitU16(Opcode.DeclareEvalVar, _b.AddConstant(vn));
             }
         }
-        // gap:closure-write-back — pre-allocate captured top-level vars
-        // BEFORE we hoist function declarations, so a hoisted function's
-        // body resolves a captured name to the parent's local (cell) slot
-        // instead of falling through to LoadGlobal/StoreGlobal.
+        // Captured top-level vars are pre-allocated as cells before function
+        // hoisting, so a hoisted function body resolves a captured name to the
+        // parent's local cell instead of falling through to LoadGlobal/StoreGlobal.
         PreallocateCapturedVarBindings(p.Body);
         if (_directEvalLocalLexicals)
             HoistLexicalDeclarations(p.Body);
@@ -705,18 +682,16 @@ public sealed partial class JsCompiler
             _b.EmitU16(Opcode.StoreEvalVar, _b.AddConstant(name));
     }
 
-    /// <summary>gap:closure-write-back — emit the correct store opcode for
-    /// a local slot, accounting for whether the slot was promoted to a
-    /// cell.</summary>
+    /// <summary>Emit the correct store opcode for a local slot, accounting for
+    /// whether the slot was promoted to a cell.</summary>
     private void EmitStoreLocalSlot(int slot)
     {
         if (_b.IsCaptured(slot)) _b.EmitSlot(Opcode.StoreCellLocal, slot);
         else _b.EmitSlot(Opcode.StoreLocal, slot);
     }
 
-    /// <summary>gap:closure-write-back — emit the correct load opcode for
-    /// a local slot, accounting for whether the slot was promoted to a
-    /// cell.</summary>
+    /// <summary>Emit the correct load opcode for a local slot, accounting for
+    /// whether the slot was promoted to a cell.</summary>
     private void EmitLoadLocalSlot(int slot)
     {
         if (_b.IsCaptured(slot)) _b.EmitSlot(Opcode.LoadCellLocal, slot);
@@ -772,13 +747,12 @@ public sealed partial class JsCompiler
         if (upvalues.Count > 65535)
             throw new NotSupportedException("more than 65535 captured variables not supported");
 
-        // gap:closure-write-back — push the captured cell (not its value)
-        // so that the new closure aliases the same shared cell that the
-        // owning function reads and writes. Parent local slots already
-        // hold the cell as a JsValue (allocated by InitCellLocal /
-        // PromoteParamCell), so a plain LoadLocal pushes the cell. Parent
-        // upvalues are dereferenced by the default LoadUpvalue, so we
-        // need LoadUpvalueCell to push the cell intact.
+        // Push the captured cell, not its value, so the new closure aliases the
+        // same shared cell that the owning function reads and writes. Parent
+        // local slots already hold the cell as a JsValue (allocated by
+        // InitCellLocal / PromoteParamCell), so a plain LoadLocal pushes the
+        // cell. Parent upvalues are dereferenced by the default LoadUpvalue, so
+        // we need LoadUpvalueCell to push the cell intact.
         foreach (var u in upvalues)
         {
             if (u.IsLocalCapture)
@@ -844,17 +818,16 @@ public sealed partial class JsCompiler
         // wp:M3-81 — a function declaration is never an arrow, so its parameter
         // default region is an initializer context for the eval ContainsArguments rule.
         BindFunctionParameters(fd.Params, markInitializer: true);
-        // gap:closure-write-back — captured `var` bindings must exist as
-        // locals BEFORE we compile any nested function body that might
-        // resolve them as upvalues. Pre-allocate slots for every captured
-        // var in this function's body, and emit InitCellLocal so the slot
-        // already holds a Cell when an inner closure is constructed.
+        // Captured `var` bindings must exist as locals before we compile any
+        // nested function body that might resolve them as upvalues. Pre-allocate
+        // slots for every captured var in this function's body, and emit
+        // InitCellLocal so the slot already holds a Cell when an inner closure is
+        // constructed.
         PreallocateCapturedVarBindings(fd.Body.Body);
-        // gap:closure-write-back — function-declarations declared inside a
-        // function body are hoisted to the top of the function per §13.2.1
-        // and §14.1.18 (function-scoped). Without this, an inner
-        // `function inner() {...}` would be silently dropped, breaking
-        // closure tests like `function outer(){ var x=0; function inner(){x=5} inner(); return x }`.
+        // Function declarations inside a function body are hoisted to the top
+        // of the function per §13.2.1 and §14.1.18. Without this, an inner
+        // `function inner() {...}` would be silently dropped, breaking closure
+        // tests like `function outer(){ var x=0; function inner(){x=5} inner(); return x }`.
         HoistFunctionDeclarations(fd.Body.Body);
         // Temporal Dead Zone — instantiate top-level let/const before we decide
         // whether to synthesize `arguments`, so a real lexical binding named
@@ -886,11 +859,11 @@ public sealed partial class JsCompiler
         if (isAsync || isGenerator) _b.Emit(Opcode.PrologueEnd);
     }
 
-    /// <summary>gap:closure-write-back — walk this function's body and
-    /// pre-allocate local slots for every <c>var</c>/<c>let</c>/<c>const</c>
-    /// binding whose name is captured by a nested function. Captured slots
-    /// are also initialized to a Cell (with undefined) immediately, so a
-    /// nested closure constructed during hoisting can capture the cell.
+    /// <summary>Walk this function's body and pre-allocate local slots for
+    /// every <c>var</c>, <c>let</c>, and <c>const</c> binding whose name is
+    /// captured by a nested function. Captured slots are also initialized to a
+    /// Cell immediately, so a nested closure built during hoisting can capture
+    /// the cell.
     /// </summary>
     /// <remarks>
     /// Non-captured locals stay unallocated here — they're declared at
@@ -1343,7 +1316,7 @@ public sealed partial class JsCompiler
             {
                 var slot = _b.ReserveLocal();
                 _scopes[^1][idParam.Name] = slot;
-                // gap:closure-write-back — catch bindings can be captured too.
+                // Catch bindings can be captured too.
                 if (IsNameCaptured(idParam.Name))
                 {
                     _b.MarkCaptured(slot);
@@ -2719,11 +2692,9 @@ public sealed partial class JsCompiler
     }
 
     /// <summary>
-    /// Arrow functions desugar to a regular function for compilation. Their
-    /// only semantic differences (lexical <c>this</c> + no <c>arguments</c>)
-    /// are wired through closure analysis in B1b-2 when class methods land.
-    /// Until then, the body is compiled identically and <c>this</c> rebinding
-    /// is a known limitation tracked in tests.
+    /// Emit an arrow function body. Arrows compile as ordinary function chunks,
+    /// then closure analysis captures lexical <c>this</c> and the compiler marks
+    /// the chunk so the VM does not create its own <c>arguments</c> binding.
     /// </summary>
     private void EmitArrowFunction(ArrowFunctionExpression arrow)
     {
@@ -2901,7 +2872,7 @@ public sealed partial class JsCompiler
         }
         if (TryResolveUpvalue(name, out var upIdx))
         {
-            // gap:closure-write-back — every upvalue is a Cell now, so
+            // Every upvalue is a Cell, so
             // LoadUpvalue dereferences it transparently. TDZ — a captured
             // lexical binding from an enclosing scope checks the sentinel.
             _b.EmitUpvalue(IsLexicalUpvalue(name)
@@ -3034,7 +3005,7 @@ public sealed partial class JsCompiler
                 EmitIdStore(id.Name, needsTdzCheck: false);
                 return;
             }
-            // gap:closure-write-back — try local first, then upvalue, then global.
+            // Try local first, then upvalue, then global.
             if (TryResolveLocal(id.Name, out var slot))
             {
                 // TDZ — the load checks the sentinel (throws if read before
@@ -3288,7 +3259,7 @@ public sealed partial class JsCompiler
                 EmitNamedEvaluation(a.Value, id.Name);
             }
             _b.Emit(Opcode.Dup); // assignment is an expression — leaves value on stack
-            // gap:closure-write-back — assigning to a captured upvalue must
+            // Assigning to a captured upvalue must
             // route through the shared cell; assignment to a captured local
             // routes through StoreCellLocal.
             // TDZ — a write to a lexical binding before initialization throws.
@@ -3906,7 +3877,7 @@ public sealed partial class JsCompiler
         // initializer context for the eval ContainsArguments rule; an arrow's own
         // parameter list is not (arrows have no own `arguments` binding).
         sub.BindFunctionParameters(fe.Params, markInitializer: !isArrow);
-        // gap:closure-write-back — pre-allocate captured vars as cell slots
+        // Pre-allocate captured vars as cell slots
         // BEFORE hoisting, so a hoisted inner function that writes an outer var
         // resolves it to the parent's cell slot rather than LoadGlobal/Store-
         // Global. Mirrors EmitProgram and the class-method body paths.
@@ -4267,7 +4238,7 @@ public sealed partial class JsCompiler
             if (param is Identifier id)
             {
                 _scopes[^1][id.Name] = argSlots[i];
-                // gap:closure-write-back — if the parameter is captured by a
+                // If the parameter is captured by a
                 // nested function, promote its argument value into a Cell so
                 // writes from the nested function propagate back.
                 if (IsNameCaptured(id.Name))
@@ -4421,7 +4392,7 @@ public sealed partial class JsCompiler
                 {
                     var slot = _b.ReserveLocal();
                     scope[id.Name] = slot;
-                    // gap:closure-write-back — captured bindings use a Cell.
+                    // Captured bindings use a Cell.
                     if (IsNameCaptured(id.Name))
                     {
                         _b.MarkCaptured(slot);
@@ -4559,7 +4530,7 @@ public sealed partial class JsCompiler
 
     private void StoreBindingIdentifier(string name)
     {
-        // gap:closure-write-back — captured-local writes route through the cell.
+        // Captured-local writes route through the cell.
         if (TryResolveLocal(name, out var slot))
         {
             // §13.15.2 — a write to a const local outside its own initializer is

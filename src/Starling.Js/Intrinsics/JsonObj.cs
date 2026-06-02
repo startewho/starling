@@ -11,18 +11,17 @@ namespace Starling.Js.Intrinsics;
 /// indent (number or string), <c>toJSON</c>, and cycle detection.
 /// </summary>
 /// <remarks>
-/// The parser is a hand-written recursive-descent over the input string. We
-/// deliberately don't lean on <c>System.Text.Json</c> because its grammar
-/// admits things RFC 8259 forbids and rejects things ECMAScript requires
-/// (e.g. number lexicals diverge).
+/// The parser is a recursive descent parser over the input string.
+/// <c>System.Text.Json</c> is not used because its grammar differs from
+/// ECMAScript JSON in edge cases such as number tokens.
 /// </remarks>
 public static class JsonObj
 {
     /// <summary>
     /// Marker subclass identifying an "array-shaped" object produced by
     /// JSON parsing. JSON.stringify uses this to decide between array and
-    /// object serialization paths. A future B2-4 will replace this with the
-    /// real <c>JsArray</c> type.
+    /// object serialization paths. <c>JSON.stringify</c> also recognizes real
+    /// <see cref="JsArray"/> instances created outside JSON parsing.
     /// </summary>
     internal sealed class JsonArray : JsObject
     {

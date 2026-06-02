@@ -1,9 +1,8 @@
 namespace Starling.Js.Runtime;
 
 /// <summary>
-/// gap:closure-write-back (wp:M3-04c2). A shared, mutable storage box for a
-/// JS binding that is captured by one or more nested functions. Reads and
-/// writes from any function that holds a reference to the same
+/// Shared mutable storage for a JS binding captured by one or more nested
+/// functions. Reads and writes from any function that holds a reference to the same
 /// <see cref="Cell"/> see each other immediately — this is what makes a JS
 /// closure a live binding rather than a snapshot.
 /// </summary>

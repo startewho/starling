@@ -22,7 +22,7 @@ namespace Starling.Js.Modules;
 /// binding of each module; an imported name reuses the exporting module's cell.
 /// </para>
 /// <para>
-/// <b>Top-level await (wp:M3-03b).</b> A module whose body uses top-level
+/// <b>Top-level await.</b> A module whose body uses top-level
 /// <c>await</c> (or that imports such a module) evaluates asynchronously: its
 /// body is an <see cref="JsFunctionKind.Async"/> function that suspends on each
 /// <c>await</c> and returns a Promise. <see cref="Evaluate"/> waits for a
@@ -32,7 +32,7 @@ namespace Starling.Js.Modules;
 /// synchronously from the host's perspective. Non-TLA graphs keep the
 /// synchronous fast path unchanged. <see cref="EvaluateToPromise"/> is the
 /// reusable "evaluate to a Promise" entry that dynamic <c>import()</c>
-/// (wp:M3-03c) builds on. <c>import.meta</c> is out of scope for this slice.
+/// builds on. <c>import.meta</c> is populated by the loader on demand.
 /// </para>
 /// </remarks>
 public sealed class ModuleLoader
