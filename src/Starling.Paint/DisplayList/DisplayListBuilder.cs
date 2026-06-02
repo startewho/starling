@@ -135,11 +135,17 @@ public sealed class DisplayListBuilder
         Func<Box, bool> isLayerBoundary,
         bool suppressRootTransform,
         Func<Box, ComputedStyle?>? styleOverride = null,
-        IImageResolver? images = null)
+        IImageResolver? images = null,
+        Func<Element, (double X, double Y)>? scrollOffsets = null)
     {
         ArgumentNullException.ThrowIfNull(sliceRoot);
         ArgumentNullException.ThrowIfNull(isLayerBoundary);
         var list = new DisplayList();
+        // Per-container scroll offsets so a slice that contains an overflow:scroll
+        // subtree paints it at the user-scrolled position (the Visit recursion
+        // brackets the scrolled children in a -offset transform). Lets the zero-copy
+        // surface path render inner-scrolled pages instead of declining to readback.
+        _scrollOffsets = scrollOffsets;
         var slice = new LayerSlice(sliceRoot, isLayerBoundary);
         if (suppressRootTransform)
         {

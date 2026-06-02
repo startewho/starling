@@ -26,7 +26,10 @@ internal sealed class PageRendererHost : IDisposable
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
     private readonly CachedPageRenderer _cached;
-    private readonly LayerCacheStore _layerCaches;
+
+    // Tile grid for the persistent per-layer compositor cache,
+    // so we don't have to re-rasterize every layer every frame when the cache is valid.
+    private readonly TileGrid _tiles;
     private bool _disposed;
 
     public PageRendererHost(IDiagnostics? diagnostics = null)
@@ -34,7 +37,7 @@ internal sealed class PageRendererHost : IDisposable
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
         _cached = new CachedPageRenderer(_backend, _diag);
-        _layerCaches = new LayerCacheStore(_diag);
+        _tiles = new TileGrid(_diag);
     }
 
     /// <summary>
@@ -58,7 +61,7 @@ internal sealed class PageRendererHost : IDisposable
     public void ResetForNavigation()
     {
         _cached.Invalidate();
-        _layerCaches.Clear();
+        _tiles.Clear();
     }
 
     /// <summary>
@@ -117,17 +120,18 @@ internal sealed class PageRendererHost : IDisposable
 
         try
         {
-            // Persistent per-layer caches (keyed by element) let a transform/
-            // opacity-only frame re-blit each layer from cache instead of
-            // re-rasterizing (Phase 5); the transform/opacity are re-sampled into
-            // the rebuilt tree and applied at composite time. Each layer is keyed
-            // by its slice content hash (LTF-02), so a relayout that bumped the
-            // page version no longer busts a layer whose content is unchanged.
-            var tree = new LayerTreeBuilder(styleOverride, images, _diag, _layerCaches.CacheFor, isAnimatingLayerRoot).Build(root);
+            // The persistent session tile grid (keyed by layer id + tile position)
+            // lets a transform/opacity-only frame re-blit each layer's tiles from
+            // cache instead of re-rasterizing; transform/opacity
+            // are re-sampled into the rebuilt tree and applied at composite time. Only
+            // tiles intersecting the viewport are rastered, so a long page never
+            // rasters its full height and no tile exceeds the GPU texture limit.
+            var tree = new LayerTreeBuilder(styleOverride, images, _diag,
+                isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor).Build(root);
             var region = viewport ?? new LayoutRect(0, 0,
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
-            var compositor = new Compositor(_backend, _diag);
+            var compositor = new Compositor(_backend, _diag, _tiles);
             return compositor.Render(tree, region, scale);
         }
         catch (Exception ex)
