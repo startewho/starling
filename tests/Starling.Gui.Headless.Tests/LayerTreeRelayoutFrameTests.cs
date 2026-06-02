@@ -32,7 +32,7 @@ public sealed class LayerTreeRelayoutFrameTests
 
         var doc = HtmlParser.Parse(
             "<body style=\"margin:0\">" +
-            $"<div id=spin style=\"{SpinBase}transform:rotate(0deg)\"></div>" +
+            $"<div id=spin style=\"{SpinBase}transform:rotate(15deg)\"></div>" +
             "<div id=label style=\"position:absolute;left:0;top:150px\">frame 0</div>" +
             "</body>");
         var style = new StyleEngine();
@@ -47,13 +47,15 @@ public sealed class LayerTreeRelayoutFrameTests
             // A layout-relevant mutation (the status-text write the demo makes) —
             // this is what forced the old gate onto the flat path every frame.
             if (label.FirstChild is Text t) t.Data = "frame " + f;
-            // A composite-time, transform-only change on the promoted layer.
-            spin.SetAttribute("style", SpinBase + $"transform:rotate({f * 15}deg)");
+            // A composite-time, transform-only change on the promoted layer. Start
+            // non-zero so the layer is promoted (a stacking context) from the first
+            // frame — rotate(0deg) is the identity and would only promote later.
+            spin.SetAttribute("style", SpinBase + $"transform:rotate({(f + 1) * 15}deg)");
 
             var root = engine.LayoutDocument(doc, size);
             host.RenderViaLayerTree(root, 1f).Dispose();
 
-            var hits = diag.CountOf("paint.cache.hit");
+            var hits = diag.CountOf("paint.tile.cache_hit");
             if (f == 0)
             {
                 hits.Should().Be(0, "the first frame seeds every layer's cache");

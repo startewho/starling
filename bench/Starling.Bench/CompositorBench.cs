@@ -57,13 +57,12 @@ public class CompositorBench
         _root = new LayoutEngine(style, measurer).LayoutDocument(doc, Viewport);
 
         _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
-        _compositor = new Compositor(_backend);
-
-        // Warm path: one persistent tree whose per-layer caches are keyed by slice
-        // content hash (LTF-02). Seed them once so every WarmCache call serves
-        // every layer from cache — the steady-state animation frame.
-        var warmStore = new LayerCacheStore();
-        _warmTree = new LayerTreeBuilder(cacheFor: warmStore.CacheFor).Build(_root);
+        // Warm path: a persistent tile grid keyed by layer id + tile position
+        // Seed it once so every WarmCache call serves every tile from cache —
+        // the steady-state animation frame.
+        var warmTiles = new TileGrid();
+        _compositor = new Compositor(_backend, null, warmTiles);
+        _warmTree = new LayerTreeBuilder(layerIdFor: warmTiles.LayerIdFor).Build(_root);
         using (_compositor.Render(_warmTree, ViewportRect, Scale)) { }
     }
 
@@ -80,12 +79,13 @@ public class CompositorBench
     [Benchmark]
     public int Composite_ColdCache()
     {
-        // Cold path: a fresh tree + store every call, so no layer's content hash
-        // is cached and each re-rasters through the WebGPU backend before the
-        // composite blend — the worst case the per-layer cache exists to avoid.
-        var coldStore = new LayerCacheStore();
-        var coldTree = new LayerTreeBuilder(cacheFor: coldStore.CacheFor).Build(_root);
-        using var bmp = _compositor.Render(coldTree, ViewportRect, Scale);
+        // Cold path: a fresh tile grid + tree every call, so no tile is cached and
+        // each re-rasters through the WebGPU backend before the composite blend —
+        // the worst case the tile cache exists to avoid.
+        var coldTiles = new TileGrid();
+        var coldComp = new Compositor(_backend, null, coldTiles);
+        var coldTree = new LayerTreeBuilder(layerIdFor: coldTiles.LayerIdFor).Build(_root);
+        using var bmp = coldComp.Render(coldTree, ViewportRect, Scale);
         return bmp.Width;
     }
 }

@@ -52,7 +52,7 @@ public sealed class LayerPromotionTests
         new LayerTreeBuilder().Build(root).Children.Should().BeEmpty();
 
         // With the predicate promoting it, the div becomes a child layer.
-        var promoted = new LayerTreeBuilder(null, null, null, null, box => ReferenceEquals(box.Element, el)).Build(root);
+        var promoted = new LayerTreeBuilder(null, null, null, isAnimatingLayerRoot: box => ReferenceEquals(box.Element, el)).Build(root);
         promoted.Children.Should().HaveCount(1, "the animating div is promoted to its own layer");
     }
 
@@ -110,7 +110,7 @@ public sealed class LayerPromotionTests
 
         // Layer path: the predicate promotes the spinning div; its slice is upright
         // and the composite applies the rotation.
-        var tree = new LayerTreeBuilder(styleOverride, null, null, null, promote).Build(root);
+        var tree = new LayerTreeBuilder(styleOverride, null, null, isAnimatingLayerRoot: promote).Build(root);
         tree.Children.Should().HaveCount(1, "the predicate promotes the spinning div");
         tree.Children[0].Transform.IsIdentity.Should().BeFalse("the sampled rotation rides on the layer transform");
         using var layered = new CompositorEngine(backend).Render(tree, new LayoutRect(0, 0, W, H), scale);

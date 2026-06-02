@@ -76,6 +76,13 @@ public sealed class InMemoryLogSink : ILoggerProvider
         return new Subscription(this, channel);
     }
 
+    /// <summary>
+    /// Append an externally-sourced log record (e.g. decoded from OTLP) into
+    /// the ring buffer and fan it out to subscribers. Same path as the local
+    /// <see cref="ILogger"/> capture.
+    /// </summary>
+    public void Ingest(LogRecord record) => Append(record);
+
     internal void Append(LogRecord record)
     {
         lock (_gate)

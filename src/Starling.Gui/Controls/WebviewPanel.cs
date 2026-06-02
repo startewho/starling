@@ -72,6 +72,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private GpuSurfacePresenter? _presenter;
     private readonly PageSurfaceHost? _pageSurfaceHost;
     private bool _useSurface;
+
+    // The zero-copy GPU surface is the ONE TRUE present path whenever a GPU is
+    // available. The readback bitmap path (_pageImage + RenderPageBitmap) is the
+    // LEGACY FALLBACK — used only when there is no GPU adapter / surface, or when
+    // a developer explicitly opts in with STARLING_FORCE_READBACK=1 (for debugging
+    // the GPU path or a driver issue). It must never be the steady-state path on a
+    // GPU host. See docs/rendering-present-paths.md.
+    private static readonly bool s_forceReadback =
+        Environment.GetEnvironmentVariable("STARLING_FORCE_READBACK") == "1";
     // Set while a batch of overlay/page mutations runs (notably ShowPage) so the
     // surface path coalesces them into ONE present at the end instead of firing a
     // full layer-tree present per overlay change. Without it a single relayout tick
@@ -547,10 +556,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             return;
         }
 
-        // Readback fallback. Hide the GPU surface overlay first — it's a native view
-        // pinned on top, so a stale frame left visible would occlude the bitmap (this
-        // is the steady state for a page with overflow:scroll containers, which the
-        // surface path can't yet offset and so always declines).
+        // Readback fallback — used ONLY when there is no GPU surface (no adapter, or
+        // surface setup failed). It is the legacy path; the zero-copy GPU surface is
+        // the one true present path whenever a GPU is available (overflow:scroll
+        // offsets are now threaded into it, so it no longer declines for scrolled
+        // pages). Hide the GPU surface overlay first — it's a native view pinned on
+        // top, so a stale frame left visible would occlude the bitmap.
         if (_pageSurfaceHost is { IsVisible: true }) _pageSurfaceHost.IsVisible = false;
         if (!_pageImage.IsVisible) _pageImage.IsVisible = true;
 
@@ -573,6 +584,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private void OnSurfaceReady()
     {
         if (_pageSurfaceHost is null || _nativeRenderer is null) return;
+
+        // Developer opt-in: STARLING_FORCE_READBACK=1 keeps the legacy readback path
+        // even on a GPU host. Off by default — the zero-copy surface is the path.
+        if (s_forceReadback)
+        {
+            _diag.Log(DiagLevel.Info, "gui",
+                "STARLING_FORCE_READBACK=1 — using the legacy readback present path (GPU surface disabled).");
+            return;
+        }
+
         var layer = _pageSurfaceHost.MetalLayerPtr;
         if (layer == 0) return;
 
@@ -580,7 +601,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             // Build the GPU device + swapchain bound to the host's CAMetalLayer. Null
             // means no adapter — keep the readback path.
-            _presenter = GpuSurfacePresenter.CreateForMetalLayer(layer);
+            _presenter = GpuSurfacePresenter.CreateForMetalLayer(layer, _diag);
             if (_presenter is null)
             {
                 _diag.Log(DiagLevel.Info, "gui", "GPU page surface unavailable; using readback present path");
@@ -629,11 +650,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             Activity.Current = null;
 
         var (styleOverride, scrollLookup) = BuildRenderInputs();
-        // The layer-tree compositor does not yet thread per-container scroll offsets
-        // (overflow:scroll subtrees); a page using them falls back to the readback
-        // path, which handles offsets correctly. Mirrors RenderPageBitmap's gating.
-        if (scrollLookup is not null)
-            return false;
 
         var overlays = CollectSurfaceOverlays();
         bool ok;
@@ -641,10 +657,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             // Present at the current viewport: the presenter (re)configures its
             // swapchain to ceil(rect × scale) device px as needed, so no explicit
-            // Resize call is required.
+            // Resize call is required. The scroll lookup threads per-container
+            // (overflow:scroll) offsets into the layer tree so inner-scrolled pages
+            // present on the zero-copy surface instead of dropping to readback.
             using (_diag.Span("gui", "render"))
                 ok = _nativeRenderer.Present(_currentPage.Root, _presenter, (float)_currentScale,
-                    styleOverride, _currentPage.ImageResolver, rect, IsElementAnimatingLayerRoot, overlays);
+                    styleOverride, _currentPage.ImageResolver, rect, IsElementAnimatingLayerRoot, overlays,
+                    scrollLookup);
         }
         catch (Exception ex)
         {
@@ -1444,6 +1463,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // prepare_anim / render) so a trace shows where a laggy animation frame
         // spends its time. The inner "gui.render" span lives in RenderPageBitmap.
         using var _tick = _diag.Span("gui", "live.tick");
+        // End-to-end frame time for the daemon's frame report (overrun rate, p99,
+        // fps). Emitted on the normal completion path below.
+        var frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
         var scripting = page.Scripting;
         if (scripting is not null)
@@ -1522,6 +1544,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _liveTimer.Stop();
             _boundScripting = null;
         }
+
+        EmitFrameTime(frameStart);
+    }
+
+    // Records this frame's end-to-end time as gui.frame.time_ms and bumps the
+    // budget-overrun counter when it blew the 60fps budget. The telemetry daemon
+    // turns these into the frame-time distribution + overrun rate and correlates
+    // the spikes with the sampled CPU/RAM.
+    private const double FrameBudgetMs = 1000.0 / 60; // 16.667ms — the actual 60fps budget
+    private void EmitFrameTime(long startTimestamp)
+    {
+        var ms = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        _diag.Gauge(RenderMetrics.FrameTimeMs, ms);
+        if (ms > FrameBudgetMs) _diag.Counter(RenderMetrics.FrameBudgetOverrun, 1);
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,

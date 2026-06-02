@@ -46,11 +46,12 @@ public sealed class LayerMutationIsolationTests
     [TestMethod]
     public void Mutated_subtree_isolates_so_the_base_layer_serves_from_cache()
     {
-        const int W = 240, H = 200;
+        const int W = 240, H = 400;
         const float scale = 1f;
         // An absolutely-positioned status line over a static base. Promoting it
         // keeps its text out of the base slice, so a text-only change leaves the
-        // base hash stable.
+        // base hash stable. The viewport is tall enough to contain both layers so
+        // the tile path rasters them (it culls tiles outside the viewport, LTF/M12-05).
         var html =
             "<body style=\"margin:0\">" +
             "<div style=\"width:240px;height:200px;background-color:#dde3ff\">base content</div>" +
@@ -64,8 +65,8 @@ public sealed class LayerMutationIsolationTests
 
         using var inner = new ImageSharpBackend(FontResolver.Default, webFonts: null);
         using var counting = new CountingBackend(inner);
-        var store = new LayerCacheStore();
-        var compositor = new CompositorEngine(counting);
+        var tiles = new TileGrid();
+        var compositor = new CompositorEngine(counting, null, tiles);
 
         // The status element is the promoted (recently-mutated) layer.
         bool Promote(Box box) => ReferenceEquals(box.Element, status);
@@ -74,7 +75,8 @@ public sealed class LayerMutationIsolationTests
         {
             FirstText(status)!.Data = f % 2 == 0 ? "running 16 ms" : "running 32 ms";
             var root = engine.LayoutDocument(doc, size);
-            var tree = new LayerTreeBuilder(null, null, null, store.CacheFor, Promote).Build(root);
+            var tree = new LayerTreeBuilder(null, null, null, isAnimatingLayerRoot: Promote,
+                layerIdFor: tiles.LayerIdFor).Build(root);
             tree.Children.Should().HaveCount(1, "the status line is promoted to its own layer");
 
             var before = counting.RenderCount;

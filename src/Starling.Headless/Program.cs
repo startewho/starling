@@ -31,6 +31,9 @@ internal static class Program
         // When STARLING_HEADLESS_MCP_URL is set we also build the in-memory
         // ring-buffer sinks so the MCP server can hand spans/logs/metrics back
         // to driving agents.
+        // If STARLING_TELEMETRY_DAEMON is set, route OTLP to the standalone daemon.
+        OtelBootstrap.ConfigureDaemonExportFromEnv();
+
         var mcpUrl = ResolveMcpUrl();
         var withInMemorySinks = mcpUrl is not null;
         using var telemetry = OtelBootstrap.Initialize("starling-headless", withInMemorySinks);

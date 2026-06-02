@@ -54,7 +54,7 @@ agent sees the state.
 ```
 starling/
 ├── AGENTS.md                  ← you are here
-├── .mcp.json                  ← Aspire Model Context Protocol wiring (`aspire agent mcp`)
+├── .mcp.json                  ← Model Context Protocol wiring for Aspire and Starling
 ├── README.md                  ← human-facing intro
 ├── browser-plan/              ← the design (immutable except by deliberate edit)
 │   ├── 00_INDEX.md            ← start here for design context
@@ -138,7 +138,7 @@ Flags win over `STARLING_JS_ENGINE` and `STARLING_PAINT_BACKEND`.
 
 There are three ways in, listed in the order you should reach for them.
 
-**1. MCP tools (preferred — already wired in `.mcp.json` via `aspire agent mcp`).**
+**1. Aspire MCP tools (preferred — already wired in `.mcp.json` via `aspire agent mcp`).**
 No setup; just call them. The drill-down path:
 
 - `mcp__aspire__list_traces` — list distributed traces (trace IDs, the resources
@@ -175,12 +175,13 @@ programmatically, hit the dashboard directly (auth via the dashboard API token):
 `GET /api/telemetry/traces/{traceId}` for one full trace. The CLI and MCP tools
 are wrappers over these.
 
-Starling also exposes its own Model Context Protocol (MCP) server. The GUI
-serves browser-control tools from `src/Starling.Gui/Mcp/` plus telemetry tools
-from `src/Starling.Mcp/Telemetry/`. Direct GUI runs default to
-`http://127.0.0.1:3077/mcp`. AppHost sets `STARLING_MCP_URL` to
-`http://127.0.0.1:3078/mcp`. Headless only starts its telemetry MCP server when
-`STARLING_HEADLESS_MCP_URL` is set.
+Starling also exposes its own Model Context Protocol (MCP) server. The repo
+`.mcp.json` registers the AppHost GUI endpoint as `starling` at
+`http://127.0.0.1:3078/mcp`. The GUI serves browser-control tools from
+`src/Starling.Gui/Mcp/` plus telemetry tools from `src/Starling.Mcp/Telemetry/`.
+Direct GUI runs default to `http://127.0.0.1:3077/mcp`. AppHost sets
+`STARLING_MCP_URL` to `http://127.0.0.1:3078/mcp`. Headless only starts its
+telemetry MCP server when `STARLING_HEADLESS_MCP_URL` is set.
 
 ## Spec coverage & the bug-fix workflow
 

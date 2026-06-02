@@ -32,14 +32,24 @@ public sealed class InMemoryMeterSink : IDisposable
     private readonly object _gate = new();
     private int _head;
     private int _count;
-    private readonly MeterListener _listener;
+    private readonly MeterListener? _listener;
     private readonly HashSet<string> _meters;
     private readonly ConcurrentBag<Channel<MeterRecord>> _subscribers = [];
     private bool _disposed;
 
-    public InMemoryMeterSink(params string[] meters)
+    public InMemoryMeterSink(params string[] meters) : this(attachListener: true, meters) { }
+
+    /// <summary>
+    /// Construct the sink, optionally skipping the in-process
+    /// <see cref="MeterListener"/>. Pass <paramref name="attachListener"/> =
+    /// false when measurements are fed exclusively via <see cref="Ingest"/>
+    /// (e.g. the telemetry daemon receiving metrics over OTLP).
+    /// </summary>
+    public InMemoryMeterSink(bool attachListener, params string[] meters)
     {
         _meters = new HashSet<string>(meters, StringComparer.Ordinal);
+        if (!attachListener) return;
+
         _listener = new MeterListener
         {
             InstrumentPublished = (instrument, listener) =>
@@ -104,6 +114,17 @@ public sealed class InMemoryMeterSink : IDisposable
             value,
             tagList);
 
+        Store(record);
+    }
+
+    /// <summary>
+    /// Append an externally-sourced measurement (e.g. decoded from OTLP) into
+    /// the ring buffer and fan it out to subscribers.
+    /// </summary>
+    public void Ingest(MeterRecord record) => Store(record);
+
+    private void Store(MeterRecord record)
+    {
         lock (_gate)
         {
             _buffer[_head] = record;
@@ -118,7 +139,7 @@ public sealed class InMemoryMeterSink : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _listener.Dispose();
+        _listener?.Dispose();
         foreach (var subscriber in _subscribers)
             subscriber.Writer.TryComplete();
     }

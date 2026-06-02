@@ -30,30 +30,35 @@ internal sealed class LayerTreeBuilder
     private readonly Func<Box, ComputedStyle?>? _styleOverride;
     private readonly IImageResolver? _images;
     private readonly IDiagnostics? _diag;
-    // Supplies each layer's picture cache. When set (the live compositing
-    // session), it returns a cache persisted across frames keyed by the layer's
-    // element, so a transform/opacity-only change re-blits from cache (Phase 5).
-    // Null for one-shot renders, where each layer owns a fresh cache.
-    private readonly Func<Box, Cache.PictureCache>? _cacheFor;
     // Per-frame promotion predicate (LTF-01): an element that is actively
     // animating (or, via LTF-06, was just mutated) becomes a layer root even
     // with no static LayerHint. Evaluated every frame because animation
     // start/stop changes faster than layout runs, so it cannot be baked into the
     // layout-time Hints. Null for one-shot renders / tests with no live loop.
     private readonly Func<Box, bool>? _isAnimatingLayerRoot;
+    // Stable cross-frame id per layer (from its element), used as the tile cache key's
+    // layer component. Null for one-shot renders / tests (id 0 → no reuse).
+    private readonly Func<Box, long>? _layerIdFor;
+    // Per-container scroll offsets (overflow:scroll|auto), keyed by element. Threaded
+    // into each layer's slice so the zero-copy surface path renders inner-scrolled
+    // content correctly — the same offsets the readback path's DisplayListBuilder
+    // applies. Null when the page has no scrolled containers.
+    private readonly Func<Starling.Dom.Element, (double X, double Y)>? _scrollOffsets;
 
     public LayerTreeBuilder(
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         IDiagnostics? diagnostics = null,
-        Func<Box, Cache.PictureCache>? cacheFor = null,
-        Func<Box, bool>? isAnimatingLayerRoot = null)
+        Func<Box, bool>? isAnimatingLayerRoot = null,
+        Func<Box, long>? layerIdFor = null,
+        Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
     {
         _styleOverride = styleOverride;
         _images = images;
         _diag = diagnostics;
-        _cacheFor = cacheFor;
         _isAnimatingLayerRoot = isAnimatingLayerRoot;
+        _layerIdFor = layerIdFor;
+        _scrollOffsets = scrollOffsets;
     }
 
     /// <summary>
@@ -74,6 +79,10 @@ internal sealed class LayerTreeBuilder
     public CompositorLayer Build(BlockBox root)
     {
         ArgumentNullException.ThrowIfNull(root);
+        // Per-build span (paint.layertree.build). Firing every frame on a static
+        // page — especially for the chrome tree — confirms the layer tree + slices
+        // + content hash are rebuilt unconditionally instead of memoized.
+        using var span = _diag?.Span(RenderMetrics.PaintArea, RenderMetrics.LayerTreeBuildOp);
         // The root's parent content origin is the document origin (0,0). The
         // box's own Frame.X/Y is folded in by BuildLayerSlice.
         return BuildLayer(root, parentOriginX: 0, parentOriginY: 0);
@@ -104,7 +113,8 @@ internal sealed class LayerTreeBuilder
             IsLayerRoot,
             suppressRootTransform: hasTransform,
             _styleOverride,
-            _images);
+            _images,
+            _scrollOffsets);
 
         var bounds = UnionBounds(slice);
 
@@ -136,8 +146,8 @@ internal sealed class LayerTreeBuilder
         // layer re-blits from cache; only a real content change re-rasters it.
         var contentHash = DisplayListContentHash.Compute(slice);
 
-        return new CompositorLayer(slice, bounds, transform ?? Matrix2D.Identity, opacity, clip, ordered, _diag,
-            cache: _cacheFor?.Invoke(layerBox), contentHash: contentHash);
+        return new CompositorLayer(slice, bounds, transform ?? Matrix2D.Identity, opacity, clip, ordered,
+            contentHash: contentHash, layerId: _layerIdFor?.Invoke(layerBox) ?? 0);
     }
 
     /// <summary>
@@ -186,7 +196,7 @@ internal sealed class LayerTreeBuilder
                     continue;
             }
 
-            if (!TryItemBounds(item, out var local)) continue;
+            if (!DisplayItemBounds.TryGet(item, out var local)) continue;
             var aabb = TransformedAabb(local, transform);
             if (!any)
             {
@@ -204,55 +214,6 @@ internal sealed class LayerTreeBuilder
 
         return any ? new Rect(minX, minY, maxX - minX, maxY - minY) : Rect.Empty;
     }
-
-    private static bool TryItemBounds(DisplayItem item, out Rect bounds)
-    {
-        switch (item)
-        {
-            case FillRect f: bounds = f.Bounds; return true;
-            case FillGradient g: bounds = g.Bounds; return true;
-            case StrokeRect s: bounds = s.Bounds; return true;
-            case FillRoundedRect rf: bounds = rf.Bounds; return true;
-            case StrokeRoundedRect rs: bounds = rs.Bounds; return true;
-            case DrawBoxShadow sh:
-                // The painted shadow is the box grown by spread+blur, offset.
-                var pad = sh.Spread + sh.Blur;
-                bounds = new Rect(
-                    sh.Bounds.X + sh.OffsetX - pad,
-                    sh.Bounds.Y + sh.OffsetY - pad,
-                    sh.Bounds.Width + 2 * pad,
-                    sh.Bounds.Height + 2 * pad);
-                return true;
-            case DrawImage i: bounds = i.Bounds; return true;
-            case DrawText t:
-                // Glyph run sits on the baseline; cover ascent above and a small
-                // descent below so the AABB encloses the rasterized glyphs.
-                bounds = new Rect(t.X, t.Y - t.FontSize, EstimateTextWidth(t), t.FontSize * 1.3);
-                return true;
-            case DrawTextDecoration d:
-                // Decoration lines span the full glyph box (overline above,
-                // line-through mid, underline below the baseline).
-                bounds = new Rect(d.X, d.BaselineY - d.FontSize, d.Width, d.FontSize * 1.3);
-                return true;
-            case DrawTextShadow s:
-                // Offset + blurred copy of the glyph run.
-                bounds = new Rect(
-                    s.X + s.OffsetX - s.Blur,
-                    s.Y - s.FontSize + s.OffsetY - s.Blur,
-                    EstimateShadowWidth(s) + 2 * s.Blur,
-                    s.FontSize * 1.3 + 2 * s.Blur);
-                return true;
-            default:
-                bounds = Rect.Empty;
-                return false;
-        }
-    }
-
-    private static double EstimateTextWidth(DrawText t)
-        => t.Shaped is { } run && run.Advance > 0 ? run.Advance : t.Text.Length * t.FontSize * 0.6;
-
-    private static double EstimateShadowWidth(DrawTextShadow s)
-        => s.Shaped is { } run && run.Advance > 0 ? run.Advance : s.Text.Length * s.FontSize * 0.6;
 
     private static Rect TransformedAabb(Rect r, Matrix2D m)
     {
