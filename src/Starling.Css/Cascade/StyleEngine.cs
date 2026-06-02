@@ -197,43 +197,6 @@ public sealed class StyleEngine
             RegisterKeyframesFromSheet(remaining);
     }
 
-    /// <summary>True when <paramref name="selector"/> uses a pseudo-class whose
-    /// result depends on sibling position, descendant state, or type-relative
-    /// sibling scans that <see cref="SharingKey"/> does not encode. The sharing
-    /// cache applies this per candidate selector instead of disabling sharing
-    /// globally for the whole document.</summary>
-    private static bool SelectorUsesUnshareableSelectors(ComplexSelector selector)
-    {
-        foreach (var part in selector.Parts)
-            foreach (var simple in part.Compound.SimpleSelectors)
-                if (SimpleSelectorUsesUnshareableSelectors(simple))
-                    return true;
-        return false;
-    }
-
-    private static bool SelectorListUsesUnshareableSelectors(SelectorList list)
-    {
-        foreach (var complex in list.Selectors)
-            if (SelectorUsesUnshareableSelectors(complex))
-                return true;
-        return false;
-    }
-
-    private static bool SimpleSelectorUsesUnshareableSelectors(SimpleSelector simple)
-    {
-        if (simple is not PseudoClassSelector pc)
-            return false;
-        if (IsUnshareablePseudoClass(pc.Name))
-            return true;
-
-        return pc.Argument switch
-        {
-            SelectorList nested => SelectorListUsesUnshareableSelectors(nested),
-            NthArgument { OfSelector: { } of } => SelectorListUsesUnshareableSelectors(of),
-            _ => false,
-        };
-    }
-
     /// <summary>True if any selector in <paramref name="index"/> uses
     /// <c>:has()</c> or <c>:empty</c> (recursing into <c>:is()</c>/<c>:where()</c>/
     /// <c>:not()</c>/<c>:has()</c> arguments). Those make an element's match
@@ -293,15 +256,6 @@ public sealed class StyleEngine
         return false;
     }
 
-    private static bool IsUnshareablePseudoClass(string name) => name switch
-    {
-        "nth-child" or "nth-last-child" or "nth-of-type" or "nth-last-of-type"
-            or "last-child" or "only-child"
-            or "first-of-type" or "last-of-type" or "only-of-type"
-            or "has" or "empty" => true,
-        _ => false,
-    };
-
     /// <summary>
     /// Per-sheet cascade plan. Style rules are flattened through
     /// <c>@media</c>/<c>@supports</c>/<c>@container</c>/<c>@layer</c> and CSS
@@ -324,19 +278,6 @@ public sealed class StyleEngine
         public IReadOnlyList<RuleCondition> Conditions { get; } = conditions;
         public int SourceOrder { get; } = sourceOrder;
         public string? LayerPath { get; } = layerPath;
-    }
-
-    private enum RuleConditionKind
-    {
-        Media,
-        Supports,
-        Container,
-    }
-
-    private sealed class RuleCondition(RuleConditionKind kind, AtRule rule)
-    {
-        public RuleConditionKind Kind { get; } = kind;
-        public AtRule Rule { get; } = rule;
     }
 
     private static SheetIndex BuildSheetIndex(StyleSheet sheet, IDiagnostics diag, LayerOrder layerOrder)
@@ -552,8 +493,8 @@ public sealed class StyleEngine
     ///   overhead outweighs the work.</item>
     /// </list>
     /// Thread safety: <see cref="CascadeCache"/> uses ConcurrentDictionary
-    /// internally so concurrent <c>Set</c>/<c>SetShared</c> from worker threads
-    /// is safe. <c>Compute</c> itself is otherwise re-entrant — it reads
+    /// internally so concurrent element and shared writes from worker threads
+    /// are safe. <c>Compute</c> itself is otherwise re-entrant — it reads
     /// <c>_sheets</c>/<c>_sheetIndexes</c>/<c>_layerOrders</c> which are not
     /// mutated during cascade.
     /// </remarks>
@@ -659,44 +600,52 @@ public sealed class StyleEngine
             ? null
             : ComputeWithAncestors(parent, context, cache, ref elementsStyled);
 
-        // Style sharing: two elements with identical selector-relevant inputs
-        // produce identical cascade results. Build a signature from those
-        // inputs and consult the sharing cache before doing the real work.
+        // Style sharing: the key narrows likely matches. The stored selector
+        // profile must also match this element before the style can be reused.
         SharingKey? sharingKey = null;
-        if (cache is not null && CanShareStyle(element))
+        if (cache is not null)
         {
             sharingKey = BuildSharingKey(element, parentStyle);
-            if (cache.TryGetShared(sharingKey.Value, out var shared))
+            if (cache.TryGetSharedEntry(sharingKey.Value, out var shared)
+                && CanReuseSharedStyle(element, shared.Validation, context))
             {
-                cache.Set(element, shared);
+                cache.Set(element, shared.Style);
                 _diag.Counter("css.style_sharing.hit", 1);
-                return shared;
+                return shared.Style;
             }
         }
 
         elementsStyled++;
-        var computed = Compute(element, parentStyle, context);
+        var validation = sharingKey is null ? null : new List<SelectorValidationResult>();
+        var computed = Compute(element, parentStyle, context, validation);
         cache?.Set(element, computed);
         if (sharingKey is { } key)
         {
-            cache!.SetShared(key, computed);
+            cache!.SetSharedEntry(
+                key,
+                new SharedStyleEntry(computed, validation));
             _diag.Counter("css.style_sharing.miss", 1);
         }
         return computed;
     }
 
-    private bool CanShareStyle(Element element)
+    private bool CanReuseSharedStyle(
+        Element element,
+        IReadOnlyList<SelectorValidationResult>? validation,
+        SelectorMatchContext? context)
     {
-        foreach (var sheetIndex in _sheetIndexes.Values)
+        if (validation is null)
+            return false;
+
+        var matchContext = context ?? new SelectorMatchContext();
+        foreach (var result in validation)
         {
-            foreach (var entry in sheetIndex.Selectors.GetCandidates(element))
-            {
-                if (entry.PseudoElementTarget is not null)
-                    continue;
-                if (SelectorUsesUnshareableSelectors(entry.Selector))
-                    return false;
-            }
+            var matched = ConditionsMatch(result.Conditions, element)
+                && SelectorMatcher.Matches(result.Selector, element, matchContext);
+            if (matched != result.Matched)
+                return false;
         }
+
         return true;
     }
 
@@ -793,7 +742,11 @@ public sealed class StyleEngine
         return Compute(element, parentStyle: elementStyle, context: pseudoContext);
     }
 
-    private ComputedStyle Compute(Element element, ComputedStyle? parentStyle, SelectorMatchContext? context = null)
+    private ComputedStyle Compute(
+        Element element,
+        ComputedStyle? parentStyle,
+        SelectorMatchContext? context = null,
+        List<SelectorValidationResult>? validation = null)
     {
         context ??= new SelectorMatchContext();
         var allCandidates = new Dictionary<PropertyId, List<CascadedValue>>();
@@ -816,6 +769,7 @@ public sealed class StyleEngine
                     allCandidates,
                     customCandidates,
                     context,
+                    validation,
                     ref order,
                     layerOrder);
         }
@@ -1158,6 +1112,7 @@ public sealed class StyleEngine
         Dictionary<PropertyId, List<CascadedValue>> candidates,
         Dictionary<string, List<CustomPropertyValue>> customCandidates,
         SelectorMatchContext? context,
+        List<SelectorValidationResult>? validation,
         ref int order,
         LayerOrder layerOrder)
     {
@@ -1169,19 +1124,30 @@ public sealed class StyleEngine
             selectors.Add(entry.Selector);
         }
 
-        _diag.Counter("css.rule_candidates", candidateRules.Count);
-
         foreach (var pair in candidateRules.OrderBy(static pair => pair.Key.SourceOrder))
         {
             var indexedRule = pair.Key;
-            if (!ConditionsMatch(indexedRule.Conditions, element))
+            var conditionsMatched = ConditionsMatch(indexedRule.Conditions, element);
+            if (!conditionsMatched)
+            {
+                if (validation is not null)
+                    foreach (var selector in pair.Value)
+                        validation.Add(new SelectorValidationResult(
+                            selector,
+                            indexedRule.Conditions,
+                            Matched: false));
                 continue;
+            }
 
             var layerIndex = layerOrder.GetIndex(indexedRule.LayerPath);
             foreach (var selector in pair.Value)
             {
-                _diag.Counter("css.selector_tests", 1);
-                if (!SelectorMatcher.Matches(selector, element, context))
+                var selectorMatched = SelectorMatcher.Matches(selector, element, context);
+                validation?.Add(new SelectorValidationResult(
+                    selector,
+                    indexedRule.Conditions,
+                    selectorMatched));
+                if (!selectorMatched)
                     continue;
                 AddDeclarations(
                     indexedRule.Rule.Declarations,
@@ -1924,4 +1890,17 @@ public sealed class StyleEngine
             (StyleOrigin.UserAgent, true) => 5,
             _ => 0,
         };
+}
+
+internal enum RuleConditionKind
+{
+    Media,
+    Supports,
+    Container,
+}
+
+internal sealed class RuleCondition(RuleConditionKind kind, AtRule rule)
+{
+    public RuleConditionKind Kind { get; } = kind;
+    public AtRule Rule { get; } = rule;
 }
