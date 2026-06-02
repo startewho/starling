@@ -1033,30 +1033,30 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var silhouette = new LayoutRect(margin, margin, silhouetteW, silhouetteH);
         var shape = BuildRoundedRectPath(silhouette, grown);
 
-        // var shadowImage = new Image<Rgba32>(imgW, imgH, new Rgba32(0, 0, 0, 0));
-        // // This offscreen silhouette fill + Gaussian blur is a full nested
-        // // rasterization invisible to the lazy outer command_record span; its
-        // // own span makes shadow-heavy pages attributable.
-        // using (_diag.Span("paint", "raster.box_shadow_blur"))
-        // {
-        //     Activity.Current?.SetTag("raster.box_shadow.width", imgW);
-        //     Activity.Current?.SetTag("raster.box_shadow.height", imgH);
-        //     Activity.Current?.SetTag("raster.box_shadow.blur", blur);
-        //     // Drawing 3 paints paths through a DrawingCanvas (the same model the main
-        //     // render path uses), so fill the silhouette inside a Paint scope, then
-        //     // soften it with a separate Gaussian-blur Mutate.
-        //     shadowImage.Mutate(ctx => ctx.Paint(canvas => canvas.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
-        //     if (blur > 0)
-        //         shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(blur / 2d)));
-        // }
-        // pendingImageSources.Add(shadowImage);
-        //
-        // // Destination in CSS px: the silhouette's top-left is
-        // // (Bounds - spread + offset); the image extends `margin` px further out.
-        // var destX = shadow.Bounds.X - spread + shadow.OffsetX - margin;
-        // var destY = shadow.Bounds.Y - spread + shadow.OffsetY - margin;
-        // var dest = new RectangleF((float)destX, (float)destY, imgW, imgH);
-        // canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), dest, KnownResamplers.Bicubic);
+        var shadowImage = new Image<Rgba32>(imgW, imgH, new Rgba32(0, 0, 0, 0));
+        // This offscreen silhouette fill + Gaussian blur is a full nested
+        // rasterization invisible to the lazy outer command_record span; its
+        // own span makes shadow-heavy pages attributable.
+        using (_diag.Span("paint", "raster.box_shadow_blur"))
+        {
+            Activity.Current?.SetTag("raster.box_shadow.width", imgW);
+            Activity.Current?.SetTag("raster.box_shadow.height", imgH);
+            Activity.Current?.SetTag("raster.box_shadow.blur", blur);
+            // Drawing 3 paints paths through a DrawingCanvas (the same model the main
+            // render path uses), so fill the silhouette inside a Paint scope, then
+            // soften it with a separate Gaussian-blur Mutate.
+            shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
+            if (blur > 0)
+                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(blur / 2d)));
+        }
+        pendingImageSources.Add(shadowImage);
+
+        // Destination in CSS px: the silhouette's top-left is
+        // (Bounds - spread + offset); the image extends `margin` px further out.
+        var destX = shadow.Bounds.X - spread + shadow.OffsetX - margin;
+        var destY = shadow.Bounds.Y - spread + shadow.OffsetY - margin;
+        var dest = new RectangleF((float)destX, (float)destY, imgW, imgH);
+        canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), dest, KnownResamplers.Bicubic);
     }
 
     private static CornerRadii GrowRadii(CornerRadii r, double by)
