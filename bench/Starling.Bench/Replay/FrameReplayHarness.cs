@@ -49,7 +49,7 @@ public sealed class FrameReplayHarness : IDisposable
     private readonly LayoutSession? _session;
     // Composite (LTF-00) state: persistent per-layer caches across frames and a
     // backend wrapper that counts how many slices each frame actually rasterized.
-    private readonly LayerCacheStore _layerCaches = new();
+    private readonly TileGrid _tiles = new();
     private readonly CountingBackend? _compositeBackend;
     private int _layersThisFrame;
     private int _rasteredThisFrame;
@@ -218,8 +218,9 @@ public sealed class FrameReplayHarness : IDisposable
             a0 = GC.GetAllocatedBytesForCurrentThread();
             sw.Restart();
             var before = _compositeBackend!.RenderCount;
-            var tree = new LayerTreeBuilder(null, null, null, _layerCaches.CacheFor, Promote).Build(root);
-            using var bmp = new Compositor(_compositeBackend).Render(
+            var tree = new LayerTreeBuilder(null, null, null, isAnimatingLayerRoot: Promote,
+                layerIdFor: _tiles.LayerIdFor).Build(root);
+            using var bmp = new Compositor(_compositeBackend, null, _tiles).Render(
                 tree, new Rect(0, 0, _scenario.Viewport.Width, _scenario.Viewport.Height), _options.Scale);
             sw.Stop();
             pt.RasterTicks = sw.ElapsedTicks;

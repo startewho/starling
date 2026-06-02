@@ -39,23 +39,23 @@ public sealed class LayerCachePersistenceTests
 
         // Seed every layer's cache (no prior content → no HIT).
         host.RenderViaLayerTree(root, 1f).Dispose();
-        diag.CountOf("paint.cache.hit").Should().Be(0, "nothing is cached before the first render");
+        diag.CountOf("paint.tile.cache_hit").Should().Be(0, "nothing is cached before the first render");
 
         // Re-render unchanged content: every layer re-blits from cache.
         host.RenderViaLayerTree(root, 1f).Dispose();
-        var afterReblit = diag.CountOf("paint.cache.hit");
+        var afterReblit = diag.CountOf("paint.tile.cache_hit");
         afterReblit.Should().BeGreaterThan(0, "unchanged layers serve from cache on the second render");
 
         // In-place relayout: the flat cache drops but the per-layer caches persist.
         host.InvalidateCache();
         host.RenderViaLayerTree(root, 1f).Dispose();
-        diag.CountOf("paint.cache.hit").Should().Be(afterReblit * 2,
+        diag.CountOf("paint.tile.cache_hit").Should().Be(afterReblit * 2,
             "the per-layer caches are retained across an in-place relayout (LTF-03)");
 
         // Navigation: every layer cache is cleared, so the next render is cold.
         host.ResetForNavigation();
         host.RenderViaLayerTree(root, 1f).Dispose();
-        diag.CountOf("paint.cache.hit").Should().Be(afterReblit * 2,
+        diag.CountOf("paint.tile.cache_hit").Should().Be(afterReblit * 2,
             "navigation clears the per-layer caches — the next render re-rasters, no new HIT");
     }
 

@@ -156,38 +156,14 @@ internal sealed class ImageSharpBackend : IPaintBackend
 
             using (_diag.Span("paint", "raster.command_record"))
             {
-                Activity.Current?.SetTag("raster.items", list.Items.Count);
                 if (webGpuFallbackReason is not null)
                     Activity.Current?.SetTag("raster.webgpu.fallback_reason", webGpuFallbackReason);
-                var stats = new RasterStats();
+                // The CPU image is allocated pre-filled with the background color, so
+                // the replay must not clear it again (clearWhite: false). ImageSharp
+                // rasterizes lazily when the Paint scope unwinds — no explicit flush.
                 image.Mutate(x => x.Paint(canvas =>
-                {
-                    var transforms = new Stack<Matrix2D>();
-                    transforms.Push(viewportTransform);
-                    canvas.Save(new DrawingOptions
-                    {
-                        Transform = ToCanvasMatrix(viewportTransform, scale),
-                    });
-
-                    // raster.command_record wraps the whole Mutate, but ImageSharp
-                    // rasterizes lazily when this Paint scope unwinds — so the
-                    // pixel-fill cost lands between this span closing and
-                    // command_record closing. replay_items isolates the
-                    // display-list walk (recording + TextBlock build) so
-                    // command_record − replay_items = the actual rasterization.
-                    using (_diag.Span("paint", "raster.replay_items"))
-                    {
-                        foreach (var item in list.Items)
-                        {
-                            var start = Stopwatch.GetTimestamp();
-                            Apply(canvas, item, scale, pendingImageSources, transforms, stats);
-                            stats.Record(item, Stopwatch.GetTimestamp() - start);
-                        }
-                    }
-
-                    canvas.Restore();
-                }));
-                stats.Emit(Activity.Current);
+                    ReplayList(canvas, list, width, height, scale, viewportTransform,
+                        clearWhite: false, pendingImageSources, flush: false)));
             }
 
             byte[] pixels;
@@ -241,45 +217,13 @@ internal sealed class ImageSharpBackend : IPaintBackend
                 canvas = target.CreateCanvas();
 
             using (canvas)
-            {
-                using (_diag.Span("paint", "raster.command_record"))
-                {
-                    Activity.Current?.SetTag("raster.items", list.Items.Count);
-                    if (opaqueBackground)
-                        canvas.Clear(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
-                    var transforms = new Stack<Matrix2D>();
-                    transforms.Push(viewportTransform);
-                    canvas.Save(new DrawingOptions
-                    {
-                        Transform = ToCanvasMatrix(viewportTransform, scale),
-                    });
-
-                    var stats = new RasterStats();
-                    // replay_items isolates the display-list walk (recording +
-                    // TextBlock build); on the GPU path the pixel work happens in
-                    // raster.flush below, so the two spans split record from
-                    // execute the same way the CPU path's command_record split does.
-                    using (_diag.Span("paint", "raster.replay_items"))
-                    {
-                        foreach (var item in list.Items)
-                        {
-                            var start = Stopwatch.GetTimestamp();
-                            Apply(canvas, item, scale, pendingImageSources, transforms, stats);
-                            stats.Record(item, Stopwatch.GetTimestamp() - start);
-                        }
-                    }
-
-                    canvas.Restore();
-                    stats.Emit(Activity.Current);
-
-                    // Flush seals queued commands into the canvas timeline so
-                    // the GPU pipeline executes before ReadbackImage samples
-                    // the texture. Without it, readback races the (un)submitted
-                    // command buffer and returns the initial clear color.
-                    using (_diag.Span("paint", "raster.flush"))
-                        canvas.Flush();
-                }
-            }
+            using (_diag.Span("paint", "raster.command_record"))
+                // Flush seals queued commands into the canvas timeline so the GPU
+                // pipeline executes before ReadbackImage samples the texture.
+                // Without it, readback races the (un)submitted command buffer and
+                // returns the initial clear color.
+                ReplayList(canvas, list, width, height, scale, viewportTransform,
+                    clearWhite: opaqueBackground, pendingImageSources, flush: true);
 
             byte[] pixels;
             using (_diag.Span("paint", "raster.readback"))
@@ -291,6 +235,46 @@ internal sealed class ImageSharpBackend : IPaintBackend
 
             return new RenderedBitmap(width, height, pixels);
         }
+    }
+
+    /// <summary>
+    /// Shared display-list replay: optionally clears to opaque white, applies the
+    /// viewport (scroll) transform, walks every <see cref="DisplayItem"/> through
+    /// <see cref="Apply"/>, then optionally flushes the GPU timeline. The offscreen
+    /// GPU and CPU renders both funnel through here so the exact same geometry
+    /// reaches every destination. <paramref name="pendingImageSources"/> is owned by
+    /// the caller and must outlive rasterization (DrawImage records the source and
+    /// samples it when the canvas timeline executes).
+    /// </summary>
+    private void ReplayList(DrawingCanvas canvas, PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool clearWhite, DisposableBag pendingImageSources, bool flush)
+    {
+        Activity.Current?.SetTag("raster.items", list.Items.Count);
+        if (clearWhite)
+            canvas.Clear(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
+
+        var transforms = new Stack<Matrix2D>();
+        transforms.Push(viewportTransform);
+        canvas.Save(new DrawingOptions { Transform = ToCanvasMatrix(viewportTransform, scale) });
+
+        var stats = new RasterStats();
+        // replay_items isolates the display-list walk (recording + TextBlock build)
+        // from the pixel work, matching the CPU/GPU span split.
+        using (_diag.Span("paint", "raster.replay_items"))
+        {
+            foreach (var item in list.Items)
+            {
+                var start = Stopwatch.GetTimestamp();
+                Apply(canvas, item, scale, pendingImageSources, transforms, stats);
+                stats.Record(item, Stopwatch.GetTimestamp() - start);
+            }
+        }
+
+        canvas.Restore();
+        stats.Emit(Activity.Current);
+
+        if (flush)
+            using (_diag.Span("paint", "raster.flush"))
+                canvas.Flush();
     }
 
     private void Apply(DrawingCanvas canvas, DisplayItem item, float scale, DisposableBag pendingImageSources, Stack<Matrix2D> transforms, RasterStats stats)

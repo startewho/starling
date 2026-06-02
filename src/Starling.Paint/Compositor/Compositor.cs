@@ -5,7 +5,6 @@ using Starling.Layout;
 using Starling.Paint.Backend;
 using Starling.Paint.Cache;
 using LayoutRect = Starling.Layout.Rect;
-using PaintList = Starling.Paint.DisplayList.DisplayList;
 
 namespace Starling.Paint.Compositor;
 
@@ -23,12 +22,24 @@ internal sealed class Compositor
 {
     private readonly IPaintBackend _backend;
     private readonly IDiagnostics _diag;
+    // Session-scoped per-layer tile cache. Supplied by the host so tiles
+    // persist across frames; one-shot renders / tests get a private grid so they still
+    // tile (and stay self-contained) without cross-frame reuse.
+    private readonly TileGrid _tileGrid;
 
-    public Compositor(IPaintBackend backend, IDiagnostics? diagnostics = null)
+    // Per-frame tile cache accounting. A Compositor instance is created per present
+    // (NativeViewportRenderer / PageRendererHost build a fresh one each frame), so
+    // these accumulate exactly one frame's tiles — the telemetry daemon reads the
+    // miss ratio to spot whole-layer invalidation defeating the per-tile cache.
+    private int _frameTileHits;
+    private int _frameTileMisses;
+
+    public Compositor(IPaintBackend backend, IDiagnostics? diagnostics = null, TileGrid? tileGrid = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         _backend = backend;
         _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _tileGrid = tileGrid ?? new TileGrid(_diag);
     }
 
     /// <summary>
@@ -68,9 +79,14 @@ internal sealed class Compositor
         var width = (int)Math.Ceiling(viewport.Width * scale);
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
+        // Per-frame phase span (low frequency — one per present) the daemon can
+        // correlate with CPU/RAM; the readback path is the Avalonia default.
+        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+
         // The output base is opaque white — the page background the flat path
         // also establishes. Every layer paints over a transparent canvas, so
         // unpainted regions of a layer leave the base (or lower layers) showing.
+        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
         var output = new byte[checked(width * height * 4)];
         FillWhite(output);
 
@@ -103,6 +119,7 @@ internal sealed class Compositor
         foreach (var bmp in keepAlive)
             bmp.Dispose();
 
+        EmitTileFrameMetrics();
         return new RenderedBitmap(width, height, output);
     }
 
@@ -116,7 +133,8 @@ internal sealed class Compositor
     /// presented (e.g. the surface needs reconfiguring). No <see cref="RenderedBitmap"/>
     /// is produced — nothing crosses back to the CPU.
     /// </summary>
-    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter)
+    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter,
+        IReadOnlyList<SurfaceOverlayRect>? overlays = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -133,13 +151,55 @@ internal sealed class Compositor
         CollectOps(root, ops, keepAlive, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
 
+        // Overlays (caret, selection, find flash) blend on top of the page as
+        // solid-colour quads. Appended last so they draw over every page layer.
+        if (overlays is { Count: > 0 })
+            AppendOverlayOps(ops, viewport, scale, overlays);
+
         var presented = presenter.PresentOps(width, height, ops);
 
         foreach (var bmp in keepAlive)
             bmp.Dispose();
 
+        EmitTileFrameMetrics();
         return presented;
     }
+
+    // Solid-colour overlay quads the surface present path draws on top of the page
+    // (the caret, selection highlight, and find-match flash the readback path draws
+    // as Avalonia controls over the bitmap). Each distinct colour reuses ONE resident
+    // 1×1 straight-RGBA texture: the swatch bitmap is cached here so no per-frame
+    // allocation happens, and the GPU keeps the texture resident across frames (keyed
+    // by the colour-derived content hash). The overlay rides the same textured-quad
+    // blend as the layers — a 1×1 sample is effectively free, so a dedicated
+    // solid-colour pipeline would add code for no measurable win.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, RenderedBitmap> _overlaySwatches = new();
+
+    private static void AppendOverlayOps(
+        List<LayerBlend> ops, LayoutRect viewport, float scale, IReadOnlyList<SurfaceOverlayRect> overlays)
+    {
+        var s = (double)scale;
+        // Same page→device map the layer ops use, so overlays align with page content.
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        foreach (var o in overlays)
+        {
+            if (o.W <= 0 || o.H <= 0 || o.A == 0) continue;
+            var packed = ((uint)o.R << 24) | ((uint)o.G << 16) | ((uint)o.B << 8) | o.A;
+            var swatch = _overlaySwatches.GetOrAdd(packed, static p =>
+                new RenderedBitmap(1, 1, new byte[] { (byte)(p >> 24), (byte)(p >> 16), (byte)(p >> 8), (byte)p }));
+            // The 1×1 swatch's local space is the unit square; map it onto the
+            // overlay's page rect, then to device.
+            var localToDevice = pageToDevice
+                .Multiply(Matrix2D.Translate(o.X, o.Y))
+                .Multiply(Matrix2D.Scale(o.W, o.H));
+            ops.Add(new LayerBlend(swatch, OverlayContentHash(packed), localToDevice, 1f, clipDevice: null));
+        }
+    }
+
+    // Tag overlay content hashes into a high range so a swatch never collides with a
+    // real layer's slice hash (which would make the engine evict + re-upload both).
+    private static long OverlayContentHash(uint packedRgba)
+        => unchecked((long)(0xC0FFEE0000000000UL | packedRgba));
 
     /// <summary>
     /// Appends one layer tree's blend ops into a shared list for a surface frame
@@ -209,23 +269,7 @@ internal sealed class Compositor
         var effectiveClip = IntersectClip(ancestorClip, layer.Clip);
 
         if (layer.Bounds.Width > 0 && layer.Bounds.Height > 0 && effectiveOpacity > 0f)
-        {
-            var local = RenderLayerBitmap(layer, scale);
-            keepAlive.Add(local);
-
-            // local-bitmap pixel -> output device pixel (see BlendOp for the
-            // composed mapping). pageToDevice is shared; clipDev is the device
-            // AABB of the page-space clip.
-            var s = scale;
-            var localToPage = Matrix2D.Translate(layer.Bounds.X, layer.Bounds.Y).Multiply(Matrix2D.Scale(1d / s, 1d / s));
-            var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
-            var localToDevice = pageToDevice.Multiply(effectiveTransform).Multiply(localToPage);
-            Rect? clipDev = effectiveClip is { } cp
-                ? TransformedAabb(new Rect(cp.X, cp.Y, cp.Width, cp.Height), pageToDevice)
-                : null;
-
-            ops.Add(new LayerBlend(local, layer.ContentHash, localToDevice, effectiveOpacity, clipDev));
-        }
+            EmitLayerTiles(layer, ops, viewport, scale, effectiveTransform, effectiveOpacity, effectiveClip);
 
         // Children already in paint order (z-index sorted at build time).
         foreach (var child in layer.Children)
@@ -234,51 +278,181 @@ internal sealed class Compositor
     }
 
     /// <summary>
-    /// Rasterizes (or serves from cache) the layer's slice into a layer-local
-    /// bitmap covering <see cref="CompositorLayer.Bounds"/> at <paramref name="scale"/>,
-    /// over a transparent canvas. A cache hit reuses the prior bitmap without a
-    /// backend call — this is what keeps an untouched sibling layer's pixels
-    /// valid while another layer is repainted (bump its pageVersion).
+    /// Emits one <see cref="LayerBlend"/> per <em>visible</em> tile of the layer
+    /// (wp:M12-05-tile-grid). The layer's slice is tiled into a grid of
+    /// <see cref="TileGrid.TileWidthDevice"/>×<see cref="TileGrid.TileHeightDevice"/>
+    /// device-px tiles; only tiles intersecting the output viewport (plus a 1-tile
+    /// overdraw ring) are rastered. Each tile's device origin is an integer multiple
+    /// of the tile size from the layer origin, so a tile rasters the same device-pixel
+    /// grid the single full-layer bitmap would — the tiles' union is byte-identical to
+    /// it for an upright layer (integer translation → <see cref="BlitIntegerAligned"/>),
+    /// and SSIM-identical under a transform. Tiles are cached across frames in the
+    /// session <see cref="TileGrid"/> keyed by (layer id, col, row, scale); a scroll
+    /// re-blits cached tiles and only rasters the newly-exposed row/column. No tile
+    /// ever exceeds the tile size, so the wgpu max-texture-dimension bug is impossible.
     /// </summary>
-    private RenderedBitmap RenderLayerBitmap(CompositorLayer layer, float scale)
+    private void EmitLayerTiles(
+        CompositorLayer layer, List<LayerBlend> ops, LayoutRect viewport, float scale,
+        Matrix2D effectiveTransform, float effectiveOpacity, Rect? effectiveClip)
     {
-        // Key the cache by the slice's content hash, not the page version: a
-        // transform/opacity-only frame (or an unrelated relayout elsewhere) leaves
-        // this layer's hash unchanged → HIT; only a real content change re-rasters.
-        var key = layer.ContentHash;
-        var device = PictureCache.ToDeviceRect(layer.Bounds, scale);
-        var w = Math.Max(1, device.Width);
-        var h = Math.Max(1, device.Height);
+        var s = (double)scale;
+        var bounds = layer.Bounds;
+        // The layer's full extent in device px — the size the single-bitmap path used.
+        var layerDevW = Math.Max(1, (int)Math.Ceiling(bounds.Width * s));
+        var layerDevH = Math.Max(1, (int)Math.Ceiling(bounds.Height * s));
 
-        if (layer.Cache.TryServe(layer.Bounds, scale, key, out var hit))
-            return CopyOut(hit, w, h);
+        var outW = (int)Math.Ceiling(viewport.Width * s);
+        var outH = (int)Math.Ceiling(viewport.Height * s);
 
-        PaintList list = layer.Items;
-        var painted = _backend.Render(list, layer.Bounds, scale, opaqueBackground: false);
-        // Seed the cache against the raster's real device rect so subsequent
-        // unchanged frames serve this layer from cache (HIT).
-        var seedRect = PictureCache.ToDeviceRect(layer.Bounds, scale);
-        var actual = ToDeviceRect(seedRect, painted.Width, painted.Height);
-        layer.Cache.Reset(actual, scale, key, painted);
-        return painted;
-    }
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        // layer-local device px (0..layerDevW, 0..layerDevH) -> output device px.
+        var layerLocalToDevice = pageToDevice.Multiply(effectiveTransform)
+            .Multiply(Matrix2D.Translate(bounds.X, bounds.Y).Multiply(Matrix2D.Scale(1d / s, 1d / s)));
 
-    private static RenderedBitmap CopyOut(CacheBlit blit, int outWidth, int outHeight)
-    {
-        var buf = new byte[checked(outWidth * outHeight * 4)];
-        var destStride = outWidth * 4;
-        var rowBytes = blit.Width * 4;
-        for (var row = 0; row < blit.Height; row++)
+        // Device AABB of the page-space clip — applied to every tile (same as the
+        // single-bitmap path applied one clip to the whole layer).
+        Rect? clipDev = effectiveClip is { } cp
+            ? TransformedAabb(new Rect(cp.X, cp.Y, cp.Width, cp.Height), pageToDevice)
+            : null;
+
+        const int TW = TileGrid.TileWidthDevice;
+        const int TH = TileGrid.TileHeightDevice;
+        var maxCol = (layerDevW - 1) / TW;
+        var maxRow = (layerDevH - 1) / TH;
+
+        // Default to the whole layer; viewport-cull only a LARGE, untransformed layer
+        // (the page root is the case that matters — a long page must not raster its
+        // full height). The inverse-transform cull is exact for an identity transform;
+        // a transformed layer (an animating element) is small and cheap, so render all
+        // its tiles rather than risk the fragile rotated-AABB cull dropping it.
+        int col0 = 0, col1 = maxCol, row0 = 0, row1 = maxRow;
+        var manyTiles = (long)(maxCol + 1) * (maxRow + 1) > MaxUnculledTiles;
+        if (manyTiles && effectiveTransform.IsIdentity
+            && !TryVisibleTileRange(layerLocalToDevice, outW, outH, layerDevW, layerDevH,
+                out col0, out col1, out row0, out row1))
+            return; // layer entirely outside the viewport
+
+        // Pre-walk the slice once so each tile can be keyed by the content that
+        // actually paints into IT (not the whole layer). This is the fix for the
+        // whole-layer-invalidation lag: a localized change (one text node, a hover
+        // colour) only changes the hash of the tiles it overlaps, so every other
+        // visible tile still serves from cache.
+        var prepared = DisplayList.DisplayListContentHash.Prepare(layer.Items);
+
+        for (var row = row0; row <= row1; row++)
         {
-            var srcOffset = ((blit.SourceY + row) * blit.SourceStride) + (blit.SourceX * 4);
-            var destOffset = ((blit.DestY + row) * destStride) + (blit.DestX * 4);
-            Array.Copy(blit.SourcePixels, srcOffset, buf, destOffset, rowBytes);
+            var th = Math.Min(TH, layerDevH - row * TH);
+            if (th <= 0) continue;
+            for (var col = col0; col <= col1; col++)
+            {
+                var tw = Math.Min(TW, layerDevW - col * TW);
+                if (tw <= 0) continue;
+
+                // Tile page origin is the layer origin plus an integer device offset
+                // (col*TW, row*TH) converted to CSS — keeps the tile on the layer's
+                // device-pixel grid for seam-free, byte-identical abutment.
+                var tilePageX = bounds.X + col * TW / s;
+                var tilePageY = bounds.Y + row * TH / s;
+
+                var tileRectPage = new LayoutRect(tilePageX, tilePageY, tw / s, th / s);
+                // Freshness key is this tile's own content hash — only the items
+                // that paint into this tile (plus bracket items) — so an unchanged
+                // tile stays cached even when another tile's content changed.
+                var tileHash = prepared.HashForTile(tileRectPage);
+
+                var key = new TileKey(layer.LayerId, col, row, scale);
+                // TileGrid.TryGetTile already emits paint.tile.cache_hit/cache_miss;
+                // here we only tally per-frame for the miss-ratio + rasters-per-frame
+                // signals it doesn't produce (a Compositor is one frame, so these
+                // instance fields are this frame's totals).
+                if (_tileGrid.TryGetTile(key, tileHash, out var tileBmp))
+                {
+                    _frameTileHits++;
+                }
+                else
+                {
+                    _frameTileMisses++;
+                    tileBmp = _backend.Render(layer.Items, tileRectPage, scale, opaqueBackground: false);
+                    _tileGrid.PutTile(key, tileHash, tileBmp);
+                }
+
+                var tileLocalToDevice = pageToDevice.Multiply(effectiveTransform)
+                    .Multiply(Matrix2D.Translate(tilePageX, tilePageY).Multiply(Matrix2D.Scale(1d / s, 1d / s)));
+
+                // GPU texture key stays position-mixed so two distinct tiles never
+                // alias one texture; seeded by the per-tile hash so a tile's texture
+                // re-uploads only when ITS content changes.
+                ops.Add(new LayerBlend(tileBmp, TileOpHash(tileHash, col, row),
+                    tileLocalToDevice, effectiveOpacity, clipDev));
+            }
         }
-        return new RenderedBitmap(outWidth, outHeight, buf);
     }
 
-    private static DeviceRect ToDeviceRect(DeviceRect anchor, int width, int height)
-        => new(anchor.X, anchor.Y, width, height);
+    /// <summary>
+    /// Flushes the per-frame tile metrics for the multi-document surface path
+    /// (<see cref="AppendSurfaceOps"/> ×N then a single present), which has no
+    /// single Render/RenderToSurface exit to hook. The host calls this once after
+    /// the last AppendSurfaceOps; a Compositor is one frame, so the accumulated
+    /// hit/miss tally is exactly this frame's.
+    /// </summary>
+    internal void FlushTileFrameMetrics() => EmitTileFrameMetrics();
+
+    // Emits the per-frame tile cache signals once the frame's ops are collected:
+    // the miss ratio (≈1.0 while only a small region changed is the smoking gun for
+    // whole-layer invalidation) and how many tiles this frame had to raster.
+    private void EmitTileFrameMetrics()
+    {
+        var total = _frameTileHits + _frameTileMisses;
+        if (total == 0) return;
+        _diag.Gauge(RenderMetrics.TileMissRatio, (double)_frameTileMisses / total);
+        _diag.Counter(RenderMetrics.TileRastersPerFrame, _frameTileMisses);
+    }
+
+    // A layer spanning this many tiles or fewer renders all of them (no viewport cull) —
+    // small/transformed layers are cheap and culling them is fragile under rotation.
+    private const int MaxUnculledTiles = 4;
+
+    // Per-tile op key for the GPU texture cache: unique per (tile position, content),
+    // so each tile uploads one texture and re-uploads when the layer content changes.
+    // FNV-style mix; stays out of the 0xC0FFEE… overlay-swatch range.
+    private static long TileOpHash(long layerContentHash, int col, int row)
+        => unchecked((layerContentHash * 1099511628211L) ^ (((long)col << 21) | (uint)row));
+
+    /// <summary>
+    /// Computes the inclusive tile column/row range of <paramref name="layerLocalToDevice"/>
+    /// whose tiles intersect the output rect (<paramref name="outW"/>×<paramref name="outH"/>),
+    /// expanded by a 1-tile overdraw ring and clamped to the layer's grid. Returns false
+    /// when the transform is degenerate or the layer is wholly outside the viewport.
+    /// </summary>
+    private static bool TryVisibleTileRange(
+        Matrix2D layerLocalToDevice, int outW, int outH, int layerDevW, int layerDevH,
+        out int col0, out int col1, out int row0, out int row1)
+    {
+        col0 = col1 = row0 = row1 = 0;
+        if (!TryInvert(layerLocalToDevice, out var inv))
+            return false;
+
+        // Inverse-map the output rect corners into layer-local device space, take AABB.
+        var (ax, ay) = inv.Transform(0, 0);
+        var (bx, by) = inv.Transform(outW, 0);
+        var (cx, cy) = inv.Transform(outW, outH);
+        var (dx, dy) = inv.Transform(0, outH);
+        var minX = Math.Max(0d, Math.Min(Math.Min(ax, bx), Math.Min(cx, dx)));
+        var minY = Math.Max(0d, Math.Min(Math.Min(ay, by), Math.Min(cy, dy)));
+        var maxX = Math.Min((double)layerDevW, Math.Max(Math.Max(ax, bx), Math.Max(cx, dx)));
+        var maxY = Math.Min((double)layerDevH, Math.Max(Math.Max(ay, by), Math.Max(cy, dy)));
+        if (maxX <= minX || maxY <= minY) return false;
+
+        const int TW = TileGrid.TileWidthDevice;
+        const int TH = TileGrid.TileHeightDevice;
+        var maxCol = (layerDevW - 1) / TW;
+        var maxRow = (layerDevH - 1) / TH;
+        col0 = Math.Clamp((int)Math.Floor(minX / TW) - 1, 0, maxCol);
+        col1 = Math.Clamp((int)Math.Floor((maxX - 1e-3) / TW) + 1, 0, maxCol);
+        row0 = Math.Clamp((int)Math.Floor(minY / TH) - 1, 0, maxRow);
+        row1 = Math.Clamp((int)Math.Floor((maxY - 1e-3) / TH) + 1, 0, maxRow);
+        return col1 >= col0 && row1 >= row0;
+    }
 
     /// <summary>
     /// Managed alpha-over blend of one <see cref="LayerBlend"/> into

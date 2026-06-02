@@ -7,8 +7,11 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Starling.Gui.Chrome;
+using Starling.Gui.Core.Rendering;
 using Starling.Gui.Imaging;
 using Starling.Gui.Theme;
+using Starling.Paint.Backend;
+using Starling.Paint.Compositor;
 using System.Diagnostics;
 using Starling.Common.Diagnostics;
 using Starling.Common.Image;
@@ -54,6 +57,35 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly ScrollViewer _scroll;
     private readonly Image _pageImage;
     private readonly Canvas _pageCanvas;
+
+    // Zero-copy present path: when the WebGPU paint backend is available, the page
+    // is composited straight onto a GPU swapchain embedded in the page region
+    // (_pageSurfaceHost's CAMetalLayer), skipping the GPU→CPU readback and the
+    // WriteableBitmap re-upload that _pageImage requires. It runs the SAME
+    // layer-tree compositor the native shell uses (NativeViewportRenderer →
+    // GpuSurfacePresenter): each promoted layer's raster is cached as a GPU texture
+    // keyed by slice content hash, so an animation-only frame re-blits the resident
+    // textures with the new transform/opacity in one pass — the box-shadow blur runs
+    // once per content change, not every frame. Null / inactive on hosts without a
+    // GPU surface, where _pageImage + RenderPageBitmap remain the fallback.
+    private readonly NativeViewportRenderer? _nativeRenderer;
+    private GpuSurfacePresenter? _presenter;
+    private readonly PageSurfaceHost? _pageSurfaceHost;
+    private bool _useSurface;
+
+    // The zero-copy GPU surface is the ONE TRUE present path whenever a GPU is
+    // available. The readback bitmap path (_pageImage + RenderPageBitmap) is the
+    // LEGACY FALLBACK — used only when there is no GPU adapter / surface, or when
+    // a developer explicitly opts in with STARLING_FORCE_READBACK=1 (for debugging
+    // the GPU path or a driver issue). It must never be the steady-state path on a
+    // GPU host. See docs/rendering-present-paths.md.
+    private static readonly bool s_forceReadback =
+        Environment.GetEnvironmentVariable("STARLING_FORCE_READBACK") == "1";
+    // Set while a batch of overlay/page mutations runs (notably ShowPage) so the
+    // surface path coalesces them into ONE present at the end instead of firing a
+    // full layer-tree present per overlay change. Without it a single relayout tick
+    // fired ~4 redundant full presents (one per Clear*/RenderCaret) of the same frame.
+    private bool _suppressPresent;
     private readonly TextBlock _placeholder;
     private readonly Border _placeholderHost;
 
@@ -128,6 +160,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Func<LaidOutPage, bool>? _hasActiveAnimations;
     private long _animClockMs;
     private bool _animating;
+
+    // Frame-rate tracking. Every presented frame bumps the monotonic
+    // "gui.frames.presented" counter (its rate in the Aspire dashboard is the
+    // live FPS), and once a second we log the computed FPS so it can be queried
+    // from structured logs. The clock is independent of _liveStopwatch, which
+    // restarts whenever a new JS context binds. After an idle gap (the live
+    // timer stops when nothing animates) the window resets so the first frame
+    // back does not report a misleadingly low average.
+    private readonly Stopwatch _frameClock = Stopwatch.StartNew();
+    private long _fpsWindowStartMs;
+    private long _fpsLastFrameMs;
+    private int _fpsFrames;
+    private const long FpsWindowMs = 1000;
+    private const long FpsIdleResetMs = 250;
 
     public WebviewPanel(
         ThemeManager tm,
@@ -217,6 +263,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (_caretOverlay is null) return;
             _caretOn = !_caretOn;
             _caretOverlay.IsVisible = _caretOn;
+            RefreshOverlays();
         };
 
         _scroll = new ScrollViewer
@@ -279,6 +326,28 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var rootGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         rootGrid.Children.Add(_findBar); Grid.SetRow(_findBar, 0);
         rootGrid.Children.Add(_scroll); Grid.SetRow(_scroll, 1);
+
+        // Zero-copy GPU present surface. Stand it up only where it can work: macOS
+        // (the CAMetalLayer host is the only wired platform) with the WebGPU paint
+        // backend active. The actual GPU device is created lazily in OnSurfaceReady;
+        // if no adapter is present there we drop back to the readback path. The host
+        // is a click-through overlay pinned to the viewport's top-left so the chrome
+        // and the ScrollViewer's scrollbars/input keep working underneath.
+        if (OperatingSystem.IsMacOS() && PaintBackendSelector.Selected == PaintBackendKind.ImageSharpWebGpu)
+        {
+            _nativeRenderer = new NativeViewportRenderer(diag);
+            _pageSurfaceHost = new PageSurfaceHost
+            {
+                Scale = _currentScale,
+                HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left,
+                VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Top,
+                IsHitTestVisible = false,
+                IsVisible = false,
+            };
+            _pageSurfaceHost.SurfaceReady += OnSurfaceReady;
+            rootGrid.Children.Add(_pageSurfaceHost);
+            Grid.SetRow(_pageSurfaceHost, 1);
+        }
 
         Content = rootGrid;
         ApplyTheme();
@@ -344,80 +413,102 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // document here (it is updated below), so it tells navigation from relayout.
         var isNavigation = !ReferenceEquals(_scrollOffsetsDocument, page.Document);
         if (isNavigation)
+        {
             _renderer.ResetForNavigation();
+            // The surface present path keeps its own per-layer caches (separate from
+            // the readback _renderer's), so drop them on navigation too. On an
+            // in-place relayout they survive — they are content-hash keyed (LTF-03).
+            _nativeRenderer?.ResetForNavigation();
+        }
         else
             _renderer.InvalidateCache();
 
 
-        // Reset interaction state.
-        ClearSelection();
-        ClearFindHighlight();
-        ClearHighlightOverlays();
-        _hoverElement = null;
-        _hoverOverrides = null;
-        _hoverScope.Clear();
-
-        // Per-element scroll offsets survive in-place relayouts (window resize
-        // keeps the same Document) but reset on navigation. Tracking the
-        // Document reference lets us distinguish the two without an explicit
-        // signal from MainWindow.
-        if (!ReferenceEquals(_scrollOffsetsDocument, page.Document))
+        // Coalesce the surface present across this whole swap. ShowPage mutates
+        // several overlays (selection, find, highlight, caret), and on the surface
+        // path each mutation's RefreshOverlays would otherwise fire a full layer-tree
+        // present of the same frame — ~4 redundant presents per relayout tick. Suppress
+        // them and present exactly once at the end (the live loop passes deferRender
+        // and presents once itself at the end of its tick).
+        var prevSuppressPresent = _suppressPresent;
+        _suppressPresent = true;
+        try
         {
-            _scrollOffsets.Clear();
-            _scrollOffsetsDocument = page.Document;
+            // Reset interaction state.
+            ClearSelection();
+            ClearFindHighlight();
+            ClearHighlightOverlays();
+            _hoverElement = null;
+            _hoverOverrides = null;
+            _hoverScope.Clear();
+
+            // Per-element scroll offsets survive in-place relayouts (window resize
+            // keeps the same Document) but reset on navigation. Tracking the
+            // Document reference lets us distinguish the two without an explicit
+            // signal from MainWindow.
+            if (!ReferenceEquals(_scrollOffsetsDocument, page.Document))
+            {
+                _scrollOffsets.Clear();
+                _scrollOffsetsDocument = page.Document;
+            }
+
+            _currentScale = GetRenderScale();
+            _pageSurfaceHost?.UpdateScale(_currentScale);
+
+            // Page-sized canvas = scroll extent. The bitmap overlaid on it is only
+            // viewport-sized; ShowPage resets to the top, then renders that region.
+            _pageImage.IsVisible = true;
+            _pageCanvas.Width = page.Root.Frame.Width;
+            _pageCanvas.Height = page.Root.Frame.Height;
+            _scroll.Content = _pageCanvas;
+
+            if (preserveScroll)
+            {
+                var maxX = Math.Max(0, _pageCanvas.Width - _scroll.Viewport.Width);
+                var maxY = Math.Max(0, _pageCanvas.Height - _scroll.Viewport.Height);
+                _scroll.Offset = new Vector(
+                    Math.Clamp(prevOffset.X, 0, maxX),
+                    Math.Clamp(prevOffset.Y, 0, maxY));
+            }
+            else
+            {
+                _scroll.Offset = new Vector(0, 0);
+            }
+
+            using (_diag.Span("gui", "show_page.hit_index"))
+                _fragments = BoxHitTester.CollectFragments(page.Root);
+            RebuildFindIndex();
+
+            // Re-establish (or drop) the text caret against the new box tree. The
+            // caret overlay belongs to the prior layout's positions, so it is always
+            // rebuilt here.
+            CaretLog($"ShowPage: keepFocus={keepFocus} idx={_caretIndex} foc={_focusedInput?.LocalName} " +
+                $"docFoc={page.Document.FocusedElement?.LocalName} vp={page.Viewport.Width}x{page.Viewport.Height} preserveScroll={preserveScroll}");
+            RemoveCaretOverlay();
+            if (keepFocus)
+            {
+                _pageCanvas.Focus();
+                RenderCaret();
+            }
+            else
+            {
+                _focusedInput = null;
+                _caretIndex = 0;
+                _caretBlinkTimer.Stop();
+            }
+
+            BindLiveScripting();
+        }
+        finally
+        {
+            _suppressPresent = prevSuppressPresent;
         }
 
-        _currentScale = GetRenderScale();
-
-        // Page-sized canvas = scroll extent. The bitmap overlaid on it is only
-        // viewport-sized; ShowPage resets to the top, then renders that region.
-        _pageImage.IsVisible = true;
-        _pageCanvas.Width = page.Root.Frame.Width;
-        _pageCanvas.Height = page.Root.Frame.Height;
-        _scroll.Content = _pageCanvas;
-
-        if (preserveScroll)
-        {
-            var maxX = Math.Max(0, _pageCanvas.Width - _scroll.Viewport.Width);
-            var maxY = Math.Max(0, _pageCanvas.Height - _scroll.Viewport.Height);
-            _scroll.Offset = new Vector(
-                Math.Clamp(prevOffset.X, 0, maxX),
-                Math.Clamp(prevOffset.Y, 0, maxY));
-        }
-        else
-        {
-            _scroll.Offset = new Vector(0, 0);
-        }
-        // The live animation loop defers the paint to the end of its tick so the
-        // page is rasterized exactly once, with the animation clock already
-        // advanced — instead of painting here with a stale clock and again after
-        // PrepareAnimationFrame. Every other caller paints inline.
+        // One present for the whole swap, after the caret/overlays are in place so
+        // the frame includes them. The live animation loop defers (deferRender:true)
+        // and presents exactly once at the end of its own tick instead.
         if (!deferRender)
             RenderViewportRegion();
-
-        using (_diag.Span("gui", "show_page.hit_index"))
-            _fragments = BoxHitTester.CollectFragments(page.Root);
-        RebuildFindIndex();
-
-        // Re-establish (or drop) the text caret against the new box tree. The
-        // caret overlay belongs to the prior layout's positions, so it is always
-        // rebuilt here.
-        CaretLog($"ShowPage: keepFocus={keepFocus} idx={_caretIndex} foc={_focusedInput?.LocalName} " +
-            $"docFoc={page.Document.FocusedElement?.LocalName} vp={page.Viewport.Width}x{page.Viewport.Height} preserveScroll={preserveScroll}");
-        RemoveCaretOverlay();
-        if (keepFocus)
-        {
-            _pageCanvas.Focus();
-            RenderCaret();
-        }
-        else
-        {
-            _focusedInput = null;
-            _caretIndex = 0;
-            _caretBlinkTimer.Stop();
-        }
-
-        BindLiveScripting();
     }
 
     /// <summary>
@@ -451,12 +542,214 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_currentPage is null) return;
         var rect = CurrentViewportRect();
+
+        // Zero-copy path: present the viewport straight to the GPU surface. The
+        // overlay is pinned at the viewport's top-left and sized to the visible
+        // region; on scroll we re-present at the new page-coord offset (the surface
+        // itself does not scroll). Falls through to the readback path on any failure.
+        if (TryPresentSurface(rect))
+        {
+            _pageSurfaceHost!.Width = rect.Width;
+            _pageSurfaceHost!.Height = rect.Height;
+            _pageSurfaceHost!.IsVisible = true;
+            if (_pageImage.IsVisible) _pageImage.IsVisible = false;
+            return;
+        }
+
+        // Readback fallback — used ONLY when there is no GPU surface (no adapter, or
+        // surface setup failed). It is the legacy path; the zero-copy GPU surface is
+        // the one true present path whenever a GPU is available (overflow:scroll
+        // offsets are now threaded into it, so it no longer declines for scrolled
+        // pages). Hide the GPU surface overlay first — it's a native view pinned on
+        // top, so a stale frame left visible would occlude the bitmap.
+        if (_pageSurfaceHost is { IsVisible: true }) _pageSurfaceHost.IsVisible = false;
+        if (!_pageImage.IsVisible) _pageImage.IsVisible = true;
+
         RenderPageBitmap(rect);
 
         _pageImage.Width = rect.Width;
         _pageImage.Height = rect.Height;
         Canvas.SetLeft(_pageImage, rect.X);
         Canvas.SetTop(_pageImage, rect.Y);
+    }
+
+    /// <summary>Device-pixel size of a page-coordinate viewport rect at the current scale.</summary>
+    private (int Width, int Height) DeviceSize(Starling.Layout.Rect rect)
+        => ((int)Math.Ceiling(rect.Width * _currentScale), (int)Math.Ceiling(rect.Height * _currentScale));
+
+    /// <summary>
+    /// Configures the GPU surface once its native handle is ready, then presents the
+    /// current viewport. Runs on the UI thread (NativeControlHost attach).
+    /// </summary>
+    private void OnSurfaceReady()
+    {
+        if (_pageSurfaceHost is null || _nativeRenderer is null) return;
+
+        // Developer opt-in: STARLING_FORCE_READBACK=1 keeps the legacy readback path
+        // even on a GPU host. Off by default — the zero-copy surface is the path.
+        if (s_forceReadback)
+        {
+            _diag.Log(DiagLevel.Info, "gui",
+                "STARLING_FORCE_READBACK=1 — using the legacy readback present path (GPU surface disabled).");
+            return;
+        }
+
+        var layer = _pageSurfaceHost.MetalLayerPtr;
+        if (layer == 0) return;
+
+        try
+        {
+            // Build the GPU device + swapchain bound to the host's CAMetalLayer. Null
+            // means no adapter — keep the readback path.
+            _presenter = GpuSurfacePresenter.CreateForMetalLayer(layer, _diag);
+            if (_presenter is null)
+            {
+                _diag.Log(DiagLevel.Info, "gui", "GPU page surface unavailable; using readback present path");
+                return;
+            }
+
+            var rect = CurrentViewportRect();
+            var (w, h) = DeviceSize(rect);
+            _presenter.Configure(w, h);
+            _useSurface = true;
+            _diag.Log(DiagLevel.Info, "gui", $"zero-copy GPU page surface active ({w}x{h} device px)");
+        }
+        catch (Exception ex)
+        {
+            // Any managed failure standing up the swapchain → drop to the readback
+            // path rather than leaving the panel half-initialized. (A non-unwinding
+            // wgpu panic from an invalid surface config can't be caught here, but the
+            // config is built from surface-advertised caps + a RenderAttachment-only
+            // usage + a positive size, so it is valid by construction.)
+            _diag.LogException("gui", ex, "GPU page surface setup failed; using readback present path");
+            _presenter?.Dispose();
+            _presenter = null;
+            _useSurface = false;
+            return;
+        }
+
+        // Outside the try: the first present routes through TryPresentSurface, which
+        // already has its own fall-back-to-readback guard.
+        if (_currentPage is not null)
+            RenderViewportRegion();
+    }
+
+    /// <summary>
+    /// Presents <paramref name="rect"/> (page-coord viewport) straight to the GPU
+    /// surface — no readback, no WriteableBitmap. Returns false when the surface
+    /// isn't active/ready or the frame couldn't be presented, so the caller falls
+    /// back to <see cref="RenderPageBitmap"/>.
+    /// </summary>
+    private bool TryPresentSurface(Starling.Layout.Rect rect)
+    {
+        if (!_useSurface || _presenter is null || _nativeRenderer is null
+            || _pageSurfaceHost is null || !_pageSurfaceHost.HasSurface || _currentPage is null)
+            return false;
+
+        if (Activity.Current is { IsStopped: true })
+            Activity.Current = null;
+
+        var (styleOverride, scrollLookup) = BuildRenderInputs();
+
+        var overlays = CollectSurfaceOverlays();
+        bool ok;
+        try
+        {
+            // Present at the current viewport: the presenter (re)configures its
+            // swapchain to ceil(rect × scale) device px as needed, so no explicit
+            // Resize call is required. The scroll lookup threads per-container
+            // (overflow:scroll) offsets into the layer tree so inner-scrolled pages
+            // present on the zero-copy surface instead of dropping to readback.
+            using (_diag.Span("gui", "render"))
+                ok = _nativeRenderer.Present(_currentPage.Root, _presenter, (float)_currentScale,
+                    styleOverride, _currentPage.ImageResolver, rect, IsElementAnimatingLayerRoot, overlays,
+                    scrollLookup);
+        }
+        catch (Exception ex)
+        {
+            // A hard GPU failure (device lost, surface creation) — drop to the
+            // readback path for the rest of the session instead of throwing on the
+            // UI thread. A merely-outdated surface returns false (not an exception)
+            // and is retried next frame.
+            _diag.LogException("gui", ex, "GPU surface present failed; falling back to readback");
+            _useSurface = false;
+            return false;
+        }
+
+        if (ok)
+            RecordPresentedFrame();
+        return ok;
+    }
+
+    /// <summary>
+    /// Snapshots the page-coordinate overlay rects (selection highlight, find-match
+    /// flash, blinking caret) the readback path draws as Avalonia controls, so the
+    /// surface path can paint them on top of the page. The native surface occludes
+    /// those Avalonia controls, so on the surface path they must be drawn into the
+    /// GPU frame instead. Returns null when there's nothing to overlay.
+    /// </summary>
+    private IReadOnlyList<SurfaceOverlayRect>? CollectSurfaceOverlays()
+    {
+        List<SurfaceOverlayRect>? overlays = null;
+
+        void Add(Control c)
+        {
+            if (!c.IsVisible) return;
+            if (c is not Border b || b.Background is not ISolidColorBrush brush) return;
+            var w = b.Width;
+            var h = b.Height;
+            if (double.IsNaN(w) || double.IsNaN(h) || w <= 0 || h <= 0) return;
+            var x = Canvas.GetLeft(b);
+            var y = Canvas.GetTop(b);
+            var col = brush.Color;
+            (overlays ??= new List<SurfaceOverlayRect>())
+                .Add(new SurfaceOverlayRect(x, y, w, h, col.R, col.G, col.B, col.A));
+        }
+
+        foreach (var o in _selectionOverlays) Add(o);
+        foreach (var o in _findOverlays) Add(o);
+        foreach (var o in _highlightOverlays) Add(o);
+        if (_caretOverlay is not null) Add(_caretOverlay);
+
+        return overlays;
+    }
+
+    /// <summary>
+    /// Re-presents the page when an overlay (caret blink, selection, find flash)
+    /// changes while the GPU surface is active — the Avalonia overlay controls are
+    /// occluded by the surface, so they must be re-drawn into the frame. A no-op on
+    /// the readback path, where the controls render themselves over the bitmap, and
+    /// while <see cref="_suppressPresent"/> is set (a ShowPage batch coalesces its
+    /// many overlay mutations into the single present ShowPage fires at the end).
+    /// </summary>
+    private void RefreshOverlays()
+    {
+        if (_useSurface && _currentPage is not null && !_suppressPresent)
+            RenderViewportRegion();
+    }
+
+    /// <summary>
+    /// Builds the per-frame hover/animation style override and the per-container
+    /// scroll-offset lookup shared by the readback (<see cref="RenderPageBitmap"/>)
+    /// and the zero-copy surface present paths.
+    /// </summary>
+    private (Func<LayoutBox, ComputedStyle?>? StyleOverride, Func<DomElement, (double X, double Y)>? ScrollLookup) BuildRenderInputs()
+    {
+        var overrides = _hoverOverrides;
+        // While animating, overlay each animated element's sampled style; hover
+        // overrides still win for the hovered element.
+        var animate = _animating && _currentPage is not null;
+        Func<LayoutBox, ComputedStyle?>? styleOverride =
+            (overrides is null && !animate)
+                ? null
+                : box => (overrides is null ? null : ResolveOverride(box, overrides))
+                         ?? (animate ? AnimatedStyle(_currentPage!, box) : null);
+
+        Func<DomElement, (double X, double Y)>? scrollLookup = _scrollOffsets.Count == 0
+            ? null
+            : el => _scrollOffsets.TryGetValue(el, out var off) ? off : (0d, 0d);
+
+        return (styleOverride, scrollLookup);
     }
 
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
@@ -960,6 +1253,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _caretOn = true;
         _caretBlinkTimer.Stop();
         _caretBlinkTimer.Start(); // solid immediately after a change, then blinks
+        RefreshOverlays();
     }
 
     private void RemoveCaretOverlay()
@@ -967,6 +1261,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (_caretOverlay is null) return;
         _pageCanvas.Children.Remove(_caretOverlay);
         _caretOverlay = null;
+        RefreshOverlays();
     }
 
     /// <summary>
@@ -1168,6 +1463,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // prepare_anim / render) so a trace shows where a laggy animation frame
         // spends its time. The inner "gui.render" span lives in RenderPageBitmap.
         using var _tick = _diag.Span("gui", "live.tick");
+        // End-to-end frame time for the daemon's frame report (overrun rate, p99,
+        // fps). Emitted on the normal completion path below.
+        var frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
         var scripting = page.Scripting;
         if (scripting is not null)
@@ -1246,6 +1544,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _liveTimer.Stop();
             _boundScripting = null;
         }
+
+        EmitFrameTime(frameStart);
+    }
+
+    // Records this frame's end-to-end time as gui.frame.time_ms and bumps the
+    // budget-overrun counter when it blew the 60fps budget. The telemetry daemon
+    // turns these into the frame-time distribution + overrun rate and correlates
+    // the spikes with the sampled CPU/RAM.
+    private const double FrameBudgetMs = 1000.0 / 60; // 16.667ms — the actual 60fps budget
+    private void EmitFrameTime(long startTimestamp)
+    {
+        var ms = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        _diag.Gauge(RenderMetrics.FrameTimeMs, ms);
+        if (ms > FrameBudgetMs) _diag.Counter(RenderMetrics.FrameBudgetOverrun, 1);
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,
@@ -1492,6 +1804,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _highlightOverlays.Add(overlay);
             count++;
         }
+        RefreshOverlays();
         return new InputResult(true, $"highlighted {count} of {els.Count} element(s) matching '{selector}'");
     }
 
@@ -1515,6 +1828,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _pageCanvas.Children.Add(overlay);
         _selectionOverlays.Add(overlay);
         _selectionText = el.TextContent ?? string.Empty;
+        RefreshOverlays();
         return new InputResult(true, $"selected <{el.LocalName}> ({_selectionText.Length} chars) — ⌘C to copy");
     }
 
@@ -1625,6 +1939,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         foreach (var o in _highlightOverlays)
             _pageCanvas.Children.Remove(o);
         _highlightOverlays.Clear();
+        RefreshOverlays();
     }
 
     private static IBrush HighlightBrush(string? color)
@@ -1976,17 +2291,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_currentPage is null) return;
 
-        var overrides = _hoverOverrides;
-        // While animating, overlay each animated element's sampled style; hover
-        // overrides still win for the hovered element.
-        var animate = _animating && _currentPage is not null;
-        Func<LayoutBox, ComputedStyle?>? styleOverride =
-            (overrides is null && !animate)
-                ? null
-                : box => (overrides is null ? null : ResolveOverride(box, overrides))
-                         ?? (animate ? AnimatedStyle(_currentPage!, box) : null);
-
-        RenderedBitmap rendered;
         // A finished navigation can leave its stopped Activity as the UI thread's
         // ambient Activity.Current (async span leak — see RunNavigation). A
         // standalone render (hover / resize / scroll) must not pile into that prior
@@ -1994,9 +2298,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // that run inside a live navigation keep their (non-stopped) parent and nest.
         if (Activity.Current is { IsStopped: true })
             Activity.Current = null;
-        Func<DomElement, (double X, double Y)>? scrollLookup = _scrollOffsets.Count == 0
-            ? null
-            : el => _scrollOffsets.TryGetValue(el, out var off) ? off : (0d, 0d);
+
+        var animate = _animating && _currentPage is not null;
+        var (styleOverride, scrollLookup) = BuildRenderInputs();
+
+        RenderedBitmap rendered;
         // While animating, the painted pixels change every frame even though the
         // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
         // key by the animation clock to force a fresh raster each frame.
@@ -2041,6 +2347,38 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         (_pageImage.Source as IDisposable)?.Dispose();
         _pageImage.Source = bmp;
+        RecordPresentedFrame();
+    }
+
+    /// <summary>Counts a frame that just reached the screen and, once per second,
+    /// emits the live frame rate as a metric and a structured log line. The log
+    /// line is what surfaces in the Aspire structured-logs query; the
+    /// "gui.frames.presented" counter graphs as a rate in the dashboard.</summary>
+    private void RecordPresentedFrame()
+    {
+        var now = _frameClock.ElapsedMilliseconds;
+        _diag.Counter("gui.frames.presented", 1);
+
+        // A gap larger than a couple of frames means the loop went idle (no
+        // animation / no script). Restart the averaging window so the resumed
+        // frame is not divided by the idle seconds.
+        if (now - _fpsLastFrameMs > FpsIdleResetMs)
+        {
+            _fpsWindowStartMs = now;
+            _fpsFrames = 0;
+        }
+        _fpsLastFrameMs = now;
+        _fpsFrames++;
+
+        var elapsed = now - _fpsWindowStartMs;
+        if (elapsed >= FpsWindowMs)
+        {
+            var fps = _fpsFrames * 1000.0 / elapsed;
+            _diag.Gauge("gui.fps", fps);
+            _diag.Log(DiagLevel.Info, "gui", $"fps {fps:F1} ({_fpsFrames} frames / {elapsed} ms)");
+            _fpsWindowStartMs = now;
+            _fpsFrames = 0;
+        }
     }
 
     /// <summary>
@@ -2132,6 +2470,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         _selectionText = SelectionModel.TextFor(_fragments, range);
         _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
+        RefreshOverlays();
     }
 
     private void ClearSelection()
@@ -2146,6 +2485,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         foreach (var o in _selectionOverlays)
             _pageCanvas.Children.Remove(o);
         _selectionOverlays.Clear();
+        RefreshOverlays();
     }
 
     /// <summary>Copies the current text selection to the clipboard.</summary>
@@ -2231,12 +2571,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var viewport = _scroll.Viewport.Height;
         var targetY = Math.Max(0, f.Y - (viewport / 3));
         _scroll.Offset = new Vector(_scroll.Offset.X, targetY);
+        RefreshOverlays();
 
         // Auto-fade after a short delay so repeated find-next stays readable.
         DispatcherTimer.RunOnce(() =>
         {
             _pageCanvas.Children.Remove(overlay);
             _findOverlays.Remove(overlay);
+            RefreshOverlays();
         }, TimeSpan.FromMilliseconds(1200));
     }
 
@@ -2245,6 +2587,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         foreach (var o in _findOverlays)
             _pageCanvas.Children.Remove(o);
         _findOverlays.Clear();
+        RefreshOverlays();
     }
 
     // ---- Helpers -------------------------------------------------------
@@ -2271,6 +2614,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _relayoutTimer.Stop();
         _caretBlinkTimer.Stop();
         _liveTimer.Stop();
+        _presenter?.Dispose();
+        _nativeRenderer?.Dispose();
         _renderer.Dispose();
         _currentPage?.Dispose();
         // Detach the bitmap before disposing it: a teardown layout pass can

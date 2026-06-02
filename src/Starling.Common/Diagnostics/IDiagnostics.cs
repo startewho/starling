@@ -19,6 +19,16 @@ public interface IDiagnostics
     void Log(DiagLevel level, string area, string message);
     IDisposable Span(string area, string operation);
     void Counter(string name, double value);
+
+    /// <summary>
+    /// Records the latest value of a gauge metric — a sampled level that rises
+    /// and falls (FPS, queue depth, memory), unlike <see cref="Counter"/> which
+    /// only ever accumulates. The OTel sink maps this to a synchronous
+    /// <c>Gauge</c> instrument so the dashboard graphs the value itself, not a
+    /// running sum. Default is a no-op so a sink only implements it if it cares.
+    /// </summary>
+    void Gauge(string name, double value) { }
+
     void Snapshot(string label, ReadOnlySpan<byte> bytes);
 
     /// <summary>
@@ -71,6 +81,9 @@ public sealed class ConsoleDiagnostics : IDiagnostics
 
     public void Counter(string name, double value)
         => Log(DiagLevel.Debug, "counter", $"{name}={value}");
+
+    public void Gauge(string name, double value)
+        => Log(DiagLevel.Debug, "gauge", $"{name}={value}");
 
     public void Snapshot(string label, ReadOnlySpan<byte> bytes)
         => Log(DiagLevel.Debug, "snapshot", $"{label} ({bytes.Length} bytes)");

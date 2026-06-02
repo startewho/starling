@@ -244,6 +244,17 @@ internal sealed class NativeBrowserWindow : IDisposable
         LaidOutPage?  page        = null;
         int           lastLayoutVersion = -1;
 
+        // In-flight navigation. Loads run off the main thread; the Update loop polls
+        // the task and applies the result on the main thread when it completes. The
+        // window stays live and shows a loading state instead of blocking — a slow
+        // or hung fetch no longer freezes the window gray on launch. pendingNavTab
+        // is the tab the load belongs to (it may not be the active one by the time
+        // it finishes); loadingUrl drives the URL bar while the first page loads.
+        Task<Result<LaidOutPage, RenderError>>? pendingNav = null;
+        int    pendingNavTab = -1;
+        string loadingUrl    = startUrl;
+        BlockBox? loadingBox = null;
+
         // Text-input state
         Element? focusedInput = null;
 
@@ -305,29 +316,19 @@ internal sealed class NativeBrowserWindow : IDisposable
         // present that skips the re-raster while still flushing the surface.
         bool needsPresent = true;
 
-        // ── Load the initial page (blocking — safe: we're not on a GPU thread yet) ──
-        // Page viewport is the window minus the chrome strip at the top.
+        // ── Start the initial load (non-blocking) ──────────────────────────────
+        // The first tab opens with no page yet; the window loop starts immediately
+        // and shows a loading state while the fetch runs. The Update loop applies
+        // the page when the task completes. Page viewport is the window minus the
+        // chrome strip at the top.
         var firstSession = new BrowserSession();
         var options = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
-        var result  = firstSession.NavigateInteractiveAsync(startUrl, options)
-                                  .GetAwaiter().GetResult();
-
-        if (result.IsErr)
-        {
-            Console.Error.WriteLine($"browser: navigation failed: {result.Error.Message}");
-            firstSession.Dispose();
-            return 1;
-        }
-        tabs.Add(new Tab(firstSession)
-        {
-            Page = result.Value,
-            LastLayoutVersion = result.Value.Document.LayoutInvalidationVersion,
-        });
-        activeIndex       = 0;
-        session           = firstSession;
-        page              = result.Value;
-        lastLayoutVersion = page.Document.LayoutInvalidationVersion;
-        Console.WriteLine($"browser: loaded {page.Url}  height={page.DocumentHeight:F0}px");
+        tabs.Add(new Tab(firstSession));
+        activeIndex   = 0;
+        session       = firstSession;
+        pendingNav    = firstSession.NavigateInteractiveAsync(startUrl, options);
+        pendingNavTab = 0;
+        Console.WriteLine($"browser: loading {startUrl} …");
 
         // Push the accessibility tree to the OS after a (re)layout or navigation.
         void PushA11y()
@@ -778,6 +779,9 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         window.Update += _ =>
         {
+            // Apply a finished navigation (incl. the initial load) on the main thread.
+            PollNav();
+
             if (page is null) return;
 
             page.Document.DecayRecentMutations();
@@ -825,8 +829,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 RefreshLayout();
             }
 
-            if (page is null) return;
-
             // Present every frame. The present is what keeps the on-screen surface
             // live — skipping it (an earlier "only present when changed"
             // optimization) left the macOS swapchain unflushed and the whole window
@@ -834,9 +836,11 @@ internal sealed class NativeBrowserWindow : IDisposable
             // (below), once the frame is already on screen, so the CPU stays bounded
             // without ever starving the display.
 
+            var loading = page is null; // the initial page hasn't arrived yet
+
             // Build (or reuse) the chrome BlockBox. The URL-bar row shows the find
             // query while find is open, else the edit buffer when focused, else the
-            // active page URL.
+            // active page URL (or the loading URL before the first page arrives).
             string shownUrl;
             bool   urlFocusVisual;
             if (findActive)
@@ -851,7 +855,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             }
             else
             {
-                shownUrl = urlBarFocused ? urlBarText : (page.Url ?? "");
+                shownUrl = urlBarFocused ? urlBarText : (page?.Url ?? loadingUrl);
                 urlFocusVisual = urlBarFocused;
             }
 
@@ -866,29 +870,47 @@ internal sealed class NativeBrowserWindow : IDisposable
                 chromeSig = sig;
             }
 
-            // Screen-fixed overlay: a context menu wins over the devtools panel.
-            if (devtoolsActive && devtoolsOverlay is null) devtoolsOverlay = BuildDevtoolsOverlay();
-            var screenOverlay = menuActive ? menuOverlay
-                              : devtoolsActive ? devtoolsOverlay
-                              : null;
+            // While the first page loads, present the chrome over a "Loading…" page
+            // so the window is live instead of gray.
+            if (loading)
+            {
+                loadingBox = BuildLoadingPage();
+                var okLoad = renderer.PresentComposited(
+                    presenter,
+                    surfaceWidth:  fb.X,
+                    surfaceHeight: fb.Y,
+                    scale:         dpr,
+                    chromeRoot:      chromeBox,
+                    chromeHeightCss: ChromeHeightCss,
+                    pageRoot:        loadingBox);
+                if (okLoad) presented++; else failures++;
+            }
+            else
+            {
+                // Screen-fixed overlay: a context menu wins over the devtools panel.
+                if (devtoolsActive && devtoolsOverlay is null) devtoolsOverlay = BuildDevtoolsOverlay();
+                var screenOverlay = menuActive ? menuOverlay
+                                  : devtoolsActive ? devtoolsOverlay
+                                  : null;
 
-            var ok = renderer.PresentComposited(
-                presenter,
-                surfaceWidth:    fb.X,
-                surfaceHeight:   fb.Y,
-                scale:           dpr,
-                chromeRoot:      chromeBox,
-                chromeHeightCss: ChromeHeightCss,
-                pageRoot:        page.Root,
-                scrollX:         0,
-                scrollY:         scrollY,
-                pageAnimating:   box => IsAnimatingLayerRoot(page, box),
-                styleOverride:     StyleOverride,
-                images:            page.ImageResolver,
-                overlayRoot:       findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
-                screenOverlayRoot: screenOverlay);
+                var ok = renderer.PresentComposited(
+                    presenter,
+                    surfaceWidth:    fb.X,
+                    surfaceHeight:   fb.Y,
+                    scale:           dpr,
+                    chromeRoot:      chromeBox,
+                    chromeHeightCss: ChromeHeightCss,
+                    pageRoot:        page!.Root,
+                    scrollX:         0,
+                    scrollY:         scrollY,
+                    pageAnimating:   box => IsAnimatingLayerRoot(page, box),
+                    styleOverride:     StyleOverride,
+                    images:            page.ImageResolver,
+                    overlayRoot:       findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
+                    screenOverlayRoot: screenOverlay);
 
-            if (ok) { presented++; needsPresent = false; } else failures++;
+                if (ok) { presented++; needsPresent = false; } else failures++;
+            }
 
             if (_maxFrames > 0 && presented >= _maxFrames)
                 window.Close();
@@ -936,13 +958,11 @@ internal sealed class NativeBrowserWindow : IDisposable
         RenderOptions NavOpts() =>
             new(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
 
-        // Swap a freshly-laid-out page in on success. On failure the old page
-        // stays visible (and the bar reverts to its URL) — a blank window on a
-        // typo or dead link would be worse. Blocking on the window thread matches
-        // the established pattern; async navigation is NS-03 follow-up.
+        // Swap a freshly-laid-out page into the ACTIVE tab. On the initial load the
+        // old page is null (the tab opened on a loading state). On a failed load the
+        // old page stays visible (a blank window on a typo or dead link is worse).
         void ApplyNav(Result<LaidOutPage, RenderError> navResult)
         {
-            if (page is null) return;
             if (navResult.IsErr)
             {
                 Console.Error.WriteLine($"browser: nav failed: {navResult.Error.Message}");
@@ -965,30 +985,71 @@ internal sealed class NativeBrowserWindow : IDisposable
             hoverOverrides = null;
             hoverScope.Clear();
             page           = navResult.Value;
-            oldPage.Dispose();
+            oldPage?.Dispose();
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
             needsPresent = true;
-            Console.WriteLine($"browser: navigated to {page.Url}");
+            Console.WriteLine($"browser: loaded {page.Url}  height={page.DocumentHeight:F0}px");
             PushA11y();
         }
 
-        void Navigate(string url) =>
-            ApplyNav(session.NavigateInteractiveAsync(url, NavOpts()).GetAwaiter().GetResult());
+        // Apply a completed navigation on the main thread. The old page stays
+        // visible until the new one is ready, so a navigation never flashes blank.
+        void PollNav()
+        {
+            if (pendingNav is not { IsCompleted: true }) return;
+            var task   = pendingNav;
+            var tabIdx = pendingNavTab;
+            pendingNav    = null;
+            pendingNavTab = -1;
+
+            Result<LaidOutPage, RenderError> r;
+            try { r = task.GetAwaiter().GetResult(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"browser: load failed: {ex.Message}");
+                return; // keep the loading state / old page
+            }
+
+            if (tabIdx == activeIndex)
+            {
+                ApplyNav(r);
+            }
+            else if (tabIdx >= 0 && tabIdx < tabs.Count && r.IsOk)
+            {
+                // Finished for a background tab: stash it without disturbing the view.
+                var t = tabs[tabIdx];
+                t.Page?.Dispose();
+                t.Page = r.Value;
+                t.LastLayoutVersion = r.Value.Document.LayoutInvalidationVersion;
+            }
+        }
+
+        void Navigate(string url)
+        {
+            loadingUrl    = url;
+            pendingNav    = session.NavigateInteractiveAsync(url, NavOpts());
+            pendingNavTab = activeIndex;
+        }
 
         void GoBack()
         {
-            if (session.History.CanGoBack)
-                ApplyNav(session.BackInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+            if (!session.History.CanGoBack) return;
+            pendingNav    = session.BackInteractiveAsync(NavOpts());
+            pendingNavTab = activeIndex;
         }
 
         void GoForward()
         {
-            if (session.History.CanGoForward)
-                ApplyNav(session.ForwardInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+            if (!session.History.CanGoForward) return;
+            pendingNav    = session.ForwardInteractiveAsync(NavOpts());
+            pendingNavTab = activeIndex;
         }
 
-        void Reload() =>
-            ApplyNav(session.ReloadInteractiveAsync(NavOpts()).GetAwaiter().GetResult());
+        void Reload()
+        {
+            pendingNav    = session.ReloadInteractiveAsync(NavOpts());
+            pendingNavTab = activeIndex;
+        }
 
         // ── Tabs ───────────────────────────────────────────────────────────────
 
@@ -1232,6 +1293,18 @@ internal sealed class NativeBrowserWindow : IDisposable
             menuOverlay  = BuildMenuOverlay();
             menuActive   = true;
             needsPresent = true;
+        }
+
+        // The page-area placeholder shown while the first page loads.
+        BlockBox BuildLoadingPage()
+        {
+            var h = Math.Max(1, logicalH - ChromeHeightCss);
+            var html =
+                $"<body style=\"margin:0;padding:0;background:#ffffff;font-family:sans-serif;" +
+                $"width:{logicalW}px;height:{h}px;display:flex;align-items:center;justify-content:center\">" +
+                "<div style=\"font-size:15px;color:#888\">Loading…</div></body>";
+            return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+                .LayoutDocument(HtmlParser.Parse(html), new LayoutSize(logicalW, (float)h));
         }
 
         // ── Devtools (read-only DOM inspector) ───────────────────────────────

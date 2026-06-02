@@ -36,6 +36,11 @@ public sealed class CompositeDiagnostics : IDiagnostics
         foreach (var d in _inner) d.Counter(name, value);
     }
 
+    public void Gauge(string name, double value)
+    {
+        foreach (var d in _inner) d.Gauge(name, value);
+    }
+
     public void Snapshot(string label, ReadOnlySpan<byte> bytes)
     {
         // ReadOnlySpan can't cross the foreach lambda barrier; manual loop.

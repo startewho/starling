@@ -40,6 +40,136 @@ internal static class DisplayListContentHash
         return unchecked((long)h);
     }
 
+    // Antialiasing/edge bleed safety (page px): a glyph or fill whose AABB ends
+    // exactly on a tile seam can still touch the adjacent tile's pixels, so the
+    // per-tile membership test grows each item's bounds by this much. Over-
+    // inclusion only ever costs a needless re-raster (a false MISS), never a
+    // stale tile (a false HIT) — the same safety contract Compute relies on.
+    private const double EdgeMargin = 2.0;
+
+    /// <summary>
+    /// Walks a slice once into per-item effective AABBs (page coords, with the
+    /// enclosing transform applied) so a per-tile content hash can be taken
+    /// cheaply for many tiles without re-walking. Bracket items (Push/Pop
+    /// Transform/Clip) and items with no computable bounds are marked "always
+    /// fold" — they contribute to every tile's hash, so any change to them
+    /// conservatively invalidates the whole layer.
+    /// </summary>
+    public static PreparedSlice Prepare(DisplayList list)
+    {
+        var items = list.Items;
+        var entries = new List<Entry>(items.Count);
+        var transform = Matrix2D.Identity;
+        var stack = new Stack<Matrix2D>();
+        stack.Push(Matrix2D.Identity);
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            switch (item)
+            {
+                case PushTransform p:
+                    entries.Add(new Entry(item, alwaysFold: true, default));
+                    transform = transform.Multiply(p.Matrix);
+                    stack.Push(transform);
+                    continue;
+                case PopTransform:
+                    entries.Add(new Entry(item, alwaysFold: true, default));
+                    if (stack.Count > 1) stack.Pop();
+                    transform = stack.Peek();
+                    continue;
+                case PushClip:
+                case PopClip:
+                    entries.Add(new Entry(item, alwaysFold: true, default));
+                    continue;
+            }
+
+            if (DisplayItemBounds.TryGet(item, out var local))
+            {
+                var aabb = TransformedAabb(Inflate(local, EdgeMargin + ExtraMargin(item)), transform);
+                entries.Add(new Entry(item, alwaysFold: false, aabb));
+            }
+            else
+            {
+                // Unknown bounds → fold everywhere (conservative).
+                entries.Add(new Entry(item, alwaysFold: true, default));
+            }
+        }
+
+        return new PreparedSlice(entries);
+    }
+
+    internal readonly struct Entry(DisplayItem item, bool alwaysFold, Rect aabb)
+    {
+        public DisplayItem Item { get; } = item;
+        public bool AlwaysFold { get; } = alwaysFold;
+        public Rect Aabb { get; } = aabb;
+    }
+
+    /// <summary>
+    /// A slice pre-walked by <see cref="Prepare"/>. <see cref="HashForTile"/>
+    /// returns the content hash of just the items that can paint into a given
+    /// page-space tile rect (plus all bracket items), so a change confined to one
+    /// region only changes the hash of the tiles it overlaps — the per-tile cache
+    /// then re-rasters those tiles and reuses the rest.
+    /// </summary>
+    public sealed class PreparedSlice
+    {
+        private readonly List<Entry> _entries;
+        internal PreparedSlice(List<Entry> entries) => _entries = entries;
+
+        public long HashForTile(Rect tilePage)
+        {
+            var h = FnvOffset;
+            foreach (var e in _entries)
+                if (e.AlwaysFold || Intersects(e.Aabb, tilePage))
+                    HashItem(ref h, e.Item);
+            return unchecked((long)h);
+        }
+    }
+
+    // Per-item extra coverage (page px) on top of EdgeMargin, where the painted
+    // pixels extend beyond DisplayItemBounds.TryGet's box. Symmetric inflation —
+    // over-covering only costs a needless re-raster, never a stale tile:
+    //  • text: TryGet's box is anchored at the line-box top, but glyphs descend
+    //    ~0.8·FontSize below its bottom edge → grow by FontSize.
+    //  • text shadow: TryGet grows by 1·Blur but the raster's Gaussian tail reaches
+    //    ~3·Blur, plus the same descender gap → FontSize + 2·Blur.
+    //  • box shadow: TryGet uses Spread+Blur; the raster's 3σ tail (σ=Blur/2) reaches
+    //    Spread + 1.5·Blur → grow by ~Blur.
+    //  • strokes: TryGet returns the centre-line box, but a centred pen paints
+    //    Width/2 outside it.
+    private static double ExtraMargin(DisplayItem item) => item switch
+    {
+        DrawText t => t.FontSize,
+        DrawTextDecoration d => d.FontSize,
+        DrawTextShadow s => s.FontSize + s.Blur * 2,
+        DrawBoxShadow s => s.Blur,
+        StrokeRect s => s.Width / 2,
+        StrokeRoundedRect s => s.Width / 2,
+        _ => 0,
+    };
+
+    private static Rect Inflate(Rect r, double m)
+        => new(r.X - m, r.Y - m, r.Width + 2 * m, r.Height + 2 * m);
+
+    private static bool Intersects(Rect a, Rect b)
+        => a.X < b.Right && b.X < a.Right && a.Y < b.Bottom && b.Y < a.Bottom;
+
+    private static Rect TransformedAabb(Rect r, Matrix2D m)
+    {
+        if (m.IsIdentity) return r;
+        var (x0, y0) = m.Transform(r.X, r.Y);
+        var (x1, y1) = m.Transform(r.X + r.Width, r.Y);
+        var (x2, y2) = m.Transform(r.X + r.Width, r.Y + r.Height);
+        var (x3, y3) = m.Transform(r.X, r.Y + r.Height);
+        var minX = Math.Min(Math.Min(x0, x1), Math.Min(x2, x3));
+        var minY = Math.Min(Math.Min(y0, y1), Math.Min(y2, y3));
+        var maxX = Math.Max(Math.Max(x0, x1), Math.Max(x2, x3));
+        var maxY = Math.Max(Math.Max(y0, y1), Math.Max(y2, y3));
+        return new Rect(minX, minY, maxX - minX, maxY - minY);
+    }
+
     private static void HashItem(ref ulong h, DisplayItem item)
     {
         switch (item)

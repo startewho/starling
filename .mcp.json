@@ -6,6 +6,9 @@
         "agent",
         "mcp"
       ]
+    },
+    "starling": {
+      "url": "http://127.0.0.1:3078/mcp"
     }
   }
 }

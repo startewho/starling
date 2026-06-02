@@ -1,11 +1,11 @@
 ---
 id: wp:M12-05-tile-grid
 milestone: M12
-status: "available"
-claimed_by: ""
-claimed_at: ""
-completed_at: ""
-branch: "main"
+status: "complete"
+claimed_by: "agent-claude-opus"
+claimed_at: "2026-06-01"
+completed_at: "2026-06-01"
+branch: "native-shell"
 depends_on:
   - wp:M12-04-layer-tree
 blocks:
@@ -101,6 +101,26 @@ fallback guard in `ImageSharpBackend` can finally be retired entirely.
   small-slice + large-tile geometry first; only fall back to a uniform
   256² grid if profiling shows the per-tile invalidation cost dominates.
 
+## Deviations from this spec (as implemented)
+
+- **Tile geometry:** WebRender-style **2048×512 device-px** tiles (not the 256²
+  default), per the geometry note above. Starling's compositor *layer* is the
+  "slice", so each layer is tiled by a uniform 2048×512 grid — no separate
+  slice-assignment logic.
+- **Cull only large, untransformed layers.** A layer spanning > 4 tiles AND with an
+  identity composite transform (the page root) is viewport-culled via inverse-mapped
+  AABB; small or transformed layers (animating elements) render all their few tiles —
+  the inverse-AABB cull is fragile under rotation and those layers are cheap.
+- **`ImageSharpBackend.MaxWebGpuTextureDimension` guard KEPT** (the WP said remove it).
+  The flat `CachedPageRenderer` path is NOT tiled and still rasters viewport-sized
+  strips, which a 5K+ display at 2× could push past 8192 (uncatchable wgpu abort). The
+  WP's "no texture exceeds the tile size" holds for the compositor path, not the flat
+  path. The temporary `WebviewPanel.PageExceedsLayerTextureLimit` netclaw gate WAS
+  removed (tiling supersedes it).
+- **CPU tile LRU is byte-budgeted** (`STARLING_TILE_BUDGET_BYTES`, default 256 MB);
+  the GPU texture cache keeps its existing frame-age eviction. Two independent caches.
+- Partial-present per-tile dirty tracking is still future (we present the whole viewport).
+
 ## Handoff log
 
 - 2026-05-19T17:46Z — created (agent-copilot-claude-opus-4.7)
@@ -111,3 +131,13 @@ fallback guard in `ImageSharpBackend` can finally be retired entirely.
   tiles in 1–3 slices, not a uniform per-layer 256² grid. Document the
   trade-off so the implementing agent considers slice-first.
   (agent-copilot-claude-opus-4.7)
+- 2026-06-01 — implemented on `native-shell` (not main): `TileGrid` (LRU + layer-id
+  allocator) replaces the per-layer `PictureCache`/`LayerCacheStore`; `Compositor`
+  emits one `LayerBlend` per visible 2048×512 tile via `EmitLayerTiles`; hosts
+  (`PageRendererHost`, `NativeViewportRenderer`) own a session `TileGrid` and `Clear()`
+  it on navigation. Fixes the netclaw.dev blank (root layer was a 9602px texture > the
+  8192 wgpu default limit). Acceptance tests added to `CompositorTests`
+  (tall-layer-bounded-tiles, scroll-one-row) + `TileGridTests` (LRU). Paint.Tests 196 +
+  Gui.Headless 30 green. Verified at runtime: netclaw.dev tiles to (≤2048×512), no
+  oversize fallback, surface path active. See the Deviations section. Not committed
+  (left in the working tree). (agent-claude-opus)
