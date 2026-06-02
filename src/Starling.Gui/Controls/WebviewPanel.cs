@@ -4,12 +4,10 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using System.Text;
 using Starling.Gui.Chrome;
 using Starling.Gui.Core.Rendering;
-using Starling.Gui.Imaging;
 using Starling.Gui.Theme;
 using Starling.Paint.Backend;
 using System.Diagnostics;
@@ -20,6 +18,7 @@ using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Engine;
+using Starling.Gui.Diagnostics;
 using Starling.Html;
 using AvColor = Avalonia.Media.Color;
 using DomDocument = Starling.Dom.Document;
@@ -50,6 +49,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // to skip (e.g. a navigation is in flight). Supplied by the host so the
     // panel can react to its own resize without owning navigation policy.
     private readonly Func<LaidOutPage, EngineSize, LaidOutPage?>? _relayout;
+
     // Coalesces the burst of viewport changes during a drag-resize into a
     // single re-layout once the size settles.
     private readonly DispatcherTimer _relayoutTimer;
@@ -63,7 +63,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // region. The bitmap image path is used only when the session has no surface.
     private SurfaceFrameTarget? _surfaceTarget;
     private readonly PageSurfaceHost? _pageSurfaceHost;
+
     private bool _useSurface;
+
     // Set while a batch of overlay/page mutations runs (notably ShowPage) so the
     // surface path coalesces them into ONE present at the end instead of firing a
     // full layer-tree present per overlay change. Without it a single relayout tick
@@ -82,23 +84,28 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private int _findCursor;
 
     private LaidOutPage? _currentPage;
+
     // Baseline of Document.LayoutInvalidationVersion captured when the current
     // page was last laid out. The live loop relayouts only when this advances —
     // i.e. only on mutations a built-in style/layout pass cares about — so a
     // rAF burst that writes nothing but data-* / aria-* / js* attributes no
     // longer forces a full reflow every frame. See LiveTick.
     private int _lastLayoutInvalidationVersion;
-    private List<BoxHitTester.PlacedFragment> _fragments = new();
+    private List<BoxHitTester.PlacedFragment> _fragments = [];
+
     private double _currentScale = 1.0;
+
     // The innermost element the pointer is currently over (or null). Drives the
     // CSS :hover re-cascade for any element — distinct from a hovered link anchor,
     // which only feeds the cursor and status-bar href.
     private DomElement? _hoverElement;
+
     private Dictionary<DomElement, ComputedStyle>? _hoverOverrides;
+
     // Elements whose computed style the current hover affects (the hovered
     // element's subtree + its ancestor chain). Tracked so the next hover change
     // can register the reverse transition for elements that leave the scope.
-    private HashSet<DomElement> _hoverScope = new();
+    private HashSet<DomElement> _hoverScope = [];
 
     // Per-element scroll offsets for `overflow: scroll | auto` containers
     // (the in-page sidebar nav, code blocks, etc.). The painter translates
@@ -280,7 +287,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _findEntry.KeyDown += OnFindEntryKeyDown;
         _findEntry.PropertyChanged += (_, e) =>
         {
-            if (e.Property == TextBox.TextProperty) { _findCursor = 0; FindNext(); }
+            if (e.Property == TextBox.TextProperty)
+            {
+                _findCursor = 0;
+                FindNext();
+            }
         };
 
         var findNext = new IconButton(_tm, Icons.Enter, "Find next");
@@ -294,9 +305,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             ColumnSpacing = 6,
             Margin = new Thickness(12, 6),
         };
-        findGrid.Children.Add(_findEntry); Grid.SetColumn(_findEntry, 0);
-        findGrid.Children.Add(findNext); Grid.SetColumn(findNext, 1);
-        findGrid.Children.Add(findClose); Grid.SetColumn(findClose, 2);
+        findGrid.Children.Add(_findEntry);
+        Grid.SetColumn(_findEntry, 0);
+        findGrid.Children.Add(findNext);
+        Grid.SetColumn(findNext, 1);
+        findGrid.Children.Add(findClose);
+        Grid.SetColumn(findClose, 2);
 
         _findBar = new Border
         {
@@ -306,8 +320,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         };
 
         var rootGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        rootGrid.Children.Add(_findBar); Grid.SetRow(_findBar, 0);
-        rootGrid.Children.Add(_scroll); Grid.SetRow(_scroll, 1);
+        rootGrid.Children.Add(_findBar);
+        Grid.SetRow(_findBar, 0);
+        rootGrid.Children.Add(_scroll);
+        Grid.SetRow(_scroll, 1);
 
         // Zero-copy GPU present surface. Stand it up only where it can work: macOS
         // with a render session that supports surface targets. The actual surface
@@ -363,7 +379,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // field; a fresh navigation produces a new document whose
         // FocusedElement is null, so the caret is dropped below.
         var keepFocus = _focusedInput is not null
-            && ReferenceEquals(page.Document.FocusedElement, _focusedInput);
+                        && ReferenceEquals(page.Document.FocusedElement, _focusedInput);
 
         // Pause the live-page pump across the swap; rebound at the end against the
         // incoming page's JS context. (All on the UI thread, so the timer can't
@@ -393,8 +409,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             _renderSession.ResetForNavigation();
         }
-        else
-            _renderSession.InvalidateBitmapCache();
 
 
         // Coalesce the surface present across this whole swap. ShowPage mutates
@@ -456,7 +470,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // caret overlay belongs to the prior layout's positions, so it is always
             // rebuilt here.
             CaretLog($"ShowPage: keepFocus={keepFocus} idx={_caretIndex} foc={_focusedInput?.LocalName} " +
-                $"docFoc={page.Document.FocusedElement?.LocalName} vp={page.Viewport.Width}x{page.Viewport.Height} preserveScroll={preserveScroll}");
+                     $"docFoc={page.Document.FocusedElement?.LocalName} vp={page.Viewport.Width}x{page.Viewport.Height} preserveScroll={preserveScroll}");
             RemoveCaretOverlay();
             if (keepFocus)
             {
@@ -516,31 +530,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (_currentPage is null) return;
         var rect = CurrentViewportRect();
 
-        // Zero-copy path: present the viewport straight to the GPU surface. The
-        // overlay is pinned at the viewport's top-left and sized to the visible
-        // region; on scroll we re-present at the new page-coord offset (the surface
-        // itself does not scroll). GPU failures throw instead of falling back.
-        if (TryPresentSurface(rect))
-        {
-            _pageSurfaceHost!.Width = rect.Width;
-            _pageSurfaceHost!.Height = rect.Height;
-            _pageSurfaceHost!.IsVisible = true;
-            if (_pageImage.IsVisible) _pageImage.IsVisible = false;
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(_pageSurfaceHost);
 
-        // Bitmap path, used only when this session did not start with an active
-        // GPU surface. Hide the GPU surface overlay first because it is pinned on
-        // top and a stale frame would occlude the bitmap.
-        if (_pageSurfaceHost is { IsVisible: true }) _pageSurfaceHost.IsVisible = false;
-        if (!_pageImage.IsVisible) _pageImage.IsVisible = true;
+        PresentSurface(rect);
 
-        RenderPageBitmap(rect);
-
-        _pageImage.Width = rect.Width;
-        _pageImage.Height = rect.Height;
-        Canvas.SetLeft(_pageImage, rect.X);
-        Canvas.SetTop(_pageImage, rect.Y);
+        _pageSurfaceHost.Width = rect.Width;
+        _pageSurfaceHost.Height = rect.Height;
+        _pageSurfaceHost.IsVisible = true;
+        if (_pageImage.IsVisible) _pageImage.IsVisible = false;
     }
 
     /// <summary>Device-pixel size of a page-coordinate viewport rect at the current scale.</summary>
@@ -600,12 +597,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// surface — no readback, no WriteableBitmap. Returns false only when the
     /// surface is not active or not ready yet.
     /// </summary>
-    private bool TryPresentSurface(Starling.Layout.Rect rect)
+    private void PresentSurface(Starling.Layout.Rect rect)
     {
         if (!_useSurface || _surfaceTarget is null
-            || _pageSurfaceHost is null || !_pageSurfaceHost.HasSurface || _currentPage is null)
+                         || _pageSurfaceHost is null || !_pageSurfaceHost.HasSurface || _currentPage is null)
         {
-            return false;
+            throw new InvalidOperationException("Surface is not active or not ready");
         }
 
         if (Activity.Current is { IsStopped: true })
@@ -626,16 +623,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // present on the zero-copy surface instead of dropping to readback.
             using (_diag.Span("gui", "render"))
             using (var frame = _renderSession.Render(new PageFrameRequest
-            {
-                Root = _currentPage.Root,
-                Scale = (float)_currentScale,
-                StyleOverride = styleOverride,
-                Images = _currentPage.ImageResolver,
-                Viewport = rect,
-                IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-                Overlays = overlays,
-                ScrollOffsets = scrollLookup,
-            }, _surfaceTarget))
+                   {
+                       Root = _currentPage.Root,
+                       Scale = (float)_currentScale,
+                       StyleOverride = styleOverride,
+                       Images = _currentPage.ImageResolver,
+                       Viewport = rect,
+                       IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
+                       Overlays = overlays,
+                       ScrollOffsets = scrollLookup,
+                   }, _surfaceTarget))
             {
                 ok = frame.Presented;
             }
@@ -654,8 +651,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             throw new InvalidOperationException("GPU surface did not present the frame.");
         }
-
-        return ok;
     }
 
     /// <summary>
@@ -710,7 +705,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// scroll-offset lookup shared by the readback (<see cref="RenderPageBitmap"/>)
     /// and the zero-copy surface present paths.
     /// </summary>
-    private (Func<LayoutBox, ComputedStyle?>? StyleOverride, Func<DomElement, (double X, double Y)>? ScrollLookup) BuildRenderInputs()
+    private (Func<LayoutBox, ComputedStyle?>? StyleOverride, Func<DomElement, (double X, double Y)>? ScrollLookup)
+        BuildRenderInputs()
     {
         var overrides = _hoverOverrides;
         // While animating, overlay each animated element's sampled style; hover
@@ -751,6 +747,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             w = Bounds.Width > 1 ? Bounds.Width : 1200;
             h = Bounds.Height > 1 ? Bounds.Height : 900;
         }
+
         return new EngineSize((int)Math.Round(w), (int)Math.Round(h));
     }
 
@@ -776,7 +773,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             size.Height == (int)Math.Round(page.Viewport.Height))
             return;
 
-        CaretLog($"RelayoutToViewport: {(int)page.Viewport.Width}x{(int)page.Viewport.Height} -> {size.Width}x{size.Height}");
+        CaretLog(
+            $"RelayoutToViewport: {(int)page.Viewport.Width}x{(int)page.Viewport.Height} -> {size.Width}x{size.Height}");
         var relaid = _relayout(page, size);
         if (relaid is not null)
             ShowPage(relaid, preserveScroll: true);
@@ -870,13 +868,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _scrollOffsets[el] = (newX, newY);
             return true;
         }
+
         return false;
     }
 
     private static bool IsScrollAxisKeyword(Starling.Css.Values.CssValue? value)
         => value is Starling.Css.Values.CssKeyword { Name: var n }
-            && (n.Equals("scroll", StringComparison.OrdinalIgnoreCase)
-             || n.Equals("auto", StringComparison.OrdinalIgnoreCase));
+           && (n.Equals("scroll", StringComparison.OrdinalIgnoreCase)
+               || n.Equals("auto", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Bounding extent of <paramref name="box"/>'s in-flow descendants in its
@@ -894,6 +893,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (right > maxX) maxX = right;
             if (bottom > maxY) maxY = bottom;
         }
+
         return (maxX, maxY);
     }
 
@@ -901,7 +901,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_currentPage is null) return;
         var doc = PointerToDocSpace(e);
-        if (doc is null) { ResetCursor(); return; }
+        if (doc is null)
+        {
+            ResetCursor();
+            return;
+        }
 
         if (_selecting && _selectAnchor is { } anchor)
         {
@@ -966,7 +970,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (_currentPage is null) { EndSelectionDrag(cancel: true); return; }
+        if (_currentPage is null)
+        {
+            EndSelectionDrag(cancel: true);
+            return;
+        }
+
         if (e.InitialPressMouseButton != MouseButton.Left) return;
 
         var wasSelecting = _selecting && _selectAnchor is not null;
@@ -1056,6 +1065,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (!el.HasAttribute("disabled") && !el.HasAttribute("readonly") && HtmlFormControls.IsTextControl(el))
                 return el;
         }
+
         return null;
     }
 
@@ -1146,11 +1156,26 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 if (idx < val.Length) CommitValue(val.Remove(idx, 1), idx);
                 e.Handled = true;
                 break;
-            case Key.Left: MoveCaret(idx - 1); e.Handled = true; break;
-            case Key.Right: MoveCaret(idx + 1); e.Handled = true; break;
-            case Key.Home: MoveCaret(0); e.Handled = true; break;
-            case Key.End: MoveCaret(val.Length); e.Handled = true; break;
-            case Key.Escape: BlurInput(); e.Handled = true; break;
+            case Key.Left:
+                MoveCaret(idx - 1);
+                e.Handled = true;
+                break;
+            case Key.Right:
+                MoveCaret(idx + 1);
+                e.Handled = true;
+                break;
+            case Key.Home:
+                MoveCaret(0);
+                e.Handled = true;
+                break;
+            case Key.End:
+                MoveCaret(val.Length);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                BlurInput();
+                e.Handled = true;
+                break;
             case Key.Enter:
                 // Implicit form submission: Enter in a text field submits its
                 // owning form (the keydown was already dispatched above).
@@ -1161,6 +1186,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                     if (SubmitOwningForm(_focusedInput, ref actioned))
                         RefreshLiveLayout();
                 }
+
                 break;
         }
     }
@@ -1194,7 +1220,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// place when no relayout hook is wired.</summary>
     private void RefreshFocusedLayout()
     {
-        if (_currentPage is null || _relayout is null) { RenderCaret(); return; }
+        if (_currentPage is null || _relayout is null)
+        {
+            RenderCaret();
+            return;
+        }
+
         var relaid = _relayout(_currentPage, CurrentViewportSize());
         if (relaid is not null)
             ShowPage(relaid, preserveScroll: true); // re-renders caret if still focused
@@ -1205,11 +1236,17 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // TEMP caret diagnostics — gated behind STARLING_CARET_DEBUG=1.
     private static readonly bool _caretDebug =
         Environment.GetEnvironmentVariable("STARLING_CARET_DEBUG") == "1";
+
     private static void CaretLog(string msg)
     {
         if (!_caretDebug) return;
-        try { System.IO.File.AppendAllText("/tmp/starling-caret.log", $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); }
-        catch { }
+        try
+        {
+            System.IO.File.AppendAllText("/tmp/starling-caret.log", $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
+        }
+        catch
+        {
+        }
     }
 
     /// <summary>(Re)draws the caret overlay at the current insertion point and
@@ -1217,7 +1254,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private void RenderCaret()
     {
         RemoveCaretOverlay();
-        if (_focusedInput is null || _currentPage is null) { CaretLog("RenderCaret: no focus/page"); return; }
+        if (_focusedInput is null || _currentPage is null)
+        {
+            CaretLog("RenderCaret: no focus/page");
+            return;
+        }
+
         if (ComputeCaretRect(_currentPage.Root, _focusedInput, _caretIndex) is not { } c)
         {
             CaretLog($"RenderCaret: ComputeCaretRect NULL idx={_caretIndex} val='{CurrentValue()}'");
@@ -1271,19 +1313,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             {
                 if (remaining <= frag.Text.Length)
                     return (th.X + frag.X + XOffsetInFragment(frag, remaining),
-                            th.Y + frag.Y, frag.Height, color);
+                        th.Y + frag.Y, frag.Height, color);
                 remaining -= frag.Text.Length;
             }
+
             // Past the last character → caret at the end of the final fragment.
             var last = t.Fragments[^1];
             return (th.X + last.X + XOffsetInFragment(last, last.Text.Length),
-                    th.Y + last.Y, last.Height, color);
+                th.Y + last.Y, last.Height, color);
         }
 
         // Empty field: caret at the content origin, spanning the content box.
         var contentH = inputBox.Frame.Height
-            - inputBox.Border.Top - inputBox.Border.Bottom
-            - inputBox.Padding.Top - inputBox.Padding.Bottom;
+                       - inputBox.Border.Top - inputBox.Border.Bottom
+                       - inputBox.Padding.Top - inputBox.Padding.Bottom;
         return (cx, cy, contentH > 2 ? contentH : 14, color);
     }
 
@@ -1313,6 +1356,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 return prior + CharOffsetInFragment(frag, clickDoc.X - fragLeft);
             prior += frag.Text.Length;
         }
+
         return val.Length;
     }
 
@@ -1330,8 +1374,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 var right = i + 1 < sh.Glyphs.Length ? sh.Glyphs[i + 1].X : frag.Width;
                 if (localX < (left + right) / 2) return i;
             }
+
             return frag.Text.Length;
         }
+
         var approx = (int)Math.Round(localX / Math.Max(1, frag.Width) * frag.Text.Length);
         return Math.Clamp(approx, 0, frag.Text.Length);
     }
@@ -1347,6 +1393,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                     b => b is Starling.Layout.Box.TextBox { Fragments.Count: > 0 }) is { } r)
                 return r;
         }
+
         return null;
     }
 
@@ -1364,7 +1411,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var cx = fx + box.Border.Left + box.Padding.Left;
         var cy = fy + box.Border.Top + box.Padding.Top;
         foreach (var child in box.Children)
-            if (FindBoxAbs(child, cx, cy, pred) is { } r) return r;
+            if (FindBoxAbs(child, cx, cy, pred) is { } r)
+                return r;
         return null;
     }
 
@@ -1417,11 +1465,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _boundScripting = null;
             return;
         }
+
         if (scripting is not null && !ReferenceEquals(scripting, _boundScripting))
         {
             _boundScripting = scripting;
             _liveStopwatch.Restart();
         }
+
         if (scripting is null && !_liveStopwatch.IsRunning) _liveStopwatch.Restart();
         if (!_liveTimer.IsEnabled) _liveTimer.Start();
     }
@@ -1429,13 +1479,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private void LiveTick()
     {
         var page = _currentPage;
-        if (page is null) { _liveTimer.Stop(); _boundScripting = null; _animating = false; return; }
+        if (page is null)
+        {
+            _liveTimer.Stop();
+            _boundScripting = null;
+            _animating = false;
+            return;
+        }
 
         // Age the recently-mutated promotion window by one frame before this tick
         // records new mutations, so a subtree promoted by a past mutation falls
         // back into the base layer once its hysteresis elapses.
         page.Document.DecayRecentMutations();
 
+        using var detachedActivity = GuiActivityScope.Detached();
         // One span per frame, with sub-spans for each phase (pump / relayout /
         // prepare_anim / render) so a trace shows where a laggy animation frame
         // spends its time. The inner "gui.render" span lives in RenderPageBitmap.
@@ -1480,7 +1537,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             CaretLog("LiveTick: layout-relevant mutation -> RefreshLiveLayout");
             RefreshLiveLayout(deferRender: true);
             page = _currentPage;
-            if (page is null) { _liveTimer.Stop(); _boundScripting = null; _animating = false; return; }
+            if (page is null)
+            {
+                _liveTimer.Stop();
+                _boundScripting = null;
+                _animating = false;
+                return;
+            }
         }
 
         // Animation loop: advance the page's animation/transition clock and
@@ -1530,6 +1593,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // turns these into the frame-time distribution + overrun rate and correlates
     // the spikes with the sampled CPU/RAM.
     private const double FrameBudgetMs = 1000.0 / 60; // 16.667ms — the actual 60fps budget
+
     private void EmitFrameTime(long startTimestamp)
     {
         var ms = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
@@ -1557,8 +1621,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var scripting = _currentPage?.Scripting;
         if (scripting is null) return false;
         bool mutated = false;
-        try { mutated = scripting.DispatchEvent(target, evt); }
-        catch (Exception ex) { _diag.Log(DiagLevel.Warn, "gui", $"DOM event dispatch failed: {ex.Message}"); }
+        try
+        {
+            mutated = scripting.DispatchEvent(target, evt);
+        }
+        catch (Exception ex)
+        {
+            _diag.Log(DiagLevel.Warn, "gui", $"DOM event dispatch failed: {ex.Message}");
+        }
+
         if (!_liveTimer.IsEnabled) BindLiveScripting();
         return mutated;
     }
@@ -1614,6 +1685,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                     m |= DispatchDom(control, new Event("change", new EventInit(Bubbles: true)));
                     return m;
                 }
+
                 if (type is "submit" or "image")
                     return SubmitOwningForm(control, ref actioned);
                 return false;
@@ -1651,7 +1723,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private static DomElement? FindClickTarget(LayoutBox? box)
     {
         for (var b = box; b is not null; b = b.Parent)
-            if (b.Element is DomElement el) return el;
+            if (b.Element is DomElement el)
+                return el;
         return null;
     }
 
@@ -1661,7 +1734,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private static DomElement? NearestControl(DomElement el)
     {
         for (DomNode? n = el; n is not null; n = n.ParentNode)
-            if (n is DomElement { LocalName: "button" or "input" } c) return c;
+            if (n is DomElement { LocalName: "button" or "input" } c)
+                return c;
         return null;
     }
 
@@ -1679,6 +1753,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             valid = false;
             DispatchDom(control, new Event("invalid", new EventInit(Cancelable: true)));
         }
+
         return valid;
     }
 
@@ -1793,6 +1868,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 return ScrollToOffset(x ?? _scroll.Offset.X, targetY,
                     $"scrolled to <{el.LocalName}> matching '{selector}'");
             }
+
             return new InputResult(true, $"no rendered element matched '{selector}'");
         }
 
@@ -1825,6 +1901,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 var doc = (loc.X + loc.Box.Frame.Width / 2, loc.Y + loc.Box.Frame.Height / 2);
                 detail = PerformClick(doc).Detail;
             }
+
             mutated |= DispatchDom(focused, MakeKeyboardEvent("keyup", normalized, shift, ctrl, alt, meta));
             if (mutated) RefreshLiveLayout();
             return new InputResult(true, detail);
@@ -1905,6 +1982,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _highlightOverlays.Add(overlay);
             count++;
         }
+
         RefreshOverlays();
         return new InputResult(true, $"highlighted {count} of {els.Count} element(s) matching '{selector}'");
     }
@@ -1947,7 +2025,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         var el = els[0];
         if (HtmlFormControls.IsTextControl(el) && !el.HasAttribute("disabled")
-            && FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is { } loc)
+                                               && FindBoxAbs(_currentPage!.Root, 0, 0,
+                                                   b => ReferenceEquals(b.Element, el)) is { } loc)
         {
             // Focus through the input path so the caret + DOM events are set up;
             // aim the synthetic click at the field centre.
@@ -1996,6 +2075,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             {
                 sb.Append(" bounds=(none)");
             }
+
             if (includeText)
                 sb.Append(" text=\"").Append(TrimForTool(el.TextContent, 500)).Append('"');
             if (includeHtml)
@@ -2003,6 +2083,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             sb.AppendLine();
             shown++;
         }
+
         if (els.Count > capped)
             sb.Append("truncated: ").Append(els.Count - capped).AppendLine(" more");
         return new InputResult(true, sb.ToString());
@@ -2032,7 +2113,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (matches.Count == 0) return new InputResult(true, $"no matches for '{q}'");
 
         var backwards = direction.Equals("previous", StringComparison.OrdinalIgnoreCase)
-            || direction.Equals("prev", StringComparison.OrdinalIgnoreCase);
+                        || direction.Equals("prev", StringComparison.OrdinalIgnoreCase);
         int matchIndex;
         if (backwards)
         {
@@ -2107,37 +2188,37 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 return new InputResult(false, "action must be copy, paste, read, or readSelection");
         }
     }
-
-    /// <summary>Captures the current visible viewport to a PNG.</summary>
-    public InputResult CaptureViewportToPng(string path)
-    {
-        if (_currentPage is null) return new InputResult(false, "no page is loaded");
-        var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
-        var rect = CurrentViewportRect();
-        var (styleOverride, scrollLookup) = BuildRenderInputs();
-        var pageVersion = _animating
-            ? unchecked(_currentPage.DisplayListVersion + (int)_animClockMs)
-            : _currentPage.DisplayListVersion;
-
-        using var rendered = _renderSession.Render(new PageFrameRequest
-        {
-            Root = _currentPage.Root,
-            Scale = (float)_currentScale,
-            StyleOverride = styleOverride,
-            Images = _currentPage.ImageResolver,
-            Viewport = rect,
-            PageVersion = pageVersion,
-            ScrollOffsets = scrollLookup,
-        }, CpuBitmapFrameTarget.Instance);
-        var cpuFrame = rendered.Bitmap
-            ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
-        var dir = Path.GetDirectoryName(full);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
-            cpuFrame.Rgba.Span, cpuFrame.Width, cpuFrame.Height);
-        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, full);
-        return new InputResult(true, $"wrote {full} ({cpuFrame.Width}x{cpuFrame.Height})");
-    }
+    //
+    // /// <summary>Captures the current visible viewport to a PNG.</summary>
+    // public InputResult CaptureViewportToPng(string path)
+    // {
+    //     if (_currentPage is null) return new InputResult(false, "no page is loaded");
+    //     var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
+    //     var rect = CurrentViewportRect();
+    //     var (styleOverride, scrollLookup) = BuildRenderInputs();
+    //     var pageVersion = _animating
+    //         ? unchecked(_currentPage.DisplayListVersion + (int)_animClockMs)
+    //         : _currentPage.DisplayListVersion;
+    //
+    //     using var rendered = _renderSession.Render(new PageFrameRequest
+    //     {
+    //         Root = _currentPage.Root,
+    //         Scale = (float)_currentScale,
+    //         StyleOverride = styleOverride,
+    //         Images = _currentPage.ImageResolver,
+    //         Viewport = rect,
+    //         PageVersion = pageVersion,
+    //         ScrollOffsets = scrollLookup,
+    //     }, CpuBitmapFrameTarget.Instance);
+    //     var cpuFrame = rendered.Bitmap
+    //         ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
+    //     var dir = Path.GetDirectoryName(full);
+    //     if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+    //     using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+    //         cpuFrame.Rgba.Span, cpuFrame.Width, cpuFrame.Height);
+    //     SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, full);
+    //     return new InputResult(true, $"wrote {full} ({cpuFrame.Width}x{cpuFrame.Height})");
+    // }
 
     /// <summary>
     /// Debug report for the <c>browser_computed_style</c> MCP
@@ -2162,7 +2243,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var shown = 0;
         foreach (var el in els)
         {
-            if (shown >= Max) { sb.Append($"; … (+{els.Count - Max} more)"); break; }
+            if (shown >= Max)
+            {
+                sb.Append($"; … (+{els.Count - Max} more)");
+                break;
+            }
 
             var hovered = _hoverOverrides is not null && _hoverOverrides.ContainsKey(el);
             var animating = IsAnimating(el);
@@ -2174,12 +2259,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             var bg = s.GetColor(PropertyId.BackgroundColor);
             if (shown > 0) sb.Append("; ");
             sb.Append($"<{el.LocalName}> opacity={s.Get(PropertyId.Opacity)} " +
-                $"transform={s.Get(PropertyId.Transform)} " +
-                $"color=rgba({color.R},{color.G},{color.B},{color.A}) " +
-                $"bg=rgba({bg.R},{bg.G},{bg.B},{bg.A}) " +
-                $"hoverOverride={(hovered ? "yes" : "no")} animating={(animating ? "yes" : "no")}");
+                      $"transform={s.Get(PropertyId.Transform)} " +
+                      $"color=rgba({color.R},{color.G},{color.B},{color.A}) " +
+                      $"bg=rgba({bg.R},{bg.G},{bg.B},{bg.A}) " +
+                      $"hoverOverride={(hovered ? "yes" : "no")} animating={(animating ? "yes" : "no")}");
             shown++;
         }
+
         return new InputResult(true, sb.ToString());
 
         bool IsAnimating(DomElement el)
@@ -2309,6 +2395,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                     return TypeText(" ");
             }
         }
+
         mutated |= DispatchDom(target, MakeKeyboardEvent("keyup", key, shift, ctrl, alt, meta));
         if (mutated) RefreshLiveLayout();
         return new InputResult(true, $"pressed {key}");
@@ -2377,13 +2464,21 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (string.IsNullOrWhiteSpace(selector)) return (new List<DomElement>(), "selector is empty");
 
         SelectorList list;
-        try { list = SelectorParser.ParseSelectorList(selector); }
-        catch (Exception ex) { return (new List<DomElement>(), $"invalid selector '{selector}': {ex.Message}"); }
+        try
+        {
+            list = SelectorParser.ParseSelectorList(selector);
+        }
+        catch (Exception ex)
+        {
+            return (new List<DomElement>(), $"invalid selector '{selector}': {ex.Message}");
+        }
+
         if (list.Selectors.Count == 0) return (new List<DomElement>(), $"invalid selector '{selector}'");
 
         var matched = new List<DomElement>();
         foreach (var el in _currentPage.Document.DescendantElements())
-            if (SelectorMatcher.Matches(list, el)) matched.Add(el);
+            if (SelectorMatcher.Matches(list, el))
+                matched.Add(el);
         return (matched, null);
     }
 
@@ -2404,6 +2499,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (c.A == 255) c = AvColor.FromArgb(110, c.R, c.G, c.B);
             return new SolidColorBrush(c);
         }
+
         return new SolidColorBrush(AvColor.FromArgb(120, 255, 224, 0)); // translucent yellow
     }
 
@@ -2415,10 +2511,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// out if a handler mutated the DOM. A no-op without a live JS context.</summary>
     private void DispatchMouseMove((double X, double Y) doc, DomElement? target)
     {
-        if (_currentPage?.Scripting is null) { _mouseTarget = target; return; }
+        if (_currentPage?.Scripting is null)
+        {
+            _mouseTarget = target;
+            return;
+        }
 
         var clientX = doc.X - _scroll.Offset.X;
         var clientY = doc.Y - _scroll.Offset.Y;
+
         MouseEvent Make(string type, DomElement? related) =>
             new(type, new EventInit(Bubbles: true, Cancelable: true))
             {
@@ -2435,6 +2536,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (target is { } cur) mutated |= DispatchDom(cur, Make("mouseover", _mouseTarget));
             _mouseTarget = target;
         }
+
         if (target is not null) mutated |= DispatchDom(target, Make("mousemove", null));
         if (mutated) RefreshLiveLayout();
     }
@@ -2447,14 +2549,17 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_focusedInput is null) return false;
         var target = _focusedInput;
-        var down = new KeyboardEvent("keydown", new EventInit(Bubbles: true, Cancelable: true)) { Key = "Enter", Code = "Enter" };
+        var down = new KeyboardEvent("keydown", new EventInit(Bubbles: true, Cancelable: true))
+            { Key = "Enter", Code = "Enter" };
         var mutated = DispatchDom(target, down);
         if (target.LocalName == "input")
         {
             var actioned = false;
             mutated |= SubmitOwningForm(target, ref actioned);
         }
-        var up = new KeyboardEvent("keyup", new EventInit(Bubbles: true, Cancelable: true)) { Key = "Enter", Code = "Enter" };
+
+        var up = new KeyboardEvent("keyup", new EventInit(Bubbles: true, Cancelable: true))
+            { Key = "Enter", Code = "Enter" };
         mutated |= DispatchDom(target, up);
         if (mutated) RefreshLiveLayout();
         return mutated;
@@ -2568,6 +2673,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 style.ComputeWithAnimations(el, nowMs, newCtx);
             }
         }
+
         _hoverScope = newScope ?? new HashSet<DomElement>();
 
         var transitionsActive = animationsWired && _hasActiveAnimations!(_currentPage);
@@ -2583,9 +2689,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _hoverOverrides = null;
             if (hadOverrides)
             {
-                _renderSession.InvalidateBitmapCache();
                 RenderViewportRegion();
             }
+
             return;
         }
 
@@ -2594,7 +2700,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // (non-hover) pixels. Wholesale invalidation keeps the cache simple:
         // any display-list change is a full miss.
         _hoverOverrides = newOverrides;
-        _renderSession.InvalidateBitmapCache();
         // While a hover transition runs, hand off to the live loop: it ticks the
         // clock, re-samples the overrides, and repaints each frame until the
         // transition settles. _animating lets this immediate paint already overlay
@@ -2605,6 +2710,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _animating = true;
             BindLiveScripting();
         }
+
         RenderViewportRegion();
     }
 
@@ -2658,7 +2764,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // target a non-hovered sibling subtree are not recomputed — a bounded
         // approximation that covers the common cases.)
         for (var n = hovered.ParentNode; n is not null; n = n.ParentNode)
-            if (n is DomElement p && Compose(p) is { } ps) result[p] = ps;
+            if (n is DomElement p && Compose(p) is { } ps)
+                result[p] = ps;
 
         // Only elements whose :hover cascade actually changes a paint-relevant
         // property are overridden. Without this, hovering a big container (or the
@@ -2689,7 +2796,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             if (Compose(el) is { } s) result[el] = s;
             for (var child = el.FirstChild; child is not null; child = child.NextSibling)
-                if (child is DomElement c) Recurse(c);
+                if (child is DomElement c)
+                    Recurse(c);
         }
     }
 
@@ -2709,6 +2817,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             var original = baseline.Compute(element);
             if (!SamePaintProperties(original, hovered)) return true;
         }
+
         return false;
     }
 
@@ -2740,59 +2849,59 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// re-layout. Called on page load, on scroll, and on every hover transition
     /// that changes paint-affecting styles.
     /// </summary>
-    private void RenderPageBitmap(Starling.Layout.Rect viewport)
-    {
-        if (_currentPage is null) return;
-
-        // A finished navigation can leave its stopped Activity as the UI thread's
-        // ambient Activity.Current (async span leak — see RunNavigation). A
-        // standalone render (hover / resize / scroll) must not pile into that prior
-        // navigation's trace, so detach from a leaked, already-stopped span. Renders
-        // that run inside a live navigation keep their (non-stopped) parent and nest.
-        if (Activity.Current is { IsStopped: true })
-            Activity.Current = null;
-
-        var animate = _animating && _currentPage is not null;
-        var (styleOverride, scrollLookup) = BuildRenderInputs();
-
-        // While animating, the painted pixels change every frame even though the
-        // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
-        // key by the animation clock to force a fresh raster each frame.
-        // On live animation frames with no per-container scroll offsets, use the
-        // compositor layer tree. Promoted layers keep content-keyed caches, while
-        // transform and opacity are applied at composite time. Pages with element
-        // scroll offsets fall back to the flat path because RenderViaLayerTree does
-        // not thread those offsets yet.
-        var useLayerTree = scrollLookup is null && _animating;
-        RenderFrame rendered;
-        using (_diag.Span("gui", "render"))
-        {
-            var pageVersion = animate
-                ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
-                : _currentPage!.DisplayListVersion;
-            rendered = _renderSession.Render(new PageFrameRequest
-            {
-                Root = _currentPage!.Root,
-                Scale = (float)_currentScale,
-                StyleOverride = styleOverride,
-                Images = _currentPage.ImageResolver,
-                Viewport = viewport,
-                PageVersion = pageVersion,
-                IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-                ScrollOffsets = scrollLookup,
-                UseLayerTree = useLayerTree,
-            }, CpuBitmapFrameTarget.Instance);
-        }
-        var cpuFrame = rendered.Bitmap
-            ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
-        WriteableBitmap bmp;
-        using (rendered)
-            bmp = BitmapBridge.ToWriteableBitmap(cpuFrame, _currentScale);
-
-        (_pageImage.Source as IDisposable)?.Dispose();
-        _pageImage.Source = bmp;
-        RecordPresentedFrame();
-    }
+    // private void RenderPageBitmap(Starling.Layout.Rect viewport)
+    // {
+    //     if (_currentPage is null) return;
+    //
+    //     // A finished navigation can leave its stopped Activity as the UI thread's
+    //     // ambient Activity.Current (async span leak — see RunNavigation). A
+    //     // standalone render (hover / resize / scroll) must not pile into that prior
+    //     // navigation's trace, so detach from a leaked, already-stopped span. Renders
+    //     // that run inside a live navigation keep their (non-stopped) parent and nest.
+    //     if (Activity.Current is { IsStopped: true })
+    //         Activity.Current = null;
+    //
+    //     var animate = _animating && _currentPage is not null;
+    //     var (styleOverride, scrollLookup) = BuildRenderInputs();
+    //
+    //     // While animating, the painted pixels change every frame even though the
+    //     // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
+    //     // key by the animation clock to force a fresh raster each frame.
+    //     // On live animation frames with no per-container scroll offsets, use the
+    //     // compositor layer tree. Promoted layers keep content-keyed caches, while
+    //     // transform and opacity are applied at composite time. Pages with element
+    //     // scroll offsets fall back to the flat path because RenderViaLayerTree does
+    //     // not thread those offsets yet.
+    //     var useLayerTree = scrollLookup is null && _animating;
+    //     RenderFrame rendered;
+    //     using (_diag.Span("gui", "render"))
+    //     {
+    //         var pageVersion = animate
+    //             ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
+    //             : _currentPage!.DisplayListVersion;
+    //         rendered = _renderSession.Render(new PageFrameRequest
+    //         {
+    //             Root = _currentPage!.Root,
+    //             Scale = (float)_currentScale,
+    //             StyleOverride = styleOverride,
+    //             Images = _currentPage.ImageResolver,
+    //             Viewport = viewport,
+    //             PageVersion = pageVersion,
+    //             IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
+    //             ScrollOffsets = scrollLookup,
+    //             UseLayerTree = useLayerTree,
+    //         }, CpuBitmapFrameTarget.Instance);
+    //     }
+    //     var cpuFrame = rendered.Bitmap
+    //         ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
+    //     WriteableBitmap bmp;
+    //     using (rendered)
+    //         bmp = BitmapBridge.ToWriteableBitmap(cpuFrame, _currentScale);
+    //
+    //     (_pageImage.Source as IDisposable)?.Dispose();
+    //     _pageImage.Source = bmp;
+    //     RecordPresentedFrame();
+    // }
 
     /// <summary>Counts a frame that just reached the screen and, once per second,
     /// emits the live frame rate as a metric and a structured log line. The log
@@ -2811,6 +2920,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _fpsWindowStartMs = now;
             _fpsFrames = 0;
         }
+
         _fpsLastFrameMs = now;
         _fpsFrames++;
 
@@ -2843,6 +2953,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (p.Element is { } pel && overrides.TryGetValue(pel, out var inherited))
                 return inherited;
         }
+
         return null;
     }
 
@@ -2882,9 +2993,19 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (box.Element is not { } el) return null;
         var hasAnim = false;
-        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) { hasAnim = true; break; }
+        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el))
+        {
+            hasAnim = true;
+            break;
+        }
+
         if (!hasAnim)
-            foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) { hasAnim = true; break; }
+            foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el))
+            {
+                hasAnim = true;
+                break;
+            }
+
         return hasAnim ? page.Style.ComputeWithAnimations(el, _animClockMs) : null;
     }
 
@@ -3001,6 +3122,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 return;
             }
         }
+
         _onStatus($"Find: '{query}' — no matches", true);
     }
 

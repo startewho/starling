@@ -57,9 +57,13 @@ internal sealed class TileGrid
     {
         public TileKey Key;
         public long ContentHash;
-        public RenderedBitmap Bitmap = null!;
+        public RenderedBitmap? Bitmap;
+        public int Width;
+        public int Height;
         public int Bytes;
     }
+
+    internal readonly record struct ResidentTile(int Width, int Height);
 
     public TileGrid(IDiagnostics? diagnostics = null, long? maxBytes = null)
     {
@@ -107,16 +111,32 @@ internal sealed class TileGrid
     /// </summary>
     public bool TryGetTile(in TileKey key, long contentHash, out RenderedBitmap bitmap)
     {
-        if (_map.TryGetValue(key, out var node) && node.Value.ContentHash == contentHash)
+        if (_map.TryGetValue(key, out var node)
+            && node.Value.ContentHash == contentHash
+            && node.Value.Bitmap is { } residentBitmap)
         {
             _lru.Remove(node);
             _lru.AddFirst(node);
-            bitmap = node.Value.Bitmap;
+            bitmap = residentBitmap;
             _diag.Counter(RenderMetrics.TileCacheHit, 1);
             return true;
         }
         bitmap = null!;
         _diag.Counter(RenderMetrics.TileCacheMiss, 1);
+        return false;
+    }
+
+    public bool TryGetResidentTile(in TileKey key, long contentHash, out ResidentTile tile)
+    {
+        if (_map.TryGetValue(key, out var node) && node.Value.ContentHash == contentHash)
+        {
+            _lru.Remove(node);
+            _lru.AddFirst(node);
+            tile = new ResidentTile(node.Value.Width, node.Value.Height);
+            return true;
+        }
+
+        tile = default;
         return false;
     }
 
@@ -134,7 +154,40 @@ internal sealed class TileGrid
         }
 
         var bytes = bitmap.Rgba.Length;
-        var node = _lru.AddFirst(new Entry { Key = key, ContentHash = contentHash, Bitmap = bitmap, Bytes = bytes });
+        var node = _lru.AddFirst(new Entry
+        {
+            Key = key,
+            ContentHash = contentHash,
+            Bitmap = bitmap,
+            Width = bitmap.Width,
+            Height = bitmap.Height,
+            Bytes = bytes,
+        });
+        _map[key] = node;
+        _bytes += bytes;
+
+        EvictToBudget();
+        _diag.Gauge(RenderMetrics.TileBytes, _bytes);
+    }
+
+    public void PutResidentTile(in TileKey key, long contentHash, int width, int height)
+    {
+        if (_map.TryGetValue(key, out var existing))
+        {
+            _bytes -= existing.Value.Bytes;
+            _lru.Remove(existing);
+            _map.Remove(key);
+        }
+
+        var bytes = checked(width * height * 4);
+        var node = _lru.AddFirst(new Entry
+        {
+            Key = key,
+            ContentHash = contentHash,
+            Width = width,
+            Height = height,
+            Bytes = bytes,
+        });
         _map[key] = node;
         _bytes += bytes;
 

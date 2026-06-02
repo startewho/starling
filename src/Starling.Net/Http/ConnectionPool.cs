@@ -21,7 +21,7 @@ namespace Starling.Net.Http;
 /// </para>
 /// <para>
 /// Thread safety: <see cref="TryAcquire"/>, <see cref="ReleaseAsync"/>,
-/// <see cref="DrainExpired"/>, and <see cref="DisposeAllAsync"/> are all safe
+///  and <see cref="DisposeAllAsync"/> are all safe
 /// to call concurrently. Each origin owns its own queue under a per-origin
 /// lock so requests against different origins don't contend.
 /// </para>
@@ -180,38 +180,6 @@ public sealed class ConnectionPool : IAsyncDisposable
         if (expired is null) return 0;
         foreach (var t in expired)
             await DiscardAsync(t).ConfigureAwait(false);
-        return expired.Count;
-    }
-
-    /// <summary>
-    /// Synchronous overload of <see cref="DrainExpiredAsync"/>. Equivalent
-    /// to <c>DrainExpiredAsync(now).GetAwaiter().GetResult()</c>; provided
-    /// because the spec lists <c>DrainExpired(TimeSpan)</c> as a non-async
-    /// API and some maintenance code paths (background sweeper) don't want
-    /// to await.
-    /// </summary>
-    public int DrainExpired(TimeSpan idleTimeout)
-    {
-        if (idleTimeout <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(idleTimeout));
-        var threshold = DateTimeOffset.UtcNow - idleTimeout;
-        List<IHttpTransport>? expired = null;
-
-        lock (_gate)
-        {
-            foreach (var (_, q) in _byOrigin)
-            {
-                while (q.First is { } first && first.Value.LastUsed <= threshold)
-                {
-                    (expired ??= []).Add(first.Value.Transport);
-                    q.RemoveFirst();
-                }
-            }
-        }
-
-        if (expired is null) return 0;
-        foreach (var t in expired)
-            DiscardAsync(t).AsTask().GetAwaiter().GetResult();
         return expired.Count;
     }
 

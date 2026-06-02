@@ -109,21 +109,6 @@ public class ConnectionPoolTests
     }
 
     [TestMethod]
-    public async Task DrainExpired_sync_overload_disposes_old_entries()
-    {
-        var pool = new ConnectionPool(maxPerOrigin: 4, idleTimeout: TimeSpan.FromHours(1));
-        var origin = Origin();
-        var entry = new FakeTransport(origin);
-        await pool.ReleaseAsync(entry);
-
-        // Pass a zero-ish timeout to force eviction of everything.
-        var drained = pool.DrainExpired(TimeSpan.FromTicks(1));
-
-        drained.Should().Be(1);
-        entry.Disposed.Should().BeTrue();
-    }
-
-    [TestMethod]
     public async Task Pool_capacity_is_bounded_and_oldest_is_evicted()
     {
         var pool = new ConnectionPool(maxPerOrigin: 2, idleTimeout: TimeSpan.FromMinutes(5));

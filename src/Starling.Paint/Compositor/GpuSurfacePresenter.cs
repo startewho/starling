@@ -1,6 +1,7 @@
 using Silk.NET.Core.Contexts;
 using Silk.NET.WebGPU;
 using Starling.Common.Diagnostics;
+using Starling.Paint.Backend;
 
 namespace Starling.Paint.Compositor;
 
@@ -16,9 +17,9 @@ namespace Starling.Paint.Compositor;
 /// Shares the reusable <see cref="GpuBlendEngine"/> with the offscreen
 /// <see cref="GpuLayerCompositor"/> — same device-resident layer-texture cache,
 /// same alpha-over blend — but renders into the surface texture and calls
-/// <c>SurfacePresent</c> instead of copying to a buffer and mapping it. The only
-/// per-frame GPU↔CPU transfer this path keeps is uploading a *changed* layer's
-/// bitmap (a cache miss); an unchanged frame touches no CPU memory.
+/// <c>SurfacePresent</c> instead of copying to a buffer and mapping it. Changed
+/// layer tiles render into GPU textures on this presenter device and are adopted
+/// by the cache, so the surface path does not need GPU-to-CPU tile readback.
 /// </remarks>
 public sealed unsafe class GpuSurfacePresenter : IDisposable
 {
@@ -68,6 +69,24 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
 
     /// <summary>The swapchain colour format wgpu chose for this surface.</summary>
     public TextureFormat Format => _format;
+
+    internal bool HasResidentTexture(long contentHash, int width, int height)
+    {
+        lock (_gate)
+        {
+            return _engine.HasResidentTexture(contentHash, width, height);
+        }
+    }
+
+    internal GpuPaintDeviceContext ImageSharpContext => _engine.ImageSharpContext;
+
+    internal void AdoptTexture(long contentHash, GpuPaintTexture texture)
+    {
+        lock (_gate)
+        {
+            _engine.AdoptTexture(contentHash, texture);
+        }
+    }
 
     /// <summary>
     /// Configures (or reconfigures) the swapchain for a device-pixel size. Call

@@ -7,7 +7,7 @@ public interface IBrowserControlDispatcher
     Task<BrowserControlResult> ForwardAsync(CancellationToken ct);
     Task<BrowserControlResult> ReloadAsync(CancellationToken ct);
     Task<BrowserControlResult> ScreenshotAsync(string path, CancellationToken ct);
-    Task<BrowserControlResult> ScreenshotViewportAsync(string path, CancellationToken ct);
+    // Task<BrowserControlResult> ScreenshotViewportAsync(string path, CancellationToken ct);
     Task<BrowserControlResult> InspectAsync(bool includeHtml, string? logPath, CancellationToken ct);
     Task<BrowserControlResult> ConsoleAsync(string? minLevel, int limit, CancellationToken ct);
     Task<BrowserControlResult> NetworkAsync(int limit, CancellationToken ct);

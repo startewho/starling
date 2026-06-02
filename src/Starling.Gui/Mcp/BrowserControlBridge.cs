@@ -40,8 +40,8 @@ public sealed class BrowserControlBridge : IBrowserControlDispatcher
     public Task<BrowserControlResult> ScreenshotAsync(string path, CancellationToken ct)
         => InvokeAsync(controller => controller.ScreenshotFromToolAsync(path, ct), ct);
 
-    public Task<BrowserControlResult> ScreenshotViewportAsync(string path, CancellationToken ct)
-        => InvokeAsync(controller => controller.ScreenshotViewportFromToolAsync(path, ct), ct);
+    // public Task<BrowserControlResult> ScreenshotViewportAsync(string path, CancellationToken ct)
+    //     => InvokeAsync(controller => controller.ScreenshotViewportFromToolAsync(path, ct), ct);
 
     public Task<BrowserControlResult> InspectAsync(bool includeHtml, string? logPath, CancellationToken ct)
         => InvokeAsync(controller => controller.InspectFromToolAsync(includeHtml, logPath, ct), ct);

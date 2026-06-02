@@ -16,18 +16,68 @@ namespace Starling.Paint.Compositor;
 /// on-screen <see cref="GpuSurfacePresenter"/>, so every path shares the exact
 /// same geometry.
 /// </summary>
-internal readonly struct LayerBlend(
-    RenderedBitmap local,
-    long contentHash,
-    Matrix2D localToDevice,
-    float opacity,
-    Rect? clipDevice)
+internal readonly struct LayerBlend
 {
-    public RenderedBitmap Local { get; } = local;
-    public long ContentHash { get; } = contentHash;
-    public Matrix2D LocalToDevice { get; } = localToDevice;
-    public float Opacity { get; } = opacity;
-    public Rect? ClipDevice { get; } = clipDevice;
+    private LayerBlend(RenderedBitmap local, long contentHash, Matrix2D localToDevice, float opacity, Rect? clipDevice)
+        : this(local, local.Width, local.Height, contentHash, localToDevice, opacity, clipDevice)
+    {
+    }
+
+    private LayerBlend(RenderedBitmap? local, int width, int height, long contentHash, Matrix2D localToDevice, float opacity, Rect? clipDevice)
+    {
+        if (width <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width));
+        }
+
+        if (height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height));
+        }
+
+        Local = local;
+        Width = width;
+        Height = height;
+        ContentHash = contentHash;
+        LocalToDevice = localToDevice;
+        Opacity = opacity;
+        ClipDevice = clipDevice;
+    }
+
+    public RenderedBitmap? Local { get; }
+
+    public int Width { get; }
+
+    public int Height { get; }
+
+    public long ContentHash { get; }
+
+    public Matrix2D LocalToDevice { get; }
+
+    public float Opacity { get; }
+
+    public Rect? ClipDevice { get; }
+
+    public bool HasLocalPixels => Local is not null;
+
+    public static LayerBlend Bitmap(
+        RenderedBitmap local, long contentHash, Matrix2D localToDevice, float opacity, Rect? clipDevice)
+        => new(null, local.Width, local.Height, contentHash, localToDevice, opacity, clipDevice);
+
+    public static LayerBlend ResidentTexture(
+        int width,
+        int height,
+        long contentHash,
+        Matrix2D localToDevice,
+        float opacity,
+        Rect? clipDevice)
+        => new(null, width, height, contentHash, localToDevice, opacity, clipDevice);
+
+    public LayerBlend WithGeometry(Matrix2D localToDevice, Rect? clipDevice)
+        => new(Local, Width, Height, ContentHash, localToDevice, Opacity, clipDevice);
+
+    public RenderedBitmap RequireLocalPixels()
+        => Local ?? throw new InvalidOperationException("CPU blend requires local bitmap pixels.");
 }
 
 /// <summary>

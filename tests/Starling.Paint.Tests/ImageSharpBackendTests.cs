@@ -2,6 +2,7 @@ using AwesomeAssertions;
 using Starling.Common.Image;
 using Starling.Css.Values;
 using Starling.Paint.Backend;
+using Starling.Paint.Compositor;
 using Starling.Paint.DisplayList;
 using LayoutRect = Starling.Layout.Rect;
 using LayoutSize = Starling.Layout.Size;
@@ -158,6 +159,39 @@ public sealed class ImageSharpBackendTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*exceeds*8192*");
+    }
+
+    [TestMethod]
+    public void Gpu_texture_render_uses_external_context()
+    {
+        var engine = GpuBlendEngine.CreateOffscreen();
+        if (engine is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
+        using (engine)
+        {
+            var list = new PaintList();
+            list.Add(new FillRect(
+                new LayoutRect(0, 0, 16, 16),
+                new Starling.Css.Values.CssColor(0, 128, 255, 255),
+                FillRectPixelAlignment.Preserve));
+
+            using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+            using var texture = backend.RenderTexture(
+                list,
+                new LayoutRect(0, 0, 16, 16),
+                scale: 1f,
+                opaqueBackground: false,
+                engine.ImageSharpContext);
+
+            texture.Width.Should().Be(16);
+            texture.Height.Should().Be(16);
+            texture.TextureHandle.Should().NotBe(0);
+            texture.TextureViewHandle.Should().NotBe(0);
+        }
     }
 
     /// <summary>

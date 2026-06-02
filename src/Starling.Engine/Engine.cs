@@ -82,9 +82,6 @@ public sealed class StarlingEngine
     /// returned <see cref="RenderOutcome.DisplayText"/> is a diagnostic text
     /// summary; the PNG is produced from the full parsed document.
     /// </remarks>
-    public Result<RenderOutcome, RenderError> Render(string url, RenderOptions options, string outputPath)
-        => RenderAsync(url, options, outputPath, CancellationToken.None).GetAwaiter().GetResult();
-
     public async Task<Result<RenderOutcome, RenderError>> RenderAsync(
         string url, RenderOptions options, string outputPath, CancellationToken ct = default)
     {

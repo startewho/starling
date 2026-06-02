@@ -7,7 +7,7 @@ public interface IBrowserController
     Task<BrowserControlResult> ForwardFromToolAsync(CancellationToken ct);
     Task<BrowserControlResult> ReloadFromToolAsync(CancellationToken ct);
     Task<BrowserControlResult> ScreenshotFromToolAsync(string path, CancellationToken ct);
-    Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct);
+    // Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct);
     Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct);
     Task<BrowserControlResult> ConsoleFromToolAsync(string? minLevel, int limit, CancellationToken ct);
     Task<BrowserControlResult> NetworkFromToolAsync(int limit, CancellationToken ct);

@@ -42,6 +42,13 @@ internal sealed class H2Connection : IAsyncDisposable
     private readonly AsyncSignal _windowSignal = new();
     private readonly SemaphoreSlim _openLock = new(1, 1);
 
+    // Cancelled when the connection is torn down. Drives the reader loop and the
+    // best-effort control-frame writes that aren't bound to a caller's request,
+    // so they stop promptly instead of running against a dying transport. The
+    // token is captured up front so it stays usable after the source is disposed.
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly CancellationToken _lifetimeToken;
+
     // Peer settings governing what we send.
     private int _peerInitialWindowSize = H2Protocol.DefaultInitialWindowSize;
     private int _peerMaxFrameSize = H2Protocol.DefaultMaxFrameSize;
@@ -72,6 +79,7 @@ internal sealed class H2Connection : IAsyncDisposable
         Origin = origin;
         _diag = diag;
         _onClosed = onClosed;
+        _lifetimeToken = _lifetime.Token;
         _reader = new H2FrameReader(transport.Stream, OurMaxFrameSize);
         _writer = new H2FrameWriter(transport.Stream);
     }
@@ -100,7 +108,9 @@ internal sealed class H2Connection : IAsyncDisposable
         await conn._writer.WriteWindowUpdateAsync(0, OurInitialWindowSize - H2Protocol.DefaultInitialWindowSize, ct)
             .ConfigureAwait(false);
 
-        conn._readerTask = Task.Run(() => conn.ReaderLoopAsync(), CancellationToken.None);
+        // The CancellationToken.None here only governs whether Task.Run starts the
+        // delegate; the loop's own cancellation rides on the connection lifetime token.
+        conn._readerTask = Task.Run(() => conn.ReaderLoopAsync(conn._lifetimeToken), CancellationToken.None);
         diag.Counter("net.h2.connections_opened", 1);
         return conn;
     }
@@ -174,8 +184,11 @@ internal sealed class H2Connection : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            // Cancel the stream at the peer and drop our local state.
-            await SafeWriteAsync(() => _writer.WriteRstStreamAsync(stream.Id, H2ErrorCode.Cancel, CancellationToken.None))
+            // The caller's token fired, so cancel the stream at the peer and drop
+            // our local state. We use the connection lifetime token (not the
+            // already-cancelled caller token) so the RST_STREAM still goes out
+            // while the connection is alive.
+            await SafeWriteAsync(() => _writer.WriteRstStreamAsync(stream.Id, H2ErrorCode.Cancel, _lifetimeToken))
                 .ConfigureAwait(false);
             RemoveStream(stream.Id);
             throw;
@@ -270,7 +283,7 @@ internal sealed class H2Connection : IAsyncDisposable
 
     // ---- Reader loop -------------------------------------------------------
 
-    private async Task ReaderLoopAsync()
+    private async Task ReaderLoopAsync(CancellationToken ct)
     {
         try
         {
@@ -279,7 +292,7 @@ internal sealed class H2Connection : IAsyncDisposable
                 RawFrame? maybe;
                 try
                 {
-                    maybe = await _reader.ReadFrameAsync(CancellationToken.None).ConfigureAwait(false);
+                    maybe = await _reader.ReadFrameAsync(ct).ConfigureAwait(false);
                 }
                 catch (EndOfStreamException)
                 {
@@ -287,14 +300,19 @@ internal sealed class H2Connection : IAsyncDisposable
                 }
 
                 if (maybe is not { } frame) break; // clean EOF
-                await HandleFrameAsync(frame).ConfigureAwait(false);
+                await HandleFrameAsync(frame, ct).ConfigureAwait(false);
             }
 
             CloseAll(NetworkError.TransportFailure);
         }
+        catch (OperationCanceledException)
+        {
+            // The lifetime token fired — the connection is being torn down.
+            CloseAll(NetworkError.TransportFailure);
+        }
         catch (H2ConnectionException ex)
         {
-            await SafeWriteAsync(() => _writer.WriteGoAwayAsync(0, ex.Code, CancellationToken.None))
+            await SafeWriteAsync(() => _writer.WriteGoAwayAsync(0, ex.Code, ct))
                 .ConfigureAwait(false);
             _diag.Log(DiagLevel.Warn, "net", $"h2 connection error {ex.Code}: {ex.Message}");
             CloseAll(NetworkError.ProtocolError);
@@ -311,7 +329,7 @@ internal sealed class H2Connection : IAsyncDisposable
         }
     }
 
-    private async Task HandleFrameAsync(RawFrame frame)
+    private async Task HandleFrameAsync(RawFrame frame, CancellationToken ct)
     {
         // While assembling a header block only CONTINUATION frames for the same
         // stream are legal (RFC 9113 §6.10).
@@ -323,10 +341,10 @@ internal sealed class H2Connection : IAsyncDisposable
         {
             case H2FrameType.Headers: HandleHeaders(frame); break;
             case H2FrameType.Continuation: HandleContinuation(frame); break;
-            case H2FrameType.Data: await HandleDataAsync(frame).ConfigureAwait(false); break;
-            case H2FrameType.Settings: await HandleSettingsAsync(frame).ConfigureAwait(false); break;
+            case H2FrameType.Data: await HandleDataAsync(frame, ct).ConfigureAwait(false); break;
+            case H2FrameType.Settings: await HandleSettingsAsync(frame, ct).ConfigureAwait(false); break;
             case H2FrameType.WindowUpdate: HandleWindowUpdate(frame); break;
-            case H2FrameType.Ping: await HandlePingAsync(frame).ConfigureAwait(false); break;
+            case H2FrameType.Ping: await HandlePingAsync(frame, ct).ConfigureAwait(false); break;
             case H2FrameType.GoAway: HandleGoAway(frame); break;
             case H2FrameType.RstStream: HandleRstStream(frame); break;
             case H2FrameType.Priority: break; // ignored
@@ -395,7 +413,7 @@ internal sealed class H2Connection : IAsyncDisposable
             FinishStream(stream);
     }
 
-    private async Task HandleDataAsync(RawFrame frame)
+    private async Task HandleDataAsync(RawFrame frame, CancellationToken ct)
     {
         if (frame.StreamId == 0)
             throw new H2ConnectionException(H2ErrorCode.ProtocolError, "DATA on stream 0");
@@ -416,14 +434,14 @@ internal sealed class H2Connection : IAsyncDisposable
         // Replenish receive windows so the peer can keep sending.
         if (flowLength > 0)
         {
-            await _writer.WriteWindowUpdateAsync(0, flowLength, CancellationToken.None).ConfigureAwait(false);
+            await _writer.WriteWindowUpdateAsync(0, flowLength, ct).ConfigureAwait(false);
             if (stream is not null && !frame.HasFlag(H2Flags.EndStream))
-                await _writer.WriteWindowUpdateAsync(frame.StreamId, flowLength, CancellationToken.None)
+                await _writer.WriteWindowUpdateAsync(frame.StreamId, flowLength, ct)
                     .ConfigureAwait(false);
         }
     }
 
-    private async Task HandleSettingsAsync(RawFrame frame)
+    private async Task HandleSettingsAsync(RawFrame frame, CancellationToken ct)
     {
         if (frame.StreamId != 0)
             throw new H2ConnectionException(H2ErrorCode.ProtocolError, "SETTINGS on non-zero stream");
@@ -445,7 +463,7 @@ internal sealed class H2Connection : IAsyncDisposable
         }
 
         _windowSignal.Pulse();
-        await _writer.WriteSettingsAckAsync(CancellationToken.None).ConfigureAwait(false);
+        await _writer.WriteSettingsAckAsync(ct).ConfigureAwait(false);
     }
 
     private void ApplyPeerSetting(H2SettingId id, uint value)
@@ -514,14 +532,14 @@ internal sealed class H2Connection : IAsyncDisposable
         if (increment > 0) _windowSignal.Pulse();
     }
 
-    private async Task HandlePingAsync(RawFrame frame)
+    private async Task HandlePingAsync(RawFrame frame, CancellationToken ct)
     {
         if (frame.StreamId != 0)
             throw new H2ConnectionException(H2ErrorCode.ProtocolError, "PING on non-zero stream");
         if (frame.Payload.Length != 8)
             throw new H2ConnectionException(H2ErrorCode.FrameSizeError, "PING length != 8");
         if (!frame.HasFlag(H2Flags.Ack))
-            await _writer.WritePingAckAsync(frame.Payload, CancellationToken.None).ConfigureAwait(false);
+            await _writer.WritePingAckAsync(frame.Payload, ct).ConfigureAwait(false);
     }
 
     private void HandleGoAway(RawFrame frame)
@@ -597,7 +615,7 @@ internal sealed class H2Connection : IAsyncDisposable
         _windowSignal.Pulse();
 
         if (rstCode is { } rc)
-            _ = SafeWriteAsync(() => _writer.WriteRstStreamAsync(stream.Id, rc, CancellationToken.None));
+            _ = SafeWriteAsync(() => _writer.WriteRstStreamAsync(stream.Id, rc, _lifetimeToken));
         stream.Completion.TrySetResult(Result<HttpResponse, NetworkError>.Err(error));
     }
 
@@ -656,6 +674,8 @@ internal sealed class H2Connection : IAsyncDisposable
             _streams.Clear();
             _activeStreams = 0;
         }
+        // Stop the reader loop and any in-flight control-frame writes.
+        _lifetime.Cancel();
         _windowSignal.Pulse();
         foreach (var s in pending)
         {
@@ -727,7 +747,9 @@ internal sealed class H2Connection : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await SafeWriteAsync(() => _writer.WriteGoAwayAsync(0, H2ErrorCode.NoError, CancellationToken.None))
+        // Graceful goodbye while the connection is still alive; if the reader loop
+        // already tore down (lifetime cancelled), this write is skipped.
+        await SafeWriteAsync(() => _writer.WriteGoAwayAsync(0, H2ErrorCode.NoError, _lifetimeToken))
             .ConfigureAwait(false);
         CloseAll(NetworkError.TransportFailure);
         // Dispose the transport first to unblock the reader loop's pending
@@ -737,5 +759,6 @@ internal sealed class H2Connection : IAsyncDisposable
         try { await _readerTask.ConfigureAwait(false); } catch { /* loop teardown */ }
         _writer.Dispose();
         _openLock.Dispose();
+        _lifetime.Dispose();
     }
 }

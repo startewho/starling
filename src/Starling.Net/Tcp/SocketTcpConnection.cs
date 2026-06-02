@@ -58,10 +58,9 @@ internal sealed class SocketTcpConnection : ITcpConnection
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        ShutdownAsync(CancellationToken.None).GetAwaiter().GetResult();
+        await ShutdownAsync(CancellationToken.None);
         _socket.Dispose();
-        return ValueTask.CompletedTask;
     }
 }

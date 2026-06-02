@@ -62,8 +62,8 @@ public sealed class BrowserTools : IMcpToolGroup
             "browser_refresh" => await _browser.ReloadAsync(ct).ConfigureAwait(false),
             "browser_screenshot" => await _browser.ScreenshotAsync(
                 McpArgumentReader.ReadString(arguments, "path"), ct).ConfigureAwait(false),
-            "browser_screenshot_viewport" => await _browser.ScreenshotViewportAsync(
-                McpArgumentReader.ReadString(arguments, "path"), ct).ConfigureAwait(false),
+            // "browser_screenshot_viewport" => await _browser.ScreenshotViewportAsync(
+            //     McpArgumentReader.ReadString(arguments, "path"), ct).ConfigureAwait(false),
             "browser_inspect" => await _browser.InspectAsync(
                 McpArgumentReader.ReadBool(arguments, "includeHtml"),
                 McpArgumentReader.ReadOptionalString(arguments, "logPath"),

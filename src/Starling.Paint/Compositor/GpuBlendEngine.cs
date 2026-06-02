@@ -3,6 +3,7 @@ using Silk.NET.Core.Native;
 using Silk.NET.WebGPU;
 using Starling.Common.Image;
 using Starling.Css.Values;
+using Starling.Paint.Backend;
 using Starling.Paint.Interop;
 using Rect = Starling.Layout.Rect;
 using WgpuBuffer = Silk.NET.WebGPU.Buffer;
@@ -39,7 +40,8 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private BindGroupLayout* _bindLayout;
     private PipelineLayout* _pipelineLayout;
     private ShaderModule* _shader;
-    private readonly Dictionary<TextureFormat, nint> _pipelines = new();
+    private readonly Dictionary<(TextureFormat Format, TextureAlphaMode AlphaMode), nint> _pipelines = new();
+    private GpuPaintDeviceContext? _imageSharpContext;
 
     // Per-layer GPU textures, keyed by slice content hash. Resident across frames
     // so an unchanged layer never re-uploads.
@@ -56,6 +58,11 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private const uint VertexStride = FloatsPerVertex * sizeof(float);
 
     internal int VertsPerQuadCount => VertsPerQuad;
+
+    internal bool HasResidentTexture(long contentHash, int width, int height)
+        => _textures.TryGetValue(contentHash, out var cached)
+            && cached.Width == width
+            && cached.Height == height;
 
     internal static void ThrowIfTextureOversized(string target, int width, int height)
     {
@@ -74,6 +81,14 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         public nint BindGroup;
         public int Width, Height;
         public ulong LastFrame;
+        public TextureAlphaMode AlphaMode;
+        public GpuPaintTexture? Owner;
+    }
+
+    private enum TextureAlphaMode
+    {
+        Premultiplied,
+        Straight,
     }
 
     private GpuBlendEngine(WebGPU api, WgpuExt? poll, Device* device, Queue* queue)
@@ -325,14 +340,27 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
     }
 
-    /// <summary>Lazily builds (and caches) the blend pipeline for a target format.</summary>
-    internal RenderPipeline* PipelineFor(TextureFormat format)
+    internal GpuPaintDeviceContext ImageSharpContext
     {
-        if (_pipelines.TryGetValue(format, out var cached))
+        get
+        {
+            _imageSharpContext ??= new GpuPaintDeviceContext((nint)Device, (nint)Queue);
+            return _imageSharpContext;
+        }
+    }
+
+    /// <summary>Lazily builds the blend pipeline for a target format and texture alpha mode.</summary>
+    private RenderPipeline* PipelineFor(TextureFormat format, TextureAlphaMode alphaMode = TextureAlphaMode.Premultiplied)
+    {
+        var key = (format, alphaMode);
+        if (_pipelines.TryGetValue(key, out var cached))
+        {
             return (RenderPipeline*)cached;
+        }
 
         var vsEntry = (byte*)SilkMarshal.StringToPtr("vs_main", NativeStringEncoding.UTF8);
-        var fsEntry = (byte*)SilkMarshal.StringToPtr("fs_main", NativeStringEncoding.UTF8);
+        var fsEntryName = alphaMode == TextureAlphaMode.Straight ? "fs_straight" : "fs_premul";
+        var fsEntry = (byte*)SilkMarshal.StringToPtr(fsEntryName, NativeStringEncoding.UTF8);
         try
         {
             var attrs = stackalloc VertexAttribute[3];
@@ -363,8 +391,12 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
                 Fragment = &fragment,
             };
             var pipeline = Api.DeviceCreateRenderPipeline(Device, in pipelineDesc);
-            if (pipeline == null) throw new InvalidOperationException("WebGPU render pipeline creation failed.");
-            _pipelines[format] = (nint)pipeline;
+            if (pipeline == null)
+            {
+                throw new InvalidOperationException("WebGPU render pipeline creation failed.");
+            }
+
+            _pipelines[key] = (nint)pipeline;
             return pipeline;
         }
         finally
@@ -376,32 +408,69 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     internal void BeginFrame() => _frame++;
 
+    internal void AdoptTexture(long contentHash, GpuPaintTexture texture)
+    {
+        ArgumentNullException.ThrowIfNull(texture);
+        ThrowIfTextureOversized("WebGPU layer texture", texture.Width, texture.Height);
+
+        var textureHandle = texture.TextureHandle;
+        var viewHandle = texture.TextureViewHandle;
+        if (textureHandle == 0 || viewHandle == 0)
+        {
+            throw new InvalidOperationException("GPU paint texture did not expose valid WebGPU handles.");
+        }
+
+        var bindGroup = CreateBindGroup((TextureView*)viewHandle);
+        var cached = new CachedTexture
+        {
+            Texture = textureHandle,
+            View = viewHandle,
+            BindGroup = bindGroup,
+            Width = texture.Width,
+            Height = texture.Height,
+            LastFrame = _frame,
+            AlphaMode = TextureAlphaMode.Straight,
+            Owner = texture,
+        };
+
+        if (_textures.TryGetValue(contentHash, out var old))
+        {
+            ReleaseCached(old);
+        }
+
+        _textures[contentHash] = cached;
+    }
+
     /// <summary>Uploads any layer whose content-hash texture isn't already resident.</summary>
     internal void UploadLayerTextures(IReadOnlyList<LayerBlend> ops)
     {
         for (var i = 0; i < ops.Count; i++)
         {
             var op = ops[i];
-            var bmp = op.Local;
             if (_textures.TryGetValue(op.ContentHash, out var cached)
-                && cached.Width == bmp.Width && cached.Height == bmp.Height)
+                && cached.Width == op.Width && cached.Height == op.Height)
             {
                 cached.LastFrame = _frame;
                 _textures[op.ContentHash] = cached;
-                continue; // resident — no re-upload
+                continue;
             }
 
-            if (cached.Texture != 0) ReleaseCached(cached); // stale dims, replace
+            if (cached.Texture != 0)
+            {
+                ReleaseCached(cached);
+            }
 
+            var bmp = op.RequireLocalPixels();
             var (texPtr, viewPtr, bgPtr) = CreateAndUpload(bmp);
             _textures[op.ContentHash] = new CachedTexture
             {
                 Texture = texPtr,
                 View = viewPtr,
                 BindGroup = bgPtr,
-                Width = bmp.Width,
-                Height = bmp.Height,
+                Width = op.Width,
+                Height = op.Height,
                 LastFrame = _frame,
+                AlphaMode = TextureAlphaMode.Premultiplied,
             };
         }
     }
@@ -409,33 +478,84 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private (nint Texture, nint View, nint BindGroup) CreateAndUpload(RenderedBitmap bmp)
     {
         ThrowIfTextureOversized("WebGPU layer texture", bmp.Width, bmp.Height);
-        var desc = new TextureDescriptor
+        Texture* tex = null;
+        TextureView* view = null;
+        BindGroup* bindGroup = null;
+        try
         {
-            Usage = TextureUsage.TextureBinding | TextureUsage.CopyDst,
-            Dimension = TextureDimension.Dimension2D,
-            Size = new Extent3D { Width = (uint)bmp.Width, Height = (uint)bmp.Height, DepthOrArrayLayers = 1 },
-            Format = TextureFormat.Rgba8Unorm,
-            MipLevelCount = 1,
-            SampleCount = 1,
-        };
-        var tex = Api.DeviceCreateTexture(Device, in desc);
-        var view = Api.TextureCreateView(tex, (TextureViewDescriptor*)null);
+            var desc = new TextureDescriptor
+            {
+                Usage = TextureUsage.TextureBinding | TextureUsage.CopyDst,
+                Dimension = TextureDimension.Dimension2D,
+                Size = new Extent3D { Width = (uint)bmp.Width, Height = (uint)bmp.Height, DepthOrArrayLayers = 1 },
+                Format = TextureFormat.Rgba8Unorm,
+                MipLevelCount = 1,
+                SampleCount = 1,
+            };
+            tex = Api.DeviceCreateTexture(Device, in desc);
+            if (tex == null)
+            {
+                throw new InvalidOperationException("WebGPU layer texture creation failed.");
+            }
 
-        var premul = Premultiply(bmp);
-        var bytesPerRow = (uint)(bmp.Width * 4);
-        var copyTex = new ImageCopyTexture { Texture = tex, MipLevel = 0, Origin = new Origin3D { X = 0, Y = 0, Z = 0 }, Aspect = TextureAspect.All };
-        var layout = new TextureDataLayout { Offset = 0, BytesPerRow = bytesPerRow, RowsPerImage = (uint)bmp.Height };
-        var extent = new Extent3D { Width = (uint)bmp.Width, Height = (uint)bmp.Height, DepthOrArrayLayers = 1 };
-        fixed (byte* p = premul)
-            Api.QueueWriteTexture(Queue, in copyTex, p, (nuint)premul.Length, in layout, in extent);
+            view = Api.TextureCreateView(tex, (TextureViewDescriptor*)null);
+            if (view == null)
+            {
+                throw new InvalidOperationException("WebGPU layer texture view creation failed.");
+            }
+
+            var premul = Premultiply(bmp);
+            var bytesPerRow = (uint)(bmp.Width * 4);
+            var copyTex = new ImageCopyTexture { Texture = tex, MipLevel = 0, Origin = new Origin3D { X = 0, Y = 0, Z = 0 }, Aspect = TextureAspect.All };
+            var layout = new TextureDataLayout { Offset = 0, BytesPerRow = bytesPerRow, RowsPerImage = (uint)bmp.Height };
+            var extent = new Extent3D { Width = (uint)bmp.Width, Height = (uint)bmp.Height, DepthOrArrayLayers = 1 };
+            fixed (byte* p = premul)
+            {
+                Api.QueueWriteTexture(Queue, in copyTex, p, (nuint)premul.Length, in layout, in extent);
+            }
+
+            bindGroup = (BindGroup*)CreateBindGroup(view);
+            return ((nint)tex, (nint)view, (nint)bindGroup);
+        }
+        catch
+        {
+            if (bindGroup != null)
+            {
+                Api.BindGroupRelease(bindGroup);
+            }
+
+            if (view != null)
+            {
+                Api.TextureViewRelease(view);
+            }
+
+            if (tex != null)
+            {
+                Api.TextureRelease(tex);
+            }
+
+            throw;
+        }
+    }
+
+    private nint CreateBindGroup(TextureView* view)
+    {
+        if (view == null)
+        {
+            throw new InvalidOperationException("WebGPU layer texture view is null.");
+        }
 
         var entries = stackalloc BindGroupEntry[2];
         entries[0] = new BindGroupEntry { Binding = 0, TextureView = view };
         entries[1] = new BindGroupEntry { Binding = 1, Sampler = _sampler };
         var bgDesc = new BindGroupDescriptor { Layout = _bindLayout, EntryCount = 2, Entries = entries };
-        var bg = Api.DeviceCreateBindGroup(Device, in bgDesc);
+        var bindGroup = Api.DeviceCreateBindGroup(Device, in bgDesc);
+        if (bindGroup == null)
+        {
+            throw new InvalidOperationException("WebGPU layer bind group creation failed.");
+        }
 
-        return ((nint)tex, (nint)view, (nint)bg);
+        return (nint)bindGroup;
     }
 
     // Upload premultiplied pixels so the linear sampler filters premultiplied
@@ -482,8 +602,8 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         for (var i = 0; i < ops.Count; i++)
         {
             var op = ops[i];
-            var w = op.Local.Width;
-            var h = op.Local.Height;
+            var w = op.Width;
+            var h = op.Height;
             var m = op.LocalToDevice;
 
             var c0 = Corner(m, 0, 0, 0, 0, targetWidth, targetHeight);
@@ -547,14 +667,26 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     internal void RecordBlend(RenderPassEncoder* pass, IReadOnlyList<LayerBlend> ops,
         TextureFormat format, uint vertexCount, int targetWidth, int targetHeight)
     {
-        Api.RenderPassEncoderSetPipeline(pass, PipelineFor(format));
         if (vertexCount > 0)
+        {
             Api.RenderPassEncoderSetVertexBuffer(pass, 0, _vertexBuffer, 0, _vertexCapacity);
+        }
 
+        RenderPipeline* boundPipeline = null;
         for (var i = 0; i < ops.Count; i++)
         {
             var op = ops[i];
-            if (!_textures.TryGetValue(op.ContentHash, out var tex)) continue;
+            if (!_textures.TryGetValue(op.ContentHash, out var tex))
+            {
+                throw new InvalidOperationException("GPU layer texture was not resident after upload.");
+            }
+
+            var pipeline = PipelineFor(format, tex.AlphaMode);
+            if (pipeline != boundPipeline)
+            {
+                Api.RenderPassEncoderSetPipeline(pass, pipeline);
+                boundPipeline = pipeline;
+            }
 
             SetScissor(pass, op.ClipDevice, targetWidth, targetHeight);
             Api.RenderPassEncoderSetBindGroup(pass, 0, (BindGroup*)tex.BindGroup, 0, (uint*)null);
@@ -597,9 +729,26 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     private void ReleaseCached(CachedTexture c)
     {
-        if (c.BindGroup != 0) Api.BindGroupRelease((BindGroup*)c.BindGroup);
-        if (c.View != 0) Api.TextureViewRelease((TextureView*)c.View);
-        if (c.Texture != 0) Api.TextureRelease((Texture*)c.Texture);
+        if (c.BindGroup != 0)
+        {
+            Api.BindGroupRelease((BindGroup*)c.BindGroup);
+        }
+
+        if (c.Owner is not null)
+        {
+            c.Owner.Dispose();
+            return;
+        }
+
+        if (c.View != 0)
+        {
+            Api.TextureViewRelease((TextureView*)c.View);
+        }
+
+        if (c.Texture != 0)
+        {
+            Api.TextureRelease((Texture*)c.Texture);
+        }
     }
 
     internal static uint Align256(uint value) => (value + 255u) & ~255u;
@@ -608,21 +757,25 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     {
         foreach (var c in _textures.Values) ReleaseCached(c);
         _textures.Clear();
-        foreach (var p in _pipelines.Values) Api.RenderPipelineRelease((RenderPipeline*)p);
+        foreach (var p in _pipelines.Values)
+        {
+            Api.RenderPipelineRelease((RenderPipeline*)p);
+        }
+
         _pipelines.Clear();
         if (_vertexBuffer != null) { Api.BufferRelease(_vertexBuffer); _vertexBuffer = null; }
         if (_shader != null) { Api.ShaderModuleRelease(_shader); _shader = null; }
         if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }
         if (_pipelineLayout != null) { Api.PipelineLayoutRelease(_pipelineLayout); _pipelineLayout = null; }
         if (_bindLayout != null) { Api.BindGroupLayoutRelease(_bindLayout); _bindLayout = null; }
+        if (_imageSharpContext is not null) { _imageSharpContext.Dispose(); _imageSharpContext = null; }
         if (Queue != null) Api.QueueRelease(Queue);
         if (Device != null) Api.DeviceRelease(Device);
     }
 
-    // Textures store premultiplied straight-RGBA8 (no sRGB), so the blend runs in
-    // the same gamma space as the CPU AlphaOver. The fragment scales the
-    // premultiplied sample by the layer opacity; the One/OneMinusSrcAlpha blend
-    // then composites it over the framebuffer.
+    // CPU uploads are premultiplied before they reach WebGPU. Adopted
+    // ImageSharp render targets stay straight RGBA, so they use a fragment entry
+    // that premultiplies the sampled color before alpha-over blending.
     private const string ShaderSource = @"
 struct VsOut {
     @builtin(position) pos : vec4<f32>,
@@ -643,9 +796,15 @@ fn vs_main(@location(0) pos : vec2<f32>, @location(1) uv : vec2<f32>, @location(
 @group(0) @binding(1) var smp : sampler;
 
 @fragment
-fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+fn fs_premul(in : VsOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, smp, in.uv); // premultiplied
     return c * in.opacity;
+}
+
+@fragment
+fn fs_straight(in : VsOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, smp, in.uv);
+    return vec4<f32>(c.rgb * c.a, c.a) * in.opacity;
 }
 ";
 }

@@ -26,7 +26,7 @@ public sealed class App : Application
         {
             _mainWindow = new MainWindow();
             desktop.MainWindow = _mainWindow;
-            desktop.Exit += (_, _) => ShutdownMcpAsync().GetAwaiter().GetResult();
+            desktop.Exit += (_, _) => _ = ShutdownMcpAsync();
 
             StartMcpServer(_mainWindow);
         }
