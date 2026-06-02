@@ -58,6 +58,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     private readonly bool _useWebGpu;
     private readonly FontCollection _fontCollection;
     private readonly ConcurrentDictionary<FontCacheKey, Font> _fontCache = new();
+    private readonly BoxShadowRasterCache _boxShadowCache;
     private static readonly Lazy<WebGPUEnvironmentError> _webGpuAvailability = new(WebGPUEnvironment.ProbeAvailability);
 
     public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diagnostics = null, bool useWebGpu = false)
@@ -68,6 +69,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _useWebGpu = useWebGpu;
         _fontCollection = ImageSharpFontLookup.LoadCollection(webFonts);
+        _boxShadowCache = new BoxShadowRasterCache(_diag);
     }
 
     public string Name => _useWebGpu ? "imagesharp-webgpu" : "imagesharp";
@@ -1031,35 +1033,40 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     {
         if (!TryGetBoxShadowRasterGeometry(shadow, out var geometry)) return;
 
-        // Grow each corner radius by the spread so the silhouette stays a
-        // rounded rect that hugs the box (a negative spread shrinks them).
-        var grown = GrowRadii(shadow.Radii, shadow.Spread);
-        var silhouette = new LayoutRect(geometry.Margin, geometry.Margin, geometry.SilhouetteWidth, geometry.SilhouetteHeight);
-        var shape = BuildRoundedRectPath(silhouette, grown);
-
-        var shadowImage = new Image<Rgba32>(geometry.ImageWidth, geometry.ImageHeight, new Rgba32(0, 0, 0, 0));
-        // This offscreen silhouette fill + Gaussian blur is a full nested
-        // rasterization invisible to the lazy outer command_record span; its
-        // own span makes shadow-heavy pages attributable.
-        using (_diag.Span("paint", "raster.box_shadow_blur"))
+        var key = BoxShadowCacheKey.From(shadow, geometry);
+        if (!_boxShadowCache.TryGet(key, out var shadowImage))
         {
-            Activity.Current?.SetTag("raster.box_shadow.width", geometry.ImageWidth);
-            Activity.Current?.SetTag("raster.box_shadow.height", geometry.ImageHeight);
-            Activity.Current?.SetTag("raster.box_shadow.blur", Math.Max(0, shadow.Blur));
-            // Drawing 3 paints paths through a DrawingCanvas (the same model the main
-            // render path uses), so fill the silhouette inside a Paint scope, then
-            // soften it with a separate Gaussian-blur Mutate.
-            shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
-            if (shadow.Blur > 0)
-                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
+            shadowImage = RasterizeBoxShadow(shadow, geometry);
+            _boxShadowCache.Put(key, shadowImage, pendingImageSources);
         }
-        pendingImageSources.Add(shadowImage);
 
         canvas.DrawImage(
             shadowImage,
             new Rectangle(0, 0, geometry.ImageWidth, geometry.ImageHeight),
             ToRectF(geometry.Destination),
             _resampler);
+    }
+
+    private Image<Rgba32> RasterizeBoxShadow(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
+    {
+        // Grow each corner radius by the spread so the silhouette stays a
+        // rounded rect that hugs the box. A negative spread shrinks it.
+        var grown = GrowRadii(shadow.Radii, shadow.Spread);
+        var silhouette = new LayoutRect(geometry.Margin, geometry.Margin, geometry.SilhouetteWidth, geometry.SilhouetteHeight);
+        var shape = BuildRoundedRectPath(silhouette, grown);
+
+        var shadowImage = new Image<Rgba32>(geometry.ImageWidth, geometry.ImageHeight, new Rgba32(0, 0, 0, 0));
+        using (_diag.Span("paint", "raster.box_shadow_blur"))
+        {
+            Activity.Current?.SetTag("raster.box_shadow.width", geometry.ImageWidth);
+            Activity.Current?.SetTag("raster.box_shadow.height", geometry.ImageHeight);
+            Activity.Current?.SetTag("raster.box_shadow.blur", Math.Max(0, shadow.Blur));
+            shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
+            if (shadow.Blur > 0)
+                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
+        }
+
+        return shadowImage;
     }
 
     private static bool BoxShadowIntersectsTarget(DrawBoxShadow shadow, Matrix2D current, LayoutRect target)
@@ -1102,6 +1109,36 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         int ImageWidth,
         int ImageHeight,
         LayoutRect Destination);
+
+    private readonly record struct BoxShadowCacheKey(
+        int ImageWidth,
+        int ImageHeight,
+        double SilhouetteWidth,
+        double SilhouetteHeight,
+        int Margin,
+        double Blur,
+        double Spread,
+        CornerRadii Radii,
+        byte R,
+        byte G,
+        byte B,
+        byte A)
+    {
+        public static BoxShadowCacheKey From(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
+            => new(
+                geometry.ImageWidth,
+                geometry.ImageHeight,
+                geometry.SilhouetteWidth,
+                geometry.SilhouetteHeight,
+                geometry.Margin,
+                Math.Max(0, shadow.Blur),
+                shadow.Spread,
+                shadow.Radii,
+                shadow.Color.R,
+                shadow.Color.G,
+                shadow.Color.B,
+                shadow.Color.A);
+    }
 
     private static LayoutRect TransformedAabb(LayoutRect r, Matrix2D m)
     {
@@ -1211,10 +1248,105 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         }
     }
 
+    private sealed class BoxShadowRasterCache(IDiagnostics diag) : IDisposable
+    {
+        private const long DefaultBudgetBytes = 64L * 1024 * 1024;
+
+        private readonly object _gate = new();
+        private readonly long _maxBytes = ReadBudgetEnv();
+        private readonly Dictionary<BoxShadowCacheKey, LinkedListNode<Entry>> _map = new();
+        private readonly LinkedList<Entry> _lru = new();
+        private long _bytes;
+
+        private static long ReadBudgetEnv()
+        {
+            var raw = Environment.GetEnvironmentVariable("STARLING_BOX_SHADOW_CACHE_BYTES");
+            return long.TryParse(raw, out var value) && value > 0 ? value : DefaultBudgetBytes;
+        }
+
+        public bool TryGet(BoxShadowCacheKey key, out Image<Rgba32> image)
+        {
+            lock (_gate)
+            {
+                if (_map.TryGetValue(key, out var node))
+                {
+                    _lru.Remove(node);
+                    _lru.AddFirst(node);
+                    image = node.Value.Image;
+                    diag.Counter("paint.box_shadow.cache_hit", 1);
+                    return true;
+                }
+            }
+
+            image = null!;
+            diag.Counter("paint.box_shadow.cache_miss", 1);
+            return false;
+        }
+
+        public bool Put(BoxShadowCacheKey key, Image<Rgba32> image, DisposableBag deferredDisposals)
+        {
+            var bytes = checked((long)image.Width * image.Height * 4);
+            if (bytes > _maxBytes)
+            {
+                deferredDisposals.Add(image);
+                diag.Counter("paint.box_shadow.cache_oversize", 1);
+                return false;
+            }
+
+            lock (_gate)
+            {
+                if (_map.TryGetValue(key, out var existing))
+                {
+                    Remove(existing, deferredDisposals);
+                }
+
+                var node = _lru.AddFirst(new Entry(key, image, bytes));
+                _map[key] = node;
+                _bytes += bytes;
+                EvictToBudget(deferredDisposals);
+                diag.Gauge("paint.box_shadow.cache_bytes", _bytes);
+                return true;
+            }
+        }
+
+        private void EvictToBudget(DisposableBag deferredDisposals)
+        {
+            while (_bytes > _maxBytes && _lru.Last is { } last)
+            {
+                Remove(last, deferredDisposals);
+                diag.Counter("paint.box_shadow.cache_evict", 1);
+            }
+        }
+
+        private void Remove(LinkedListNode<Entry> node, DisposableBag deferredDisposals)
+        {
+            _lru.Remove(node);
+            _map.Remove(node.Value.Key);
+            _bytes -= node.Value.Bytes;
+            deferredDisposals.Add(node.Value.Image);
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                foreach (var entry in _lru)
+                    entry.Image.Dispose();
+
+                _lru.Clear();
+                _map.Clear();
+                _bytes = 0;
+            }
+        }
+
+        private sealed record Entry(BoxShadowCacheKey Key, Image<Rgba32> Image, long Bytes);
+    }
+
     public void Dispose()
     {
         // FontCollection has no Dispose. Clear cached Font entries so a
         // long-lived host releases per-spec lookup results.
+        _boxShadowCache.Dispose();
         _fontCache.Clear();
         _ = _fonts;
         _ = _webFonts;
