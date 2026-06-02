@@ -28,9 +28,8 @@ using RenderOptions = Starling.Engine.RenderOptions;
 namespace Starling.Gui;
 
 /// <summary>
-/// Composition root — sidebar (bookmarks/pinned/today) | toolbar over
-/// <see cref="WebviewPanel"/> over status bar. Owns the <see cref="BrowserSession"/>
-/// and the navigation flow. Mirrors the MAUI <c>MainPage</c> chrome.
+/// Composition root for the sidebar, toolbar, webview, status bar, DevTools,
+/// and navigation flow.
 /// </summary>
 public sealed class MainWindow : Window, IBrowserController
 {
@@ -744,7 +743,8 @@ public sealed class MainWindow : Window, IBrowserController
     }
 
     // ---- IBrowserController -------------------------------------------------
-    // MCP tool calls land here, marshaled to the UI thread by BrowserControlBridge.
+    // Model Context Protocol tool calls land here, marshaled to the UI thread
+    // by BrowserControlBridge.
     // Each method drives the same navigation flow as the toolbar buttons and
     // returns a BrowserControlResult so the agent sees the post-state.
 

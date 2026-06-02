@@ -1,10 +1,9 @@
 namespace Starling.Gui.Theme;
 
 /// <summary>
-/// Active theme / density / type selection and resolved token sets. Ported
-/// from src/Starling.Gui/Theme/ThemeManager.cs minus the MAUI dispatcher
-/// coupling. Avalonia controls subscribe to <see cref="Changed"/> and rebuild
-/// or re-bind their visuals when it fires.
+/// Active theme, density, and type selection plus resolved token sets. Avalonia
+/// controls subscribe to <see cref="Changed"/> and rebuild or re-bind their
+/// visuals when it fires.
 /// </summary>
 public sealed class ThemeManager
 {
