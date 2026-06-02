@@ -6,6 +6,7 @@ public sealed class SelectorIndex<T>
 {
     private readonly Dictionary<string, List<SelectorIndexEntry<T>>> _ids = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<SelectorIndexEntry<T>>> _classes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<SelectorIndexEntry<T>>> _attributes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<SelectorIndexEntry<T>>> _tags = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SelectorIndexEntry<T>> _universal = [];
     private int _sequence;
@@ -31,6 +32,8 @@ public sealed class SelectorIndex<T>
             AddTo(_ids, id.Id, entry);
         else if (bucketSelectors.OfType<ClassSelector>().FirstOrDefault() is { } @class)
             AddTo(_classes, @class.ClassName, entry);
+        else if (bucketSelectors.OfType<AttributeSelector>().FirstOrDefault() is { } attribute)
+            AddTo(_attributes, attribute.Name, entry);
         else if (bucketSelectors.OfType<TypeSelector>().FirstOrDefault() is { } type)
             AddTo(_tags, type.LocalName, entry);
         else
@@ -46,6 +49,9 @@ public sealed class SelectorIndex<T>
         foreach (var className in element.ClassList)
             if (_classes.TryGetValue(className, out var classEntries))
                 AddEntries(entries, classEntries);
+        foreach (var attribute in element.Attributes)
+            if (_attributes.TryGetValue(attribute.Name, out var attributeEntries))
+                AddEntries(entries, attributeEntries);
         if (_tags.TryGetValue(element.LocalName, out var tagEntries))
             AddEntries(entries, tagEntries);
         AddEntries(entries, _universal);

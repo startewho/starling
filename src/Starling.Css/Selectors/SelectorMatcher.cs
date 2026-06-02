@@ -4,7 +4,8 @@ namespace Starling.Css.Selectors;
 
 public sealed class SelectorMatchContext
 {
-    public static SelectorMatchContext Default { get; } = new();
+    public static SelectorMatchContext Default => new();
+    private Dictionary<HasMatchCacheKey, bool>? _hasMatchCache;
 
     public Element? HoveredElement { get; init; }
     public Element? ActiveElement { get; init; }
@@ -32,6 +33,7 @@ public sealed class SelectorMatchContext
         DocumentUrl = DocumentUrl,
         VisitedHrefs = VisitedHrefs,
         HasDepth = depth,
+        _hasMatchCache = _hasMatchCache,
     };
 
     internal SelectorMatchContext WithScope(Element? scope) => new()
@@ -45,7 +47,46 @@ public sealed class SelectorMatchContext
         DocumentUrl = DocumentUrl,
         VisitedHrefs = VisitedHrefs,
         HasDepth = HasDepth,
+        _hasMatchCache = _hasMatchCache,
     };
+
+    internal bool TryGetHasMatch(Element scope, SelectorList list, out bool matched)
+    {
+        if (_hasMatchCache is not null &&
+            _hasMatchCache.TryGetValue(new HasMatchCacheKey(scope, list, HasDepth), out matched))
+            return true;
+        matched = false;
+        return false;
+    }
+
+    internal void SetHasMatch(Element scope, SelectorList list, bool matched)
+    {
+        _hasMatchCache ??= new Dictionary<HasMatchCacheKey, bool>();
+        _hasMatchCache[new HasMatchCacheKey(scope, list, HasDepth)] = matched;
+    }
+
+    private readonly struct HasMatchCacheKey(Element scope, SelectorList list, int hasDepth) : IEquatable<HasMatchCacheKey>
+    {
+        private readonly Element _scope = scope;
+        private readonly SelectorList _list = list;
+        private readonly int _hasDepth = hasDepth;
+
+        public bool Equals(HasMatchCacheKey other)
+            => ReferenceEquals(_scope, other._scope)
+            && ReferenceEquals(_list, other._list)
+            && _hasDepth == other._hasDepth;
+
+        public override bool Equals(object? obj) => obj is HasMatchCacheKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            var h = new HashCode();
+            h.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_scope));
+            h.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_list));
+            h.Add(_hasDepth);
+            return h.ToHashCode();
+        }
+    }
 }
 
 public readonly record struct SelectorMatchResult(bool Matched, PseudoElement? Pseudo)
@@ -63,7 +104,7 @@ public static class SelectorMatcher
     {
         ArgumentNullException.ThrowIfNull(selectorList);
         ArgumentNullException.ThrowIfNull(element);
-        context ??= SelectorMatchContext.Default;
+        context ??= new SelectorMatchContext();
         return selectorList.Selectors.Any(selector => Matches(selector, element, context));
     }
 
@@ -71,7 +112,7 @@ public static class SelectorMatcher
     {
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(element);
-        context ??= SelectorMatchContext.Default;
+        context ??= new SelectorMatchContext();
         return MatchWithResult(selector, element, context).Matched;
     }
 
@@ -83,7 +124,7 @@ public static class SelectorMatcher
     {
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(element);
-        context ??= SelectorMatchContext.Default;
+        context ??= new SelectorMatchContext();
         if (selector.Parts.Count == 0) return SelectorMatchResult.NoMatch;
 
         // Caller filters by pseudo-element kind: if the caller supplied a PseudoElement filter,
@@ -134,7 +175,7 @@ public static class SelectorMatcher
     {
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(element);
-        context ??= SelectorMatchContext.Default;
+        context ??= new SelectorMatchContext();
         return MatchesCompound(selector, element, context);
     }
 
@@ -313,30 +354,64 @@ public static class SelectorMatcher
     {
         if (argument is not SelectorList list) return false;
         if (context.HasDepth >= MaxHasDepth) return false; // depth bound — Selectors 4 §16.8
+        if (context.TryGetHasMatch(element, list, out var cached))
+            return cached;
 
         var childContext = context.WithHasDepth(context.HasDepth + 1).WithScope(element);
 
         foreach (var selector in list.Selectors)
         {
             if (selector.Parts.Count == 0) continue;
-            var leadingCombinator = selector.Parts[0].CombinatorFromPrevious;
-            var search = ElementsForHas(element, leadingCombinator);
+            var search = ElementsForHas(element, selector);
             foreach (var candidate in search)
-            {
                 if (MatchesScoped(selector, candidate, element, childContext))
+                {
+                    context.SetHasMatch(element, list, true);
                     return true;
-            }
+                }
         }
+        context.SetHasMatch(element, list, false);
         return false;
     }
 
-    private static IEnumerable<Element> ElementsForHas(Element scope, SelectorCombinator leading)
-        => leading switch
+    private static IEnumerable<Element> ElementsForHas(Element scope, ComplexSelector selector)
+    {
+        var leading = selector.Parts[0].CombinatorFromPrevious;
+        var onePart = selector.Parts.Count == 1;
+        return leading switch
         {
+            SelectorCombinator.Child when onePart => ChildElements(scope),
+            SelectorCombinator.NextSibling when onePart => SingleElement(NextElementSibling(scope)),
+            SelectorCombinator.NextSibling => NextElementSiblingAndDescendants(scope),
+            SelectorCombinator.SubsequentSibling when onePart => NextElementSiblings(scope),
             SelectorCombinator.NextSibling or SelectorCombinator.SubsequentSibling =>
                 NextElementSiblingsAndDescendants(scope),
             _ => scope.Descendants().OfType<Element>(),
         };
+    }
+
+    private static IEnumerable<Element> ChildElements(Element scope)
+    {
+        for (var child = scope.FirstChild; child is not null; child = child.NextSibling)
+            if (child is Element childElement)
+                yield return childElement;
+    }
+
+    private static IEnumerable<Element> SingleElement(Element? element)
+    {
+        if (element is not null)
+            yield return element;
+    }
+
+    private static IEnumerable<Element> NextElementSiblingAndDescendants(Element scope)
+    {
+        var sibling = NextElementSibling(scope);
+        if (sibling is null)
+            yield break;
+        yield return sibling;
+        foreach (var d in sibling.Descendants().OfType<Element>())
+            yield return d;
+    }
 
     private static IEnumerable<Element> NextElementSiblingsAndDescendants(Element scope)
     {
