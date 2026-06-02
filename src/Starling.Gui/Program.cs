@@ -6,8 +6,6 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Starling.Common.Diagnostics;
 using Starling.Gui.Theme;
-// Telemetry assembly is now Starling.Telemetry on disk but the in-file
-// namespace was not renamed in the Starling→Starling pass.
 using Starling.Telemetry;
 
 namespace Starling.Gui;
@@ -22,8 +20,8 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // If STARLING_TELEMETRY_DAEMON is set, point the OTLP exporter at the
-        // standalone daemon (HTTP/protobuf) before telemetry is wired.
+        // If STARLING_TELEMETRY_DAEMON is set, point the OpenTelemetry Protocol
+        // exporter at the standalone daemon before telemetry is wired.
         OtelBootstrap.ConfigureDaemonExportFromEnv();
 
         Services = BuildServices();
@@ -61,10 +59,9 @@ internal static class Program
 
         var provider = host.Services.BuildServiceProvider();
 
-        // Mirror the MAUI workaround: the OTel TracerProvider and
-        // MeterProvider register as IHostedService and only attach the
-        // ActivityListener inside StartAsync. We're not running the host, so
-        // resolve them by hand to force the build closure.
+        // TracerProvider and MeterProvider register as hosted services and only
+        // attach listeners inside StartAsync. We do not run the host here, so
+        // resolve them by hand to force the providers to build.
         _ = provider.GetService<TracerProvider>();
         _ = provider.GetService<MeterProvider>();
         return provider;

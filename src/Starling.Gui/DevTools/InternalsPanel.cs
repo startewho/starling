@@ -11,10 +11,10 @@ using Starling.Telemetry;
 namespace Starling.Gui.DevTools;
 
 /// <summary>
-/// Live internals panel — module chips count distinct activity sources /
-/// operation areas, metric cards list the last few <see cref="MeterRecord"/>
-/// entries per instrument. The MAUI panel's Parser/JS/GC/IPC cards are not
-/// populated since no upstream engine counters exist yet — left as TODO.
+/// Live internals panel. Module chips count distinct activity sources and
+/// operation areas. Metric cards list the last few <see cref="MeterRecord"/>
+/// entries per instrument. Some cards stay placeholders until parser, JS engine,
+/// and network counters are exposed.
 /// </summary>
 public sealed class InternalsPanel : Grid, IDisposable
 {
@@ -51,7 +51,7 @@ public sealed class InternalsPanel : Grid, IDisposable
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
         grid.Children.Add(BuildCard("Metrics (live)", _metricsCard)); SetColumn(_metricsCard.Parent as Control ?? _metricsCard, 0);
         grid.Children.Add(BuildPlaceholderCard("Parser tree", "TODO: hook Starling.Engine parser counter"));
-        // Two more rows of placeholder cards filled below.
+        // Placeholder cards for counters that are not exposed yet.
         var stack = new StackPanel { Spacing = 8, Margin = new Thickness(tm.Metrics.PadSm) };
         stack.Children.Add(grid);
         stack.Children.Add(BuildGridRow(

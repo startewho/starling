@@ -11,13 +11,10 @@ using LayoutRect = Starling.Layout.Rect;
 namespace Starling.Gui.Core.Rendering;
 
 /// <summary>
-/// Renders a page's layer tree straight to a window's wgpu swapchain for the
-/// native Silk.NET shell — the zero-copy present path. Unlike
-/// <c>PageRendererHost</c>, which produces a <c>RenderedBitmap</c> for Avalonia
-/// to re-upload, this builds the layer tree and hands its blend ops to a
-/// <see cref="GpuSurfacePresenter"/>, which composites into the swapchain texture
-/// and presents. The only per-frame GPU↔CPU transfer left is uploading a layer
-/// whose content actually changed.
+/// Renders a page's layer tree straight to a window swapchain for the zero-copy
+/// present path. The host supplies a <see cref="GpuSurfacePresenter"/>, and this
+/// renderer builds the layer tree, uploads changed layer content, composites, and
+/// presents.
 /// </summary>
 /// <remarks>
 /// Holds the same persistent per-layer caches as the Avalonia path (keyed by
@@ -32,7 +29,7 @@ public sealed class NativeViewportRenderer : IDisposable
     private readonly IPaintBackend _backend;
     // One session tile cache for all composited documents (chrome / page / overlay):
     // their layer-root elements are distinct objects, so they never collide on a
-    // layer id within the shared grid (wp:M12-05).
+    // layer id within the shared grid.
     private readonly TileGrid _tiles;
     private bool _disposed;
 

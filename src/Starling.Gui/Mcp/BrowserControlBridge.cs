@@ -3,11 +3,10 @@ using Avalonia.Threading;
 namespace Starling.Gui.Mcp;
 
 /// <summary>
-/// Avalonia port of Starling.Gui's Mcp/BrowserControlBridge.cs. Marshals MCP
-/// tool calls onto the UI thread via <see cref="Dispatcher.UIThread"/> instead
-/// of MAUI's <c>MainThread.InvokeOnMainThreadAsync</c>. A semaphore serializes
-/// concurrent tool calls so the browser state machine only sees one mutation
-/// at a time.
+/// Bridges Model Context Protocol browser tools to the active Avalonia window.
+/// Marshals tool calls onto <see cref="Dispatcher.UIThread"/>. A semaphore
+/// serializes concurrent tool calls so the browser state machine only sees one
+/// mutation at a time.
 /// </summary>
 public sealed class BrowserControlBridge : IBrowserControlDispatcher
 {
@@ -85,8 +84,8 @@ public sealed class BrowserControlBridge : IBrowserControlDispatcher
                     canGoForward: false,
                     isBusy: false);
 
-            // Dispatcher.UIThread.InvokeAsync<T>(Func<Task<T>>) flattens the
-            // returned task — same semantic as MAUI's MainThread.InvokeOnMainThreadAsync.
+            // Dispatcher.UIThread.InvokeAsync<T>(Func<Task<T>>) unwraps the
+            // returned task, so the caller observes the tool action's result directly.
             return await Dispatcher.UIThread.InvokeAsync(() => action(controller));
         }
         finally

@@ -8,9 +8,9 @@ using Starling.Gui.Theme;
 namespace Starling.Gui.Chrome;
 
 /// <summary>
-/// Shared chrome atoms — Avalonia port of Starling.Gui's Chrome/ChromeKit.cs.
-/// All helpers read colours and metrics from the supplied <see cref="ThemeManager"/>
-/// at build time; a theme flip plus a tree rebuild keeps everything in sync.
+/// Shared Avalonia chrome atoms. All helpers read colours and metrics from the
+/// supplied <see cref="ThemeManager"/> at build time. A theme flip plus a tree
+/// rebuild keeps everything in sync.
 /// </summary>
 public static class ChromeKit
 {
@@ -95,8 +95,7 @@ public static class ChromeKit
     }
 
     /// <summary>
-    /// Wires a left-button click to a control by listening on PointerReleased —
-    /// the Avalonia analogue of MAUI's TapGestureRecognizer on a Border.
+    /// Wires a left-button click to a control by listening on PointerReleased.
     /// </summary>
     public static void AttachClick(Control control, Action onClick)
     {
