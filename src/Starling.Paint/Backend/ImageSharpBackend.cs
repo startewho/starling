@@ -9,6 +9,7 @@ using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Drawing.Processing.Backends;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Css.Values;
@@ -50,6 +51,7 @@ namespace Starling.Paint.Backend;
 /// </remarks>
 internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 {
+    private readonly IResampler _resampler = KnownResamplers.NearestNeighbor;
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
     private readonly IDiagnostics _diag;
@@ -341,6 +343,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         transforms.Push(viewportTransform);
         canvas.Save(new DrawingOptions { Transform = ToCanvasMatrix(viewportTransform, scale) });
 
+        var target = new LayoutRect(0, 0, width / scale, height / scale);
         var stats = new RasterStats();
         // replay_items isolates the display-list walk (recording + TextBlock build)
         // from the pixel work, matching the CPU/GPU span split.
@@ -349,7 +352,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             foreach (var item in list.Items)
             {
                 var start = Stopwatch.GetTimestamp();
-                Apply(canvas, item, scale, pendingImageSources, transforms, stats);
+                Apply(canvas, item, scale, pendingImageSources, transforms, stats, target);
                 stats.Record(item, Stopwatch.GetTimestamp() - start);
             }
         }
@@ -366,7 +369,22 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         }
     }
 
-    private void Apply(DrawingCanvas canvas, DisplayItem item, float scale, DisposableBag pendingImageSources, Stack<Matrix2D> transforms, RasterStats stats)
+    /// <summary>
+    /// Applies the specified <paramref name="item"/> to the given <paramref name="canvas"/>
+    /// at the provided <paramref name="scale"/> using the transformation stack <paramref name="transforms"/>.
+    /// Updates <paramref name="stats"/> with rasterization details and utilizes
+    /// <paramref name="pendingImageSources"/> for managing temporary image assets.
+    /// The operation is confined to the designated <paramref name="target"/> layout bounds.
+    /// </summary>
+    /// <param name="canvas">The drawing surface on which the display item is applied.</param>
+    /// <param name="item">The visual element that will be rendered on the canvas.</param>
+    /// <param name="scale">The scaling factor to adjust for rendering resolution.</param>
+    /// <param name="pendingImageSources">A collection of disposable image resources used during the rendering process.</param>
+    /// <param name="transforms">A stack of transformation matrices applied to the display item.</param>
+    /// <param name="stats">An object gathering statistics about the rasterization process.</param>
+    /// <param name="target">The layout bounds restricting the rendering area on the canvas.</param>
+    private void Apply(DrawingCanvas canvas, DisplayItem item, float scale, DisposableBag pendingImageSources,
+        Stack<Matrix2D> transforms, RasterStats stats, LayoutRect target)
     {
         switch (item)
         {
@@ -420,6 +438,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 }
                 break;
             case DrawBoxShadow shadow:
+                if (!BoxShadowIntersectsTarget(shadow, transforms.Peek(), target)) return;
                 _diag.Counter("paint.box_shadow", 1);
                 DrawBoxShadow(canvas, shadow, scale, pendingImageSources);
                 break;
@@ -819,10 +838,10 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
         // Composite at the offset origin minus the padding we added.
         var destRect = new RectangleF(originX - pad, originY - pad, width, height);
-        canvas.DrawImage(glyphLayer, new Rectangle(0, 0, width, height), destRect, KnownResamplers.Bicubic);
+        canvas.DrawImage(glyphLayer, new Rectangle(0, 0, width, height), destRect, _resampler);
     }
 
-    private static void DrawImage(DrawingCanvas canvas, DrawImage item, DisposableBag pendingImageSources)
+    private void DrawImage(DrawingCanvas canvas, DrawImage item, DisposableBag pendingImageSources)
     {
         if (item.Bounds.Width <= 0 || item.Bounds.Height <= 0) return;
         var decoded = item.Source;
@@ -854,7 +873,8 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             sourceRect = new Rectangle(0, 0, decoded.Width, decoded.Height);
         }
         var destRect = ToRectF(item.Bounds);
-        canvas.DrawImage(src, sourceRect, destRect, KnownResamplers.Bicubic);
+
+        canvas.DrawImage(src, sourceRect, destRect, _resampler);
     }
 
     private readonly record struct FontCacheKey(FontSpec Spec, float Size, int Probe);
@@ -1009,55 +1029,96 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     /// </summary>
     private void DrawBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, float scale, DisposableBag pendingImageSources)
     {
-        if (shadow.Inset) return; // inner shadows deferred
-        if (shadow.Color.A == 0) return;
-
-        // The spread-expanded silhouette in CSS px (still at the box origin).
-        var spread = shadow.Spread;
-        var silhouetteW = shadow.Bounds.Width + 2 * spread;
-        var silhouetteH = shadow.Bounds.Height + 2 * spread;
-        if (silhouetteW <= 0 || silhouetteH <= 0) return;
-
-        var blur = Math.Max(0, shadow.Blur);
-        // Padding around the silhouette so the Gaussian tail isn't clipped. A
-        // Gaussian is effectively zero past 3σ; σ = blur/2, so 3σ = 1.5·blur.
-        var margin = (int)Math.Ceiling(blur * 1.5) + 2;
-
-        var imgW = (int)Math.Ceiling(silhouetteW) + 2 * margin;
-        var imgH = (int)Math.Ceiling(silhouetteH) + 2 * margin;
-        if (imgW <= 0 || imgH <= 0 || (long)imgW * imgH > 64_000_000L) return; // guard pathological sizes
+        if (!TryGetBoxShadowRasterGeometry(shadow, out var geometry)) return;
 
         // Grow each corner radius by the spread so the silhouette stays a
         // rounded rect that hugs the box (a negative spread shrinks them).
-        var grown = GrowRadii(shadow.Radii, spread);
-        var silhouette = new LayoutRect(margin, margin, silhouetteW, silhouetteH);
+        var grown = GrowRadii(shadow.Radii, shadow.Spread);
+        var silhouette = new LayoutRect(geometry.Margin, geometry.Margin, geometry.SilhouetteWidth, geometry.SilhouetteHeight);
         var shape = BuildRoundedRectPath(silhouette, grown);
 
-        var shadowImage = new Image<Rgba32>(imgW, imgH, new Rgba32(0, 0, 0, 0));
+        var shadowImage = new Image<Rgba32>(geometry.ImageWidth, geometry.ImageHeight, new Rgba32(0, 0, 0, 0));
         // This offscreen silhouette fill + Gaussian blur is a full nested
         // rasterization invisible to the lazy outer command_record span; its
         // own span makes shadow-heavy pages attributable.
         using (_diag.Span("paint", "raster.box_shadow_blur"))
         {
-            Activity.Current?.SetTag("raster.box_shadow.width", imgW);
-            Activity.Current?.SetTag("raster.box_shadow.height", imgH);
-            Activity.Current?.SetTag("raster.box_shadow.blur", blur);
+            Activity.Current?.SetTag("raster.box_shadow.width", geometry.ImageWidth);
+            Activity.Current?.SetTag("raster.box_shadow.height", geometry.ImageHeight);
+            Activity.Current?.SetTag("raster.box_shadow.blur", Math.Max(0, shadow.Blur));
             // Drawing 3 paints paths through a DrawingCanvas (the same model the main
             // render path uses), so fill the silhouette inside a Paint scope, then
             // soften it with a separate Gaussian-blur Mutate.
             shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
-            if (blur > 0)
-                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(blur / 2d)));
+            if (shadow.Blur > 0)
+                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
         }
         pendingImageSources.Add(shadowImage);
 
-        // Destination in CSS px: the silhouette's top-left is
-        // (Bounds - spread + offset); the image extends `margin` px further out.
+        canvas.DrawImage(
+            shadowImage,
+            new Rectangle(0, 0, geometry.ImageWidth, geometry.ImageHeight),
+            ToRectF(geometry.Destination),
+            _resampler);
+    }
+
+    private static bool BoxShadowIntersectsTarget(DrawBoxShadow shadow, Matrix2D current, LayoutRect target)
+        => TryGetBoxShadowRasterGeometry(shadow, out var geometry)
+           && Intersects(TransformedAabb(geometry.Destination, current), target);
+
+    private static bool TryGetBoxShadowRasterGeometry(DrawBoxShadow shadow, out BoxShadowRasterGeometry geometry)
+    {
+        geometry = default;
+        if (shadow.Inset) return false; // inner shadows deferred
+        if (shadow.Color.A == 0) return false;
+
+        var spread = shadow.Spread;
+        var silhouetteW = shadow.Bounds.Width + 2 * spread;
+        var silhouetteH = shadow.Bounds.Height + 2 * spread;
+        if (silhouetteW <= 0 || silhouetteH <= 0) return false;
+
+        var blur = Math.Max(0, shadow.Blur);
+        var margin = (int)Math.Ceiling(blur * 1.5) + 2;
+        var imgW = (int)Math.Ceiling(silhouetteW) + 2 * margin;
+        var imgH = (int)Math.Ceiling(silhouetteH) + 2 * margin;
+        if (imgW <= 0 || imgH <= 0 || (long)imgW * imgH > 64_000_000L) return false;
+
         var destX = shadow.Bounds.X - spread + shadow.OffsetX - margin;
         var destY = shadow.Bounds.Y - spread + shadow.OffsetY - margin;
-        var dest = new RectangleF((float)destX, (float)destY, imgW, imgH);
-        canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), dest, KnownResamplers.Bicubic);
+        geometry = new BoxShadowRasterGeometry(
+            silhouetteW,
+            silhouetteH,
+            margin,
+            imgW,
+            imgH,
+            new LayoutRect(destX, destY, imgW, imgH));
+        return true;
     }
+
+    private readonly record struct BoxShadowRasterGeometry(
+        double SilhouetteWidth,
+        double SilhouetteHeight,
+        int Margin,
+        int ImageWidth,
+        int ImageHeight,
+        LayoutRect Destination);
+
+    private static LayoutRect TransformedAabb(LayoutRect r, Matrix2D m)
+    {
+        if (m.IsIdentity) return r;
+        var (x0, y0) = m.Transform(r.X, r.Y);
+        var (x1, y1) = m.Transform(r.X + r.Width, r.Y);
+        var (x2, y2) = m.Transform(r.X + r.Width, r.Y + r.Height);
+        var (x3, y3) = m.Transform(r.X, r.Y + r.Height);
+        var minX = Math.Min(Math.Min(x0, x1), Math.Min(x2, x3));
+        var minY = Math.Min(Math.Min(y0, y1), Math.Min(y2, y3));
+        var maxX = Math.Max(Math.Max(x0, x1), Math.Max(x2, x3));
+        var maxY = Math.Max(Math.Max(y0, y1), Math.Max(y2, y3));
+        return new LayoutRect(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    private static bool Intersects(LayoutRect a, LayoutRect b)
+        => a.X < b.Right && b.X < a.Right && a.Y < b.Bottom && b.Y < a.Bottom;
 
     private static CornerRadii GrowRadii(CornerRadii r, double by)
     {
