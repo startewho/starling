@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json.Nodes;
 using AwesomeAssertions;
 using Starling.Mcp.Telemetry;
@@ -18,6 +20,12 @@ public class StarlingMcpServerTests
         var response = await fixture.PostJsonRpcAsync("initialize", new JsonObject
         {
             ["protocolVersion"] = "2025-11-25",
+            ["capabilities"] = new JsonObject(),
+            ["clientInfo"] = new JsonObject
+            {
+                ["name"] = "starling-test-client",
+                ["version"] = "0.1.0",
+            },
         });
 
         response["result"]!["capabilities"]!["resources"].Should().NotBeNull();
@@ -40,6 +48,21 @@ public class StarlingMcpServerTests
             "browser_telemetry_logs",
             "browser_telemetry_metrics",
             "browser_telemetry_describe");
+    }
+
+    [TestMethod]
+    public async Task Tools_list_includes_llm_discovery_metadata()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        var response = await fixture.PostJsonRpcAsync("tools/list", null);
+
+        var tool = response["result"]!["tools"]!.AsArray()
+            .Single(n => n!["name"]!.GetValue<string>() == "browser_telemetry_describe")!;
+
+        tool["title"]!.GetValue<string>().Should().Be("Browser telemetry describe");
+        tool["annotations"]!["readOnlyHint"]!.GetValue<bool>().Should().BeTrue();
+        tool["annotations"]!["idempotentHint"]!.GetValue<bool>().Should().BeTrue();
+        tool["outputSchema"]!["type"]!.GetValue<string>().Should().Be("object");
     }
 
     [TestMethod]
@@ -115,7 +138,7 @@ public class StarlingMcpServerTests
             ["uri"] = "telemetry://does-not-exist",
         });
 
-        response["error"]!["code"]!.GetValue<int>().Should().Be(-32602);
+        response["error"]!["code"]!.GetValue<int>().Should().Be(-32002);
     }
 
     [TestMethod]
@@ -124,6 +147,96 @@ public class StarlingMcpServerTests
         await using var fixture = await TestServerFixture.StartAsync();
         var response = await fixture.PostJsonRpcAsync("nonsense/method", null);
         response["error"]!["code"]!.GetValue<int>().Should().Be(-32601);
+    }
+
+    [TestMethod]
+    public async Task Prompts_list_includes_default_telemetry_prompt()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        var response = await fixture.PostJsonRpcAsync("prompts/list", null);
+
+        var names = response["result"]!["prompts"]!.AsArray()
+            .Select(n => n!["name"]!.GetValue<string>())
+            .ToArray();
+
+        names.Should().Contain("starling_summarize_telemetry");
+    }
+
+    [TestMethod]
+    public async Task Prompts_get_returns_prompt_messages()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        var response = await fixture.PostJsonRpcAsync("prompts/get", new JsonObject
+        {
+            ["name"] = "starling_summarize_telemetry",
+            ["arguments"] = new JsonObject(),
+        });
+
+        var text = response["result"]!["messages"]!.AsArray()[0]!["content"]!["text"]!.GetValue<string>();
+        text.Should().Contain("browser_telemetry_describe");
+    }
+
+    [TestMethod]
+    public async Task Streamable_http_requires_accept_header()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        using var response = await fixture.PostRawJsonRpcAsync("ping", null, configure: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotAcceptable);
+    }
+
+    [TestMethod]
+    public async Task Streamable_http_rejects_invalid_origin()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        using var response = await fixture.PostRawJsonRpcAsync("ping", null, message =>
+        {
+            AddMcpAcceptHeaders(message);
+            message.Headers.Add("Origin", "https://evil.example");
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [TestMethod]
+    public async Task Streamable_http_accepts_notifications_with_accepted_status()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        using var response = await fixture.PostRawJsonRpcAsync("notifications/initialized", null, AddMcpAcceptHeaders, id: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await response.Content.ReadAsStringAsync()).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task Streamable_http_rejects_invalid_protocol_version_header()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        using var response = await fixture.PostRawJsonRpcAsync("ping", null, message =>
+        {
+            AddMcpAcceptHeaders(message);
+            message.Headers.Add("MCP-Protocol-Version", "1900-01-01");
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [TestMethod]
+    public async Task Streamable_http_get_without_sse_returns_method_not_allowed()
+    {
+        await using var fixture = await TestServerFixture.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, fixture.Endpoint.AbsolutePath);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        using var response = await fixture.Http.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed);
+    }
+
+    private static void AddMcpAcceptHeaders(HttpRequestMessage message)
+    {
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
     }
 
     private sealed class TestServerFixture : IAsyncDisposable
@@ -162,18 +275,57 @@ public class StarlingMcpServerTests
 
         public async Task<JsonObject> PostJsonRpcAsync(string method, JsonNode? @params)
         {
+            using var response = await PostRawJsonRpcAsync(method, @params, AddMcpAcceptHeaders);
+            var body = await response.Content.ReadAsStringAsync();
+            ((int)response.StatusCode).Should().BeInRange(200, 299, body);
+            return JsonNode.Parse(ExtractJsonRpcPayload(body))!.AsObject();
+        }
+
+        private static string ExtractJsonRpcPayload(string body)
+        {
+            var trimmed = body.TrimStart();
+            if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
+                return body;
+
+            var payload = new StringBuilder();
+            using var reader = new StringReader(body);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (!line.StartsWith("data:", StringComparison.Ordinal))
+                    continue;
+
+                var start = line.Length > 5 && line[5] == ' ' ? 6 : 5;
+                var data = line[start..];
+                if (data.Length > 0)
+                    payload.Append(data);
+            }
+
+            return payload.Length == 0 ? body : payload.ToString();
+        }
+
+        public async Task<HttpResponseMessage> PostRawJsonRpcAsync(
+            string method,
+            JsonNode? @params,
+            Action<HttpRequestMessage>? configure,
+            int? id = 1)
+        {
             var request = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
-                ["id"] = 1,
                 ["method"] = method,
             };
+            if (id is not null)
+                request["id"] = id.Value;
             if (@params is not null)
                 request["params"] = @params;
-            using var response = await Http.PostAsJsonAsync(Endpoint.AbsolutePath, request);
-            response.EnsureSuccessStatusCode();
-            var body = await response.Content.ReadAsStringAsync();
-            return JsonNode.Parse(body)!.AsObject();
+
+            var message = new HttpRequestMessage(HttpMethod.Post, Endpoint.AbsolutePath)
+            {
+                Content = JsonContent.Create(request),
+            };
+            configure?.Invoke(message);
+            return await Http.SendAsync(message);
         }
 
         public async ValueTask DisposeAsync()

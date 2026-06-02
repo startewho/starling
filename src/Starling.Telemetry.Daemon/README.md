@@ -61,13 +61,15 @@ All accept `?window=<seconds>`.
 
 ## Query the lag (MCP)
 
-The daemon hosts an MCP server (`STARLING_DAEMON_MCP_URL`, default
-`http://127.0.0.1:4319/mcp`) exposing:
+The daemon hosts a Model Context Protocol (MCP) server
+(`STARLING_DAEMON_MCP_URL`, default `http://127.0.0.1:4319/mcp`) exposing:
 
 - the reused raw-telemetry tools — `browser_telemetry_traces` / `_logs` /
   `_metrics` / `_describe` (and `telemetry://` resources);
 - analysis tools — `lag_overview`, `lag_top_offenders`, `lag_frames`,
   `lag_resources`, `lag_correlate_span`.
+
+Shared setup notes are in [`docs/mcp.md`](../../docs/mcp.md).
 
 ## What the browser emits
 

@@ -6,6 +6,9 @@
     <NoWarn>$(NoWarn);CA1859</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <ProjectReference Include="..\Starling.Telemetry\Starling.Telemetry.csproj" />
   </ItemGroup>
   <ItemGroup>
