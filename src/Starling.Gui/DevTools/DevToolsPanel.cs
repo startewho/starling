@@ -9,9 +9,8 @@ using Starling.Telemetry;
 namespace Starling.Gui.DevTools;
 
 /// <summary>
-/// Docked DevTools shell — Avalonia port of Starling.Gui's DevTools/DevToolsPanel.cs.
-/// Tab strip (Performance / Console / Internals / Inspect / Network) over a
-/// switching body that hosts panels wired to <see cref="TelemetryStream"/>.
+/// Docked DevTools shell. Tab strip over a switching body that hosts panels
+/// wired to <see cref="TelemetryStream"/>.
 /// </summary>
 public sealed class DevToolsPanel : Grid, IDisposable
 {

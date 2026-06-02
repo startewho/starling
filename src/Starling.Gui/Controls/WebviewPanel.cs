@@ -31,11 +31,11 @@ using LayoutBox = Starling.Layout.Box.Box;
 namespace Starling.Gui.Controls;
 
 /// <summary>
-/// The page surface — a ScrollViewer wrapping a Canvas that hosts the page
+/// The page surface. A ScrollViewer wraps a Canvas that hosts the page
 /// bitmap plus absolute-positioned overlays for hover highlight, drag-select,
 /// and find-match flash. Interaction (hover, link activation, drag-select,
-/// Cmd-F) is re-derived from the laid-out box tree via <see cref="BoxHitTester"/>,
-/// mirroring the M2-era MAUI WebviewPanel's model.
+/// and Command-F) is re-derived from the laid-out box tree via
+/// <see cref="BoxHitTester"/>.
 /// </summary>
 internal sealed class WebviewPanel : UserControl, IDisposable
 {
@@ -59,26 +59,23 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Canvas _pageCanvas;
 
     // Zero-copy present path: when the WebGPU paint backend is available, the page
-    // is composited straight onto a GPU swapchain embedded in the page region
-    // (_pageSurfaceHost's CAMetalLayer), skipping the GPU→CPU readback and the
-    // WriteableBitmap re-upload that _pageImage requires. It runs the SAME
-    // layer-tree compositor the native shell uses (NativeViewportRenderer →
-    // GpuSurfacePresenter): each promoted layer's raster is cached as a GPU texture
-    // keyed by slice content hash, so an animation-only frame re-blits the resident
-    // textures with the new transform/opacity in one pass — the box-shadow blur runs
-    // once per content change, not every frame. Null / inactive on hosts without a
-    // GPU surface, where _pageImage + RenderPageBitmap remain the fallback.
+    // is composited straight onto a GPU swapchain embedded in the page region. This
+    // skips the GPU-to-CPU readback and WriteableBitmap re-upload that _pageImage
+    // requires. It uses the same layer-tree compositor as the native shell. Each
+    // promoted layer's raster is cached as a GPU texture keyed by slice content hash,
+    // so an animation-only frame re-blits resident textures with new transform and
+    // opacity in one pass. Null or inactive on hosts without a GPU surface, where
+    // _pageImage plus RenderPageBitmap remain the fallback.
     private readonly NativeViewportRenderer? _nativeRenderer;
     private GpuSurfacePresenter? _presenter;
     private readonly PageSurfaceHost? _pageSurfaceHost;
     private bool _useSurface;
 
-    // The zero-copy GPU surface is the ONE TRUE present path whenever a GPU is
-    // available. The readback bitmap path (_pageImage + RenderPageBitmap) is the
-    // LEGACY FALLBACK — used only when there is no GPU adapter / surface, or when
-    // a developer explicitly opts in with STARLING_FORCE_READBACK=1 (for debugging
-    // the GPU path or a driver issue). It must never be the steady-state path on a
-    // GPU host. See docs/rendering-present-paths.md.
+    // The zero-copy GPU surface is the preferred present path whenever a GPU is
+    // available. The readback bitmap path (_pageImage + RenderPageBitmap) is used
+    // only when there is no GPU adapter or surface, or when a developer explicitly
+    // opts in with STARLING_FORCE_READBACK=1 for debugging. See
+    // docs/rendering-present-paths.md.
     private static readonly bool s_forceReadback =
         Environment.GetEnvironmentVariable("STARLING_FORCE_READBACK") == "1";
     // Set while a batch of overlay/page mutations runs (notably ShowPage) so the
@@ -273,11 +270,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             Content = _placeholderHost,
         };
         // Re-render the visible viewport region whenever the user scrolls or
-        // the viewport size changes (M12 viewport-clipped paint: the page is no
-        // longer rasterized whole, only the on-screen rect each frame). A
-        // non-zero ViewportDelta means the visible area itself resized (window
-        // resize, sidebar/DevTools toggle) — schedule a debounced re-layout so
-        // the page reflows to the new width instead of staying at its old one.
+        // the viewport size changes. The page is no longer rasterized whole.
+        // A non-zero ViewportDelta means the visible area itself resized
+        // (window resize, sidebar/DevTools toggle), so schedule a debounced
+        // re-layout and let the page reflow to the new width.
         _scroll.ScrollChanged += OnScrollChanged;
 
         // ScrollChanged alone misses bare window resizes that don't move the
@@ -373,8 +369,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// the resulting bitmap. The page-sized <see cref="_pageCanvas"/> provides
     /// the scroll extent (virtual content), while <see cref="_pageImage"/> is
     /// sized to the visible viewport and re-rendered for the current scroll
-    /// offset — only the on-screen region is rasterized each frame (M12
-    /// viewport-clipped paint).
+    /// offset. Only the on-screen region is rasterized each frame.
     /// </summary>
     public void ShowPage(LaidOutPage page, bool preserveScroll = false, bool deferRender = false)
     {
@@ -406,10 +401,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // cache — flat pixels and the persistent per-layer compositor caches — so
         // nothing from the previous page survives. On an in-place relayout (same
         // Document: resize / edit / animation) keep the per-layer caches: they are
-        // keyed by slice content hash (LTF-02), so an unchanged layer re-blits
-        // from cache and only genuinely changed layers re-raster (LTF-03). The
-        // flat scroll cache is dropped either way (its version-keyed pixels would
-        // otherwise blit stale). _scrollOffsetsDocument still holds the PREVIOUS
+        // keyed by slice content hash, so an unchanged layer re-blits from cache
+        // and only genuinely changed layers re-raster. The flat scroll cache is
+        // dropped either way because its version-keyed pixels would otherwise blit
+        // stale. _scrollOffsetsDocument still holds the PREVIOUS
         // document here (it is updated below), so it tells navigation from relayout.
         var isNavigation = !ReferenceEquals(_scrollOffsetsDocument, page.Document);
         if (isNavigation)
@@ -417,7 +412,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _renderer.ResetForNavigation();
             // The surface present path keeps its own per-layer caches (separate from
             // the readback _renderer's), so drop them on navigation too. On an
-            // in-place relayout they survive — they are content-hash keyed (LTF-03).
+            // in-place relayout they survive because they are content-hash keyed.
             _nativeRenderer?.ResetForNavigation();
         }
         else
@@ -556,12 +551,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             return;
         }
 
-        // Readback fallback — used ONLY when there is no GPU surface (no adapter, or
-        // surface setup failed). It is the legacy path; the zero-copy GPU surface is
-        // the one true present path whenever a GPU is available (overflow:scroll
-        // offsets are now threaded into it, so it no longer declines for scrolled
-        // pages). Hide the GPU surface overlay first — it's a native view pinned on
-        // top, so a stale frame left visible would occlude the bitmap.
+        // Readback fallback, used when there is no GPU surface or surface setup
+        // failed. Overflow scroll offsets are now threaded into the GPU path, so
+        // scrolled pages no longer force this path. Hide the GPU surface overlay
+        // first because it is pinned on top and a stale frame would occlude the bitmap.
         if (_pageSurfaceHost is { IsVisible: true }) _pageSurfaceHost.IsVisible = false;
         if (!_pageImage.IsVisible) _pageImage.IsVisible = true;
 
@@ -585,8 +578,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_pageSurfaceHost is null || _nativeRenderer is null) return;
 
-        // Developer opt-in: STARLING_FORCE_READBACK=1 keeps the legacy readback path
-        // even on a GPU host. Off by default — the zero-copy surface is the path.
+        // Developer opt-in: STARLING_FORCE_READBACK=1 keeps the readback fallback
+        // even on a GPU host. Off by default.
         if (s_forceReadback)
         {
             _diag.Log(DiagLevel.Info, "gui",
@@ -1454,9 +1447,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var page = _currentPage;
         if (page is null) { _liveTimer.Stop(); _boundScripting = null; _animating = false; return; }
 
-        // LTF-06: age the recently-mutated promotion window by one frame before
-        // this tick records new mutations, so a subtree promoted by a past
-        // mutation falls back into the base layer once its hysteresis elapses.
+        // Age the recently-mutated promotion window by one frame before this tick
+        // records new mutations, so a subtree promoted by a past mutation falls
+        // back into the base layer once its hysteresis elapses.
         page.Document.DecayRecentMutations();
 
         // One span per frame, with sub-spans for each phase (pump / relayout /
@@ -1531,10 +1524,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         // Exactly one paint per frame — the animation clock and _animating flag
         // are already set, so the sampled styles match this frame. An animating
-        // frame takes the compositor path (LTF-04) whether or not it relayouted:
-        // the per-layer caches now survive relayout (LTF-03) and each layer's
-        // content hash (LTF-02) decides what re-rasters, so a relayout-every-frame
-        // animation no longer pays a full-viewport raster.
+        // frame takes the compositor path whether or not it relayouted. The
+        // per-layer caches now survive relayout and each layer's content hash
+        // decides what re-rasters, so a relayout-every-frame animation no longer
+        // pays a full-viewport raster.
         if (needsRelayout || animating)
             RenderViewportRegion();
 
@@ -1705,14 +1698,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         return valid;
     }
 
-    // ---- Programmatic input (MCP automation) --------------------------
+    // ---- Programmatic input (Model Context Protocol automation) --------
     //
-    // ClickAt / MoveTo / TypeText let an out-of-process driver (the MCP server)
-    // synthesize input without a real device. Coordinates are document-space CSS
-    // px from the page's top-left — the same space browser_screenshot captures
-    // (full scroll extent) — so a driver can click/move where it sees a target in
-    // a screenshot. These reuse the very same paths the pointer/keyboard handlers
-    // drive, so synthetic and real input behave identically.
+    // ClickAt / MoveTo / TypeText let an out-of-process driver synthesize input
+    // without a real device. Coordinates are document-space CSS px from the page's
+    // top-left, the same space browser_screenshot captures across the full scroll
+    // extent. These reuse the same paths the pointer and keyboard handlers drive.
 
     /// <summary>True once a page is laid out and ready to receive synthetic input.</summary>
     public bool HasPage => _currentPage is not null;
@@ -1776,7 +1767,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             : $"typed \"{clean}\"; value=\"{CurrentValue()}\"");
     }
 
-    // ---- MCP element-targeting tools: highlight / select / focus by selector ----
+    // ---- Model Context Protocol element-targeting tools ----------------
 
     private readonly List<Control> _highlightOverlays = new();
 
@@ -1867,11 +1858,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Debug report for the <c>browser_computed_style</c> MCP tool: for every
-    /// element matching <paramref name="selector"/>, reports the EFFECTIVE painted
-    /// style using the same precedence the painter does — a live hover override
-    /// first, then an animation/transition sample, otherwise the laid-out style —
-    /// plus whether a hover override or a live animation is currently driving it.
+    /// Debug report for the <c>browser_computed_style</c> Model Context Protocol
+    /// tool. For every element matching <paramref name="selector"/>, reports the
+    /// EFFECTIVE painted style using the same precedence the painter does: a live
+    /// hover override first, then an animation/transition sample, otherwise the
+    /// laid-out style. Also reports whether hover or animation is driving it.
     /// Built to diagnose "renders wrong / goes invisible" bugs: it surfaces the
     /// opacity / transform / colour actually on screen and the flag that explains
     /// them (e.g. an unexpected hover override shadowing an animation).
@@ -2138,8 +2129,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         // The override set changes the display list without changing the page
         // version, so the picture cache must be dropped or it would blit stale
-        // (non-hover) pixels. Wholesale invalidation matches the WP: any
-        // display-list change is a full miss (smarter is wp:M12-06).
+        // (non-hover) pixels. Wholesale invalidation keeps the cache simple:
+        // any display-list change is a full miss.
         _hoverOverrides = newOverrides;
         _renderer.InvalidateCache();
         // While a hover transition runs, hand off to the live loop: it ticks the
@@ -2306,26 +2297,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // While animating, the painted pixels change every frame even though the
         // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
         // key by the animation clock to force a fresh raster each frame.
-        // Phase 5: on an animation-only frame (the clock advanced, nothing
-        // relayouted) for a page that has transform/opacity compositor layers,
-        // route through the layer tree. Each layer's CONTENT is cached across
-        // frames — the page version excludes the animation clock, so the cache
-        // key is stable — while the re-sampled transform / opacity are applied
-        // at COMPOSITE time. So the frame re-blits each layer's pixels from
-        // cache instead of re-rasterizing. The flat path stays the default
-        // everywhere else (no animation, a frame that relayouted and wiped the
-        // caches, or no promoted layer), so existing goldens are untouched and a
-        // relayout-every-frame page never pays cold compositing. Guarded to the
-        // no-per-element-scroll case because RenderViaLayerTree does not yet
-        // thread per-container scroll offsets (tracked follow-up); a scrollable
-        // page falls back to the flat path, which handles offsets correctly.
-        // LTF-04: take the compositor layer-tree path on any live animation frame
-        // (the per-frame predicate promotes the animating elements; the base layer
-        // and unchanged layers re-blit from their persistent content-keyed caches).
-        // Gated to _animating so scroll / hover / navigation of a non-animating page
-        // is untouched, and to scrollLookup is null because RenderViaLayerTree does
-        // not yet thread per-container scroll offsets (a scrollable page falls back
-        // to the flat path, which handles offsets correctly).
+        // On live animation frames with no per-container scroll offsets, use the
+        // compositor layer tree. Promoted layers keep content-keyed caches, while
+        // transform and opacity are applied at composite time. Pages with element
+        // scroll offsets fall back to the flat path because RenderViaLayerTree does
+        // not thread those offsets yet.
         var useLayerTree = scrollLookup is null && _animating;
         using (_diag.Span("gui", "render"))
         {
@@ -2412,19 +2388,19 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// inherited into descendant text boxes is a follow-up.
     /// </summary>
     /// <summary>
-    /// Per-frame layer-promotion predicate (LTF-01 / LTF-06): a box whose element
-    /// has any active animation or transition — or whose subtree a script mutated
-    /// in the last few frames — becomes its own compositor layer, even with no
-    /// static <see cref="LayerHint"/>. A composite-time transform/opacity is
-    /// applied at composite (the slice stays cacheable); any other changed paint
-    /// property re-rasters just this box's small slice while the base layer stays
-    /// cached. Boxes with no element (anonymous/text) are never promoted here.
+    /// Per-frame layer-promotion predicate. A box whose element has any active
+    /// animation or transition, or whose subtree a script mutated in the last few
+    /// frames, becomes its own compositor layer even with no static
+    /// <see cref="LayerHint"/>. Composite-time transform and opacity keep the
+    /// slice cacheable. Any other changed paint property re-rasters just this
+    /// box's small slice while the base layer stays cached. Boxes with no element
+    /// (anonymous/text) are never promoted here.
     /// </summary>
     private bool IsElementAnimatingLayerRoot(LayoutBox box)
     {
         if (_currentPage is not { } page || box.Element is not { } el) return false;
-        // LTF-06: a subtree a script mutated in the last few frames is promoted to
-        // its own isolated layer, so its repaint does not re-raster the base layer
+        // A subtree a script mutated in the last few frames is promoted to its own
+        // isolated layer, so its repaint does not re-raster the base layer
         // (the base slice excludes it, so the base content hash stays stable and
         // serves from cache). Light hysteresis (Document.DecayRecentMutations)
         // keeps it promoted briefly so promotion does not churn frame to frame.

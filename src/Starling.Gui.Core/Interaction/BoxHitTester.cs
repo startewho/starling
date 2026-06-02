@@ -8,12 +8,10 @@ using DomNode = Starling.Dom.Node;
 namespace Starling.Gui;
 
 /// <summary>
-/// Re-derives interaction from the laid-out box tree now that the GUI paints a
-/// single flat bitmap instead of a native MAUI view tree. Everything
-/// <c>BoxTreeRenderer</c> used to get from per-<c>Label</c> gesture recognizers
-/// — hover, link activation, drag-select, Cmd-F — is recovered here by walking
-/// the box tree in document-space CSS px and hit-testing pointer coordinates
-/// against it.
+/// Re-derives page interaction from the laid-out box tree. The GUI paints one
+/// flat bitmap, so hover, link activation, drag selection, and Command-F are
+/// recovered by walking the box tree in document-space CSS px and hit-testing
+/// pointer coordinates against it.
 /// </summary>
 /// <remarks>
 /// Coordinates are document-space: the same space the page bitmap is rendered

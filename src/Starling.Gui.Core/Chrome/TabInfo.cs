@@ -1,7 +1,7 @@
 namespace Starling.Gui.Chrome;
 
 /// <summary>
-/// One sidebar tab row's data. Port of Starling.Gui's Chrome/TabInfo.cs.
+/// One sidebar tab row's data.
 /// </summary>
 /// <param name="Id">Stable id, used to mark the active tab.</param>
 /// <param name="Host">Host string — drives the synthetic favicon.</param>

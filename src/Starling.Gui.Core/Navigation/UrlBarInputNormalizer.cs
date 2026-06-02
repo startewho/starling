@@ -7,9 +7,8 @@ namespace Starling.Gui;
 /// URL ready for navigation. Mirrors the behavior of Chrome's omnibox and
 /// Firefox's URIFixup: schemeless input like <c>google.com</c> becomes
 /// <c>https://google.com</c>, <c>localhost</c> becomes <c>http://localhost</c>,
-/// and a single word with no dot returns null (would be a search query in a
-/// real browser; this engine has no search provider yet, so the shell can
-/// surface an error instead of attempting a navigation).
+/// and a single word with no dot returns null. Starling has no search provider
+/// yet, so the shell can surface an error instead of attempting a navigation.
 /// </summary>
 public static class UrlBarInputNormalizer
 {
@@ -20,8 +19,8 @@ public static class UrlBarInputNormalizer
     /// <summary>
     /// Returns a fully-qualified URL for <paramref name="raw"/>, or null if
     /// the input doesn't look like a URL at all (empty, or a single word
-    /// with no dot/port/scheme — what a full browser would route to its
-    /// search provider).
+    /// with no dot, port, or scheme). A search-backed browser would route it to
+    /// a search provider.
     /// </summary>
     public static string? Normalize(string? raw)
     {
@@ -64,7 +63,7 @@ public static class UrlBarInputNormalizer
         if (bareHost.Contains('.') || HasExplicitPort(hostCandidate))
             return "https://" + input;
 
-        // Single bare word — would be a search query in a real browser.
+        // Single bare word: search query, not a URL.
         return null;
     }
 

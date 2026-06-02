@@ -5,9 +5,9 @@ using Starling.Mcp;
 namespace Starling.Gui.Mcp;
 
 /// <summary>
-/// MCP tool group that drives the visible Starling browser window. Owns the
-/// tool descriptors (the static JSON below is the single source of truth) and
-/// dispatches tools/call onto <see cref="IBrowserControlDispatcher"/>.
+/// Model Context Protocol tool group that drives the visible Starling browser
+/// window. Owns the tool descriptors and dispatches tools/call onto
+/// <see cref="IBrowserControlDispatcher"/>.
 /// </summary>
 public sealed class BrowserTools : IMcpToolGroup
 {
@@ -99,9 +99,9 @@ public sealed class BrowserTools : IMcpToolGroup
     };
 
     // The tool catalogue is fully static; the descriptors live as a JSON
-    // literal so the MCP server can splice them into tools/list and re-parse
-    // a fresh tree per request (a JsonNode cannot be re-parented, so a
-    // pre-built tree could not be reused).
+    // literal so the Model Context Protocol server can splice them into
+    // tools/list and re-parse a fresh tree per request. A JsonNode cannot be
+    // re-parented, so a pre-built tree could not be reused.
     private const string ToolDescriptorsJson = """
         [
           {
