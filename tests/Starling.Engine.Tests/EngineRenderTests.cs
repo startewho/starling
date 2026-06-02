@@ -8,7 +8,7 @@ namespace Starling.Engine.Tests;
 public class EngineRenderTests
 {
     [TestMethod]
-    public void Render_writes_a_non_empty_png_for_hello_html()
+    public async Task Render_writes_a_non_empty_png_for_hello_html()
     {
         var fixture = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.html");
         var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
@@ -17,7 +17,7 @@ public class EngineRenderTests
         {
             File.WriteAllText(fixture, "<!doctype html><body><p>Hello, world.</p></body>");
             var engine = new StarlingEngine();
-            var result = engine.Render(
+            var result = await engine.RenderAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(400, 200), 28f),
                 output);
@@ -35,7 +35,7 @@ public class EngineRenderTests
     }
 
     [TestMethod]
-    public void Render_fetches_and_paints_local_image_via_file_url()
+    public async Task Render_fetches_and_paints_local_image_via_file_url()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
@@ -63,7 +63,7 @@ public class EngineRenderTests
                 "<!doctype html><body><p>before<img src=\"swatch.png\">after</p></body>");
 
             var engine = new StarlingEngine();
-            var result = engine.Render(
+            var result = await engine.RenderAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(320, 180), 16f),
                 output);
@@ -80,10 +80,10 @@ public class EngineRenderTests
     }
 
     [TestMethod]
-    public void Render_returns_err_for_missing_file()
+    public async Task Render_returns_err_for_missing_file()
     {
         var engine = new StarlingEngine();
-        var result = engine.Render(
+        var result = await engine.RenderAsync(
             "file:///definitely-not-there.html",
             RenderOptions.Default,
             Path.Combine(Path.GetTempPath(), "unused.png"));
@@ -93,7 +93,7 @@ public class EngineRenderTests
     }
 
     [TestMethod]
-    public void Render_uses_document_style_layout_and_paint_pipeline()
+    public async Task Render_uses_document_style_layout_and_paint_pipeline()
     {
         var fixture = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.html");
         var output = Path.Combine(Path.GetTempPath(), $"starling-{Guid.NewGuid():N}.png");
@@ -113,7 +113,7 @@ public class EngineRenderTests
                 """);
 
             var engine = new StarlingEngine();
-            var result = engine.Render(
+            var result = await engine.RenderAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(240, 140), 16f),
                 output);

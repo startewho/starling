@@ -50,7 +50,10 @@ internal sealed class H2FrameWriter(Stream stream) : IDisposable
         var payload = new byte[8];
         WriteUInt32(payload.AsSpan(0), (uint)lastStreamId);
         WriteUInt32(payload.AsSpan(4), (uint)code);
-        return WriteSimpleAsync(H2FrameType.GoAway, H2Flags.None, 0, payload, ct);
+        _ = WriteSimpleAsync(H2FrameType.GoAway, H2Flags.None, 0, payload, ct);
+
+        // don't wait on the GOAWAY
+        return Task.CompletedTask;
     }
 
     /// <summary>Write one DATA frame for <paramref name="streamId"/>.</summary>

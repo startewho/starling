@@ -1,5 +1,4 @@
 using Starling.Common.Diagnostics;
-using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Layout.Box;
 using Starling.Layout.Tree;
@@ -27,7 +26,9 @@ public sealed class NativeViewportRenderer : IDisposable
 {
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
+
     private readonly bool _ownsBackend;
+
     // One session tile cache for all composited documents (chrome / page / overlay):
     // their layer-root elements are distinct objects, so they never collide on a
     // layer id within the shared grid.
@@ -35,7 +36,8 @@ public sealed class NativeViewportRenderer : IDisposable
     private bool _disposed;
 
     public NativeViewportRenderer(IDiagnostics? diagnostics = null)
-        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diagnostics), diagnostics, ownsBackend: true)
+        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diagnostics), diagnostics,
+            ownsBackend: true)
     {
     }
 
@@ -134,6 +136,7 @@ public sealed class NativeViewportRenderer : IDisposable
         {
             throw new ArgumentException("Surface dimensions must be positive.");
         }
+
         if (scale <= 0)
         {
             throw new ArgumentException("Scale must be positive.", nameof(scale));
@@ -159,56 +162,46 @@ public sealed class NativeViewportRenderer : IDisposable
 
         var compositor = new Compositor(_backend, _diag, _tiles);
         var ops = new List<LayerBlend>();
-        var keepAlive = new List<RenderedBitmap>();
-        try
-        {
-            // Chrome: top strip, no offset.
-            compositor.AppendSurfaceOps(
-                chromeTree,
-                new LayoutRect(0, 0, logicalW, chromeHeightCss),
-                scale, destOriginXDevice: 0, destOriginYDevice: 0,
-                regionClipDevice: new LayoutRect(0, 0, surfaceWidth, chromeDevH),
-                ops, keepAlive);
 
-            // Page: below the chrome, scrolled, clipped to the content region.
-            var pageRegion = new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss);
-            var pageClip = new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH);
+        // Chrome: top strip, no offset.
+        compositor.AppendSurfaceOps(
+            chromeTree,
+            new LayoutRect(0, 0, logicalW, chromeHeightCss),
+            scale, destOriginXDevice: 0, destOriginYDevice: 0,
+            regionClipDevice: new LayoutRect(0, 0, surfaceWidth, chromeDevH),
+            ops, presenter);
+
+        // Page: below the chrome, scrolled, clipped to the content region.
+        var pageRegion = new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss);
+        var pageClip = new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH);
+        compositor.AppendSurfaceOps(
+            pageTree, pageRegion,
+            scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+            regionClipDevice: pageClip,
+            ops, presenter);
+
+        // Overlay: same region/offset as the page so it tracks scroll.
+        if (overlayTree is not null)
             compositor.AppendSurfaceOps(
-                pageTree, pageRegion,
+                overlayTree, pageRegion,
                 scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
                 regionClipDevice: pageClip,
-                ops, keepAlive);
+                ops, presenter);
 
-            // Overlay: same region/offset as the page so it tracks scroll.
-            if (overlayTree is not null)
-                compositor.AppendSurfaceOps(
-                    overlayTree, pageRegion,
-                    scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
-                    regionClipDevice: pageClip,
-                    ops, keepAlive);
+        // Screen overlay: whole window, no scroll, on top of everything.
+        if (screenOverlayTree is not null)
+            compositor.AppendSurfaceOps(
+                screenOverlayTree,
+                new LayoutRect(0, 0, logicalW, logicalH),
+                scale, destOriginXDevice: 0, destOriginYDevice: 0,
+                regionClipDevice: new LayoutRect(0, 0, surfaceWidth, surfaceHeight),
+                ops, presenter);
 
-            // Screen overlay: whole window, no scroll, on top of everything.
-            if (screenOverlayTree is not null)
-                compositor.AppendSurfaceOps(
-                    screenOverlayTree,
-                    new LayoutRect(0, 0, logicalW, logicalH),
-                    scale, destOriginXDevice: 0, destOriginYDevice: 0,
-                    regionClipDevice: new LayoutRect(0, 0, surfaceWidth, surfaceHeight),
-                    ops, keepAlive);
-
-            // Emit this frame's tile miss-ratio / rasters-per-frame. The multi-doc
-            // path has no single Render exit to hook, so flush after the last
-            // AppendSurfaceOps (the Compositor is one frame, so the tally is exact).
-            compositor.FlushTileFrameMetrics();
-            return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
-        }
-        finally
-        {
-            foreach (var bmp in keepAlive)
-            {
-                bmp.Dispose();
-            }
-        }
+        // Emit this frame's tile miss-ratio / rasters-per-frame. The multi-doc
+        // path has no single Render exit to hook, so flush after the last
+        // AppendSurfaceOps (the Compositor is one frame, so the tally is exact).
+        compositor.FlushTileFrameMetrics();
+        return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
     }
 
     /// <summary>Drops the tile cache — call on navigation to a new document.</summary>

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Chrome;
@@ -12,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Starling.Gui.Chrome;
 using Starling.Gui.Controls;
+using Starling.Gui.Diagnostics;
 using Starling.Gui.DevTools;
 using Starling.Gui.Mcp;
 using Starling.Gui.Theme;
@@ -559,23 +561,30 @@ public sealed class MainWindow : Window, IBrowserController
         // would show one ever-growing trace instead of one trace per navigation.
         Activity.Current = null;
         using var navSpan = _diag.Span("gui", "navigate");
+        var navigationActivity = Activity.Current;
+        var firstPaintPosted = 0;
 
         // Progressive first paint: the engine invokes this from a background
         // continuation once render-blocking scripts have run, before deferred
         // scripts settle. Marshal to the UI thread and, if this navigation is
         // still current, show the page immediately so the user sees content
         // without waiting on async/analytics scripts.
-        void OnFirstPaint(LaidOutPage page) => Dispatcher.UIThread.Post(() =>
+        void OnFirstPaint(LaidOutPage page)
         {
-            if (!ReferenceEquals(_navCts, myCts)) return;
-            // Wall time from navigation start to "page is visible." This is
-            // the user-meaningful "loaded and rendered" moment, distinct from
-            // the navigate-task's full-settle time (which includes deferred
-            // scripts that run after first paint).
-            _diag.Log(DiagLevel.Info, "gui",
-                $"first-paint: {sw.ElapsedMilliseconds} ms ({opLabel})");
-            ApplyShownPage(page, opLabel, sw.ElapsedMilliseconds);
-        });
+            Interlocked.Exchange(ref firstPaintPosted, 1);
+            PostUiWithoutActivity(() =>
+            {
+                if (!ReferenceEquals(_navCts, myCts)) return;
+                using var _ = GuiActivityScope.Use(navigationActivity);
+                // Wall time from navigation start to "page is visible." This is
+                // the user-meaningful "loaded and rendered" moment, distinct from
+                // the navigate-task's full-settle time (which includes deferred
+                // scripts that run after first paint).
+                _diag.Log(DiagLevel.Info, "gui",
+                    $"first-paint: {sw.ElapsedMilliseconds} ms ({opLabel})");
+                ApplyShownPage(page, opLabel, sw.ElapsedMilliseconds);
+            });
+        }
 
         try
         {
@@ -595,7 +604,18 @@ public sealed class MainWindow : Window, IBrowserController
                 // Re-showing it would dispose the live page (ShowPage disposes the
                 // outgoing page, which would be this same instance).
                 if (!ReferenceEquals(result.Value, _lastShownPage))
-                    ApplyShownPage(result.Value, opLabel, sw.ElapsedMilliseconds);
+                {
+                    if (Volatile.Read(ref firstPaintPosted) != 0)
+                    {
+                        using var detached = GuiActivityScope.Detached();
+                        using var settleShow = _diag.Span("gui", "settle_show");
+                        ApplyShownPage(result.Value, opLabel, sw.ElapsedMilliseconds);
+                    }
+                    else
+                    {
+                        ApplyShownPage(result.Value, opLabel, sw.ElapsedMilliseconds);
+                    }
+                }
 
                 // The page's live JS context is attached only once the load
                 // settles. In the no-mutation case above we skip the re-show, so
@@ -628,6 +648,26 @@ public sealed class MainWindow : Window, IBrowserController
                 _navCts = null;
             }
             myCts.Dispose();
+        }
+    }
+
+    private static void PostUiWithoutActivity(Action action)
+    {
+        using var detached = GuiActivityScope.Detached();
+        if (ExecutionContext.IsFlowSuppressed())
+        {
+            Dispatcher.UIThread.Post(action);
+            return;
+        }
+
+        var flow = ExecutionContext.SuppressFlow();
+        try
+        {
+            Dispatcher.UIThread.Post(action);
+        }
+        finally
+        {
+            flow.Undo();
         }
     }
 
@@ -815,8 +855,8 @@ public sealed class MainWindow : Window, IBrowserController
         }
     }
 
-    public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
-        => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
+    // public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
+    //     => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
 
     public Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct)
     {

@@ -76,7 +76,9 @@ internal sealed class PageSurfaceHost : NativeControlHost
     {
         Scale = scale;
         if (_metalLayer != 0)
+        {
             MacMetal.SetContentsScale(_metalLayer, scale);
+        }
     }
 }
 
@@ -88,23 +90,47 @@ internal static unsafe class MacMetal
 {
     private const string Objc = "/usr/lib/libobjc.A.dylib";
 
-    [DllImport(Objc)] private static extern nint objc_getClass(string name);
-    [DllImport(Objc)] private static extern nint sel_registerName(string name);
-    [DllImport(Objc)] private static extern nint objc_allocateClassPair(nint superclass, string name, nint extraBytes);
-    [DllImport(Objc)] private static extern void objc_registerClassPair(nint cls);
-    [DllImport(Objc)] private static extern nint objc_lookUpClass(string name);
-    [DllImport(Objc)][return: MarshalAs(UnmanagedType.I1)] private static extern bool class_addMethod(nint cls, nint sel, nint imp, string types);
-    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern nint MsgSend(nint receiver, nint sel);
-    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void MsgSendVoidPtr(nint receiver, nint sel, nint arg);
-    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void MsgSendVoidBool(nint receiver, nint sel, [MarshalAs(UnmanagedType.I1)] bool arg);
-    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void MsgSendVoidDouble(nint receiver, nint sel, double arg);
+    [DllImport(Objc)]
+    private static extern nint objc_getClass(string name);
+
+    [DllImport(Objc)]
+    private static extern nint sel_registerName(string name);
+
+    [DllImport(Objc)]
+    private static extern nint objc_allocateClassPair(nint superclass, string name, nint extraBytes);
+
+    [DllImport(Objc)]
+    private static extern void objc_registerClassPair(nint cls);
+
+    [DllImport(Objc)]
+    private static extern nint objc_lookUpClass(string name);
+
+    [DllImport(Objc)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool class_addMethod(nint cls, nint sel, nint imp, string types);
+
+    [DllImport(Objc, EntryPoint = "objc_msgSend")]
+    private static extern nint MsgSend(nint receiver, nint sel);
+
+    [DllImport(Objc, EntryPoint = "objc_msgSend")]
+    private static extern void MsgSendVoidPtr(nint receiver, nint sel, nint arg);
+
+    [DllImport(Objc, EntryPoint = "objc_msgSend")]
+    private static extern void MsgSendVoidBool(nint receiver, nint sel, [MarshalAs(UnmanagedType.I1)] bool arg);
+
+    [DllImport(Objc, EntryPoint = "objc_msgSend")]
+    private static extern void MsgSendVoidDouble(nint receiver, nint sel, double arg);
 
     private static nint _passthroughClass;
 
     // Fields are never read in managed code — they exist only to give objc_msgSend
     // the correct by-value calling convention for hitTest:'s NSPoint argument.
 #pragma warning disable CS0649
-    private struct CGPoint { public double X; public double Y; }
+    private struct CGPoint
+    {
+        public double X;
+        public double Y;
+    }
 #pragma warning restore CS0649
 
     // hitTest: implementation that always returns nil, so AppKit continues the hit
@@ -120,7 +146,11 @@ internal static unsafe class MacMetal
         // A second run in the same process (rare) would find the class already
         // registered; reuse it rather than re-allocating (which returns nil).
         var existing = objc_lookUpClass("StarlingPassthroughMetalView");
-        if (existing != 0) { _passthroughClass = existing; return _passthroughClass; }
+        if (existing != 0)
+        {
+            _passthroughClass = existing;
+            return _passthroughClass;
+        }
 
         var cls = objc_allocateClassPair(objc_getClass("NSView"), "StarlingPassthroughMetalView", 0);
         if (cls == 0) return 0;
@@ -182,14 +212,26 @@ internal static unsafe class MacMetal
     public static void SetContentsScale(nint metalLayer, double scale)
     {
         if (metalLayer == 0 || scale <= 0) return;
-        try { MsgSendVoidDouble(metalLayer, sel_registerName("setContentsScale:"), scale); }
-        catch { /* best effort */ }
+        try
+        {
+            MsgSendVoidDouble(metalLayer, sel_registerName("setContentsScale:"), scale);
+        }
+        catch
+        {
+            /* best effort */
+        }
     }
 
     public static void Release(nint obj)
     {
         if (obj == 0) return;
-        try { MsgSend(obj, sel_registerName("release")); }
-        catch { /* best effort */ }
+        try
+        {
+            MsgSend(obj, sel_registerName("release"));
+        }
+        catch
+        {
+            /* best effort */
+        }
     }
 }

@@ -48,7 +48,7 @@ namespace Starling.Paint.Backend;
 /// the first registered family when nothing matches.
 /// </para>
 /// </remarks>
-internal sealed class ImageSharpBackend : IPaintBackend
+internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 {
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
@@ -87,9 +87,14 @@ internal sealed class ImageSharpBackend : IPaintBackend
     {
         ArgumentNullException.ThrowIfNull(list);
         if (viewport.Width <= 0 || viewport.Height <= 0)
+        {
             throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        }
+
         if (!(scale > 0.0f))
+        {
             throw new ArgumentException("Scale must be positive.", nameof(scale));
+        }
 
         var width = (int)Math.Ceiling(viewport.Width * scale);
         var height = (int)Math.Ceiling(viewport.Height * scale);
@@ -108,17 +113,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
 
         if (_useWebGpu && (width > MaxWebGpuTextureDimension || height > MaxWebGpuTextureDimension))
         {
-            // wgpu's default uncaptured-error handler is a Rust panic that
-            // calls abort(), so a CreateTexture call exceeding
-            // maxTextureDimension2D crashes the entire process before any
-            // C# try/catch can intercept it. Real pages (e.g. tall scrolling
-            // articles like netclaw.dev) routinely exceed the WebGPU spec
-            // default of 8192 px in the long axis. GPU sessions are strict: an
-            // oversize GPU texture is a render failure, not a CPU fallback.
-            Activity.Current?.SetTag("raster.webgpu.failure_reason", "exceeds_max_texture_dimension");
-            throw new InvalidOperationException(
-                $"WebGPU paint target {width}x{height} exceeds the supported " +
-                $"{MaxWebGpuTextureDimension}x{MaxWebGpuTextureDimension} texture limit.");
+            ThrowWebGpuTargetOversized(width, height);
         }
 
         return _useWebGpu
@@ -126,11 +121,120 @@ internal sealed class ImageSharpBackend : IPaintBackend
             : RenderCpu(list, width, height, scale, viewportTransform, opaqueBackground);
     }
 
+    public GpuPaintTexture RenderTexture(
+        PaintList list,
+        LayoutRect viewport,
+        float scale,
+        bool opaqueBackground,
+        GpuPaintDeviceContext context)
+    {
+        ArgumentNullException.ThrowIfNull(list);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (!_useWebGpu)
+        {
+            throw new InvalidOperationException("GPU texture rendering requires the ImageSharp WebGPU paint backend.");
+        }
+
+        if (viewport.Width <= 0 || viewport.Height <= 0)
+        {
+            throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        }
+
+        if (!(scale > 0.0f))
+        {
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+        }
+
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+        if (width > MaxWebGpuTextureDimension || height > MaxWebGpuTextureDimension)
+        {
+            ThrowWebGpuTargetOversized(width, height);
+        }
+
+        var viewportTransform = Matrix2D.Translate(-viewport.X, -viewport.Y);
+        Activity.Current?.SetTag("raster.width", width);
+        Activity.Current?.SetTag("raster.height", height);
+        Activity.Current?.SetTag("raster.scale", scale);
+        Activity.Current?.SetTag("raster.items", list.Items.Count);
+
+        EnsureWebGpuAvailable();
+
+        WebGPURenderTarget? target = null;
+        try
+        {
+            using (_diag.Span("paint", "raster.context_init"))
+            {
+                context.ThrowIfDisposed();
+            }
+
+            using (_diag.Span("paint", "raster.surface_alloc"))
+            {
+                target = context.CreateRenderTarget(WebGPUTextureFormat.Rgba8Unorm, width, height);
+            }
+
+            using var pendingImageSources = new DisposableBag();
+
+            DrawingCanvas canvas;
+            using (_diag.Span("paint", "raster.command_record"))
+            {
+                canvas = target.CreateCanvas();
+                using (canvas)
+                {
+                    ReplayList(canvas, list, width, height, scale, viewportTransform,
+                        clearWhite: opaqueBackground, pendingImageSources, flush: true);
+                }
+            }
+
+            var texture = new GpuPaintTexture(target);
+            target = null;
+            return texture;
+        }
+        finally
+        {
+            target?.Dispose();
+        }
+    }
+
     // 8192 is WebGPU's guaranteed minimum maxTextureDimension2D. Larger
     // surfaces can fail texture creation on constrained adapters, and wgpu's
     // default uncaptured-error handler aborts the process before C# can catch
     // anything, so detect the overflow before allocating a texture.
     private const int MaxWebGpuTextureDimension = 8192;
+
+    private static void ThrowWebGpuTargetOversized(int width, int height)
+    {
+        // wgpu's default uncaptured-error handler aborts the process when
+        // texture creation exceeds maxTextureDimension2D. GPU sessions are
+        // strict: an oversize texture is a render failure, not a CPU fallback.
+        Activity.Current?.SetTag("raster.webgpu.failure_reason", "exceeds_max_texture_dimension");
+        throw new InvalidOperationException(
+            $"WebGPU paint target {width}x{height} exceeds the supported " +
+            $"{MaxWebGpuTextureDimension}x{MaxWebGpuTextureDimension} texture limit.");
+    }
+
+    private static void EnsureWebGpuAvailable()
+    {
+        // Probe the WebGPU environment before constructing a render target so a
+        // missing or blocked wgpu-native binary reports a clear error.
+        var probe = _webGpuAvailability.Value;
+        if (probe != WebGPUEnvironmentError.Success)
+        {
+            throw new InvalidOperationException(
+                $"WebGPU paint backend requested via STARLING_PAINT_BACKEND=imagesharp-webgpu, " +
+                $"but WebGPUEnvironment.ProbeAvailability returned {probe}. " +
+                Environment.NewLine + Environment.NewLine +
+                "Native loader trail (Starling.Paint.Interop.WgpuNativeLoader):" + Environment.NewLine +
+                "  " + WgpuNativeLoader.Diagnose() +
+                Environment.NewLine + Environment.NewLine +
+                "Common causes: the wgpu-native library was not copied into the runtime layout " +
+                "(check runtimes/<rid>/native/libwgpu_native.{dylib,so} in the app bundle), " +
+                "no compatible GPU adapter is visible to the process, or a sandbox blocks " +
+                "Metal/Vulkan/D3D12 access. Fall back to STARLING_PAINT_BACKEND=imagesharp " +
+                "to use the pure-CPU rasterizer.");
+        }
+    }
 
     private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool opaqueBackground = true)
     {
@@ -181,25 +285,7 @@ internal sealed class ImageSharpBackend : IPaintBackend
     // compositor layer slices keep a see-through background).
     private RenderedBitmap RenderWebGpu(PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool opaqueBackground = true)
     {
-        // Probe the WebGPU environment before constructing a render target so a
-        // missing/broken wgpu-native binary, no compatible GPU adapter, or a
-        // sandboxed Catalyst process surfaces as a clear actionable error
-        // rather than the generic "failed to initialize webgpu runtime" the
-        // constructor would otherwise throw.
-        var probe = _webGpuAvailability.Value;
-        if (probe != WebGPUEnvironmentError.Success)
-            throw new InvalidOperationException(
-                $"WebGPU paint backend requested via STARLING_PAINT_BACKEND=imagesharp-webgpu, " +
-                $"but WebGPUEnvironment.ProbeAvailability returned {probe}. " +
-                Environment.NewLine + Environment.NewLine +
-                "Native loader trail (Starling.Paint.Interop.WgpuNativeLoader):" + Environment.NewLine +
-                "  " + WgpuNativeLoader.Diagnose() +
-                Environment.NewLine + Environment.NewLine +
-                "Common causes: the wgpu-native dylib was not copied into the runtime layout " +
-                "(check runtimes/<rid>/native/libwgpu_native.{dylib,so} in the app bundle), " +
-                "no compatible GPU adapter is visible to the process, or a sandbox blocks " +
-                "Metal/Vulkan/D3D12 access. Fall back to STARLING_PAINT_BACKEND=imagesharp " +
-                "to use the pure-CPU rasterizer.");
+        EnsureWebGpuAvailable();
 
         WebGPURenderTarget target;
         using (_diag.Span("paint", "raster.context_init"))
@@ -247,7 +333,9 @@ internal sealed class ImageSharpBackend : IPaintBackend
     {
         Activity.Current?.SetTag("raster.items", list.Items.Count);
         if (clearWhite)
+        {
             canvas.Clear(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
+        }
 
         var transforms = new Stack<Matrix2D>();
         transforms.Push(viewportTransform);
@@ -270,8 +358,12 @@ internal sealed class ImageSharpBackend : IPaintBackend
         stats.Emit(Activity.Current);
 
         if (flush)
+        {
             using (_diag.Span("paint", "raster.flush"))
+            {
                 canvas.Flush();
+            }
+        }
     }
 
     private void Apply(DrawingCanvas canvas, DisplayItem item, float scale, DisposableBag pendingImageSources, Stack<Matrix2D> transforms, RasterStats stats)
@@ -941,30 +1033,30 @@ internal sealed class ImageSharpBackend : IPaintBackend
         var silhouette = new LayoutRect(margin, margin, silhouetteW, silhouetteH);
         var shape = BuildRoundedRectPath(silhouette, grown);
 
-        var shadowImage = new Image<Rgba32>(imgW, imgH, new Rgba32(0, 0, 0, 0));
-        // This offscreen silhouette fill + Gaussian blur is a full nested
-        // rasterization invisible to the lazy outer command_record span; its
-        // own span makes shadow-heavy pages attributable.
-        using (_diag.Span("paint", "raster.box_shadow_blur"))
-        {
-            Activity.Current?.SetTag("raster.box_shadow.width", imgW);
-            Activity.Current?.SetTag("raster.box_shadow.height", imgH);
-            Activity.Current?.SetTag("raster.box_shadow.blur", blur);
-            // Drawing 3 paints paths through a DrawingCanvas (the same model the main
-            // render path uses), so fill the silhouette inside a Paint scope, then
-            // soften it with a separate Gaussian-blur Mutate.
-            shadowImage.Mutate(ctx => ctx.Paint(canvas => canvas.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
-            if (blur > 0)
-                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(blur / 2d)));
-        }
-        pendingImageSources.Add(shadowImage);
-
-        // Destination in CSS px: the silhouette's top-left is
-        // (Bounds - spread + offset); the image extends `margin` px further out.
-        var destX = shadow.Bounds.X - spread + shadow.OffsetX - margin;
-        var destY = shadow.Bounds.Y - spread + shadow.OffsetY - margin;
-        var dest = new RectangleF((float)destX, (float)destY, imgW, imgH);
-        canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), dest, KnownResamplers.Bicubic);
+        // var shadowImage = new Image<Rgba32>(imgW, imgH, new Rgba32(0, 0, 0, 0));
+        // // This offscreen silhouette fill + Gaussian blur is a full nested
+        // // rasterization invisible to the lazy outer command_record span; its
+        // // own span makes shadow-heavy pages attributable.
+        // using (_diag.Span("paint", "raster.box_shadow_blur"))
+        // {
+        //     Activity.Current?.SetTag("raster.box_shadow.width", imgW);
+        //     Activity.Current?.SetTag("raster.box_shadow.height", imgH);
+        //     Activity.Current?.SetTag("raster.box_shadow.blur", blur);
+        //     // Drawing 3 paints paths through a DrawingCanvas (the same model the main
+        //     // render path uses), so fill the silhouette inside a Paint scope, then
+        //     // soften it with a separate Gaussian-blur Mutate.
+        //     shadowImage.Mutate(ctx => ctx.Paint(canvas => canvas.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
+        //     if (blur > 0)
+        //         shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(blur / 2d)));
+        // }
+        // pendingImageSources.Add(shadowImage);
+        //
+        // // Destination in CSS px: the silhouette's top-left is
+        // // (Bounds - spread + offset); the image extends `margin` px further out.
+        // var destX = shadow.Bounds.X - spread + shadow.OffsetX - margin;
+        // var destY = shadow.Bounds.Y - spread + shadow.OffsetY - margin;
+        // var dest = new RectangleF((float)destX, (float)destY, imgW, imgH);
+        // canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), dest, KnownResamplers.Bicubic);
     }
 
     private static CornerRadii GrowRadii(CornerRadii r, double by)

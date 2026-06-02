@@ -19,7 +19,7 @@ internal static class Program
 {
     private static IDiagnostics s_diagnostics = NoopDiagnostics.Instance;
 
-    public static int Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
         // Wire OpenTelemetry before we do anything observable. When launched by Aspire
         // (`dotnet run --project src/Starling.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
@@ -64,7 +64,7 @@ internal static class Program
 
             var exitCode = sub switch
             {
-                "render" => Render(rest),
+                "render" => await Render(rest),
                 "tokenize" => Tokenize(rest),
                 "parse" or "style" or "layout" or "js"
                     => StubSubcommand(sub),
@@ -237,7 +237,7 @@ internal static class Program
         }
     }
 
-    private static int Render(string[] args)
+    private static async Task<int> Render(string[] args, CancellationToken ct = default)
     {
         // starling render <url-or-file> [-o out.png] [--viewport WxH]
         if (args.Length == 0)
@@ -308,16 +308,16 @@ internal static class Program
 
         if (frames > 1)
         {
-            return RenderFrameSequence(engine, url, new RenderOptions(viewport, fontSize), output, frames, frameStepMs);
+            return await RenderFrameSequence(engine, url, new RenderOptions(viewport, fontSize), output, frames, frameStepMs, ct);
         }
 
         if (dumpLayout)
         {
-            var page = engine.LayoutPageAsync(url, new RenderOptions(viewport, fontSize)).GetAwaiter().GetResult();
+            var page = await engine.LayoutPageAsync(url, new RenderOptions(viewport, fontSize), ct);
             page.Match(p => { using (p) { DumpLayout(p.Root, 0); } return 0; }, _ => 1);
         }
 
-        var result = engine.Render(url, new RenderOptions(viewport, fontSize), output);
+        var result = await engine.RenderAsync(url, new RenderOptions(viewport, fontSize), output, ct);
 
         return result.Match(
             ok =>
@@ -332,16 +332,16 @@ internal static class Program
             });
     }
 
-    private static int RenderFrameSequence(
+    private static async Task<int> RenderFrameSequence(
         StarlingEngine engine, string url, RenderOptions options, string outputTemplate,
-        int frames, long frameStepMs)
+        int frames, long frameStepMs, CancellationToken ct = default)
     {
         // Lay the page out once, then ask the engine to repaint at evenly
         // spaced frame timestamps. The animation/transition engines on the
         // retained LaidOutPage carry their state forward between calls so
         // CSS animations sample correctly across the sequence.
-        var layoutTask = engine.LayoutPageAsync(url, options);
-        var layoutResult = layoutTask.GetAwaiter().GetResult();
+        var layoutTask = engine.LayoutPageAsync(url, options, ct);
+        var layoutResult = await layoutTask;
         return layoutResult.Match(
             page =>
             {

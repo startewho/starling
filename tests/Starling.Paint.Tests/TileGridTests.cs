@@ -92,6 +92,21 @@ public sealed class TileGridTests
     }
 
     [TestMethod]
+    public void Resident_tile_metadata_does_not_serve_cpu_bitmap()
+    {
+        var grid = new TileGrid(maxBytes: 1_000_000);
+        var key = Key(0, 0);
+
+        grid.PutResidentTile(key, contentHash: 11, width: 128, height: 64);
+
+        grid.TryGetResidentTile(key, contentHash: 11, out var resident).Should().BeTrue();
+        resident.Width.Should().Be(128);
+        resident.Height.Should().Be(64);
+        grid.TryGetTile(key, contentHash: 11, out _).Should().BeFalse(
+            "a CPU bitmap target cannot consume GPU-resident tile metadata");
+    }
+
+    [TestMethod]
     public void Distinct_layers_and_positions_do_not_collide()
     {
         var grid = new TileGrid(maxBytes: 1_000_000);

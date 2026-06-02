@@ -7,7 +7,7 @@ namespace Starling.Engine.Tests;
 public class EngineRozTests
 {
     [TestMethod]
-    public void Render_returns_err_when_roz_dom_depth_limit_is_exceeded()
+    public async Task Render_returns_err_when_roz_dom_depth_limit_is_exceeded()
     {
         var fixture = Path.Combine(Path.GetTempPath(), $"starling-roz-{Guid.NewGuid():N}.html");
         var output = Path.Combine(Path.GetTempPath(), $"starling-roz-{Guid.NewGuid():N}.png");
@@ -15,7 +15,7 @@ public class EngineRozTests
         {
             File.WriteAllText(fixture, BuildDeepDomHtml(depth: 120));
             var engine = new StarlingEngine();
-            var result = engine.Render(
+            var result = await engine.RenderAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(400, 200), 16f)
                 {
@@ -42,7 +42,7 @@ public class EngineRozTests
     }
 
     [TestMethod]
-    public void Render_returns_err_when_roz_dom_node_limit_is_exceeded()
+    public async Task Render_returns_err_when_roz_dom_node_limit_is_exceeded()
     {
         var fixture = Path.Combine(Path.GetTempPath(), $"starling-roz-{Guid.NewGuid():N}.html");
         var output = Path.Combine(Path.GetTempPath(), $"starling-roz-{Guid.NewGuid():N}.png");
@@ -50,7 +50,7 @@ public class EngineRozTests
         {
             File.WriteAllText(fixture, BuildWideDomHtml(nodeCount: 600));
             var engine = new StarlingEngine();
-            var result = engine.Render(
+            var result = await engine.RenderAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(400, 200), 16f)
                 {

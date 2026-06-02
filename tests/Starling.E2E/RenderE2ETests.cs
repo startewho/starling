@@ -15,7 +15,7 @@ namespace Starling.E2E;
 public class RenderE2ETests
 {
     [TestMethod]
-    public void Render_hello_html_fixture()
+    public async Task Render_hello_html_fixture()
     {
         var repoRoot = LocateRepoRoot();
         var fixture = Path.Combine(repoRoot, "testdata", "hello.html");
@@ -26,7 +26,7 @@ public class RenderE2ETests
 
         try
         {
-            var result = engine.Render(
+            var result = await engine.RenderAsync(
                 "file://" + fixture.Replace('\\', '/'),
                 new RenderOptions(new Size(800, 600), 32f),
                 output);

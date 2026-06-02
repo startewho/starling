@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 using Silk.NET.Core.Contexts;
 using Starling.Common.Diagnostics;
-using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Dom;
 using Starling.Layout.Box;
@@ -25,8 +24,6 @@ public interface IRenderSession : IDisposable
     RenderFrame Render(PageFrameRequest request, IFrameTarget target);
 
     RenderFrame RenderComposited(CompositedFrameRequest request, IFrameTarget target);
-
-    void InvalidateBitmapCache();
 
     void ResetForNavigation();
 }
@@ -167,15 +164,12 @@ public enum RenderFrameKind
 
 public sealed class RenderFrame : IDisposable
 {
-    private RenderFrame(RenderFrameKind kind, CpuFrame? bitmap = null)
+    private RenderFrame(RenderFrameKind kind)
     {
         Kind = kind;
-        Bitmap = bitmap;
     }
 
     public RenderFrameKind Kind { get; }
-
-    public CpuFrame? Bitmap { get; }
 
     public bool Presented => Kind == RenderFrameKind.Presented;
 
@@ -183,37 +177,8 @@ public sealed class RenderFrame : IDisposable
 
     public static RenderFrame PresentedFrame() => new(RenderFrameKind.Presented);
 
-    internal static RenderFrame FromBitmap(RenderedBitmap bitmap)
-        => new(RenderFrameKind.CpuBitmap, new CpuFrame(bitmap));
-
-    public void Dispose() => Bitmap?.Dispose();
-}
-
-public sealed class CpuFrame : IDisposable
-{
-    private RenderedBitmap? _bitmap;
-
-    internal CpuFrame(RenderedBitmap bitmap)
-    {
-        ArgumentNullException.ThrowIfNull(bitmap);
-        _bitmap = bitmap;
-    }
-
-    public int Width => Bitmap.Width;
-
-    public int Height => Bitmap.Height;
-
-    public ReadOnlyMemory<byte> Rgba => Bitmap.Rgba;
-
-    internal byte[] RgbaArray => Bitmap.Rgba;
-
-    private RenderedBitmap Bitmap
-        => _bitmap ?? throw new ObjectDisposedException(nameof(CpuFrame));
-
     public void Dispose()
     {
-        _bitmap?.Dispose();
-        _bitmap = null;
     }
 }
 
@@ -221,7 +186,7 @@ internal sealed class DefaultRenderSession : IRenderSession
 {
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
-    private readonly PageRendererHost _bitmapRenderer;
+    // private readonly PageRendererHost _bitmapRenderer;
     private readonly NativeViewportRenderer? _surfaceRenderer;
     private bool _disposed;
 
@@ -231,7 +196,7 @@ internal sealed class DefaultRenderSession : IRenderSession
         ArgumentNullException.ThrowIfNull(backend);
         _diag = diagnostics;
         _backend = backend;
-        _bitmapRenderer = new PageRendererHost(_backend, _diag);
+        // _bitmapRenderer = new PageRendererHost(_backend, _diag);
         _surfaceRenderer = supportsSurfaceTargets ? new NativeViewportRenderer(_backend, _diag) : null;
     }
 
@@ -245,7 +210,7 @@ internal sealed class DefaultRenderSession : IRenderSession
 
         return target.Kind switch
         {
-            FrameTargetKind.CpuBitmap => RenderBitmap(request),
+            // FrameTargetKind.CpuBitmap => RenderBitmap(request),
             FrameTargetKind.Surface => RenderSurface(request, target),
             _ => RenderFrame.Unavailable(),
         };
@@ -290,34 +255,34 @@ internal sealed class DefaultRenderSession : IRenderSession
 
     public void ResetForNavigation()
     {
-        _bitmapRenderer.ResetForNavigation();
+        // _bitmapRenderer.ResetForNavigation();
         _surfaceRenderer?.ResetForNavigation();
     }
 
-    public void InvalidateBitmapCache()
-        => _bitmapRenderer.InvalidateCache();
+    // public void InvalidateBitmapCache()
+    //     => _bitmapRenderer.InvalidateCache();
 
-    private RenderFrame RenderBitmap(PageFrameRequest request)
-    {
-        var bitmap = request.UseLayerTree
-            ? _bitmapRenderer.RenderViaLayerTree(
-                request.Root,
-                request.Scale,
-                request.StyleOverride,
-                request.Images,
-                request.Viewport,
-                request.IsAnimatingLayerRoot)
-            : _bitmapRenderer.Render(
-                request.Root,
-                request.Scale,
-                request.StyleOverride,
-                request.Images,
-                request.Viewport,
-                request.PageVersion,
-                request.ScrollOffsets);
-
-        return RenderFrame.FromBitmap(bitmap);
-    }
+    // private RenderFrame RenderBitmap(PageFrameRequest request)
+    // {
+    //     var bitmap = request.UseLayerTree
+    //         ? _bitmapRenderer.RenderViaLayerTree(
+    //             request.Root,
+    //             request.Scale,
+    //             request.StyleOverride,
+    //             request.Images,
+    //             request.Viewport,
+    //             request.IsAnimatingLayerRoot)
+    //         : _bitmapRenderer.Render(
+    //             request.Root,
+    //             request.Scale,
+    //             request.StyleOverride,
+    //             request.Images,
+    //             request.Viewport,
+    //             request.PageVersion,
+    //             request.ScrollOffsets);
+    //
+    //     return RenderFrame.FromBitmap(bitmap);
+    // }
 
     private RenderFrame RenderSurface(PageFrameRequest request, IFrameTarget target)
     {
@@ -356,7 +321,7 @@ internal sealed class DefaultRenderSession : IRenderSession
 
         _disposed = true;
         _surfaceRenderer?.Dispose();
-        _bitmapRenderer.Dispose();
+        // _bitmapRenderer.Dispose();
         _backend.Dispose();
     }
 }

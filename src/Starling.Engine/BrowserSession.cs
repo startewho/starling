@@ -14,14 +14,6 @@ public sealed class BrowserSession : IDisposable
 {
     private readonly StarlingEngine _engine;
     private readonly IDiagnostics _diag;
-
-    // Persistent, session-scoped HTTP client shared across interactive
-    // navigations so warm HTTP/2 connections, pooled keep-alive transports, and
-    // the DNS cache survive page-to-page — revisiting an origin (or following a
-    // same-origin link) skips the DNS+TCP+TLS round-trips. Disposed in Dispose().
-    // The PNG render path (RenderAsync) still mints a per-load client via the
-    // engine's factory; it's a one-shot path where cross-navigation reuse adds
-    // nothing.
     private readonly StarlingHttpClient _http;
 
     public BrowserSession(IDiagnostics? diagnostics = null, CookieJar? cookieJar = null)
