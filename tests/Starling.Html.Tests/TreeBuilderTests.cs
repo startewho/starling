@@ -248,6 +248,43 @@ public sealed class TreeBuilderTests
         doc.DescendantElements().Should().Contain(e => e.LocalName == "div");
     }
 
+    // ----------------------------------------------------------------- template
+    // WHATWG HTML §13.2.6.4.5 "after head" forwards <template> start tags to the
+    // "in head" insertion mode (§13.2.6.4.4). If "in head" doesn't recognize
+    // <template>, it falls back through "anything else" — which puts the parser
+    // back into "after head" with the same token, looping forever. A real-world
+    // Astro/Starlight docs page (netclaw.dev/getting-started/installation/)
+    // crashed Starling with a stack overflow before this case was handled.
+
+    [Spec("html", "https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead",
+        "13.2.6.4.4 in head — template start tag")]
+    [SpecFact]
+    public void Template_after_head_does_not_stack_overflow()
+    {
+        // The minimal reproduction: head closes, then a <template> appears
+        // before <body>. Before the fix this looped between InHead ↔ AfterHead.
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head></head><template id=\"t\"></template><body>x</body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.TextContent.Should().Be("x");
+    }
+
+    [Spec("html", "https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead",
+        "13.2.6.4.4 in head — template start tag")]
+    [SpecFact]
+    public void Template_inside_head_does_not_stack_overflow()
+    {
+        // The same loop fires when <template> appears directly inside <head>:
+        // InHead's "anything else" falls through to AfterHead, which forwards
+        // template back to InHead.
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head><template id=\"t\"></template></head><body>x</body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.TextContent.Should().Be("x");
+    }
+
     [Spec("html", "https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead",
         "13.2.6.4.4 in head — noscript / scripting flag")]
     [SpecFact]
@@ -262,5 +299,41 @@ public sealed class TreeBuilderTests
 
         var noscript = doc.Body!.DescendantElements().Single(e => e.LocalName == "noscript");
         noscript.TextContent.Should().Be("HIDDEN");
+    }
+
+    // Regression: <template> after </head> used to bounce between the "after head"
+    // and "in head" insertion modes forever (stack overflow), because "after head"
+    // delegated it to "in head" and "in head" had no case for it. The token must be
+    // consumed and parsing must finish with the body content intact.
+    [TestMethod]
+    public void Template_after_head_does_not_overflow()
+    {
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head><title>t</title></head>" +
+            "<template><div>tpl</div></template><body><p>VISIBLE</p></body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
+        doc.DocumentElement!.DescendantElements().Should().Contain(e => e.LocalName == "template");
+    }
+
+    [TestMethod]
+    public void Template_in_head_does_not_overflow()
+    {
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><head><template><div>tpl</div></template></head>" +
+            "<body><p>VISIBLE</p></body></html>");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
+    }
+
+    [TestMethod]
+    public void Template_in_body_is_parsed()
+    {
+        var doc = HtmlParser.Parse(
+            "<!doctype html><html><body><template><span>tpl</span></template><p>VISIBLE</p></body></html>");
+
+        doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
     }
 }

@@ -105,6 +105,92 @@ public sealed class GpuCompositeParityTests
     }
 
     [TestMethod]
+    public void Many_overlapping_animated_layers_match_cpu_blend()
+    {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
+        // Mimic the animations page: many promoted layers (transform + opacity)
+        // overlapping in a grid, the exact shape that stacks layers on the GPU
+        // blend. A regression in multi-layer blending shows here even though the
+        // single-layer parity tests pass.
+        const int W = 360, H = 360;
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<body style=\"margin:0;background-color:#101018\">");
+        sb.Append("<div style=\"position:absolute;left:0;top:0;width:360px;height:360px;background-color:#181826\"></div>");
+        for (var i = 0; i < 16; i++)
+        {
+            var x = 20 + (i % 4) * 80;
+            var y = 20 + (i / 4) * 80;
+            var angle = (i * 23) % 360;
+            var op = 0.4 + 0.04 * i; // 0.4 .. ~1.0
+            var color = $"#{(40 + i * 12) % 256:x2}{(200 - i * 9) % 256:x2}{(90 + i * 15) % 256:x2}";
+            sb.Append($"<div style=\"position:absolute;left:{x}px;top:{y}px;width:70px;height:70px;" +
+                      $"background-color:{color};opacity:{op.ToString(System.Globalization.CultureInfo.InvariantCulture)};" +
+                      $"transform:rotate({angle}deg)\"></div>");
+        }
+        sb.Append("</body>");
+
+        var (c, g) = RenderBothPaths(sb.ToString(), W, H, 2.0f);
+        using (c)
+        using (g)
+        {
+            c.Width.Should().Be(g.Width);
+            Ssim.ComputeRgba(c.Rgba, g.Rgba, c.Width, c.Height)
+                .Should().BeGreaterThanOrEqualTo(0.99,
+                    "stacked animated layers must blend on the GPU the same as the CPU path");
+        }
+    }
+
+    [TestMethod]
+    public void Gpu_blend_is_deterministic_under_cache_churn()
+    {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
+        // The GPU compositor's texture cache is a process-wide singleton shared
+        // across every frame. If rendering the same layer tree twice — with a
+        // DIFFERENT tree churning the cache in between — ever differs, that is a
+        // frame-to-frame flicker. Render A, then B, then A again, byte-for-byte.
+        const int W = 200, H = 200;
+        const string htmlA =
+            "<body style=\"margin:0;background-color:#202030\">" +
+            "<div style=\"position:absolute;left:10px;top:10px;width:120px;height:80px;background-color:#cc3344;transform:rotate(15deg)\"></div>" +
+            "<div style=\"opacity:0.6;position:absolute;left:60px;top:60px;width:120px;height:80px;background-color:#3366cc\"></div>" +
+            "</body>";
+        const string htmlB =
+            "<body style=\"margin:0;background-color:#103018\">" +
+            "<div style=\"position:absolute;left:20px;top:30px;width:90px;height:90px;background-color:#33aa55;transform:rotate(40deg)\"></div>" +
+            "<div style=\"opacity:0.5;position:absolute;left:80px;top:20px;width:100px;height:120px;background-color:#aa33aa\"></div>" +
+            "</body>";
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+
+        RenderedBitmap RenderGpu(string html)
+        {
+            var root = Layout(html, W, H);
+            var tree = new LayerTreeBuilder().Build(root);
+            return new CompositorEngine(backend).Render(tree, new LayoutRect(0, 0, W, H), 2.0f);
+        }
+
+        using var a1 = RenderGpu(htmlA);
+        using var b = RenderGpu(htmlB);          // churn the shared cache
+        using var a2 = RenderGpu(htmlA);          // same content as a1 — must match
+        using var a3 = RenderGpu(htmlA);          // and again
+
+        a1.Rgba.AsSpan().SequenceEqual(a2.Rgba).Should().BeTrue(
+            "the same layer tree must blend identically after another tree churned the shared GPU cache");
+        a2.Rgba.AsSpan().SequenceEqual(a3.Rgba).Should().BeTrue(
+            "repeated renders of the same tree must be byte-identical (no flicker)");
+    }
+
+    [TestMethod]
     public void Rotated_layer_matches_cpu_blend_within_ssim_tolerance()
     {
         if (GpuLayerCompositor.Shared is null)

@@ -877,6 +877,18 @@ public sealed class MainWindow : Window, IBrowserController
     public Task<BrowserControlResult> TypeTextFromToolAsync(string text, bool submit, CancellationToken ct)
         => InputTool("type", () => _webview.TypeText(text, submit));
 
+    public Task<BrowserControlResult> HighlightFromToolAsync(string selector, string? color, CancellationToken ct)
+        => InputTool("highlight", () => _webview.HighlightElement(selector, color));
+
+    public Task<BrowserControlResult> SelectElementFromToolAsync(string selector, CancellationToken ct)
+        => InputTool("select", () => _webview.SelectBySelector(selector));
+
+    public Task<BrowserControlResult> FocusElementFromToolAsync(string selector, CancellationToken ct)
+        => InputTool("focus", () => _webview.FocusBySelector(selector));
+
+    public Task<BrowserControlResult> ComputedStyleFromToolAsync(string selector, CancellationToken ct)
+        => InputTool("computed_style", () => _webview.InspectComputedStyle(selector));
+
     public Task<BrowserControlResult> ResizeFromToolAsync(double width, double height, CancellationToken ct)
     {
         if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)

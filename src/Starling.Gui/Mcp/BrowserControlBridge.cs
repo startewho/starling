@@ -56,6 +56,18 @@ public sealed class BrowserControlBridge : IBrowserControlDispatcher
     public Task<BrowserControlResult> ResizeAsync(double width, double height, CancellationToken ct)
         => InvokeAsync(controller => controller.ResizeFromToolAsync(width, height, ct), ct);
 
+    public Task<BrowserControlResult> HighlightAsync(string selector, string? color, CancellationToken ct)
+        => InvokeAsync(controller => controller.HighlightFromToolAsync(selector, color, ct), ct);
+
+    public Task<BrowserControlResult> SelectElementAsync(string selector, CancellationToken ct)
+        => InvokeAsync(controller => controller.SelectElementFromToolAsync(selector, ct), ct);
+
+    public Task<BrowserControlResult> FocusElementAsync(string selector, CancellationToken ct)
+        => InvokeAsync(controller => controller.FocusElementFromToolAsync(selector, ct), ct);
+
+    public Task<BrowserControlResult> ComputedStyleAsync(string selector, CancellationToken ct)
+        => InvokeAsync(controller => controller.ComputedStyleFromToolAsync(selector, ct), ct);
+
     private async Task<BrowserControlResult> InvokeAsync(
         Func<IBrowserController, Task<BrowserControlResult>> action,
         CancellationToken ct)
