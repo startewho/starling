@@ -6,7 +6,6 @@ using Starling.Html;
 using Starling.Layout;
 using Starling.Layout.Box;
 using Starling.Layout.Text;
-using Starling.Paint.Compositor;
 
 namespace Starling.Shell.Native;
 
@@ -46,14 +45,19 @@ internal static class NativePresentDemo
         var dpr = window.Size.X > 0 ? (float)window.FramebufferSize.X / window.Size.X : 1f;
         Console.WriteLine($"present: fb={window.FramebufferSize} logical={window.Size} dpr={dpr}");
 
-        var presenter = GpuSurfacePresenter.CreateForWindow(window);
-        if (presenter is null)
+        using var renderer = RenderSessionFactory.Create();
+        if (!renderer.SupportsSurfaceTargets)
         {
-            Console.Error.WriteLine("present: no GPU adapter / surface; cannot create presenter.");
+            Console.Error.WriteLine("present: selected render backend does not support surface targets.");
             return 1;
         }
-        using var _p = presenter;
-        using var renderer = new NativeViewportRenderer();
+        var target = WindowSurfaceFrameTarget.TryCreate(window);
+        if (target is null)
+        {
+            Console.Error.WriteLine("present: no GPU adapter / surface; cannot create surface target.");
+            return 1;
+        }
+        using var _target = target;
 
         // Lay out the page once at the current logical size; re-layout on resize.
         var doc = HtmlParser.Parse(Html);
@@ -66,7 +70,7 @@ internal static class NativePresentDemo
 
         window.FramebufferResize += sz =>
         {
-            presenter.Configure(Math.Max(1, sz.X), Math.Max(1, sz.Y));
+            target.Configure(Math.Max(1, sz.X), Math.Max(1, sz.Y));
         };
 
         window.Render += _ =>
@@ -82,9 +86,13 @@ internal static class NativePresentDemo
 
             var logicalW = fb.X / dpr;
             var logicalH = fb.Y / dpr;
-            var ok = renderer.Present(
-                root, presenter, scale: dpr,
-                viewport: new Rect(0, 0, logicalW, logicalH));
+            using var frame = renderer.Render(new PageFrameRequest
+            {
+                Root = root,
+                Scale = dpr,
+                Viewport = new Rect(0, 0, logicalW, logicalH),
+            }, target);
+            var ok = frame.Presented;
             if (ok) presented++; else failures++;
 
             if (maxFrames > 0 && presented >= maxFrames)

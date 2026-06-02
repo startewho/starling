@@ -155,7 +155,7 @@ internal static unsafe class MacMetal
             var layer = MsgSend(MsgSend(metalClass, sel_registerName("alloc")), sel_registerName("init"));
             if (layer == 0) return view;
 
-            // The compositor present (GpuSurfacePresenter) configures the swapchain
+            // The render session configures the swapchain
             // with RenderAttachment usage only, so the default framebufferOnly = YES
             // would actually suffice. We clear it anyway so the drawable also allows
             // copy/sample usages — leaving room for a future surface-readback path

@@ -16,7 +16,6 @@ using Starling.Html;
 using Starling.Layout.Box;
 using Starling.Layout.Text;
 using LayoutSize = Starling.Layout.Size;
-using Starling.Paint.Compositor;
 using Starling.Gui.Core.Accessibility;
 using Starling.Gui.Core.Rendering;
 using Starling.Shell.Native.Mac;
@@ -26,8 +25,8 @@ namespace Starling.Shell.Native;
 /// <summary>
 /// Phase-3 native browser window: real navigation, scroll, hover-cursor,
 /// click, and keyboard-text wired to the Starling engine via
-/// <see cref="BrowserSession"/>, presented zero-copy through
-/// <see cref="NativeViewportRenderer"/> with engine-rendered chrome above
+/// <see cref="BrowserSession"/>, presented through a render session with
+/// engine-rendered chrome above
 /// the page in a single composited frame.
 /// </summary>
 internal sealed class NativeBrowserWindow : IDisposable
@@ -210,14 +209,19 @@ internal sealed class NativeBrowserWindow : IDisposable
         var dpr = window.Size.X > 0 ? (float)window.FramebufferSize.X / window.Size.X : 1f;
         Console.WriteLine($"browser: fb={window.FramebufferSize} logical={window.Size} dpr={dpr}");
 
-        var presenter = GpuSurfacePresenter.CreateForWindow(window);
-        if (presenter is null)
+        using var renderer = RenderSessionFactory.Create();
+        if (!renderer.SupportsSurfaceTargets)
         {
-            Console.Error.WriteLine("browser: no GPU adapter / surface; cannot create presenter.");
+            Console.Error.WriteLine("browser: selected render backend does not support surface targets.");
             return 1;
         }
-        using var _p = presenter;
-        using var renderer = new NativeViewportRenderer();
+        var target = WindowSurfaceFrameTarget.TryCreate(window);
+        if (target is null)
+        {
+            Console.Error.WriteLine("browser: no GPU adapter / surface; cannot create surface target.");
+            return 1;
+        }
+        using var _target = target;
 
         // macOS accessibility bridge (phase 4) — null off macOS / no content view.
         var a11y = MacAccessibilityBridge.TryCreate(window.Native?.Cocoa ?? 0);
@@ -765,7 +769,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         // ── Window events ─────────────────────────────────────────────────────
         window.FramebufferResize += sz =>
         {
-            presenter.Configure(Math.Max(1, sz.X), Math.Max(1, sz.Y));
+            target.Configure(Math.Max(1, sz.X), Math.Max(1, sz.Y));
         };
 
         // Animation pacing. Cap continuous animation/transition frames to a target
@@ -875,14 +879,16 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (loading)
             {
                 loadingBox = BuildLoadingPage();
-                var okLoad = renderer.PresentComposited(
-                    presenter,
-                    surfaceWidth: fb.X,
-                    surfaceHeight: fb.Y,
-                    scale: dpr,
-                    chromeRoot: chromeBox,
-                    chromeHeightCss: ChromeHeightCss,
-                    pageRoot: loadingBox);
+                using var loadFrame = renderer.RenderComposited(new CompositedFrameRequest
+                {
+                    SurfaceWidth = fb.X,
+                    SurfaceHeight = fb.Y,
+                    Scale = dpr,
+                    ChromeRoot = chromeBox,
+                    ChromeHeightCss = ChromeHeightCss,
+                    PageRoot = loadingBox,
+                }, target);
+                var okLoad = loadFrame.Presented;
                 if (okLoad) presented++; else failures++;
             }
             else
@@ -893,21 +899,23 @@ internal sealed class NativeBrowserWindow : IDisposable
                                   : devtoolsActive ? devtoolsOverlay
                                   : null;
 
-                var ok = renderer.PresentComposited(
-                    presenter,
-                    surfaceWidth: fb.X,
-                    surfaceHeight: fb.Y,
-                    scale: dpr,
-                    chromeRoot: chromeBox,
-                    chromeHeightCss: ChromeHeightCss,
-                    pageRoot: page!.Root,
-                    scrollX: 0,
-                    scrollY: scrollY,
-                    pageAnimating: box => IsAnimatingLayerRoot(page, box),
-                    styleOverride: StyleOverride,
-                    images: page.ImageResolver,
-                    overlayRoot: findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
-                    screenOverlayRoot: screenOverlay);
+                using var frame = renderer.RenderComposited(new CompositedFrameRequest
+                {
+                    SurfaceWidth = fb.X,
+                    SurfaceHeight = fb.Y,
+                    Scale = dpr,
+                    ChromeRoot = chromeBox,
+                    ChromeHeightCss = ChromeHeightCss,
+                    PageRoot = page!.Root,
+                    ScrollX = 0,
+                    ScrollY = scrollY,
+                    PageAnimating = box => IsAnimatingLayerRoot(page, box),
+                    StyleOverride = StyleOverride,
+                    Images = page.ImageResolver,
+                    OverlayRoot = findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
+                    ScreenOverlayRoot = screenOverlay,
+                }, target);
+                var ok = frame.Presented;
 
                 if (ok) { presented++; needsPresent = false; } else failures++;
             }

@@ -51,13 +51,13 @@ internal sealed class Compositor
 
     /// <summary>
     /// Forces the managed CPU blend even when a GPU is available
-    /// (wp:M12-13-gpu-composite-blend). The composite path blends cached layers
-    /// on the GPU by default — this switch pins the CPU path for the golden
-    /// parity test and for hosts that opt out.
+    /// (wp:M12-13-gpu-composite-blend). This is an explicit test/reference
+    /// switch, not an automatic fallback.
     /// </summary>
     internal bool DisableGpuBlend { get; init; }
 
-    private GpuLayerCompositor? Gpu => DisableGpuBlend ? null : GpuLayerCompositor.Shared;
+    private bool RequiresGpuBlend
+        => !DisableGpuBlend && string.Equals(_backend.Name, "imagesharp-webgpu", StringComparison.Ordinal);
 
     /// <summary>
     /// Renders <paramref name="root"/> (the layer tree's root) into a bitmap
@@ -99,19 +99,16 @@ internal sealed class Compositor
         CollectOps(root, ops, keepAlive, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
 
-        // GPU blend (wp:M12-13): cached layer textures stay resident across
-        // frames and blend in one pass. Falls back to the managed CPU blend when
-        // no GPU adapter is present or a frame fails on the GPU.
-        var blended = false;
-        var gpu = Gpu;
-        if (gpu is not null && ops.Count > 0)
-            blended = gpu.Composite(output, width, height, ops);
-
-        if (!blended)
+        // GPU sessions are strict: if the WebGPU backend was selected, blending
+        // must also stay on the GPU unless a test explicitly pins DisableGpuBlend.
+        if (RequiresGpuBlend && ops.Count > 0)
         {
-            // A failed GPU frame may have left partial pixels in the output; reset
-            // to the white base before the CPU blend re-composites from scratch.
-            if (gpu is not null) FillWhite(output);
+            var gpu = GpuLayerCompositor.Shared
+                ?? throw new InvalidOperationException("WebGPU composite blend is unavailable for the selected paint backend.");
+            gpu.Composite(output, width, height, ops);
+        }
+        else
+        {
             foreach (var op in ops)
                 BlendOp(op, output, width, height, fastBlit: !DisableFastBlit);
         }
@@ -160,6 +157,8 @@ internal sealed class Compositor
             AppendOverlayOps(ops, viewport, scale, overlays);
 
         var presented = presenter.PresentOps(width, height, ops);
+        if (!presented)
+            throw new InvalidOperationException("GPU surface presenter did not present the frame.");
 
         foreach (var bmp in keepAlive)
             bmp.Dispose();
@@ -462,7 +461,7 @@ internal sealed class Compositor
 
     /// <summary>
     /// Managed alpha-over blend of one <see cref="LayerBlend"/> into
-    /// <paramref name="output"/> — the CPU fallback for the GPU composite path.
+    /// <paramref name="output"/> — the CPU blend path.
     /// Inverse-maps each output device pixel back to a source sample using the
     /// op's precomputed <see cref="LayerBlend.LocalToDevice"/> so rotation /
     /// scaling are exact regardless of the transform.

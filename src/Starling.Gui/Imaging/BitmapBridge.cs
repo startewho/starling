@@ -2,13 +2,13 @@ using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Starling.Common.Image;
+using Starling.Gui.Core.Rendering;
 
 namespace Starling.Gui.Imaging;
 
 /// <summary>
-/// Copies a <see cref="RenderedBitmap"/> (top-down, tightly-packed,
-/// straight-alpha RGBA8888 — see RenderedBitmap.cs) into an Avalonia
+/// Copies a <see cref="CpuFrame"/> (top-down, tightly-packed,
+/// straight-alpha RGBA8888) into an Avalonia
 /// <see cref="WriteableBitmap"/>. DPI is left at the default (96, 96):
 /// the WebviewPanel uses Stretch.Uniform with explicit DIP-sized Width/Height,
 /// so the bitmap's reported logical size is irrelevant and the renderer
@@ -18,23 +18,24 @@ internal static class BitmapBridge
 {
     private static readonly Vector DefaultDpi = new(96.0, 96.0);
 
-    public static WriteableBitmap ToWriteableBitmap(RenderedBitmap source, double _ignoredScale)
+    public static WriteableBitmap ToWriteableBitmap(CpuFrame source, double _ignoredScale)
     {
         ArgumentNullException.ThrowIfNull(source);
 
         var pixelSize = new PixelSize(source.Width, source.Height);
         var bitmap = new WriteableBitmap(pixelSize, DefaultDpi, PixelFormat.Rgba8888, AlphaFormat.Unpremul);
+        var rgba = source.RgbaArray;
 
         using (var fb = bitmap.Lock())
         {
-            // RenderedBitmap rows are stride = Width*4 (no padding). Avalonia's
+            // CpuFrame rows are stride = Width*4 (no padding). Avalonia's
             // FrameBuffer can report a wider RowBytes if it pads — copy
             // row-by-row when strides differ, single Marshal.Copy when they
             // match.
             var srcStride = source.Width * 4;
             if (fb.RowBytes == srcStride)
             {
-                Marshal.Copy(source.Rgba, 0, fb.Address, source.Rgba.Length);
+                Marshal.Copy(rgba, 0, fb.Address, rgba.Length);
             }
             else
             {
@@ -42,7 +43,7 @@ internal static class BitmapBridge
                 {
                     var rowStart = y * srcStride;
                     var dst = fb.Address + (y * fb.RowBytes);
-                    Marshal.Copy(source.Rgba, rowStart, dst, srcStride);
+                    Marshal.Copy(rgba, rowStart, dst, srcStride);
                 }
             }
         }

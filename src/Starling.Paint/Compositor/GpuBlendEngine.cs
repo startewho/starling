@@ -28,6 +28,8 @@ namespace Starling.Paint.Compositor;
 /// </remarks>
 internal sealed unsafe class GpuBlendEngine : IDisposable
 {
+    internal const int MaxTextureDimension2D = 8192;
+
     internal WebGPU Api { get; }
     internal WgpuExt? Poll { get; }
     internal Device* Device { get; }
@@ -54,6 +56,16 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private const uint VertexStride = FloatsPerVertex * sizeof(float);
 
     internal int VertsPerQuadCount => VertsPerQuad;
+
+    internal static void ThrowIfTextureOversized(string target, int width, int height)
+    {
+        if (width > MaxTextureDimension2D || height > MaxTextureDimension2D)
+        {
+            throw new InvalidOperationException(
+                $"{target} {width}x{height} exceeds the supported " +
+                $"{MaxTextureDimension2D}x{MaxTextureDimension2D} texture limit.");
+        }
+    }
 
     private struct CachedTexture
     {
@@ -396,6 +408,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     private (nint Texture, nint View, nint BindGroup) CreateAndUpload(RenderedBitmap bmp)
     {
+        ThrowIfTextureOversized("WebGPU layer texture", bmp.Width, bmp.Height);
         var desc = new TextureDescriptor
         {
             Usage = TextureUsage.TextureBinding | TextureUsage.CopyDst,

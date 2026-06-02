@@ -25,6 +25,7 @@ internal sealed class PageRendererHost : IDisposable
 {
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
+    private readonly bool _ownsBackend;
     private readonly CachedPageRenderer _cached;
 
     // Tile grid for the persistent per-layer compositor cache,
@@ -33,9 +34,21 @@ internal sealed class PageRendererHost : IDisposable
     private bool _disposed;
 
     public PageRendererHost(IDiagnostics? diagnostics = null)
+        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diagnostics), diagnostics, ownsBackend: true)
     {
+    }
+
+    internal PageRendererHost(IPaintBackend backend, IDiagnostics? diagnostics = null)
+        : this(backend, diagnostics, ownsBackend: false)
+    {
+    }
+
+    private PageRendererHost(IPaintBackend backend, IDiagnostics? diagnostics, bool ownsBackend)
+    {
+        ArgumentNullException.ThrowIfNull(backend);
         _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, _diag);
+        _backend = backend;
+        _ownsBackend = ownsBackend;
         _cached = new CachedPageRenderer(_backend, _diag);
         _tiles = new TileGrid(_diag);
     }
@@ -141,8 +154,15 @@ internal sealed class PageRendererHost : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
-        _backend.Dispose();
+        if (_ownsBackend)
+        {
+            _backend.Dispose();
+        }
     }
 }

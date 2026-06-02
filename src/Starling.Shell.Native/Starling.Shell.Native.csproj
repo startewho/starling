@@ -11,7 +11,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Engine (BrowserSession/LaidOutPage) + Gui.Core (PageRendererHost,
+    <!-- Engine (BrowserSession/LaidOutPage) + Gui.Core (render session,
          hit-testing, navigation) drive page load + layout + paint. Engine pulls
          Starling.Paint transitively, which copies the native wgpu dylib into the
          shell's output and installs WgpuNativeLoader so WebGPU.GetApi() resolves. -->
