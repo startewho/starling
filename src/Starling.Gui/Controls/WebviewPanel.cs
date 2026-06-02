@@ -75,8 +75,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private int _lastLayoutInvalidationVersion;
     private List<BoxHitTester.PlacedFragment> _fragments = new();
     private double _currentScale = 1.0;
-    private DomElement? _hoverAnchor;
+    // The innermost element the pointer is currently over (or null). Drives the
+    // CSS :hover re-cascade for any element — distinct from a hovered link anchor,
+    // which only feeds the cursor and status-bar href.
+    private DomElement? _hoverElement;
     private Dictionary<DomElement, ComputedStyle>? _hoverOverrides;
+    // Elements whose computed style the current hover affects (the hovered
+    // element's subtree + its ancestor chain). Tracked so the next hover change
+    // can register the reverse transition for elements that leave the scope.
+    private HashSet<DomElement> _hoverScope = new();
 
     // Per-element scroll offsets for `overflow: scroll | auto` containers
     // (the in-page sidebar nav, code blocks, etc.). The painter translates
@@ -102,7 +109,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     // The element a synthetic mouse-move (MoveTo) last hovered, so the next move
     // can fire mouseout on it / mouseover on the new target. Only the programmatic
-    // MoveTo path tracks this — real pointer moves drive CSS :hover via _hoverAnchor.
+    // MoveTo path tracks this — real pointer moves drive CSS :hover via _hoverElement.
     private DomElement? _mouseTarget;
 
     // Live-page event loop: while the current page carries a live JS context
@@ -345,8 +352,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // Reset interaction state.
         ClearSelection();
         ClearFindHighlight();
-        _hoverAnchor = null;
+        ClearHighlightOverlays();
+        _hoverElement = null;
         _hoverOverrides = null;
+        _hoverScope.Clear();
 
         // Per-element scroll offsets survive in-place relayouts (window resize
         // keeps the same Document) but reset on navigation. Tracking the
@@ -640,13 +649,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         ApplyCursor(hit);
 
-        var anchorEl = hit.LinkAnchor;
-        if (!ReferenceEquals(anchorEl, _hoverAnchor))
+        // CSS :hover follows the innermost element under the pointer (any
+        // element, not just links), so buttons/tiles/divs re-cascade too.
+        var hoverEl = FindClickTarget(hit.Box);
+        if (!ReferenceEquals(hoverEl, _hoverElement))
         {
-            _hoverAnchor = anchorEl;
+            _hoverElement = hoverEl;
             ApplyHoverState();
         }
 
+        var anchorEl = hit.LinkAnchor;
         if (anchorEl is not null)
         {
             var href = anchorEl.GetAttribute("href");
@@ -658,9 +670,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private void OnPointerExited(object? sender, PointerEventArgs e)
     {
         ResetCursor();
-        if (_hoverAnchor is not null)
+        if (_hoverElement is not null)
         {
-            _hoverAnchor = null;
+            _hoverElement = null;
             ApplyHoverState();
         }
     }
@@ -1207,6 +1219,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             using (_diag.Span("gui", "live.prepare_anim"))
                 _prepareAnimationFrame!(page, _animClockMs);
             _animating = true;
+            // Re-sample the hovered scope at the advanced clock so a hover
+            // transition (e.g. a tile easing on :hover) progresses. Elements that
+            // left the hover scope are not here — they animate back via the
+            // AnimatedStyle path below, which carries their reverse transition.
+            if (_hoverElement is not null)
+                _hoverOverrides = BuildHoverOverrides(_hoverElement, _animClockMs);
         }
         else
         {
@@ -1446,6 +1464,181 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             : $"typed \"{clean}\"; value=\"{CurrentValue()}\"");
     }
 
+    // ---- MCP element-targeting tools: highlight / select / focus by selector ----
+
+    private readonly List<Control> _highlightOverlays = new();
+
+    /// <summary>
+    /// Draws a translucent highlight box over every element matching
+    /// <paramref name="selector"/> (a CSS selector). Non-destructive — clears the
+    /// previous highlight first and on navigation. <paramref name="color"/> is an
+    /// optional CSS colour; an opaque colour is made translucent so the element
+    /// shows through.
+    /// </summary>
+    public InputResult HighlightElement(string selector, string? color)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        ClearHighlightOverlays();
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var brush = HighlightBrush(color);
+        var count = 0;
+        foreach (var el in els)
+        {
+            if (FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is not { } loc) continue;
+            var overlay = MakeOverlay(brush, loc.X, loc.Y, loc.Box.Frame.Width, loc.Box.Frame.Height);
+            _pageCanvas.Children.Add(overlay);
+            _highlightOverlays.Add(overlay);
+            count++;
+        }
+        return new InputResult(true, $"highlighted {count} of {els.Count} element(s) matching '{selector}'");
+    }
+
+    /// <summary>
+    /// Selects the first element matching <paramref name="selector"/>: draws a
+    /// selection box over it and makes its text the copyable selection (⌘C).
+    /// </summary>
+    public InputResult SelectBySelector(string selector)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var el = els[0];
+        if (FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is not { } loc)
+            return new InputResult(false, $"matched <{el.LocalName}> has no rendered box to select");
+
+        ClearSelection();
+        var brush = new SolidColorBrush(AvColor.FromArgb(80, 51, 144, 255));
+        var overlay = MakeOverlay(brush, loc.X, loc.Y, loc.Box.Frame.Width, loc.Box.Frame.Height);
+        _pageCanvas.Children.Add(overlay);
+        _selectionOverlays.Add(overlay);
+        _selectionText = el.TextContent ?? string.Empty;
+        return new InputResult(true, $"selected <{el.LocalName}> ({_selectionText.Length} chars) — ⌘C to copy");
+    }
+
+    /// <summary>
+    /// Focuses the first element matching <paramref name="selector"/>: a text
+    /// field gets keyboard focus + caret (then <c>browser_type</c> works); any
+    /// other element gets DOM focus so <c>:focus</c> styling and JS focus handlers
+    /// run.
+    /// </summary>
+    public InputResult FocusBySelector(string selector)
+    {
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var el = els[0];
+        if (HtmlFormControls.IsTextControl(el) && !el.HasAttribute("disabled")
+            && FindBoxAbs(_currentPage!.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is { } loc)
+        {
+            // Focus through the input path so the caret + DOM events are set up;
+            // aim the synthetic click at the field centre.
+            var cx = loc.X + loc.Box.Frame.Width / 2;
+            var cy = loc.Y + loc.Box.Frame.Height / 2;
+            FocusInput(el, (cx, cy));
+            return new InputResult(true, $"focused text field <{el.LocalName}> matching '{selector}'");
+        }
+
+        // Any other element: clear input focus, set document focus, fire events,
+        // and relayout so :focus styling applies.
+        BlurInput();
+        _currentPage!.Document.FocusedElement = el;
+        DispatchDom(el, new FocusEvent("focus"));
+        DispatchDom(el, new FocusEvent("focusin", new EventInit(Bubbles: true)));
+        RefreshFocusedLayout();
+        return new InputResult(true, $"focused <{el.LocalName}> matching '{selector}'");
+    }
+
+    /// <summary>
+    /// Debug report for the <c>browser_computed_style</c> MCP tool: for every
+    /// element matching <paramref name="selector"/>, reports the EFFECTIVE painted
+    /// style using the same precedence the painter does — a live hover override
+    /// first, then an animation/transition sample, otherwise the laid-out style —
+    /// plus whether a hover override or a live animation is currently driving it.
+    /// Built to diagnose "renders wrong / goes invisible" bugs: it surfaces the
+    /// opacity / transform / colour actually on screen and the flag that explains
+    /// them (e.g. an unexpected hover override shadowing an animation).
+    /// </summary>
+    public InputResult InspectComputedStyle(string selector)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+        var (els, error) = QueryAll(selector);
+        if (error is not null) return new InputResult(false, error);
+        if (els.Count == 0) return new InputResult(true, $"no elements matched '{selector}'");
+
+        var page = _currentPage;
+        var sb = new System.Text.StringBuilder();
+        const int Max = 10;
+        var shown = 0;
+        foreach (var el in els)
+        {
+            if (shown >= Max) { sb.Append($"; … (+{els.Count - Max} more)"); break; }
+
+            var hovered = _hoverOverrides is not null && _hoverOverrides.ContainsKey(el);
+            var animating = IsAnimating(el);
+            var s = hovered ? _hoverOverrides![el]
+                : animating ? page.Style.ComputeWithAnimations(el, _animClockMs)
+                : page.Style.Compute(el);
+
+            var color = s.GetColor(PropertyId.Color);
+            var bg = s.GetColor(PropertyId.BackgroundColor);
+            if (shown > 0) sb.Append("; ");
+            sb.Append($"<{el.LocalName}> opacity={s.Get(PropertyId.Opacity)} " +
+                $"transform={s.Get(PropertyId.Transform)} " +
+                $"color=rgba({color.R},{color.G},{color.B},{color.A}) " +
+                $"bg=rgba({bg.R},{bg.G},{bg.B},{bg.A}) " +
+                $"hoverOverride={(hovered ? "yes" : "no")} animating={(animating ? "yes" : "no")}");
+            shown++;
+        }
+        return new InputResult(true, sb.ToString());
+
+        bool IsAnimating(DomElement el)
+        {
+            foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) return true;
+            foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Resolves a CSS selector to the matching elements, in document order.</summary>
+    private (List<DomElement> Elements, string? Error) QueryAll(string selector)
+    {
+        if (_currentPage is null) return (new List<DomElement>(), "no page is loaded");
+        if (string.IsNullOrWhiteSpace(selector)) return (new List<DomElement>(), "selector is empty");
+
+        SelectorList list;
+        try { list = SelectorParser.ParseSelectorList(selector); }
+        catch (Exception ex) { return (new List<DomElement>(), $"invalid selector '{selector}': {ex.Message}"); }
+        if (list.Selectors.Count == 0) return (new List<DomElement>(), $"invalid selector '{selector}'");
+
+        var matched = new List<DomElement>();
+        foreach (var el in _currentPage.Document.DescendantElements())
+            if (SelectorMatcher.Matches(list, el)) matched.Add(el);
+        return (matched, null);
+    }
+
+    private void ClearHighlightOverlays()
+    {
+        foreach (var o in _highlightOverlays)
+            _pageCanvas.Children.Remove(o);
+        _highlightOverlays.Clear();
+    }
+
+    private static IBrush HighlightBrush(string? color)
+    {
+        if (!string.IsNullOrWhiteSpace(color) && AvColor.TryParse(color, out var c))
+        {
+            // An opaque colour is dimmed to a translucent highlight so the element
+            // shows through; a colour given with alpha is honoured as-is.
+            if (c.A == 255) c = AvColor.FromArgb(110, c.R, c.G, c.B);
+            return new SolidColorBrush(c);
+        }
+        return new SolidColorBrush(AvColor.FromArgb(120, 255, 224, 0)); // translucent yellow
+    }
+
     /// <summary>Dispatches DOM mouse-move events for a synthetic move to
     /// <paramref name="target"/>: <c>mouseout</c>/<c>mouseover</c> across a target
     /// change (with the other element as relatedTarget), then <c>mousemove</c>.
@@ -1570,14 +1763,51 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_currentPage is null) return;
 
-        var newOverrides = _hoverAnchor is null
-            ? null
-            : BuildHoverOverrides(_hoverAnchor, _currentPage.Style);
+        var style = _currentPage.Style;
+        var animationsWired = _prepareAnimationFrame is not null && _hasActiveAnimations is not null;
 
-        // Skip re-render when nothing the cascade emitted actually changed —
-        // pages without :hover rules then pay only the cascade-probe cost on
-        // pointer move, not the paint cost.
-        if (!OverridesDifferFromBaseline(newOverrides))
+        // Advance the animation/transition clock to "now" BEFORE re-cascading, so
+        // a transition the hover change triggers starts at the current frame time.
+        // The TransitionEngine stamps StartMs from its own clock (set by Tick), so
+        // without this a freshly-registered transition would date from the last
+        // frame and jump ahead on the next tick.
+        long nowMs = 0;
+        if (animationsWired)
+        {
+            EnsureAnimationClock();
+            nowMs = _liveStopwatch.ElapsedMilliseconds;
+            _prepareAnimationFrame!(_currentPage, nowMs);
+        }
+
+        // Build the new hover scope (hovered subtree + ancestor chain). When the
+        // animation hooks are wired this runs through ComputeWithAnimations, which
+        // registers + samples any forward transition as a side effect.
+        var newOverrides = BuildHoverOverrides(_hoverElement, nowMs);
+        var newScope = newOverrides is null ? null : new HashSet<DomElement>(newOverrides.Keys);
+
+        // Elements leaving the scope revert: re-cascade each once with the new
+        // hover context so the compositor sees the hover->base change and starts
+        // the reverse transition. They then animate out via the live loop's
+        // AnimatedStyle path (they carry an active transition, not a hover override).
+        if (animationsWired && _hoverScope.Count > 0)
+        {
+            var newCtx = _hoverElement is null
+                ? null
+                : new SelectorMatchContext { HoveredElement = _hoverElement };
+            foreach (var el in _hoverScope)
+            {
+                if (newScope is not null && newScope.Contains(el)) continue;
+                style.ComputeWithAnimations(el, nowMs, newCtx);
+            }
+        }
+        _hoverScope = newScope ?? new HashSet<DomElement>();
+
+        var transitionsActive = animationsWired && _hasActiveAnimations!(_currentPage);
+
+        // Fast path for non-:hover pages (and settled hovers that change nothing
+        // paint-relevant): drop overrides without repainting — unless a transition
+        // is mid-flight, in which case the live loop must keep driving frames.
+        if (!transitionsActive && !OverridesDifferFromBaseline(newOverrides))
         {
             // If we were previously showing hover pixels, the display list just
             // reverted to the baseline: drop the hover-painted cache and repaint.
@@ -1597,19 +1827,99 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // display-list change is a full miss (smarter is wp:M12-06).
         _hoverOverrides = newOverrides;
         _renderer.InvalidateCache();
+        // While a hover transition runs, hand off to the live loop: it ticks the
+        // clock, re-samples the overrides, and repaints each frame until the
+        // transition settles. _animating lets this immediate paint already overlay
+        // the reverse-transitioning (leaving) elements.
+        if (transitionsActive)
+        {
+            _animClockMs = nowMs;
+            _animating = true;
+            BindLiveScripting();
+        }
         RenderViewportRegion();
     }
 
-    private static Dictionary<DomElement, ComputedStyle> BuildHoverOverrides(DomElement hovered, StyleEngine style)
+    /// <summary>Start the live-loop stopwatch if it isn't already running, so a
+    /// hover-triggered transition has a monotonic clock even on a page with no JS
+    /// context. A bound scripting context already keeps it running.</summary>
+    private void EnsureAnimationClock()
     {
+        if (!_liveStopwatch.IsRunning) _liveStopwatch.Restart();
+    }
+
+    /// <summary>Test hook: true when <paramref name="el"/> is in the current hover
+    /// override set. Used to assert hover only overrides the genuinely
+    /// :hover-affected elements, not the whole hovered subtree.</summary>
+    internal bool HoverScopeContainsForTest(DomElement el)
+        => _hoverOverrides is not null && _hoverOverrides.ContainsKey(el);
+
+    /// <summary>Test hook: number of elements in the current hover override set.</summary>
+    internal int HoverOverrideCountForTest => _hoverOverrides?.Count ?? 0;
+
+    /// <summary>Test hook: drive the CSS <c>:hover</c> re-cascade for
+    /// <paramref name="el"/> directly (no hit-test), exactly as a real pointer move
+    /// onto it would — so a test can assert which elements the hover overrides.</summary>
+    internal void HoverElementForTest(DomElement el)
+    {
+        _hoverElement = el;
+        ApplyHoverState();
+    }
+
+    /// <summary>
+    /// Re-cascades the hovered element's subtree plus its ancestor chain under a
+    /// <c>:hover</c> context, returning the per-element computed styles to overlay
+    /// at paint time. When the animation hooks are wired the cascade runs through
+    /// <see cref="StyleEngine.ComputeWithAnimations"/> at <paramref name="nowMs"/>,
+    /// so a state change registers and samples a CSS transition; otherwise it is a
+    /// plain static cascade. Returns null when nothing is hovered.
+    /// </summary>
+    private Dictionary<DomElement, ComputedStyle>? BuildHoverOverrides(DomElement? hovered, long nowMs)
+    {
+        if (hovered is null || _currentPage is null) return null;
+        var style = _currentPage.Style;
         var ctx = new SelectorMatchContext { HoveredElement = hovered };
+        var animate = _prepareAnimationFrame is not null;
         var result = new Dictionary<DomElement, ComputedStyle>();
+
+        // The hovered element's subtree covers `.x:hover` (self) and
+        // `.x:hover .descendant` rules.
         Recurse(hovered);
-        return result;
+        // Hovering an element also hovers its ancestors, so re-cascade the chain
+        // for `.ancestor:hover` self-rules. (Rules anchored on an ancestor that
+        // target a non-hovered sibling subtree are not recomputed — a bounded
+        // approximation that covers the common cases.)
+        for (var n = hovered.ParentNode; n is not null; n = n.ParentNode)
+            if (n is DomElement p && Compose(p) is { } ps) result[p] = ps;
+
+        // Only elements whose :hover cascade actually changes a paint-relevant
+        // property are overridden. Without this, hovering a big container (or the
+        // body while the pointer sweeps) re-cascaded and overrode its WHOLE
+        // subtree on every move — shadowing each element's AnimatedStyle with the
+        // hover sample, so animated/just-styled content flashed to its base state
+        // (invisible) until the pointer stopped. Pruning to the genuinely
+        // :hover-affected elements lets everyone else keep their laid-out /
+        // animated style.
+        return result.Count == 0 ? null : result;
+
+        // The override style for `el` when :hover changes its paint, else null.
+        // Relevance is judged from the STATIC cascade (with vs. without the :hover
+        // context) so a running animation's per-frame sample doesn't make every
+        // animating element look "changed"; the stored style still carries the
+        // animation sample via ComputeWithAnimations.
+        ComputedStyle? Compose(DomElement el)
+        {
+            var hoverStatic = style.Compute(el, ctx);
+            // Compare the element's cascade with vs. without :hover; prune it when
+            // nothing the painter emits changed (SamePaintProperties value-compares,
+            // so identical cascades from two runs match).
+            if (SamePaintProperties(style.Compute(el), hoverStatic)) return null;
+            return animate ? style.ComputeWithAnimations(el, nowMs, ctx) : hoverStatic;
+        }
 
         void Recurse(DomElement el)
         {
-            result[el] = style.Compute(el, ctx);
+            if (Compose(el) is { } s) result[el] = s;
             for (var child = el.FirstChild; child is not null; child = child.NextSibling)
                 if (child is DomElement c) Recurse(c);
         }
@@ -1642,10 +1952,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (a.GetColor(PropertyId.BorderRightColor) != b.GetColor(PropertyId.BorderRightColor)) return false;
         if (a.GetColor(PropertyId.BorderBottomColor) != b.GetColor(PropertyId.BorderBottomColor)) return false;
         if (a.GetColor(PropertyId.BorderLeftColor) != b.GetColor(PropertyId.BorderLeftColor)) return false;
-        // Reference-compare the decoration value — different cascade outputs
-        // for the same `underline` keyword still produce reference-equal
-        // CssKeyword.Underline singletons in the engine.
-        if (!ReferenceEquals(a.Get(PropertyId.TextDecoration), b.Get(PropertyId.TextDecoration))) return false;
+        // Value-compare the decoration: two independent cascade runs (with vs.
+        // without :hover) produce non-identical CssKeyword instances for the same
+        // keyword, so ReferenceEquals would always report a spurious change — which
+        // pulled every element into the hover override set (the invisibility bug).
+        if (!Equals(a.Get(PropertyId.TextDecoration), b.Get(PropertyId.TextDecoration))) return false;
+        // Transform / opacity are paint-on-self too (the painter reads them off
+        // the override style), so a hover that only moves or fades an element —
+        // the common case for the demo's tiles — must still repaint.
+        if (!Equals(a.Get(PropertyId.Transform), b.Get(PropertyId.Transform))) return false;
+        if (!Equals(a.Get(PropertyId.Opacity), b.Get(PropertyId.Opacity))) return false;
         return true;
     }
 

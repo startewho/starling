@@ -1,0 +1,586 @@
+using Silk.NET.Core.Contexts;
+using Silk.NET.Core.Native;
+using Silk.NET.WebGPU;
+using Starling.Common.Image;
+using Starling.Css.Values;
+using Starling.Paint.Interop;
+using Rect = Starling.Layout.Rect;
+using WgpuBuffer = Silk.NET.WebGPU.Buffer;
+using WgpuExt = Silk.NET.WebGPU.Extensions.WGPU.Wgpu;
+
+namespace Starling.Paint.Compositor;
+
+/// <summary>
+/// The reusable wgpu blend engine shared by the offscreen
+/// <see cref="GpuLayerCompositor"/> (renders to a texture + reads back) and the
+/// on-screen <see cref="GpuSurfacePresenter"/> (renders to a swapchain texture +
+/// presents, zero readback). It owns the device, queue, sampler, the explicit
+/// bind-group layout, a render pipeline per target colour format, and the
+/// per-layer texture cache keyed by slice content hash. The blend itself is one
+/// textured quad per layer, alpha-over in premultiplied space — see
+/// <see cref="GpuLayerCompositor"/> for the colour-math rationale.
+/// </summary>
+/// <remarks>
+/// Two factories: <see cref="CreateOffscreen"/> requests a default device, and
+/// <see cref="CreateForSurface"/> requests a surface-compatible device and hands
+/// back the configured surface. Either way the blend recording is identical — the
+/// caller supplies the render pass and the target format.
+/// </remarks>
+internal sealed unsafe class GpuBlendEngine : IDisposable
+{
+    internal WebGPU Api { get; }
+    internal WgpuExt? Poll { get; }
+    internal Device* Device { get; }
+    internal Queue* Queue { get; }
+
+    private Sampler* _sampler;
+    private BindGroupLayout* _bindLayout;
+    private PipelineLayout* _pipelineLayout;
+    private ShaderModule* _shader;
+    private readonly Dictionary<TextureFormat, nint> _pipelines = new();
+
+    // Per-layer GPU textures, keyed by slice content hash. Resident across frames
+    // so an unchanged layer never re-uploads.
+    private readonly Dictionary<long, CachedTexture> _textures = new();
+    private ulong _frame;
+    private const ulong EvictAfterFrames = 240;
+
+    private WgpuBuffer* _vertexBuffer;
+    private nuint _vertexCapacity;
+
+    // 5 floats per vertex (ndc.x, ndc.y, u, v, opacity), 6 vertices per layer quad.
+    private const int FloatsPerVertex = 5;
+    private const int VertsPerQuad = 6;
+    private const uint VertexStride = FloatsPerVertex * sizeof(float);
+
+    internal int VertsPerQuadCount => VertsPerQuad;
+
+    private struct CachedTexture
+    {
+        public nint Texture;
+        public nint View;
+        public nint BindGroup;
+        public int Width, Height;
+        public ulong LastFrame;
+    }
+
+    private GpuBlendEngine(WebGPU api, WgpuExt? poll, Device* device, Queue* queue)
+    {
+        Api = api;
+        Poll = poll;
+        Device = device;
+        Queue = queue;
+        BuildLayout();
+    }
+
+    /// <summary>Default device for offscreen blend + readback. Null on no GPU.</summary>
+    internal static GpuBlendEngine? CreateOffscreen()
+    {
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+            var ok = RequestDevice(api, instance, compatibleSurface: null, out var device, out var queue, out var poll);
+            api.InstanceRelease(instance);
+            return ok ? new GpuBlendEngine(api, poll, device, queue) : null;
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Surface-compatible device for on-screen present. Creates the wgpu surface
+    /// from <paramref name="window"/>'s native handle, requests an adapter that
+    /// supports it, and returns the surface plus its preferred colour format. Null
+    /// on no GPU. The engine keeps the instance alive for the surface's lifetime.
+    /// </summary>
+    internal static GpuBlendEngine? CreateForSurface(INativeWindowSource window, out nint surface, out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+
+            var surf = window.CreateWebGPUSurface(api, instance);
+            if (surf == null) { api.InstanceRelease(instance); return null; }
+
+            if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
+            {
+                api.SurfaceRelease(surf);
+                api.InstanceRelease(instance);
+                return null;
+            }
+
+            // Pick a supported format. wgpu surfaces on Metal prefer Bgra8Unorm;
+            // the shader writes logical RGBA, so the target's channel order is
+            // handled by the API — either format reproduces the colours.
+            var caps = default(SurfaceCapabilities);
+            api.SurfaceGetCapabilities(surf, GetAdapterForCaps(api, instance, surf), ref caps);
+            format = PickFormat(caps);
+
+            // The instance is intentionally NOT released: wgpu keeps the surface
+            // tied to it. We leak one instance per presenter, which lives for the
+            // whole process.
+            surface = (nint)surf;
+            return new GpuBlendEngine(api, poll, device, queue);
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
+    // Requesting capabilities needs an adapter; rather than thread it out of
+    // RequestDevice we re-request a (cheap, cached by wgpu) compatible adapter.
+    private static Adapter* GetAdapterForCaps(WebGPU api, Instance* instance, Surface* surf)
+    {
+        Adapter* adapter = null;
+        var opts = new RequestAdapterOptions { CompatibleSurface = surf, PowerPreference = PowerPreference.HighPerformance };
+        var cb = PfnRequestAdapterCallback.From((status, a, _, _) => { if (status == RequestAdapterStatus.Success) adapter = a; });
+        api.InstanceRequestAdapter(instance, in opts, cb, null);
+        return adapter;
+    }
+
+    private static TextureFormat PickFormat(SurfaceCapabilities caps)
+    {
+        // Prefer a plain (non-sRGB) 8-bit format so the blend runs in the same
+        // gamma space as the CPU AlphaOver. Fall back to the surface's first
+        // advertised format.
+        for (var i = 0; i < (int)caps.FormatCount; i++)
+        {
+            var f = caps.Formats[i];
+            if (f == TextureFormat.Bgra8Unorm || f == TextureFormat.Rgba8Unorm) return f;
+        }
+        return caps.FormatCount > 0 ? caps.Formats[0] : TextureFormat.Bgra8Unorm;
+    }
+
+    private static bool RequestDevice(WebGPU api, Instance* instance, Surface* compatibleSurface,
+        out Device* device, out Queue* queue, out WgpuExt? poll)
+    {
+        device = null;
+        queue = null;
+        poll = null;
+
+        Adapter* adapter = null;
+        var adapterOpts = new RequestAdapterOptions
+        {
+            CompatibleSurface = compatibleSurface,
+            PowerPreference = PowerPreference.HighPerformance,
+        };
+        var adapterCb = PfnRequestAdapterCallback.From((status, a, _, _) => { if (status == RequestAdapterStatus.Success) adapter = a; });
+        api.InstanceRequestAdapter(instance, in adapterOpts, adapterCb, null);
+        if (adapter == null) return false;
+
+        Device* dev = null;
+        var deviceDesc = default(DeviceDescriptor);
+        var deviceCb = PfnRequestDeviceCallback.From((status, d, _, _) => { if (status == RequestDeviceStatus.Success) dev = d; });
+        api.AdapterRequestDevice(adapter, in deviceDesc, deviceCb, null);
+        api.AdapterRelease(adapter);
+        if (dev == null) return false;
+
+        var q = api.DeviceGetQueue(dev);
+        if (q == null) { api.DeviceRelease(dev); return false; }
+
+        // Swallow uncaptured device errors instead of letting wgpu's default
+        // handler abort() the process.
+        var errorCb = PfnErrorCallback.From((_, _, _) => { });
+        api.DeviceSetUncapturedErrorCallback(dev, errorCb, null);
+
+        try { poll = new WgpuExt(api.Context); } catch { poll = null; }
+
+        device = dev;
+        queue = q;
+        return true;
+    }
+
+    // Explicit bind-group + pipeline layout shared by every per-format pipeline,
+    // so a bind group built once is valid against any of them.
+    private void BuildLayout()
+    {
+        var entries = stackalloc BindGroupLayoutEntry[2];
+        entries[0] = new BindGroupLayoutEntry
+        {
+            Binding = 0,
+            Visibility = ShaderStage.Fragment,
+            Texture = new TextureBindingLayout
+            {
+                SampleType = TextureSampleType.Float,
+                ViewDimension = TextureViewDimension.Dimension2D,
+                Multisampled = false,
+            },
+        };
+        entries[1] = new BindGroupLayoutEntry
+        {
+            Binding = 1,
+            Visibility = ShaderStage.Fragment,
+            Sampler = new SamplerBindingLayout { Type = SamplerBindingType.Filtering },
+        };
+        var bglDesc = new BindGroupLayoutDescriptor { EntryCount = 2, Entries = entries };
+        _bindLayout = Api.DeviceCreateBindGroupLayout(Device, in bglDesc);
+
+        var bgl = _bindLayout;
+        var plDesc = new PipelineLayoutDescriptor { BindGroupLayoutCount = 1, BindGroupLayouts = &bgl };
+        _pipelineLayout = Api.DeviceCreatePipelineLayout(Device, in plDesc);
+
+        var samplerDesc = new SamplerDescriptor
+        {
+            AddressModeU = AddressMode.ClampToEdge,
+            AddressModeV = AddressMode.ClampToEdge,
+            AddressModeW = AddressMode.ClampToEdge,
+            MagFilter = FilterMode.Linear,
+            MinFilter = FilterMode.Linear,
+            MipmapFilter = MipmapFilterMode.Nearest,
+            LodMinClamp = 0,
+            LodMaxClamp = 1,
+            MaxAnisotropy = 1,
+        };
+        _sampler = Api.DeviceCreateSampler(Device, in samplerDesc);
+
+        var codePtr = (byte*)SilkMarshal.StringToPtr(ShaderSource, NativeStringEncoding.UTF8);
+        try
+        {
+            var wgsl = new ShaderModuleWGSLDescriptor
+            {
+                Chain = new ChainedStruct { SType = SType.ShaderModuleWgslDescriptor },
+                Code = codePtr,
+            };
+            var shaderDesc = new ShaderModuleDescriptor { NextInChain = (ChainedStruct*)&wgsl };
+            _shader = Api.DeviceCreateShaderModule(Device, in shaderDesc);
+        }
+        finally
+        {
+            SilkMarshal.Free((nint)codePtr);
+        }
+    }
+
+    /// <summary>Lazily builds (and caches) the blend pipeline for a target format.</summary>
+    internal RenderPipeline* PipelineFor(TextureFormat format)
+    {
+        if (_pipelines.TryGetValue(format, out var cached))
+            return (RenderPipeline*)cached;
+
+        var vsEntry = (byte*)SilkMarshal.StringToPtr("vs_main", NativeStringEncoding.UTF8);
+        var fsEntry = (byte*)SilkMarshal.StringToPtr("fs_main", NativeStringEncoding.UTF8);
+        try
+        {
+            var attrs = stackalloc VertexAttribute[3];
+            attrs[0] = new VertexAttribute { Format = VertexFormat.Float32x2, Offset = 0, ShaderLocation = 0 };
+            attrs[1] = new VertexAttribute { Format = VertexFormat.Float32x2, Offset = 2 * sizeof(float), ShaderLocation = 1 };
+            attrs[2] = new VertexAttribute { Format = VertexFormat.Float32, Offset = 4 * sizeof(float), ShaderLocation = 2 };
+            var vbl = new VertexBufferLayout
+            {
+                ArrayStride = VertexStride,
+                StepMode = VertexStepMode.Vertex,
+                AttributeCount = 3,
+                Attributes = attrs,
+            };
+
+            var blend = new BlendState
+            {
+                Color = new BlendComponent { SrcFactor = BlendFactor.One, DstFactor = BlendFactor.OneMinusSrcAlpha, Operation = BlendOperation.Add },
+                Alpha = new BlendComponent { SrcFactor = BlendFactor.One, DstFactor = BlendFactor.OneMinusSrcAlpha, Operation = BlendOperation.Add },
+            };
+            var colorTarget = new ColorTargetState { Format = format, Blend = &blend, WriteMask = ColorWriteMask.All };
+            var fragment = new FragmentState { Module = _shader, EntryPoint = fsEntry, TargetCount = 1, Targets = &colorTarget };
+            var pipelineDesc = new RenderPipelineDescriptor
+            {
+                Layout = _pipelineLayout,
+                Vertex = new VertexState { Module = _shader, EntryPoint = vsEntry, BufferCount = 1, Buffers = &vbl },
+                Primitive = new PrimitiveState { Topology = PrimitiveTopology.TriangleList, FrontFace = FrontFace.Ccw, CullMode = CullMode.None },
+                Multisample = new MultisampleState { Count = 1, Mask = ~0u, AlphaToCoverageEnabled = false },
+                Fragment = &fragment,
+            };
+            var pipeline = Api.DeviceCreateRenderPipeline(Device, in pipelineDesc);
+            if (pipeline == null) throw new InvalidOperationException("WebGPU render pipeline creation failed.");
+            _pipelines[format] = (nint)pipeline;
+            return pipeline;
+        }
+        finally
+        {
+            SilkMarshal.Free((nint)vsEntry);
+            SilkMarshal.Free((nint)fsEntry);
+        }
+    }
+
+    internal void BeginFrame() => _frame++;
+
+    /// <summary>Uploads any layer whose content-hash texture isn't already resident.</summary>
+    internal void UploadLayerTextures(IReadOnlyList<LayerBlend> ops)
+    {
+        for (var i = 0; i < ops.Count; i++)
+        {
+            var op = ops[i];
+            var bmp = op.Local;
+            if (_textures.TryGetValue(op.ContentHash, out var cached)
+                && cached.Width == bmp.Width && cached.Height == bmp.Height)
+            {
+                cached.LastFrame = _frame;
+                _textures[op.ContentHash] = cached;
+                continue; // resident — no re-upload
+            }
+
+            if (cached.Texture != 0) ReleaseCached(cached); // stale dims, replace
+
+            var (texPtr, viewPtr, bgPtr) = CreateAndUpload(bmp);
+            _textures[op.ContentHash] = new CachedTexture
+            {
+                Texture = texPtr,
+                View = viewPtr,
+                BindGroup = bgPtr,
+                Width = bmp.Width,
+                Height = bmp.Height,
+                LastFrame = _frame,
+            };
+        }
+    }
+
+    private (nint Texture, nint View, nint BindGroup) CreateAndUpload(RenderedBitmap bmp)
+    {
+        var desc = new TextureDescriptor
+        {
+            Usage = TextureUsage.TextureBinding | TextureUsage.CopyDst,
+            Dimension = TextureDimension.Dimension2D,
+            Size = new Extent3D { Width = (uint)bmp.Width, Height = (uint)bmp.Height, DepthOrArrayLayers = 1 },
+            Format = TextureFormat.Rgba8Unorm,
+            MipLevelCount = 1,
+            SampleCount = 1,
+        };
+        var tex = Api.DeviceCreateTexture(Device, in desc);
+        var view = Api.TextureCreateView(tex, (TextureViewDescriptor*)null);
+
+        var premul = Premultiply(bmp);
+        var bytesPerRow = (uint)(bmp.Width * 4);
+        var copyTex = new ImageCopyTexture { Texture = tex, MipLevel = 0, Origin = new Origin3D { X = 0, Y = 0, Z = 0 }, Aspect = TextureAspect.All };
+        var layout = new TextureDataLayout { Offset = 0, BytesPerRow = bytesPerRow, RowsPerImage = (uint)bmp.Height };
+        var extent = new Extent3D { Width = (uint)bmp.Width, Height = (uint)bmp.Height, DepthOrArrayLayers = 1 };
+        fixed (byte* p = premul)
+            Api.QueueWriteTexture(Queue, in copyTex, p, (nuint)premul.Length, in layout, in extent);
+
+        var entries = stackalloc BindGroupEntry[2];
+        entries[0] = new BindGroupEntry { Binding = 0, TextureView = view };
+        entries[1] = new BindGroupEntry { Binding = 1, Sampler = _sampler };
+        var bgDesc = new BindGroupDescriptor { Layout = _bindLayout, EntryCount = 2, Entries = entries };
+        var bg = Api.DeviceCreateBindGroup(Device, in bgDesc);
+
+        return ((nint)tex, (nint)view, (nint)bg);
+    }
+
+    // Upload premultiplied pixels so the linear sampler filters premultiplied
+    // colour — matching the CPU Sample(), which premultiplies before interpolating.
+    private static byte[] Premultiply(RenderedBitmap bmp)
+    {
+        var src = bmp.Rgba;
+        var dst = new byte[src.Length];
+        for (var i = 0; i < src.Length; i += 4)
+        {
+            var a = src[i + 3];
+            if (a == 255)
+            {
+                dst[i] = src[i];
+                dst[i + 1] = src[i + 1];
+                dst[i + 2] = src[i + 2];
+                dst[i + 3] = 255;
+            }
+            else if (a == 0)
+            {
+                // Leave fully transparent texels at zero (premultiplied 0).
+            }
+            else
+            {
+                dst[i] = (byte)((src[i] * a + 127) / 255);
+                dst[i + 1] = (byte)((src[i + 1] * a + 127) / 255);
+                dst[i + 2] = (byte)((src[i + 2] * a + 127) / 255);
+                dst[i + 3] = a;
+            }
+        }
+        return dst;
+    }
+
+    /// <summary>
+    /// Builds the per-op quad geometry and uploads it to the vertex buffer.
+    /// Returns the total vertex count. <paramref name="targetWidth"/>/<paramref
+    /// name="targetHeight"/> are the device-pixel dimensions of the render target.
+    /// </summary>
+    internal uint BuildAndUploadVertices(IReadOnlyList<LayerBlend> ops, int targetWidth, int targetHeight)
+    {
+        var totalVerts = ops.Count * VertsPerQuad;
+        var verts = new float[totalVerts * FloatsPerVertex];
+        var f = 0;
+        for (var i = 0; i < ops.Count; i++)
+        {
+            var op = ops[i];
+            var w = op.Local.Width;
+            var h = op.Local.Height;
+            var m = op.LocalToDevice;
+
+            var c0 = Corner(m, 0, 0, 0, 0, targetWidth, targetHeight);
+            var c1 = Corner(m, w, 0, 1, 0, targetWidth, targetHeight);
+            var c2 = Corner(m, w, h, 1, 1, targetWidth, targetHeight);
+            var c3 = Corner(m, 0, h, 0, 1, targetWidth, targetHeight);
+
+            var op4 = op.Opacity;
+            Emit(verts, ref f, c0, op4);
+            Emit(verts, ref f, c1, op4);
+            Emit(verts, ref f, c2, op4);
+            Emit(verts, ref f, c0, op4);
+            Emit(verts, ref f, c2, op4);
+            Emit(verts, ref f, c3, op4);
+        }
+
+        var byteLen = (nuint)(verts.Length * sizeof(float));
+        EnsureVertexBuffer(byteLen);
+        if (byteLen > 0)
+        {
+            fixed (float* p = verts)
+                Api.QueueWriteBuffer(Queue, _vertexBuffer, 0, p, byteLen);
+        }
+        return (uint)totalVerts;
+    }
+
+    private static (float, float, float, float) Corner(Matrix2D m, double lx, double ly, float u, float v, int width, int height)
+    {
+        var (dx, dy) = m.Transform(lx, ly);
+        var nx = (float)(dx / width * 2.0 - 1.0);
+        var ny = (float)(1.0 - dy / height * 2.0);
+        return (nx, ny, u, v);
+    }
+
+    private static void Emit(float[] verts, ref int f, (float nx, float ny, float u, float v) c, float opacity)
+    {
+        verts[f++] = c.nx;
+        verts[f++] = c.ny;
+        verts[f++] = c.u;
+        verts[f++] = c.v;
+        verts[f++] = opacity;
+    }
+
+    private void EnsureVertexBuffer(nuint byteLen)
+    {
+        if (byteLen == 0) return;
+        if (_vertexBuffer != null && _vertexCapacity >= byteLen) return;
+        if (_vertexBuffer != null) { Api.BufferRelease(_vertexBuffer); _vertexBuffer = null; }
+        var cap = (nuint)Align256((uint)byteLen);
+        var desc = new BufferDescriptor { Usage = BufferUsage.Vertex | BufferUsage.CopyDst, Size = cap, MappedAtCreation = false };
+        _vertexBuffer = Api.DeviceCreateBuffer(Device, in desc);
+        _vertexCapacity = cap;
+    }
+
+    /// <summary>
+    /// Records the blend into an already-open render pass: sets the pipeline for
+    /// <paramref name="format"/>, binds the vertex buffer, then per layer sets the
+    /// scissor + texture bind group and draws its quad. Call
+    /// <see cref="BuildAndUploadVertices"/> first.
+    /// </summary>
+    internal void RecordBlend(RenderPassEncoder* pass, IReadOnlyList<LayerBlend> ops,
+        TextureFormat format, uint vertexCount, int targetWidth, int targetHeight)
+    {
+        Api.RenderPassEncoderSetPipeline(pass, PipelineFor(format));
+        if (vertexCount > 0)
+            Api.RenderPassEncoderSetVertexBuffer(pass, 0, _vertexBuffer, 0, _vertexCapacity);
+
+        for (var i = 0; i < ops.Count; i++)
+        {
+            var op = ops[i];
+            if (!_textures.TryGetValue(op.ContentHash, out var tex)) continue;
+
+            SetScissor(pass, op.ClipDevice, targetWidth, targetHeight);
+            Api.RenderPassEncoderSetBindGroup(pass, 0, (BindGroup*)tex.BindGroup, 0, (uint*)null);
+            Api.RenderPassEncoderDraw(pass, VertsPerQuad, 1, (uint)(i * VertsPerQuad), 0);
+        }
+    }
+
+    private void SetScissor(RenderPassEncoder* pass, Rect? clip, int width, int height)
+    {
+        int x = 0, y = 0, w = width, h = height;
+        if (clip is { } cd)
+        {
+            var minX = Math.Max(0, (int)Math.Floor(cd.X));
+            var minY = Math.Max(0, (int)Math.Floor(cd.Y));
+            var maxX = Math.Min(width, (int)Math.Ceiling(cd.Right));
+            var maxY = Math.Min(height, (int)Math.Ceiling(cd.Bottom));
+            x = minX; y = minY;
+            w = Math.Max(0, maxX - minX);
+            h = Math.Max(0, maxY - minY);
+        }
+        Api.RenderPassEncoderSetScissorRect(pass, (uint)x, (uint)y, (uint)w, (uint)h);
+    }
+
+    internal void EvictStale()
+    {
+        if (_textures.Count == 0) return;
+        List<long>? drop = null;
+        foreach (var kv in _textures)
+        {
+            if (_frame - kv.Value.LastFrame > EvictAfterFrames)
+                (drop ??= new List<long>()).Add(kv.Key);
+        }
+        if (drop is null) return;
+        foreach (var key in drop)
+        {
+            ReleaseCached(_textures[key]);
+            _textures.Remove(key);
+        }
+    }
+
+    private void ReleaseCached(CachedTexture c)
+    {
+        if (c.BindGroup != 0) Api.BindGroupRelease((BindGroup*)c.BindGroup);
+        if (c.View != 0) Api.TextureViewRelease((TextureView*)c.View);
+        if (c.Texture != 0) Api.TextureRelease((Texture*)c.Texture);
+    }
+
+    internal static uint Align256(uint value) => (value + 255u) & ~255u;
+
+    public void Dispose()
+    {
+        foreach (var c in _textures.Values) ReleaseCached(c);
+        _textures.Clear();
+        foreach (var p in _pipelines.Values) Api.RenderPipelineRelease((RenderPipeline*)p);
+        _pipelines.Clear();
+        if (_vertexBuffer != null) { Api.BufferRelease(_vertexBuffer); _vertexBuffer = null; }
+        if (_shader != null) { Api.ShaderModuleRelease(_shader); _shader = null; }
+        if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }
+        if (_pipelineLayout != null) { Api.PipelineLayoutRelease(_pipelineLayout); _pipelineLayout = null; }
+        if (_bindLayout != null) { Api.BindGroupLayoutRelease(_bindLayout); _bindLayout = null; }
+        if (Queue != null) Api.QueueRelease(Queue);
+        if (Device != null) Api.DeviceRelease(Device);
+    }
+
+    // Textures store premultiplied straight-RGBA8 (no sRGB), so the blend runs in
+    // the same gamma space as the CPU AlphaOver. The fragment scales the
+    // premultiplied sample by the layer opacity; the One/OneMinusSrcAlpha blend
+    // then composites it over the framebuffer.
+    private const string ShaderSource = @"
+struct VsOut {
+    @builtin(position) pos : vec4<f32>,
+    @location(0) uv : vec2<f32>,
+    @location(1) opacity : f32,
+};
+
+@vertex
+fn vs_main(@location(0) pos : vec2<f32>, @location(1) uv : vec2<f32>, @location(2) opacity : f32) -> VsOut {
+    var o : VsOut;
+    o.pos = vec4<f32>(pos, 0.0, 1.0);
+    o.uv = uv;
+    o.opacity = opacity;
+    return o;
+}
+
+@group(0) @binding(0) var tex : texture_2d<f32>;
+@group(0) @binding(1) var smp : sampler;
+
+@fragment
+fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, smp, in.uv); // premultiplied
+    return c * in.opacity;
+}
+";
+}

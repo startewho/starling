@@ -106,6 +106,87 @@ internal sealed class Compositor
         return new RenderedBitmap(width, height, output);
     }
 
+    /// <summary>
+    /// Blends the layer tree straight onto a window's wgpu swapchain via
+    /// <paramref name="presenter"/> — the zero-copy present path
+    /// (wp:M12-13-gpu-composite-blend). Builds the exact same paint-ordered blend
+    /// ops as <see cref="Render"/>, but instead of an offscreen target + readback
+    /// it hands them to the surface presenter, which blends into the swapchain
+    /// texture and presents. Returns <c>false</c> if the frame could not be
+    /// presented (e.g. the surface needs reconfiguring). No <see cref="RenderedBitmap"/>
+    /// is produced — nothing crosses back to the CPU.
+    /// </summary>
+    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(presenter);
+        if (viewport.Width <= 0 || viewport.Height <= 0)
+            throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        if (!(scale > 0f))
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+
+        var ops = new List<LayerBlend>();
+        var keepAlive = new List<RenderedBitmap>();
+        CollectOps(root, ops, keepAlive, viewport, scale,
+            ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
+
+        var presented = presenter.PresentOps(width, height, ops);
+
+        foreach (var bmp in keepAlive)
+            bmp.Dispose();
+
+        return presented;
+    }
+
+    /// <summary>
+    /// Appends one layer tree's blend ops into a shared list for a surface frame
+    /// that composites several documents (e.g. engine-rendered chrome above the
+    /// page). Each op's device mapping is post-translated by
+    /// (<paramref name="destOriginXDevice"/>, <paramref name="destOriginYDevice"/>)
+    /// so the tree lands in a sub-region of the swapchain, and clipped to
+    /// <paramref name="regionClipDevice"/> so it can't draw outside that region.
+    /// The presenter blends the combined list in one render pass, one present.
+    /// </summary>
+    internal void AppendSurfaceOps(
+        CompositorLayer root,
+        LayoutRect viewport,
+        float scale,
+        double destOriginXDevice,
+        double destOriginYDevice,
+        Rect? regionClipDevice,
+        List<LayerBlend> ops,
+        List<RenderedBitmap> keepAlive)
+    {
+        var local = new List<LayerBlend>();
+        CollectOps(root, local, keepAlive, viewport, scale,
+            ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null);
+
+        var offset = Matrix2D.Translate(destOriginXDevice, destOriginYDevice);
+        foreach (var op in local)
+        {
+            var mapped = offset.Multiply(op.LocalToDevice);
+            // The op's own clip is already in device space; shift it into the
+            // region and intersect with the region bounds.
+            Rect? clip = op.ClipDevice is { } c
+                ? IntersectDeviceRect(c.Translate(destOriginXDevice, destOriginYDevice), regionClipDevice)
+                : regionClipDevice;
+            ops.Add(new LayerBlend(op.Local, op.ContentHash, mapped, op.Opacity, clip));
+        }
+    }
+
+    private static Rect? IntersectDeviceRect(Rect a, Rect? b)
+    {
+        if (b is not { } r) return a;
+        var x = Math.Max(a.X, r.X);
+        var y = Math.Max(a.Y, r.Y);
+        var right = Math.Min(a.Right, r.Right);
+        var bottom = Math.Min(a.Bottom, r.Bottom);
+        return new Rect(x, y, Math.Max(0, right - x), Math.Max(0, bottom - y));
+    }
+
     private void CollectOps(
         CompositorLayer layer,
         List<LayerBlend> ops,
