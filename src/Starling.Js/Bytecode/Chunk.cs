@@ -78,10 +78,9 @@ public sealed class Chunk
     /// which carry <see cref="Starling.Js.Runtime.JsFunction.InInitializer"/>) is
     /// subject to the ContainsArguments early-error rule.</summary>
     public bool IsInitializer { get; init; }
-    /// <summary>gap:closure-write-back — the set of local-slot indices in
-    /// this chunk that the compiler promoted to <c>Cell</c> storage because
-    /// at least one nested function references the binding. Empty for
-    /// functions with no captured locals (the common case).</summary>
+    /// <summary>Local-slot indices promoted to <c>Cell</c> storage because at
+    /// least one nested function references the binding. Empty for functions
+    /// with no captured locals.</summary>
     public IReadOnlySet<int> CapturedSlots { get; }
 
     /// <summary>wp:M3-23 — sparse source-position table, sorted ascending by
@@ -226,10 +225,9 @@ public sealed class ChunkBuilder
             _positions.Add((offset, line, col));
     }
 
-    /// <summary>gap:closure-write-back — record that <paramref name="slot"/>
-    /// is captured by a nested function and must use <see cref="Starling.Js.Runtime.Cell"/>
-    /// storage. Reads and writes against the slot go through the cell-aware
-    /// opcodes.</summary>
+    /// <summary>Record that <paramref name="slot"/> is captured by a nested
+    /// function and must use <see cref="Starling.Js.Runtime.Cell"/> storage.
+    /// Reads and writes against the slot go through the cell-aware opcodes.</summary>
     public void MarkCaptured(int slot)
     {
         _capturedSlots ??= [];

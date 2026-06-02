@@ -70,7 +70,7 @@ public enum Opcode : byte
     /// (write before initialization through a closure).</summary>
     StoreUpvalueChecked,
 
-    // ----- Captured locals (gap:closure-write-back / wp:M3-04c2) -----
+    // ----- Captured locals -----
     /// <summary>[u16 slot] — allocate a fresh <c>Cell { Value = Undefined }</c>
     /// and store it as the slot's value. Emitted in place of
     /// <see cref="DeclareLocal"/> for any local whose binding is referenced

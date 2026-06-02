@@ -26,7 +26,7 @@ namespace Starling.Js.Bytecode;
 /// <c>StoreUpvalue</c> (already supported by the VM) do the dereferencing.
 /// </para>
 /// <para>
-/// <b>Top-level await (wp:M3-03b).</b> A module whose body contains a top-level
+/// <b>Top-level await.</b> A module whose body contains a top-level
 /// <c>await</c> (an <see cref="AwaitExpression"/> — or a <c>for await</c> loop —
 /// that is NOT nested inside a non-async function/method/arrow) evaluates
 /// asynchronously. The compiler detects this
@@ -35,8 +35,8 @@ namespace Starling.Js.Bytecode;
 /// so the VM's existing <c>StartAsyncBody</c>/<c>ScheduleAwait</c> machinery
 /// suspends the body at each <c>await</c> and the body returns a Promise. Modules
 /// with no top-level await keep <see cref="Runtime.JsFunctionKind.Normal"/> and
-/// the synchronous fast path. <c>import.meta</c> and dynamic <c>import()</c> are
-/// out of scope for this slice.
+/// the synchronous fast path. Dynamic <c>import()</c> and <c>import.meta</c>
+/// lower to dedicated opcodes handled by the module loader.
 /// </para>
 /// </remarks>
 public sealed partial class JsCompiler
