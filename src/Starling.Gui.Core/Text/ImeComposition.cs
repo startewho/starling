@@ -8,12 +8,10 @@ namespace Starling.Gui.Core.Text;
 /// driver can feed it, and is platform-neutral and unit-tested.
 /// </summary>
 /// <remarks>
-/// Standard GLFW (the native shell's windowing) delivers *committed* composed
-/// characters through its character callback, so commit-style IME already reaches
-/// a focused field. The missing piece is the inline preedit display, which needs
-/// a native `NSTextInputClient` on the window's view — that driver calls
-/// <see cref="SetMarkedText"/> as the user composes and <see cref="Insert"/> on
-/// commit. Tracked by `wp:NS-01-ime`.
+/// Standard GLFW delivers committed composed characters through its character
+/// callback. On macOS, the native bridge forwards marked-text updates from
+/// <c>NSTextInputClient</c> into <see cref="SetMarkedText"/> and calls
+/// <see cref="Insert"/> on commit, so the shell can draw inline preedit text.
 /// </remarks>
 public sealed class ImeComposition
 {

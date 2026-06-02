@@ -7,10 +7,8 @@ public enum DensityMode { Comfy, Compact }
 public enum TypeMode { Sans, Mono }
 
 /// <summary>
-/// One theme's worth of colour tokens — C# port of <c>design/theme.css</c>.
-/// Ported from src/Starling.Gui/Theme/ThemeTokens.cs with the only difference
-/// being the Color type (Microsoft.Maui.Graphics.Color → Avalonia.Media.Color)
-/// and its construction helpers.
+/// One theme's worth of Avalonia colour tokens, derived from
+/// <c>design/theme.css</c>.
 /// </summary>
 public sealed record ThemeTokens
 {

@@ -44,9 +44,9 @@ internal sealed class PageRendererHost : IDisposable
     /// Drops the flat scroll picture cache only. The shell calls this on an
     /// in-place relayout / hover-override change so the next flat render is a
     /// clean repaint. The per-layer compositor caches are NOT dropped: they are
-    /// keyed by each layer's slice content hash (LTF-02), so an unchanged layer
-    /// stays valid across a relayout and only a real content change re-rasters it
-    /// (LTF-03). Scroll-only repaints leave the flat cache intact so it can serve.
+    /// keyed by each layer's slice content hash, so an unchanged layer stays
+    /// valid across a relayout. Only a real content change re-rasters it.
+    /// Scroll-only repaints leave the flat cache intact so it can serve.
     /// </summary>
     public void InvalidateCache()
     {
@@ -56,7 +56,7 @@ internal sealed class PageRendererHost : IDisposable
     /// <summary>
     /// Navigation reset: drops the flat cache AND every persistent per-layer
     /// compositor cache. Called when the laid-out page belongs to a different
-    /// Document, so no pixels from the previous page survive (LTF-03).
+    /// Document, so no pixels from the previous page survive.
     /// </summary>
     public void ResetForNavigation()
     {
@@ -70,8 +70,7 @@ internal sealed class PageRendererHost : IDisposable
     /// offset, Width/Height = visible size), the display list is culled to it
     /// and the output bitmap is sized to the viewport — the scroll-driven path.
     /// When omitted, the full page is rendered into a bitmap sized to
-    /// <c>root.Frame</c> (the legacy full-page behavior; the CPU rasterizer
-    /// handles arbitrarily large surfaces).
+    /// <c>root.Frame</c>. The CPU rasterizer handles arbitrarily large surfaces.
     /// </summary>
     public RenderedBitmap Render(BlockBox root, float scale = 1.0f, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, LayoutRect? viewport = null, int pageVersion = 0, Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
     {
@@ -83,7 +82,7 @@ internal sealed class PageRendererHost : IDisposable
             // Viewport-clipped (scroll) path goes through the picture cache so
             // scrolling reuses prior pixels. The no-viewport full-page path
             // (headless screenshots, very tall pages) bypasses the cache and
-            // paints everything, preserving byte-identical legacy output.
+            // paints everything, preserving byte-identical full-page output.
             if (viewport is { } v)
                 return _cached.Render(root, v, scale, pageVersion, styleOverride, images, scrollOffsets);
 
@@ -95,8 +94,8 @@ internal sealed class PageRendererHost : IDisposable
         }
         catch (Exception ex)
         {
-            // Surface backend failures (WebGPU init, native shim missing, etc.)
-            // through diagnostics so Aspire's trace view shows the full
+            // Surface backend failures (WebGPU init, GPU device issue, etc.)
+            // are routed through diagnostics so Aspire's trace view shows the full
             // exception on the GUI span instead of just a failed activity.
             _diag.LogException("gui", ex, $"page render via '{_backend.Name}' failed");
             throw;
@@ -104,14 +103,13 @@ internal sealed class PageRendererHost : IDisposable
     }
 
     /// <summary>
-    /// Renders <paramref name="root"/> through the compositor layer tree
-    /// (M12-04): the box tree is split into per-layer display-list slices, each
-    /// slice is rasterized into its own cached bitmap, and the bitmaps are
-    /// composited top-down with each layer's transform / opacity / clip applied.
-    /// This is the additive layer-compositing path; the flat
-    /// <see cref="Render"/> path above is preserved for the legacy/screenshot
-    /// callers and existing golden tests. <paramref name="viewport"/> is the
-    /// page-coord visible region; when omitted the full page frame is used.
+    /// Renders <paramref name="root"/> through the compositor layer tree. The box
+    /// tree is split into per-layer display-list slices. Each slice is rasterized
+    /// into its own cached bitmap, and the bitmaps are composited top-down with
+    /// each layer's transform, opacity, and clip applied. The flat <see cref="Render"/>
+    /// path above is preserved for screenshot callers and existing golden tests.
+    /// <paramref name="viewport"/> is the page-coord visible region. When omitted,
+    /// the full page frame is used.
     /// </summary>
     public RenderedBitmap RenderViaLayerTree(BlockBox root, float scale = 1.0f, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, LayoutRect? viewport = null, Func<Box, bool>? isAnimatingLayerRoot = null)
     {
@@ -122,10 +120,10 @@ internal sealed class PageRendererHost : IDisposable
         {
             // The persistent session tile grid (keyed by layer id + tile position)
             // lets a transform/opacity-only frame re-blit each layer's tiles from
-            // cache instead of re-rasterizing; transform/opacity
-            // are re-sampled into the rebuilt tree and applied at composite time. Only
-            // tiles intersecting the viewport are rastered, so a long page never
-            // rasters its full height and no tile exceeds the GPU texture limit.
+            // cache instead of re-rasterizing. Transform and opacity are re-sampled
+            // into the rebuilt tree and applied at composite time. Only tiles
+            // intersecting the viewport are rastered, so a long page never rasters
+            // its full height and no tile exceeds the GPU texture limit.
             var tree = new LayerTreeBuilder(styleOverride, images, _diag,
                 isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor).Build(root);
             var region = viewport ?? new LayoutRect(0, 0,

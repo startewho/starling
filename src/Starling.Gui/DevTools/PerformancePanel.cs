@@ -11,8 +11,7 @@ namespace Starling.Gui.DevTools;
 
 /// <summary>
 /// Live performance panel wired to <see cref="TelemetryStream.Activities"/>.
-/// Renders captured spans as flame rows grouped by activity source. Replaces
-/// the MAUI panel's static <c>SampleData.PerfFrames</c>.
+/// Renders captured spans as flame rows grouped by activity source.
 /// </summary>
 public sealed class PerformancePanel : Grid, IDisposable
 {
