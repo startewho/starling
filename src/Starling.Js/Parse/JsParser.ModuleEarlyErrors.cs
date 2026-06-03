@@ -297,7 +297,7 @@ public sealed partial class JsParser
         // §16.2.1.6.2 — `await` is reserved in module code, so it is never a
         // valid imported-binding name (the general strict check below does not
         // cover it because `await` is not a strict FutureReservedWord).
-        if (token.Lexeme == "await")
+        if (token.TextEquals("await"))
             throw new JsParseException(
                 "'await' may not be used as a binding identifier in a module", token.Start);
         CheckBindingIdentifier(token.Lexeme, token.Start);
