@@ -106,6 +106,12 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
+    <!-- HTML-parser comparison bench (Starling.HtmlParserBench): a mature,
+         pure-managed reference parser to benchmark Starling.Html against. Only
+         that standalone bench project references it — no engine project does, so
+         the managed-first interop policy is unaffected (AngleSharp ships no
+         native dependency). MIT-licensed. -->
+    <PackageVersion Include="AngleSharp" Version="1.4.1" />
 
     <!-- Analyzers (PrivateAssets in Directory.Build.props) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.0.0" />
