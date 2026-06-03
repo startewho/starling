@@ -46,6 +46,45 @@ public sealed class SelectorIndexTests
     }
 
     [TestMethod]
+    public void Candidates_keep_source_order_across_buckets()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("article");
+        el.Id = "hero";
+        el.ClassList.Add("card");
+        doc.AppendChild(el);
+
+        var index = new SelectorIndex<string>();
+        index.Add(SelectorParser.ParseSelectorList(".card"), "class-first");
+        index.Add(SelectorParser.ParseSelectorList("#hero"), "id-second");
+        index.Add(SelectorParser.ParseSelectorList("article"), "tag-third");
+
+        index.GetCandidates(el).Select(c => c.Value)
+            .Should().Equal("class-first", "id-second", "tag-third");
+    }
+
+    [TestMethod]
+    public void Candidates_can_filter_by_pseudo_element_target()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("p");
+        doc.AppendChild(el);
+
+        var index = new SelectorIndex<string>();
+        index.Add(SelectorParser.ParseSelectorList("p"), "element");
+        index.Add(SelectorParser.ParseSelectorList("p::before"), "before");
+        index.Add(SelectorParser.ParseSelectorList("p::after"), "after");
+
+        var results = new List<SelectorIndexEntry<string>>();
+        var seen = new HashSet<int>();
+        index.GetCandidates(el, results, seen, filterPseudoElement: true);
+        results.Select(c => c.Value).Should().ContainSingle("element");
+
+        index.GetCandidates(el, results, seen, filterPseudoElement: true, pseudoElement: PseudoElement.Before);
+        results.Select(c => c.Value).Should().ContainSingle("before");
+    }
+
+    [TestMethod]
     public void Buckets_is_and_where_arguments_by_nested_keys()
     {
         var doc = new Document();

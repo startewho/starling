@@ -21,6 +21,8 @@ public sealed class StyleEngine
         = new(ReferenceEqualityComparer.Instance);
     private readonly IDiagnostics _diag;
     private MediaContext _mediaContext = MediaContext.Default;
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> s_emptyCustomProperties
+        = new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal);
 
     // True when any active stylesheet uses :has() or :empty — selectors whose
     // match for an element depends on its descendants/emptiness, so a child
@@ -742,6 +744,80 @@ public sealed class StyleEngine
         return Compute(element, parentStyle: elementStyle, context: pseudoContext);
     }
 
+    /// <summary>
+    /// Compute a pseudo-element only when it can generate a layout box through a
+    /// matching <c>content</c> declaration. CSSOM callers that need the computed
+    /// pseudo style should use <see cref="ComputePseudoElement"/>.
+    /// </summary>
+    public ComputedStyle? ComputeGeneratedPseudoElement(
+        Element element,
+        PseudoElement pseudo,
+        ComputedStyle elementStyle,
+        SelectorMatchContext? baseContext = null)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentNullException.ThrowIfNull(elementStyle);
+
+        var b = baseContext ?? SelectorMatchContext.Default;
+        var pseudoContext = new SelectorMatchContext
+        {
+            HoveredElement = b.HoveredElement,
+            ActiveElement = b.ActiveElement,
+            FocusedElement = b.FocusedElement,
+            TargetElement = b.TargetElement,
+            ScopeElement = b.ScopeElement,
+            DocumentUrl = b.DocumentUrl,
+            VisitedHrefs = b.VisitedHrefs,
+            PseudoElement = pseudo,
+        };
+        return HasMatchingPseudoContentDeclaration(element, pseudo, pseudoContext)
+            ? Compute(element, parentStyle: elementStyle, context: pseudoContext)
+            : null;
+    }
+
+    private bool HasMatchingPseudoContentDeclaration(
+        Element element,
+        PseudoElement pseudo,
+        SelectorMatchContext context)
+    {
+        var selectorScratch = new List<SelectorIndexEntry<IndexedStyleRule>>();
+        var selectorScratchSeen = new HashSet<int>();
+
+        foreach (var sheet in _sheets)
+        {
+            if (!_sheetIndexes.TryGetValue(sheet, out var sheetIndex))
+                continue;
+
+            sheetIndex.Selectors.GetCandidates(
+                element,
+                selectorScratch,
+                selectorScratchSeen,
+                filterPseudoElement: true,
+                pseudoElement: pseudo);
+
+            foreach (var entry in selectorScratch)
+            {
+                var indexedRule = entry.Value;
+                if (!RuleDeclaresContent(indexedRule.Rule)
+                    || !ConditionsMatch(indexedRule.Conditions, element)
+                    || !SelectorMatcher.Matches(entry.Selector, element, context))
+                    continue;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool RuleDeclaresContent(StyleRule rule)
+    {
+        foreach (var declaration in rule.Declarations)
+            if (declaration.Name.Equals("content", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
     private ComputedStyle Compute(
         Element element,
         ComputedStyle? parentStyle,
@@ -751,11 +827,10 @@ public sealed class StyleEngine
         context ??= new SelectorMatchContext();
         var allCandidates = new Dictionary<PropertyId, List<CascadedValue>>();
         var customCandidates = new Dictionary<string, List<CustomPropertyValue>>(StringComparer.Ordinal);
-        var customProperties = parentStyle?.CustomProperties.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value,
-            StringComparer.Ordinal) ?? new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal);
+        var inheritedCustomProperties = parentStyle?.CustomProperties ?? s_emptyCustomProperties;
         var order = 0;
+        var selectorScratch = new List<SelectorIndexEntry<IndexedStyleRule>>();
+        var selectorScratchSeen = new HashSet<int>();
 
         foreach (var sheet in _sheets)
         {
@@ -771,7 +846,9 @@ public sealed class StyleEngine
                     context,
                     validation,
                     ref order,
-                    layerOrder);
+                    layerOrder,
+                    selectorScratch,
+                    selectorScratchSeen);
         }
 
         var inlineStyle = element.GetAttribute("style");
@@ -824,15 +901,26 @@ public sealed class StyleEngine
                 customWinners[kvp.Key] = best;
         }
 
-        foreach (var pair in customWinners)
-            customProperties[pair.Key] = pair.Value.Value;
+        IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> customProperties = inheritedCustomProperties;
+        if (customWinners.Count > 0)
+        {
+            var mergedCustomProperties = inheritedCustomProperties.Count == 0
+                ? new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal)
+                : inheritedCustomProperties.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value,
+                    StringComparer.Ordinal);
+            foreach (var pair in customWinners)
+                mergedCustomProperties[pair.Key] = pair.Value.Value;
 
-        // CSS Variables L1 §3.3: a custom property whose var() references form a
-        // cycle is invalid at computed-value time and computes to the
-        // guaranteed-invalid value. Drop every property in a cycle from the map
-        // so it reads as undefined — any var() pointing at it then takes its
-        // fallback, or makes the using property invalid-at-computed-value-time.
-        RemoveCyclicCustomProperties(customProperties);
+            // CSS Variables L1 §3.3: a custom property whose var() references form a
+            // cycle is invalid at computed-value time and computes to the
+            // guaranteed-invalid value. Drop every property in a cycle from the map
+            // so it reads as undefined — any var() pointing at it then takes its
+            // fallback, or makes the using property invalid-at-computed-value-time.
+            RemoveCyclicCustomProperties(mergedCustomProperties);
+            customProperties = mergedCustomProperties;
+        }
 
         var values = new Dictionary<PropertyId, CssValue>();
         foreach (var property in PropertyRegistry.All)
@@ -1087,52 +1175,60 @@ public sealed class StyleEngine
         SelectorMatchContext? context,
         List<SelectorValidationResult>? validation,
         ref int order,
-        LayerOrder layerOrder)
+        LayerOrder layerOrder,
+        List<SelectorIndexEntry<IndexedStyleRule>> selectorScratch,
+        HashSet<int> selectorScratchSeen)
     {
-        var candidateRules = new Dictionary<IndexedStyleRule, List<ComplexSelector>>();
-        foreach (var entry in sheetIndex.Selectors.GetCandidates(element))
-        {
-            if (!candidateRules.TryGetValue(entry.Value, out var selectors))
-                candidateRules[entry.Value] = selectors = new List<ComplexSelector>();
-            selectors.Add(entry.Selector);
-        }
+        sheetIndex.Selectors.GetCandidates(
+            element,
+            selectorScratch,
+            selectorScratchSeen,
+            filterPseudoElement: true,
+            pseudoElement: context?.PseudoElement);
 
-        foreach (var pair in candidateRules.OrderBy(static pair => pair.Key.SourceOrder))
+        IndexedStyleRule? currentRule = null;
+        bool currentConditionsMatched = false;
+        int currentLayerIndex = LayerOrder.UnlayeredIndex;
+
+        foreach (var entry in selectorScratch)
         {
-            var indexedRule = pair.Key;
-            var conditionsMatched = ConditionsMatch(indexedRule.Conditions, element);
-            if (!conditionsMatched)
+            var indexedRule = entry.Value;
+            if (!ReferenceEquals(indexedRule, currentRule))
             {
-                if (validation is not null)
-                    foreach (var selector in pair.Value)
-                        validation.Add(new SelectorValidationResult(
-                            selector,
-                            indexedRule.Conditions,
-                            Matched: false));
+                currentRule = indexedRule;
+                currentConditionsMatched = ConditionsMatch(indexedRule.Conditions, element);
+                currentLayerIndex = currentConditionsMatched
+                    ? layerOrder.GetIndex(indexedRule.LayerPath)
+                    : LayerOrder.UnlayeredIndex;
+            }
+
+            if (!currentConditionsMatched)
+            {
+                validation?.Add(new SelectorValidationResult(
+                    entry.Selector,
+                    indexedRule.Conditions,
+                    Matched: false));
                 continue;
             }
 
-            var layerIndex = layerOrder.GetIndex(indexedRule.LayerPath);
-            foreach (var selector in pair.Value)
-            {
-                var selectorMatched = SelectorMatcher.Matches(selector, element, context);
-                validation?.Add(new SelectorValidationResult(
-                    selector,
-                    indexedRule.Conditions,
-                    selectorMatched));
-                if (!selectorMatched)
-                    continue;
-                AddDeclarations(
-                    indexedRule.Rule.Declarations,
-                    origin,
-                    inline: false,
-                    selector.Specificity,
-                    candidates,
-                    customCandidates,
-                    ref order,
-                    layerIndex,
-                    indexedRule.LayerPath);
-            }
+            var selectorMatched = SelectorMatcher.Matches(entry.Selector, element, context);
+            validation?.Add(new SelectorValidationResult(
+                entry.Selector,
+                indexedRule.Conditions,
+                selectorMatched));
+            if (!selectorMatched)
+                continue;
+
+            AddDeclarations(
+                indexedRule.Rule.Declarations,
+                origin,
+                inline: false,
+                entry.Selector.Specificity,
+                candidates,
+                customCandidates,
+                ref order,
+                currentLayerIndex,
+                indexedRule.LayerPath);
         }
     }
 

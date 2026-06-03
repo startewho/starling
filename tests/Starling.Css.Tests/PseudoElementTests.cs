@@ -1,4 +1,6 @@
 using AwesomeAssertions;
+using Starling.Css.Cascade;
+using Starling.Css.Parser;
 using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Spec;
@@ -55,6 +57,23 @@ public sealed class PseudoElementTests
         var selector = SelectorParser.ParseSelectorList("p").Selectors.Single();
         SelectorMatcher.MatchWithResult(selector, p,
             new SelectorMatchContext { PseudoElement = PseudoElement.Before }).Matched.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Generated_pseudo_element_style_is_skipped_without_matching_content_declaration()
+    {
+        var doc = new Document();
+        var p = doc.CreateElement("p");
+        doc.AppendChild(p);
+
+        var engine = new StyleEngine(includeUserAgentStyleSheet: false);
+        engine.AddStyleSheet(CssParser.ParseStyleSheet("p::before { color: red; }"));
+        var elementStyle = engine.Compute(p);
+
+        engine.ComputeGeneratedPseudoElement(p, PseudoElement.Before, elementStyle).Should().BeNull();
+
+        engine.AddStyleSheet(CssParser.ParseStyleSheet("p::before { content: \"x\"; }"));
+        engine.ComputeGeneratedPseudoElement(p, PseudoElement.Before, elementStyle).Should().NotBeNull();
     }
 
     [TestMethod]
