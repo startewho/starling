@@ -110,7 +110,8 @@ public sealed class Chunk
     }
 
     public Chunk(byte[] code, IReadOnlyList<object?> constants, int localCount, string? name,
-        IReadOnlySet<int>? capturedSlots, IReadOnlyList<(int Offset, int Line, int Col)>? positions)
+        IReadOnlySet<int>? capturedSlots, IReadOnlyList<(int Offset, int Line, int Col)>? positions,
+        int inlineCacheCount = 0)
     {
         Code = code ?? throw new ArgumentNullException(nameof(code));
         Constants = constants ?? throw new ArgumentNullException(nameof(constants));
@@ -118,10 +119,20 @@ public sealed class Chunk
         Name = name;
         CapturedSlots = capturedSlots ?? EmptyCaptured;
         Positions = positions ?? EmptyPositions;
+        Caches = inlineCacheCount == 0 ? EmptyCaches : new Runtime.InlineCache[inlineCacheCount];
     }
 
     private static readonly IReadOnlySet<int> EmptyCaptured = new HashSet<int>();
     private static readonly IReadOnlyList<(int, int, int)> EmptyPositions = [];
+    private static readonly Runtime.InlineCache[] EmptyCaches = System.Array.Empty<Runtime.InlineCache>();
+
+    /// <summary>Per-property-site inline caches, indexed by the <c>u16</c> cache
+    /// id operand the compiler emits on <see cref="Opcode.LoadProperty"/> /
+    /// <see cref="Opcode.StoreProperty"/>. Mutated by the VM on a cache miss;
+    /// the array reference is fixed for the chunk's life. A cache id of
+    /// <c>0xFFFF</c> means "uncacheable site" (allocated past the per-chunk
+    /// limit) and indexes nothing.</summary>
+    internal Runtime.InlineCache[] Caches { get; }
 
     /// <summary>wp:M3-23 — find the nearest recorded source position at or
     /// before <paramref name="ip"/>. The VM's <c>ip</c> at a throw site has
@@ -277,6 +288,24 @@ public sealed class ChunkBuilder
         _code.Add(b2);
     }
 
+    /// <summary>Number of inline-cache sites allocated so far; becomes the size
+    /// of <see cref="Chunk.Caches"/>. Capped at 0xFFFF (see
+    /// <see cref="EmitProperty"/>).</summary>
+    private int _cacheCount;
+
+    /// <summary>Emit a named property access opcode (<see cref="Opcode.LoadProperty"/>
+    /// / <see cref="Opcode.StoreProperty"/>) as <c>[op][u16 nameIdx][u16
+    /// cacheId]</c>. Each site gets its own dense cache id so the VM can index
+    /// <see cref="Chunk.Caches"/> directly. Past 0xFFFF sites (huge functions)
+    /// the site is emitted with the 0xFFFF "uncacheable" sentinel and always
+    /// takes the slow path.</summary>
+    public void EmitProperty(Opcode op, int nameIdx)
+    {
+        EmitU16(op, nameIdx);
+        if (_cacheCount < 0xFFFF) { EmitU16Raw(_cacheCount); _cacheCount++; }
+        else EmitU16Raw(0xFFFF);
+    }
+
     /// <summary>Emit a local-slot opcode with a 16-bit slot operand. Local
     /// slots are addressed with a u16 (not u8) so functions with more than
     /// 255 locals — common in large minified bundles such as Google Tag
@@ -410,6 +439,6 @@ public sealed class ChunkBuilder
 
     public Chunk Build(string? name = null)
         => new(_code.ToArray(), _constants.ToArray(), LocalCount, name, _capturedSlots,
-            _positions is null ? null : _positions.ToArray())
+            _positions is null ? null : _positions.ToArray(), _cacheCount)
         { IsStrict = IsStrict, HasPrologue = HasPrologue, CapturesWith = CapturesWith, SourcePath = SourcePath, IsArrow = IsArrow, IsInitializer = IsInitializer, HasDirectEval = HasDirectEval, PrivateNameScope = PrivateNameScope };
 }

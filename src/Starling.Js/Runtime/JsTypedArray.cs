@@ -24,6 +24,7 @@ public sealed class JsTypedArray : JsObject
 {
     public JsTypedArray(JsObject? prototype, JsTypedArrayKind kind, JsArrayBuffer buffer, int byteOffset, int length) : base(prototype)
     {
+        DisableInlineCache();
         Kind = kind;
         Buffer = buffer;
         ByteOffset = byteOffset;

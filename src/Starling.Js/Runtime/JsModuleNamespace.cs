@@ -43,6 +43,7 @@ public sealed class JsModuleNamespace : JsObject
     internal JsModuleNamespace(IReadOnlyDictionary<string, Cell> exports)
         : base(prototype: null)
     {
+        DisableInlineCache();
         _exports = new Dictionary<string, Cell>(exports, StringComparer.Ordinal);
         _sortedNames = new List<string>(_exports.Keys);
         // Array.prototype.sort's default comparator orders by UTF-16 code unit,
