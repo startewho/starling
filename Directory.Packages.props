@@ -111,7 +111,7 @@
          that standalone bench project references it — no engine project does, so
          the managed-first interop policy is unaffected (AngleSharp ships no
          native dependency). MIT-licensed. -->
-    <PackageVersion Include="AngleSharp" Version="1.4.1" />
+    <PackageVersion Include="AngleSharp" Version="1.4.0" />
 
     <!-- Analyzers (PrivateAssets in Directory.Build.props) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.0.0" />
