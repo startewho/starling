@@ -53,42 +53,49 @@ public static class StringCtor
         IntrinsicHelpers.DefineMethod(realm, ctor, "fromCodePoint", 1, (_, args) => FromCodePoint(realm, args));
         IntrinsicHelpers.DefineMethod(realm, ctor, "raw", 1, (_, args) => Raw(realm, args));
 
-        stringProto.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "at", 1, (thisV, args) => At(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "charAt", 1, (thisV, args) => CharAt(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "charCodeAt", 1, (thisV, args) => CharCodeAt(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "codePointAt", 1, (thisV, args) => CodePointAt(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "concat", 1, (thisV, args) => Concat(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "endsWith", 1, (thisV, args) => EndsWith(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "includes", 1, (thisV, args) => Includes(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "indexOf", 1, (thisV, args) => IndexOf(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "lastIndexOf", 1, (thisV, args) => LastIndexOf(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "localeCompare", 1, (thisV, args) => LocaleCompare(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "normalize", 0, (thisV, args) => Normalize(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "padEnd", 1, (thisV, args) => Pad(realm, thisV, args, atStart: false));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "padStart", 1, (thisV, args) => Pad(realm, thisV, args, atStart: true));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "repeat", 1, (thisV, args) => Repeat(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "match", 1, (thisV, args) => Match(realm, thisV, args, all: false));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "matchAll", 1, (thisV, args) => Match(realm, thisV, args, all: true));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "search", 1, (thisV, args) => Search(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "replace", 2, (thisV, args) => Replace(realm, thisV, args, replaceAll: false));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "replaceAll", 2, (thisV, args) => Replace(realm, thisV, args, replaceAll: true));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "slice", 2, (thisV, args) => Slice(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "split", 2, (thisV, args) => Split(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "startsWith", 1, (thisV, args) => StartsWith(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "substring", 2, (thisV, args) => Substring(realm, thisV, args));
-        // Annex B §B.2.2.1 String.prototype.substr(start[, length]) — legacy but widely used.
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "substr", 2, (thisV, args) => Substr(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "toLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLowerInvariant()));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "toUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpperInvariant()));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpper(CultureInfo.InvariantCulture)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "trim", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: true)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "trimStart", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)));
+        // Bulk-install constructor + every string-keyed prototype method by
+        // adopting one precomputed shape. Order is unchanged from the prior
+        // sequential install, so getOwnPropertyNames order is identical and the
+        // result is byte-identical. The symbol-keyed @@iterator is installed
+        // separately below (symbols can never enter a shape).
+        IntrinsicHelpers.BulkInstallBuiltins(realm, stringProto, new[]
+        {
+            new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
+            new IntrinsicHelpers.BulkMember("at", 1, (thisV, args) => At(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("charAt", 1, (thisV, args) => CharAt(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("charCodeAt", 1, (thisV, args) => CharCodeAt(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("codePointAt", 1, (thisV, args) => CodePointAt(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("concat", 1, (thisV, args) => Concat(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("endsWith", 1, (thisV, args) => EndsWith(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("includes", 1, (thisV, args) => Includes(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("indexOf", 1, (thisV, args) => IndexOf(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("lastIndexOf", 1, (thisV, args) => LastIndexOf(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("localeCompare", 1, (thisV, args) => LocaleCompare(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("normalize", 0, (thisV, args) => Normalize(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("padEnd", 1, (thisV, args) => Pad(realm, thisV, args, atStart: false)),
+            new IntrinsicHelpers.BulkMember("padStart", 1, (thisV, args) => Pad(realm, thisV, args, atStart: true)),
+            new IntrinsicHelpers.BulkMember("repeat", 1, (thisV, args) => Repeat(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("match", 1, (thisV, args) => Match(realm, thisV, args, all: false)),
+            new IntrinsicHelpers.BulkMember("matchAll", 1, (thisV, args) => Match(realm, thisV, args, all: true)),
+            new IntrinsicHelpers.BulkMember("search", 1, (thisV, args) => Search(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("replace", 2, (thisV, args) => Replace(realm, thisV, args, replaceAll: false)),
+            new IntrinsicHelpers.BulkMember("replaceAll", 2, (thisV, args) => Replace(realm, thisV, args, replaceAll: true)),
+            new IntrinsicHelpers.BulkMember("slice", 2, (thisV, args) => Slice(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("split", 2, (thisV, args) => Split(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("startsWith", 1, (thisV, args) => StartsWith(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("substring", 2, (thisV, args) => Substring(realm, thisV, args)),
+            // Annex B §B.2.2.1 String.prototype.substr(start[, length]) — legacy but widely used.
+            new IntrinsicHelpers.BulkMember("substr", 2, (thisV, args) => Substr(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("toLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLowerInvariant())),
+            new IntrinsicHelpers.BulkMember("toUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpperInvariant())),
+            new IntrinsicHelpers.BulkMember("toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture))),
+            new IntrinsicHelpers.BulkMember("toLocaleUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpper(CultureInfo.InvariantCulture))),
+            new IntrinsicHelpers.BulkMember("trim", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: true))),
+            new IntrinsicHelpers.BulkMember("trimStart", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false))),
+            new IntrinsicHelpers.BulkMember("trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true))),
+            new IntrinsicHelpers.BulkMember("toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
+            new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
+        });
 
         // §22.1.3.34 String.prototype[@@iterator] — walks the string by
         // Unicode code points (not UTF-16 code units), e.g.
