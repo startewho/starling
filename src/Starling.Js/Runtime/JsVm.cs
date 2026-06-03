@@ -1663,10 +1663,10 @@ public sealed class JsVm
                             var flagsStr = (string)constants[flagsIdx]!;
                             if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
                                 throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
-                            CompiledRegex compiled;
+                            Starling.Js.Runtime.Regex.IRegexMatcher compiled;
                             try
                             {
-                                compiled = CompiledRegex.Compile(source, flags);
+                                compiled = Starling.Js.Runtime.Regex.RegexBackendSelector.Compile(source, flags);
                             }
                             catch (RegexSyntaxException ex)
                             {

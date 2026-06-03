@@ -1,4 +1,5 @@
 using Starling.RegExp;
+using Starling.Js.Runtime.Regex;
 
 namespace Starling.Js.Runtime;
 
@@ -9,11 +10,11 @@ namespace Starling.Js.Runtime;
 /// </summary>
 public sealed class JsRegExp : JsObject
 {
-    public CompiledRegex Compiled { get; }
+    public IRegexMatcher Compiled { get; }
     public string Source => Compiled.Source;
     public RegexFlags Flags => Compiled.Flags;
 
-    public JsRegExp(JsRealm realm, CompiledRegex compiled) : base(realm.RegExpPrototype)
+    public JsRegExp(JsRealm realm, IRegexMatcher compiled) : base(realm.RegExpPrototype)
     {
         Compiled = compiled;
         // lastIndex is writable, non-enumerable, non-configurable per §22.2.7.1.

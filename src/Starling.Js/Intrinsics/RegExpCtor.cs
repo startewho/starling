@@ -1,6 +1,7 @@
 using System.Text;
 using Starling.RegExp;
 using Starling.Js.Runtime;
+using Starling.Js.Runtime.Regex;
 
 namespace Starling.Js.Intrinsics;
 
@@ -100,10 +101,10 @@ public static class RegExpCtor
                 throw new JsThrow(realm.NewSyntaxError(err!));
         }
 
-        CompiledRegex compiled;
+        IRegexMatcher compiled;
         try
         {
-            compiled = CompiledRegex.Compile(source, flags);
+            compiled = RegexBackendSelector.Compile(source, flags);
         }
         catch (RegexSyntaxException ex)
         {
@@ -151,10 +152,10 @@ public static class RegExpCtor
     // Public-internal helper so JsRegExpStringIterator can build per-match
     // arrays without rerouting through prototype.exec (avoids re-entering the
     // dispatcher just to construct the same object).
-    internal static JsArray BuildMatchArrayForIterator(JsRealm realm, JsRegExp re, RegexMatch m)
+    internal static JsArray BuildMatchArrayForIterator(JsRealm realm, JsRegExp re, IRegexMatch m)
         => BuildMatchArray(realm, re, m);
 
-    private static JsArray BuildMatchArray(JsRealm realm, JsRegExp re, RegexMatch m)
+    private static JsArray BuildMatchArray(JsRealm realm, JsRegExp re, IRegexMatch m)
     {
         var arr = new JsArray(realm);
         // index 0 = full match, then group captures
@@ -533,10 +534,10 @@ public static class RegExpCtor
     {
         if (!RegexFlagParser.TryParse(flags, out var f, out var err))
             throw new JsThrow(realm.NewSyntaxError(err!));
-        CompiledRegex compiled;
+        IRegexMatcher compiled;
         try
         {
-            compiled = CompiledRegex.Compile(source, f);
+            compiled = RegexBackendSelector.Compile(source, f);
         }
         catch (RegexSyntaxException ex)
         {
