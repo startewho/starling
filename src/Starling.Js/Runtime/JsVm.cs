@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
 using Starling.Js.Bytecode;
@@ -36,17 +37,41 @@ public sealed class JsVm
     private const int MaxCallDepth = 1000;
     private int _callDepth;
 
+    // Exact-size pool of call-argument arrays. A JS call previously allocated a
+    // fresh JsValue[argc] on every invocation — the hottest allocation in the
+    // interpreter. args.Length is load-bearing (it is the JS argument count), so
+    // this hands back arrays of the EXACT requested length, unlike ArrayPool's
+    // ">= size" sizing. Rent and Return are balanced on one thread within a
+    // single synchronous call; generator/async bodies clone their args (see
+    // StartGeneratorBody), so a pooled buffer is never parked on a worker thread.
+    // Arrays are cleared on return so the pool never pins JS objects.
+    [ThreadStatic] private static Stack<JsValue[]>?[]? t_argPools;
+    private const int MaxPooledArgc = 8;
+    private const int ArgPoolDepth = 64;
+
+    private static JsValue[] RentArgs(int n)
+    {
+        if (n == 0) return System.Array.Empty<JsValue>();
+        if (n > MaxPooledArgc) return new JsValue[n];
+        var pools = t_argPools ??= new Stack<JsValue[]>?[MaxPooledArgc + 1];
+        var pool = pools[n];
+        return pool is { Count: > 0 } ? pool.Pop() : new JsValue[n];
+    }
+
+    private static void ReturnArgs(JsValue[] args)
+    {
+        var n = args.Length;
+        if (n == 0 || n > MaxPooledArgc) return;
+        System.Array.Clear(args, 0, n);
+        var pools = t_argPools ??= new Stack<JsValue[]>?[MaxPooledArgc + 1];
+        var pool = pools[n] ??= new Stack<JsValue[]>();
+        if (pool.Count < ArgPoolDepth) pool.Push(args);
+    }
+
     public JsVm(JsRuntime runtime)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
-
-    /// <summary>Per-opcode dispatch counts for this VM. Indexed by
-    /// <see cref="Opcode"/> byte value. Incremented once per dispatched
-    /// instruction inside <see cref="RunInner"/>; surfaced by the script
-    /// session's <c>js: execute</c> trace span so we can see which ops a slow
-    /// script burns time on without rebuilding the interpreter.</summary>
-    public readonly long[] OpcodeCounts = new long[256];
 
     /// <summary>The realm this VM dispatches against.</summary>
     public JsRealm Realm => _runtime.Realm;
@@ -448,7 +473,16 @@ public sealed class JsVm
         SuspendedFrame? suspension = null, EvalScope? evalScope = null,
         EvalVarStore? frameVarStore = null)
     {
-        var stack = new JsValue[MaxStack];
+        // wp — operand stack rented from the shared array pool. This was the
+        // single largest per-frame allocation (MaxStack JsValue). It is returned
+        // via Finish() at every normal exit below; abnormal exits (host abort,
+        // stack overflow) just let it fall to GC, which is harmless. Generators
+        // rent on their worker thread and return on completion, so rent/return
+        // stay balanced per thread. maxSp tracks the high-water slot so Finish
+        // clears only the touched region (never pinning JS objects in the pool)
+        // rather than memset-ing the whole 1024-slot buffer on every call.
+        var stack = ArrayPool<JsValue>.Shared.Rent(MaxStack);
+        var maxSp = 0;
         var sp = 0;
         var locals = new JsValue[Math.Max(chunk.LocalCount, 1)];
         for (var k = 0; k < args.Length && k < locals.Length; k++)
@@ -487,9 +521,21 @@ public sealed class JsVm
         {
             if (sp >= MaxStack) throw new StackOverflowException("JS stack overflow");
             stack[sp++] = v;
+            if (sp > maxSp) maxSp = sp;
         }
         JsValue Pop() => stack[--sp];
         JsValue Peek() => stack[sp - 1];
+
+        // Return the rented operand stack to the pool, clearing only the slots we
+        // touched so the pool never pins JS objects. Returns its argument so call
+        // sites read `return Finish(value);` — the value is evaluated before the
+        // clear, so reading stack[sp-1] for it stays valid.
+        JsValue Finish(JsValue result)
+        {
+            if (maxSp > 0) System.Array.Clear(stack, 0, maxSp);
+            ArrayPool<JsValue>.Shared.Return(stack);
+            return result;
+        }
 
         int ReadU8() => code[ip++];
         int ReadU16()
@@ -589,11 +635,10 @@ public sealed class JsVm
             try
             {
                 var op = (Opcode)code[ip++];
-                OpcodeCounts[(byte)op]++;
                 switch (op)
                 {
                     case Opcode.Halt:
-                        return sp > 0 ? stack[sp - 1] : JsValue.Undefined;
+                        return Finish(sp > 0 ? stack[sp - 1] : JsValue.Undefined);
                     case Opcode.Nop: break;
 
                     // ----- Constants -----
@@ -1346,24 +1391,28 @@ public sealed class JsVm
                     case Opcode.Call:
                         {
                             var argc = ReadU8();
-                            var callArgs = new JsValue[argc];
+                            var callArgs = RentArgs(argc);
                             for (var i = argc - 1; i >= 0; i--) callArgs[i] = Pop();
                             var callee = Pop();
                             if (!IsCallableValue(callee))
                                 throw new JsThrow(JsValue.String(AtPos($"not a function: {JsValue.ToStringValue(callee)} (callee hint: '{_lastLoadName}')")));
-                            Push(AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs));
+                            var callResult = AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs);
+                            ReturnArgs(callArgs);
+                            Push(callResult);
                             break;
                         }
                     case Opcode.CallMethod:
                         {
                             var argc = ReadU8();
-                            var callArgs = new JsValue[argc];
+                            var callArgs = RentArgs(argc);
                             for (var i = argc - 1; i >= 0; i--) callArgs[i] = Pop();
                             var callee = Pop();
                             var receiver = Pop();
                             if (!IsCallableValue(callee))
                                 throw new JsThrow(JsValue.String(AtPos($"not a function: {JsValue.ToStringValue(callee)} (method hint: '{_lastLoadName}')")));
-                            Push(AbstractOperations.Call(this, callee, receiver, callArgs));
+                            var methodResult = AbstractOperations.Call(this, callee, receiver, callArgs);
+                            ReturnArgs(callArgs);
+                            Push(methodResult);
                             break;
                         }
                     case Opcode.DirectEval:
@@ -1545,12 +1594,14 @@ public sealed class JsVm
                     case Opcode.New:
                         {
                             var argc = ReadU8();
-                            var newArgs = new JsValue[argc];
+                            var newArgs = RentArgs(argc);
                             for (var i = argc - 1; i >= 0; i--) newArgs[i] = Pop();
                             var ctor = Pop();
                             if (!ctor.IsObject)
                                 throw new JsThrow(JsValue.String(AtPos($"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
-                            Push(AbstractOperations.Construct(this, ctor, newArgs));
+                            var newResult = AbstractOperations.Construct(this, ctor, newArgs);
+                            ReturnArgs(newArgs);
+                            Push(newResult);
                             break;
                         }
 
@@ -1581,12 +1632,12 @@ public sealed class JsVm
                         {
                             var rv = Pop();
                             if (DivertReturnThroughFinally(tryStack, rv, ref ip)) break;
-                            return rv;
+                            return Finish(rv);
                         }
                     case Opcode.ReturnUndefined:
                         {
                             if (DivertReturnThroughFinally(tryStack, JsValue.Undefined, ref ip)) break;
-                            return JsValue.Undefined;
+                            return Finish(JsValue.Undefined);
                         }
 
                     // ----- Throw -----
@@ -1654,7 +1705,7 @@ public sealed class JsVm
                                     {
                                         var rv = frame.PendingValue;
                                         if (DivertReturnThroughFinally(tryStack, rv, ref ip)) break;
-                                        return rv;
+                                        return Finish(rv);
                                     }
                                 case PendingCompletion.Break:
                                     {
@@ -2053,7 +2104,9 @@ public sealed class JsVm
                             var argsArrV = Pop();
                             var callee = Pop();
                             var applyArgs = ExtractApplyArgs(argsArrV);
-                            Push(AbstractOperations.Call(this, callee, JsValue.Undefined, applyArgs));
+                            var applyResult = AbstractOperations.Call(this, callee, JsValue.Undefined, applyArgs);
+                            ReturnArgs(applyArgs);
+                            Push(applyResult);
                             break;
                         }
 
@@ -2063,7 +2116,9 @@ public sealed class JsVm
                             var callee = Pop();
                             var receiver = Pop();
                             var applyArgs = ExtractApplyArgs(argsArrV);
-                            Push(AbstractOperations.Call(this, callee, receiver, applyArgs));
+                            var applyResult = AbstractOperations.Call(this, callee, receiver, applyArgs);
+                            ReturnArgs(applyArgs);
+                            Push(applyResult);
                             break;
                         }
 
@@ -2072,7 +2127,9 @@ public sealed class JsVm
                             var argsArrV = Pop();
                             var ctor = Pop();
                             var applyArgs = ExtractApplyArgs(argsArrV);
-                            Push(AbstractOperations.Construct(this, ctor, applyArgs));
+                            var applyResult = AbstractOperations.Construct(this, ctor, applyArgs);
+                            ReturnArgs(applyArgs);
+                            Push(applyResult);
                             break;
                         }
 
@@ -2818,6 +2875,7 @@ public sealed class JsVm
                     {
                         sp = frame.StackBase;
                         stack[sp++] = thrown;
+                        if (sp > maxSp) maxSp = sp;
                         ip = frame.CatchPc;
                         frame.Phase = TryPhase.CatchBody;
                         tryStack.Pop(); tryStack.Push(frame);
@@ -2847,9 +2905,13 @@ public sealed class JsVm
                 // Return opcode). If nothing diverts it, exit the body
                 // with rs.Value as the return value.
                 if (!DivertReturnThroughFinally(tryStack, rs.Value, ref ip))
-                    return rs.Value;
+                    return Finish(rs.Value);
             }
-            if (rethrow is not null) throw rethrow;
+            if (rethrow is not null)
+            {
+                Finish(JsValue.Undefined);
+                throw rethrow;
+            }
         }
     }
 
@@ -3188,7 +3250,7 @@ public sealed class JsVm
         if (!argsArrV.IsObject || argsArrV.AsObject is not JsArray arr)
             throw new InvalidOperationException("CallApply expects an Array of args on the stack");
         var n = arr.Length;
-        var dst = new JsValue[n];
+        var dst = RentArgs(n);
         for (var i = 0; i < n; i++) dst[i] = arr[i];
         return dst;
     }
@@ -3766,7 +3828,10 @@ public sealed class JsVm
         var frame = new SuspendedFrame(this);
         var gen = new JsGenerator(realm, frame);
         // Stamp own properties so duck-typing tests work.
-        var argsCopy = args; // captured into the lambda
+        // Deep-copy: the caller's args array is pooled and reused after this
+        // synchronous call returns, but the worker lambda parks with a reference
+        // to it across suspensions. Clone so the worker owns its own buffer.
+        var argsCopy = args.Length == 0 ? args : (JsValue[])args.Clone();
         var thisCopy = thisValue;
         var fnCopy = fn;
         frame.Start(() =>
@@ -3822,7 +3887,10 @@ public sealed class JsVm
         var state = new JsAsyncFunctionState(frame, outer);
 
         var fnCopy = fn;
-        var argsCopy = args;
+        // Deep-copy: the caller's args array is pooled and reused after this
+        // synchronous call returns, but the worker lambda parks with a reference
+        // to it across suspensions. Clone so the worker owns its own buffer.
+        var argsCopy = args.Length == 0 ? args : (JsValue[])args.Clone();
         var thisCopy = thisValue;
         frame.Start(() =>
         {
@@ -3957,7 +4025,10 @@ public sealed class JsVm
         var frame = new SuspendedFrame(this);
         var gen = new JsAsyncGenerator(realm, frame);
         var fnCopy = fn;
-        var argsCopy = args;
+        // Deep-copy: the caller's args array is pooled and reused after this
+        // synchronous call returns, but the worker lambda parks with a reference
+        // to it across suspensions. Clone so the worker owns its own buffer.
+        var argsCopy = args.Length == 0 ? args : (JsValue[])args.Clone();
         var thisCopy = thisValue;
         frame.Start(() =>
         {

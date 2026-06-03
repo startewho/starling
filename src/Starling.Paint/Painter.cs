@@ -52,6 +52,9 @@ public sealed class Painter
         return _timelines.GetValue(document, static _ => new AnimationTimeline());
     }
 
+    public CompositedPageRenderer CreateCompositedRenderer(FontFaceRegistry? webFonts = null)
+        => new(_fonts, webFonts, _diag);
+
     /// <summary>
     /// Run the full pipeline: build a box tree, lay it out, build a paint
     /// display list, and rasterize it with ImageSharp.Drawing 3. The caller

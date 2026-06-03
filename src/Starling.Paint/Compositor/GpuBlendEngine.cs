@@ -49,6 +49,24 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private ulong _frame;
     private const ulong EvictAfterFrames = 240;
 
+    // Hard cap on resident GPU layer-texture bytes. Age-based eviction alone is
+    // unbounded: a dynamic page (load thrash, scrolling a tall page) can touch
+    // thousands of distinct tiles inside the EvictAfterFrames window, each a few MB
+    // of GPU memory — that is how github.com pinned ~15 GB. The byte budget evicts
+    // least-recently-used tiles so the cache can't balloon, mirroring the CPU-side
+    // TileGrid budget. Configurable like STARLING_TILE_BUDGET_BYTES.
+    private long _textureBytes;
+    private readonly long _maxTextureBytes = ReadTextureBudgetEnv();
+    private const long DefaultTextureBudgetBytes = 512L * 1024 * 1024; // 512 MB
+
+    private static long ReadTextureBudgetEnv()
+    {
+        var raw = Environment.GetEnvironmentVariable("STARLING_GPU_TEXTURE_BUDGET_BYTES");
+        return long.TryParse(raw, out var v) && v > 0 ? v : DefaultTextureBudgetBytes;
+    }
+
+    private static long BytesOf(CachedTexture c) => (long)c.Width * c.Height * 4;
+
     private WgpuBuffer* _vertexBuffer;
     private nuint _vertexCapacity;
 
@@ -136,27 +154,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
             if (instance == null) return null;
 
             var surf = window.CreateWebGPUSurface(api, instance);
-            if (surf == null) { api.InstanceRelease(instance); return null; }
-
-            if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
-            {
-                api.SurfaceRelease(surf);
-                api.InstanceRelease(instance);
-                return null;
-            }
-
-            // Pick a supported format. wgpu surfaces on Metal prefer Bgra8Unorm;
-            // the shader writes logical RGBA, so the target's channel order is
-            // handled by the API — either format reproduces the colours.
-            var caps = default(SurfaceCapabilities);
-            api.SurfaceGetCapabilities(surf, GetAdapterForCaps(api, instance, surf), ref caps);
-            format = PickFormat(caps);
-
-            // The instance is intentionally NOT released: wgpu keeps the surface
-            // tied to it. We leak one instance per presenter, which lives for the
-            // whole process.
-            surface = (nint)surf;
-            return new GpuBlendEngine(api, poll, device, queue);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
         }
         catch
         {
@@ -192,29 +190,104 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
             };
             var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&metal };
             var surf = api.InstanceCreateSurface(instance, in desc);
-            if (surf == null) { api.InstanceRelease(instance); return null; }
-
-            if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
-            {
-                api.SurfaceRelease(surf);
-                api.InstanceRelease(instance);
-                return null;
-            }
-
-            var caps = default(SurfaceCapabilities);
-            api.SurfaceGetCapabilities(surf, GetAdapterForCaps(api, instance, surf), ref caps);
-            format = PickFormat(caps);
-
-            // Instance intentionally NOT released: wgpu ties the surface to it (leaked
-            // for the process lifetime, one per presenter — see CreateForSurface).
-            surface = (nint)surf;
-            return new GpuBlendEngine(api, poll, device, queue);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
         }
         catch
         {
             _ = WgpuNativeLoader.Diagnose();
             return null;
         }
+    }
+
+    internal static GpuBlendEngine? CreateForWindowsHwnd(nint hwnd, nint hinstance, out nint surface, out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (hwnd == 0) return null;
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+
+            var windows = new SurfaceDescriptorFromWindowsHWND
+            {
+                Chain = new ChainedStruct { Next = null, SType = SType.SurfaceDescriptorFromWindowsHwnd },
+                Hinstance = (void*)hinstance,
+                Hwnd = (void*)hwnd,
+            };
+            var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&windows };
+            var surf = api.InstanceCreateSurface(instance, in desc);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
+    internal static GpuBlendEngine? CreateForXlibWindow(nint display, ulong window, out nint surface, out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (display == 0 || window == 0) return null;
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+
+            var xlib = new SurfaceDescriptorFromXlibWindow
+            {
+                Chain = new ChainedStruct { Next = null, SType = SType.SurfaceDescriptorFromXlibWindow },
+                Display = (void*)display,
+                Window = window,
+            };
+            var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&xlib };
+            var surf = api.InstanceCreateSurface(instance, in desc);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
+    private static GpuBlendEngine? CreateForCreatedSurface(
+        WebGPU api,
+        Instance* instance,
+        Surface* surf,
+        out nint surface,
+        out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (surf == null)
+        {
+            api.InstanceRelease(instance);
+            return null;
+        }
+
+        if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
+        {
+            api.SurfaceRelease(surf);
+            api.InstanceRelease(instance);
+            return null;
+        }
+
+        var caps = default(SurfaceCapabilities);
+        var capsAdapter = GetAdapterForCaps(api, instance, surf);
+        if (capsAdapter != null)
+        {
+            api.SurfaceGetCapabilities(surf, capsAdapter, ref caps);
+            api.AdapterRelease(capsAdapter);
+        }
+        format = PickFormat(caps);
+
+        surface = (nint)surf;
+        return new GpuBlendEngine(api, poll, device, queue);
     }
 
     // Requesting capabilities needs an adapter; rather than thread it out of
@@ -435,10 +508,12 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
         if (_textures.TryGetValue(contentHash, out var old))
         {
+            _textureBytes -= BytesOf(old);
             ReleaseCached(old);
         }
 
         _textures[contentHash] = cached;
+        _textureBytes += BytesOf(cached);
     }
 
     /// <summary>Uploads any layer whose content-hash texture isn't already resident.</summary>
@@ -457,12 +532,13 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
             if (cached.Texture != 0)
             {
+                _textureBytes -= BytesOf(cached);
                 ReleaseCached(cached);
             }
 
             var bmp = op.RequireLocalPixels();
             var (texPtr, viewPtr, bgPtr) = CreateAndUpload(bmp);
-            _textures[op.ContentHash] = new CachedTexture
+            var entry = new CachedTexture
             {
                 Texture = texPtr,
                 View = viewPtr,
@@ -472,6 +548,8 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
                 LastFrame = _frame,
                 AlphaMode = TextureAlphaMode.Premultiplied,
             };
+            _textures[op.ContentHash] = entry;
+            _textureBytes += BytesOf(entry);
         }
     }
 
@@ -688,13 +766,17 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
                 boundPipeline = pipeline;
             }
 
-            SetScissor(pass, op.ClipDevice, targetWidth, targetHeight);
+            if (!TrySetScissor(pass, op.ClipDevice, targetWidth, targetHeight))
+            {
+                continue;
+            }
+
             Api.RenderPassEncoderSetBindGroup(pass, 0, (BindGroup*)tex.BindGroup, 0, (uint*)null);
             Api.RenderPassEncoderDraw(pass, VertsPerQuad, 1, (uint)(i * VertsPerQuad), 0);
         }
     }
 
-    private void SetScissor(RenderPassEncoder* pass, Rect? clip, int width, int height)
+    private bool TrySetScissor(RenderPassEncoder* pass, Rect? clip, int width, int height)
     {
         int x = 0, y = 0, w = width, h = height;
         if (clip is { } cd)
@@ -703,11 +785,17 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
             var minY = Math.Max(0, (int)Math.Floor(cd.Y));
             var maxX = Math.Min(width, (int)Math.Ceiling(cd.Right));
             var maxY = Math.Min(height, (int)Math.Ceiling(cd.Bottom));
+            if (maxX <= minX || maxY <= minY)
+            {
+                return false;
+            }
+
             x = minX; y = minY;
-            w = Math.Max(0, maxX - minX);
-            h = Math.Max(0, maxY - minY);
+            w = maxX - minX;
+            h = maxY - minY;
         }
         Api.RenderPassEncoderSetScissorRect(pass, (uint)x, (uint)y, (uint)w, (uint)h);
+        return true;
     }
 
     internal void EvictStale()
@@ -719,12 +807,42 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
             if (_frame - kv.Value.LastFrame > EvictAfterFrames)
                 (drop ??= new List<long>()).Add(kv.Key);
         }
-        if (drop is null) return;
-        foreach (var key in drop)
+        if (drop is not null)
         {
-            ReleaseCached(_textures[key]);
-            _textures.Remove(key);
+            foreach (var key in drop)
+                DropEntry(key, _textures[key]);
         }
+
+        EvictToBudget();
+    }
+
+    // Evicts least-recently-used tiles (oldest LastFrame first) until resident GPU
+    // bytes are under budget. Never evicts this frame's working set (LastFrame ==
+    // _frame) — the visible viewport is tens of MB, far under the budget. The sort
+    // only runs while over budget, which after the first drain is rare (steady
+    // state adds a few tiles per frame).
+    private void EvictToBudget()
+    {
+        if (_textureBytes <= _maxTextureBytes) return;
+        var candidates = new List<KeyValuePair<long, CachedTexture>>(_textures.Count);
+        foreach (var kv in _textures)
+        {
+            if (kv.Value.LastFrame != _frame)
+                candidates.Add(kv);
+        }
+        candidates.Sort(static (a, b) => a.Value.LastFrame.CompareTo(b.Value.LastFrame));
+        foreach (var kv in candidates)
+        {
+            if (_textureBytes <= _maxTextureBytes) break;
+            DropEntry(kv.Key, kv.Value);
+        }
+    }
+
+    private void DropEntry(long key, CachedTexture c)
+    {
+        _textureBytes -= BytesOf(c);
+        ReleaseCached(c);
+        _textures.Remove(key);
     }
 
     private void ReleaseCached(CachedTexture c)
@@ -757,6 +875,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     {
         foreach (var c in _textures.Values) ReleaseCached(c);
         _textures.Clear();
+        _textureBytes = 0;
         foreach (var p in _pipelines.Values)
         {
             Api.RenderPipelineRelease((RenderPipeline*)p);

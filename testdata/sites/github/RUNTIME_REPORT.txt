@@ -1,0 +1,5 @@
+github runtime harness: 73 scripts evaluated
+  parse/compile failures: 0
+  eval-time throws: 1
+  console.error: 0
+  THROW assets/wp-runtime-35970562c246cfa6.js: JsThrow: uncaught: [object Object]

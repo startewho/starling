@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Standalone JS engine-comparison benchmark: Starling vs Jint, replicating
+    Jint's official EngineComparison suite (same scripts under Scripts/, every
+    engine in strict mode) and ranking on this machine.
+
+    Kept as its OWN project, separate from bench/Starling.Bench, on purpose: it
+    needs only Starling.Js + Jint, so it builds and runs without dragging in the
+    paint/compositor benches (whose Compositor.Render path is mid-refactor and
+    currently does not compile). See bench/engine-comparison.md for results.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Jint" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Starling.Js\Starling.Js.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Scripts\*.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

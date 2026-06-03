@@ -40,8 +40,8 @@
     <PackageReference Include="SixLabors.ImageSharp.Drawing.WebGPU" />
     <!-- Direct WebGPU bindings: the GPU layer-composite blend
          (wp:M12-13-gpu-composite-blend) drives wgpu itself to keep cached layer
-         textures resident and blend them in a single pass — and now to present the
-         page straight onto a host-owned CAMetalLayer swapchain (GpuSurfacePresenter). -->
+         textures resident and blend them in one pass. It also presents the page
+         to host-owned native swapchains through GpuSurfacePresenter. -->
     <PackageReference Include="Silk.NET.WebGPU" />
     <PackageReference Include="Silk.NET.WebGPU.Extensions.WGPU" />
   </ItemGroup>

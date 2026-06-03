@@ -760,6 +760,24 @@ public sealed class Selectors4Tests
         Matches("section:has(+ div)", section).Should().BeFalse();
     }
 
+    [Spec("selectors-4", "https://www.w3.org/TR/selectors-4/#has-pseudo", section: "16.4")]
+    [SpecFact]
+    public void Has_pseudo_with_chained_next_sibling_combinators()
+    {
+        var doc = new Document();
+        var div = doc.CreateElement("div");
+        var section = doc.CreateElement("section");
+        var p = doc.CreateElement("p");
+        var img = doc.CreateElement("img");
+        doc.AppendChild(div);
+        div.AppendChild(section);
+        div.AppendChild(p);
+        div.AppendChild(img);
+
+        Matches("section:has(+ p + img)", section).Should().BeTrue();
+        Matches("section:has(+ p + div)", section).Should().BeFalse();
+    }
+
     // ========================================================================
     // §17 — Specificity
     // ========================================================================

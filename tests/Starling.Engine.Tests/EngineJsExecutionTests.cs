@@ -742,6 +742,57 @@ public sealed class EngineJsExecutionTests
     }
 
     [TestMethod]
+    public async Task Progressive_layout_first_paint_does_not_wait_for_defer_script_fetch()
+    {
+        using var server = new ConcurrencyTrackingServer(new()
+        {
+            ["/defer.js"] = new Route(
+                "application/javascript",
+                "document.getElementById('out').textContent='DEFERRED';",
+                DelayMs: 1500),
+        });
+        var html = $@"<!doctype html><html><head></head><body>
+<p id=""out"">START</p>
+<script>document.getElementById('out').textContent='CRITICAL';</script>
+<script defer src=""http://127.0.0.1:{server.Port}/defer.js""></script>
+</body></html>";
+        var fixture = Path.Combine(Path.GetTempPath(), $"starling-prog-{Guid.NewGuid():N}.html");
+        await File.WriteAllTextAsync(fixture, html);
+        try
+        {
+            var engine = new StarlingEngine();
+            LaidOutPage? firstPaintPage = null;
+            string? firstPaintText = null;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            long firstPaintMs = -1;
+
+            var result = await engine.LayoutPageAsync(
+                "file://" + fixture.Replace('\\', '/'),
+                DefaultOptions,
+                CancellationToken.None,
+                onFirstPaint: p =>
+                {
+                    firstPaintMs = sw.ElapsedMilliseconds;
+                    firstPaintPage = p;
+                    firstPaintText = p.Document.GetElementById("out")?.TextContent;
+                });
+
+            result.IsOk.Should().BeTrue(result.IsErr ? result.Error.Message : "");
+            firstPaintPage.Should().NotBeNull("onFirstPaint must fire before deferred scripts settle");
+            firstPaintText.Should().Be("CRITICAL");
+            firstPaintMs.Should().BeLessThan(1000);
+            ReferenceEquals(result.Value, firstPaintPage).Should().BeFalse();
+            result.Value.Document.GetElementById("out")!.TextContent.Should().Be("DEFERRED");
+            using var page = result.Value;
+            firstPaintPage!.Dispose();
+        }
+        finally
+        {
+            if (File.Exists(fixture)) File.Delete(fixture);
+        }
+    }
+
+    [TestMethod]
     public async Task Progressive_layout_returns_same_page_when_deferred_changes_nothing()
     {
         // The analytics-only common case: deferred scripts fire beacons but do

@@ -56,3 +56,6 @@ TestResults/
 
 # Test262 conformance corpus (fetched via tools/fetch-test262.sh)
 testdata/test262/
+
+# Large live-site snapshots fetched on demand for local perf work.
+testdata/local-snapshots/

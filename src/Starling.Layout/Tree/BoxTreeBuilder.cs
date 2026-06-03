@@ -664,7 +664,7 @@ internal sealed class BoxTreeBuilder
         PseudoElement pseudo,
         CascadeCache cache)
     {
-        var pseudoStyle = _style.ComputePseudoElement(element, pseudo, elementStyle);
+        var pseudoStyle = _style.ComputeGeneratedPseudoElement(element, pseudo, elementStyle);
         if (pseudoStyle is null) return;
 
         // `display: none` on the pseudo suppresses it entirely.

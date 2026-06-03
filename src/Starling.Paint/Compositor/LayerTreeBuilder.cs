@@ -29,7 +29,6 @@ internal sealed class LayerTreeBuilder
     private readonly DisplayListBuilder _builder = new();
     private readonly Func<Box, ComputedStyle?>? _styleOverride;
     private readonly IImageResolver? _images;
-    private readonly IDiagnostics? _diag;
     // Per-frame promotion predicate (LTF-01): an element that is actively
     // animating (or, via LTF-06, was just mutated) becomes a layer root even
     // with no static LayerHint. Evaluated every frame because animation
@@ -55,7 +54,6 @@ internal sealed class LayerTreeBuilder
     {
         _styleOverride = styleOverride;
         _images = images;
-        _diag = diagnostics;
         _isAnimatingLayerRoot = isAnimatingLayerRoot;
         _layerIdFor = layerIdFor;
         _scrollOffsets = scrollOffsets;
@@ -79,10 +77,6 @@ internal sealed class LayerTreeBuilder
     public CompositorLayer Build(BlockBox root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        // Per-build span (paint.layertree.build). Firing every frame on a static
-        // page — especially for the chrome tree — confirms the layer tree + slices
-        // + content hash are rebuilt unconditionally instead of memoized.
-        using var span = _diag?.Span(RenderMetrics.PaintArea, RenderMetrics.LayerTreeBuildOp);
         // The root's parent content origin is the document origin (0,0). The
         // box's own Frame.X/Y is folded in by BuildLayerSlice.
         return BuildLayer(root, parentOriginX: 0, parentOriginY: 0);

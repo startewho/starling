@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
@@ -41,10 +40,6 @@ internal sealed class InlineLayout
     /// </summary>
     internal double Layout(Box.Box container, double availableWidth, bool measure)
     {
-        using var span = _diag.Span("layout", "inline");
-        Activity.Current?.SetTag("inline.measure", measure);
-        Activity.Current?.SetTag("inline.available_width", availableWidth);
-
         var fontSize = ResolveFontSize(container.Style);
         var containerSpec = ResolveFontSpec(container.Style);
         var lineHeight = ResolveLineHeight(container.Style, fontSize, containerSpec);
@@ -57,7 +52,6 @@ internal sealed class InlineLayout
         // as a single unit with their own frame + box model.
         var runs = new List<InlineRun>();
         Flatten(container, runs);
-        Activity.Current?.SetTag("inline.runs", runs.Count);
 
         // No content → zero height.
         if (runs.Count == 0) return 0;
@@ -318,7 +312,6 @@ internal sealed class InlineLayout
 
     private ShapedRun ShapeWord(string word, double fontSize, FontSpec spec)
     {
-        _diag.Counter("layout.text.measures", 1);
         return _measurer.Shape(word, fontSize, spec);
     }
 
@@ -359,7 +352,6 @@ internal sealed class InlineLayout
         if (segment.Length == 0) yield break;
 
         // Shape the whole segment once; slice words from it when 1:1.
-        _diag.Counter("layout.text.measures", 1);
         var whole = _measurer.Shape(segment, fontSize, spec);
         var canSlice = whole.Glyphs.Length == segment.Length;
 
@@ -627,8 +619,6 @@ internal sealed class InlineLayout
         ref double cursorY,
         ref double currentLineHeight)
     {
-        using var span = _diag.Span("layout", "inline.atomic");
-
         ResolveAtomicBoxModel(box, availableWidth);
 
         var fontSize = ResolveFontSize(box.Style);
@@ -640,7 +630,6 @@ internal sealed class InlineLayout
 
         if (Block.BlockLayout.IsFlexContainer(box.Style))
         {
-            Activity.Current?.SetTag("atomic.path", "flex");
             // display:inline-flex — an atomic inline whose contents lay out as
             // a flex container, shrunk-to-fit. Mirror the two-pass approach of
             // the BFC path: lay flex out at "infinite" main size (grow=0 keeps
@@ -656,22 +645,19 @@ internal sealed class InlineLayout
             }
             else
             {
-                using (_diag.Span("layout", "inline.measure_pass"))
-                {
-                    const double measureWidth = 1_000_000d;
-                    var measureBlock = new Block.BlockLayout(_measurer, viewport, _diag);
-                    var measureFlex = new Starling.Layout.Flex.FlexLayout(measureBlock, viewport);
-                    measureFlex.Layout(box, measureWidth, null);
-                    // Flex items are direct children placed along the main axis;
-                    // their frames carry the used main extent. (MeasureUsedWidth
-                    // can't be reused here: item text fragments are positioned
-                    // relative to each item, not the flex container.)
-                    double maxContent = 0;
-                    foreach (var item in box.Children)
-                        maxContent = Math.Max(maxContent, item.Frame.X + item.Frame.Width);
-                    var available = Math.Max(0, availableWidth - cursorX);
-                    subWidth = Math.Min(maxContent, available);
-                }
+                const double measureWidth = 1_000_000d;
+                var measureBlock = new Block.BlockLayout(_measurer, viewport, _diag);
+                var measureFlex = new Starling.Layout.Flex.FlexLayout(measureBlock, viewport);
+                measureFlex.Layout(box, measureWidth, null);
+                // Flex items are direct children placed along the main axis;
+                // their frames carry the used main extent. (MeasureUsedWidth
+                // can't be reused here: item text fragments are positioned
+                // relative to each item, not the flex container.)
+                double maxContent = 0;
+                foreach (var item in box.Children)
+                    maxContent = Math.Max(maxContent, item.Frame.X + item.Frame.Width);
+                var available = Math.Max(0, availableWidth - cursorX);
+                subWidth = Math.Min(maxContent, available);
             }
 
             var block = new Block.BlockLayout(_measurer, viewport, _diag);
@@ -681,7 +667,6 @@ internal sealed class InlineLayout
         }
         else if (HasBlockLevelChild(box))
         {
-            Activity.Current?.SetTag("atomic.path", "bfc");
             // Inline-block with mixed/block children: run a BFC sub-pass.
             //
             // CSS 2.1 §10.3.5 shrink-to-fit:
@@ -710,15 +695,12 @@ internal sealed class InlineLayout
             }
             else
             {
-                using (_diag.Span("layout", "inline.measure_pass"))
-                {
-                    const double measureWidth = 1_000_000d;
-                    var measureLayout = new Block.BlockLayout(_measurer, viewport, _diag);
-                    measureLayout.LayoutChildren(box, measureWidth, measure: true);
-                    var maxContent = MeasureUsedWidth(box);
-                    var available = Math.Max(0, availableWidth - cursorX);
-                    subWidth = Math.Min(maxContent, available);
-                }
+                const double measureWidth = 1_000_000d;
+                var measureLayout = new Block.BlockLayout(_measurer, viewport, _diag);
+                measureLayout.LayoutChildren(box, measureWidth, measure: true);
+                var maxContent = MeasureUsedWidth(box);
+                var available = Math.Max(0, availableWidth - cursorX);
+                subWidth = Math.Min(maxContent, available);
             }
 
             var sub = new Block.BlockLayout(_measurer, viewport, _diag);
@@ -728,7 +710,6 @@ internal sealed class InlineLayout
         }
         else if (HasNonTextInlineChild(box))
         {
-            Activity.Current?.SetTag("atomic.path", "ifc");
             // Inline-block whose children are inline-level non-text (nested
             // inline-blocks, <br>, <img>, spans). The text-only path would
             // silently drop these. Run an IFC sub-pass shrunk-to-fit via the
@@ -745,14 +726,11 @@ internal sealed class InlineLayout
             }
             else
             {
-                using (_diag.Span("layout", "inline.measure_pass"))
-                {
-                    const double measureWidth = 1_000_000d;
-                    this.Layout(box, measureWidth, measure: true);
-                    var maxContent = MeasureUsedWidth(box);
-                    var available = Math.Max(0, availableWidth - cursorX);
-                    subWidth = Math.Min(maxContent, available);
-                }
+                const double measureWidth = 1_000_000d;
+                this.Layout(box, measureWidth, measure: true);
+                var maxContent = MeasureUsedWidth(box);
+                var available = Math.Max(0, availableWidth - cursorX);
+                subWidth = Math.Min(maxContent, available);
             }
 
             var consumed = this.Layout(box, subWidth);
@@ -761,7 +739,6 @@ internal sealed class InlineLayout
         }
         else
         {
-            Activity.Current?.SetTag("atomic.path", "text");
             contentWidth = LayoutAtomicContent(box, fontSize, spec);
             contentHeight = lineHeight;
         }

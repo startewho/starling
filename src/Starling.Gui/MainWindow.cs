@@ -46,6 +46,7 @@ public sealed class MainWindow : Window, IBrowserController
         new TabInfo("b2", "localhost:8088",   "Words",                   Url: "http://localhost:8088/words/"),
         new TabInfo("b3", "ladybird.org",     "Ladybird",                Url: "https://ladybird.org/"),
         new TabInfo("b4", "mcmaster.com",     "McMaster-Carr",           Url: "https://www.mcmaster.com/"),
+        new TabInfo("b5", "github.com",     "GitHub",           Url: "https://github.com/"),
     ];
 
     // Window icon, loaded once from the bundled PNG (WindowIcon can't parse
@@ -855,8 +856,8 @@ public sealed class MainWindow : Window, IBrowserController
         }
     }
 
-    // public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
-    //     => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
+    public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
+        => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
 
     public Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct)
     {

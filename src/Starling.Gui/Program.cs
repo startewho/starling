@@ -20,17 +20,25 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Default the JS engine to Jint for the desktop app. JsEngineSelector
+        // reads STARLING_JS_ENGINE lazily on first use, so seed it here before
+        // any page runs scripts. An explicit STARLING_JS_ENGINE (e.g. from
+        // Aspire, CI, or the shell) still wins — we only fill in the unset case.
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STARLING_JS_ENGINE")))
+            Environment.SetEnvironmentVariable("STARLING_JS_ENGINE", "jint");
+
         // If STARLING_TELEMETRY_DAEMON is set, point the OpenTelemetry Protocol
         // exporter at the standalone daemon before telemetry is wired.
         OtelBootstrap.ConfigureDaemonExportFromEnv();
 
         Services = BuildServices();
 
-        // Sample this process's CPU/memory as gauges so the daemon can correlate
-        // render spans with local-machine resource use.
-        s_resourceSampler = new ProcessResourceSampler(Services.GetRequiredService<IDiagnostics>());
-
         var otlp = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+        // Sample this process's CPU/memory only when telemetry is being exported
+        // or detailed local diagnostics are enabled.
+        if (DiagnosticsMode.ProcessSampler || !string.IsNullOrWhiteSpace(otlp))
+            s_resourceSampler = new ProcessResourceSampler(Services.GetRequiredService<IDiagnostics>());
+
         var log = Services.GetRequiredService<ILoggerFactory>()
             .CreateLogger("Starling.Gui.Startup");
         if (!string.IsNullOrWhiteSpace(otlp))

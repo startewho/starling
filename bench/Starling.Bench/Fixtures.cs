@@ -8,6 +8,18 @@ internal static class Fixtures
 
     public static string NginxHtmlPath => Path.Combine(RepoRoot, "testdata", "snapshots", "nginx.org", "index.html");
     public static string NginxCssPath => Path.Combine(RepoRoot, "testdata", "snapshots", "nginx.org", "css", "style_en.css");
+    public static string GitHubSnapshotRoot => Path.Combine(RepoRoot, "testdata", "local-snapshots", "github.com");
+    public static string GitHubHtmlPath => Path.Combine(GitHubSnapshotRoot, "index.html");
+    public static string GitHubAssetsPath => Path.Combine(GitHubSnapshotRoot, "assets");
+    public static bool GitHubSnapshotExists
+        => File.Exists(GitHubHtmlPath) && Directory.Exists(GitHubAssetsPath);
+
+    public static void RequireGitHubSnapshot()
+    {
+        if (!GitHubSnapshotExists)
+            throw new InvalidOperationException(
+                "GitHub local snapshot missing. Run tools/snapshot-vendor/vendor-github-home.sh first.");
+    }
 
     private static string LocateRepoRoot()
     {

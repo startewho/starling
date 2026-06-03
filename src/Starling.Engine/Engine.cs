@@ -7,12 +7,15 @@ using Starling.Common.Diagnostics;
 using Starling.Common.Encoding;
 using Starling.Bindings;
 using Starling.Css;
+using Starling.Css.Cascade;
 using Starling.Css.Parser;
 using Starling.Dom;
 using Starling.Js.Hosting;
 using Starling.Net;
 using Starling.Paint;
 using Starling.Url;
+using LayoutBox = Starling.Layout.Box.Box;
+using LayoutRect = Starling.Layout.Rect;
 using LayoutSize = Starling.Layout.Size;
 using StarlingUrl = global::Starling.Url.Url;
 
@@ -569,13 +572,16 @@ public sealed class StarlingEngine
 
             try
             {
-                // Start external script downloads now, concurrently with the
-                // stylesheet/image/font fetch below — only script *execution*
-                // must wait for stylesheets, so serializing the downloads just
-                // inflates the critical path. FetchAllAsync enumerates the
-                // <script> elements synchronously before its first await, so this
-                // reads the DOM before any concurrent fetch can touch it.
-                var scriptsFetch = scripts.FetchAllAsync(doc, baseUrl: u, ct);
+                // Snapshot callers keep the old all-resources-before-paint
+                // semantics. Interactive callers split the critical path:
+                // blocking scripts and CSS/fonts can delay first paint, but
+                // images and defer/async/module scripts settle after the first
+                // visible frame.
+                var hasScripts = ScriptFetcher.HasRunnableScripts(doc);
+                var interactive = onFirstPaint is not null && hasScripts;
+                var scriptsFetch = interactive
+                    ? scripts.FetchBlockingAsync(doc, baseUrl: u, ct)
+                    : scripts.FetchAllAsync(doc, baseUrl: u, ct);
 
                 // Fonts depend on the @font-face rules in the stylesheets, not on
                 // the images — chain the font fetch onto the stylesheet fetch and
@@ -591,21 +597,27 @@ public sealed class StarlingEngine
                             .ConfigureAwait(false);
                     }
 
-                    await Task.WhenAll(
-                        images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
-                        FetchSheetsThenFontsAsync()
-                    ).ConfigureAwait(false);
-                }
-                _diag.Log(DiagLevel.Info, "engine", $"phase: subresources@{pageSw.ElapsedMilliseconds}ms");
+                    if (interactive)
+                    {
+                        await Task.WhenAll(
+                            scriptsFetch,
+                            FetchSheetsThenFontsAsync()
+                        ).ConfigureAwait(false);
+                        _diag.Log(DiagLevel.Info, "engine",
+                            $"phase: render_blocking_resources@{pageSw.ElapsedMilliseconds}ms");
+                    }
+                    else
+                    {
+                        await Task.WhenAll(
+                            scriptsFetch,
+                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
+                            FetchSheetsThenFontsAsync()
+                        ).ConfigureAwait(false);
+                        _diag.Log(DiagLevel.Info, "engine", $"phase: subresources@{pageSw.ElapsedMilliseconds}ms");
+                        _diag.Log(DiagLevel.Info, "engine", $"phase: scripts_fetched@{pageSw.ElapsedMilliseconds}ms");
+                    }
 
-                // The script downloads were kicked off above and ran concurrently
-                // with the stylesheet/font fetch; await their completion now,
-                // before any script executes.
-                await scriptsFetch.ConfigureAwait(false);
-                _diag.Log(DiagLevel.Info, "engine", $"phase: scripts_fetched@{pageSw.ElapsedMilliseconds}ms");
-
-                var hasScripts = scripts.Scripts.Count > 0 || scripts.ModuleScripts.Count > 0;
-                var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
+                    var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
 
                 // Lazy pre-script layout — see RenderAsync for rationale. The
                 // trigger string identifies which JS read forced the layout
@@ -703,7 +715,7 @@ public sealed class StarlingEngine
                             Activity.Current?.SetTag("script.count", scripts.Scripts.Count);
                             Activity.Current?.SetTag("script.module_count", scripts.ModuleScripts.Count);
                             var critSw = System.Diagnostics.Stopwatch.StartNew();
-                            RunCriticalScripts(session, deferAsync: true, ct);
+                            RunCriticalScripts(session, deferAsync: true, includeParserDeferred: false, ct);
                             critSw.Stop();
                             _diag.Log(DiagLevel.Info, "engine",
                                 $"run_scripts.critical: {critSw.ElapsedMilliseconds} ms ({scripts.Scripts.Count} classic + {scripts.ModuleScripts.Count} module); " +
@@ -714,7 +726,7 @@ public sealed class StarlingEngine
                         // the caller. From here the displayed page owns the shared
                         // resources + http client, so the catch must not free them.
                         var injSw = System.Diagnostics.Stopwatch.StartNew();
-                        await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
+                        await FetchSheetsThenFontsAsync().ConfigureAwait(false);
                         injSw.Stop();
                         var paintSw = System.Diagnostics.Stopwatch.StartNew();
                         // Reuse the JS layout host's materialized layout if its
@@ -723,17 +735,30 @@ public sealed class StarlingEngine
                         var page1 = BuildPage(progressiveHost);
                         paintSw.Stop();
                         _diag.Log(DiagLevel.Info, "engine",
-                            $"post-script: fetch_injected_backgrounds={injSw.ElapsedMilliseconds}ms, build_page={paintSw.ElapsedMilliseconds}ms" +
+                            $"post-critical: fetch_styles_fonts={injSw.ElapsedMilliseconds}ms, build_page={paintSw.ElapsedMilliseconds}ms" +
                             $" (reused_host_layout={(progressiveHost.HasLayout && progressiveHost.LaidOutVersion == doc.LayoutInvalidationVersion)})");
                         httpHandedToPage = ownsHttp;
                         resourcesHandedToPage = true;
 
                         var versionAtPaint = doc.MutationVersion;
+                        var imagesAtPaint = images.LoadedCount;
+                        var sheetsAtPaint = stylesheets.LoadedCount;
                         onFirstPaint(page1);
 
-                        // Deferred (async) scripts settle here, after first paint.
+                        var deferredFetchSw = System.Diagnostics.Stopwatch.StartNew();
+                        await Task.WhenAll(
+                            scripts.FetchDeferredAsync(doc, baseUrl: u, ct),
+                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct)
+                        ).ConfigureAwait(false);
+                        await images
+                            .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
+                            .ConfigureAwait(false);
+                        _diag.Log(DiagLevel.Info, "engine",
+                            $"phase: deferred_resources@{pageSw.ElapsedMilliseconds}ms ({deferredFetchSw.ElapsedMilliseconds}ms)");
+
+                        // Deferred scripts settle here, after first paint.
                         using (_diag.Span("engine", "run_scripts.deferred"))
-                            await RunDeferredScriptsAsync(session, deferAsync: true, ct).ConfigureAwait(false);
+                            await RunDeferredScriptsAsync(session, deferAsync: true, runParserDeferred: true, ct).ConfigureAwait(false);
 
                         // Keep the realm LIVE past load: instead of tearing the
                         // session down, hand it to the returned page as a
@@ -755,14 +780,18 @@ public sealed class StarlingEngine
                         }
 
                         // Common case (analytics/beacons): deferred work touched no
-                        // DOM, so page1 is still correct — return it (now live).
-                        if (doc.MutationVersion == versionAtPaint)
+                        // DOM and no late layout-affecting resources arrived, so
+                        // page1 is still correct — return it (now live).
+                        if (doc.MutationVersion == versionAtPaint
+                            && images.LoadedCount == imagesAtPaint
+                            && stylesheets.LoadedCount == sheetsAtPaint)
                             return Result<LaidOutPage, RenderError>.Ok(HandOff(page1));
 
-                        // Deferred scripts mutated the DOM: re-fetch what they
-                        // injected and reflow into a successor. Relayout transfers
-                        // page1's shared resources to it and marks page1 inert, so
-                        // the caller can dispose page1 safely.
+                        // Deferred scripts mutated the DOM or late resources
+                        // arrived: re-fetch what they injected and reflow into a
+                        // successor. Relayout transfers page1's shared resources
+                        // to it and marks page1 inert, so the caller can dispose
+                        // page1 safely.
                         await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
                         var (root2, style2) = _painter.LayoutDocumentWithStyle(
                             doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
@@ -800,6 +829,7 @@ public sealed class StarlingEngine
                 httpHandedToPage = ownsHttp;
                 resourcesHandedToPage = true;
                 return Result<LaidOutPage, RenderError>.Ok(page);
+            }
             }
             catch
             {
@@ -895,6 +925,37 @@ public sealed class StarlingEngine
             nowMs: (double)nowMs);
     }
 
+    public CompositedPageRenderer CreateCompositedRenderer(LaidOutPage page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        var renderer = _painter.CreateCompositedRenderer(page.WebFonts);
+        renderer.ResetForNavigation();
+        return renderer;
+    }
+
+    public Starling.Common.Image.RenderedBitmap RenderFrameGpu(
+        LaidOutPage page,
+        long nowMs,
+        CompositedPageRenderer? renderer = null,
+        bool fullPage = false)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+
+        var ownsRenderer = renderer is null;
+        renderer ??= CreateCompositedRenderer(page);
+        try
+        {
+            return RenderFrameGpuCore(page, nowMs, renderer, fullPage);
+        }
+        finally
+        {
+            if (ownsRenderer)
+            {
+                renderer.Dispose();
+            }
+        }
+    }
+
     /// <summary>
     /// Advance the page's animation/transition clocks to <paramref name="nowMs"/>,
     /// priming declarative animations if this box tree has not been primed yet,
@@ -987,6 +1048,95 @@ public sealed class StarlingEngine
         return new RenderOutcome(outputPath, bitmap.Width, bitmap.Height, DisplayText: string.Empty);
     }
 
+    public RenderOutcome CaptureToPngGpu(
+        LaidOutPage page, string outputPath, long nowMs = 0, bool fullPage = false)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(outputPath);
+
+        using var _ = _diag.Span("engine", $"capture_png.gpu {page.Url} -> {outputPath}");
+        using var renderer = CreateCompositedRenderer(page);
+        using var bitmap = RenderFrameGpu(page, nowMs, renderer, fullPage);
+
+        EnsureOutputDirectory(outputPath);
+        using var image = Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+            bitmap.Rgba, bitmap.Width, bitmap.Height);
+        image.SaveAsPng(outputPath);
+
+        return new RenderOutcome(outputPath, bitmap.Width, bitmap.Height, DisplayText: string.Empty);
+    }
+
+    private Starling.Common.Image.RenderedBitmap RenderFrameGpuCore(
+        LaidOutPage page,
+        long nowMs,
+        CompositedPageRenderer renderer,
+        bool fullPage)
+    {
+        PrepareAnimationFrame(page, nowMs);
+
+        var height = fullPage
+            ? Math.Clamp(Math.Ceiling(page.DocumentHeight), page.Viewport.Height, 30000)
+            : page.Viewport.Height;
+        var viewport = new LayoutRect(0, 0, page.Viewport.Width, height);
+        var animating = HasActiveAnimations(page);
+        Func<LayoutBox, ComputedStyle?>? styleOverride = animating
+            ? box => AnimatedStyle(page, box, nowMs)
+            : null;
+
+        return renderer.Render(
+            page.Root,
+            viewport,
+            scale: 1.0f,
+            styleOverride,
+            page.ImageResolver,
+            box => IsElementAnimatingLayerRoot(page, box));
+    }
+
+    private static bool IsElementAnimatingLayerRoot(LaidOutPage page, LayoutBox box)
+    {
+        if (box.Element is not { } el)
+        {
+            return false;
+        }
+
+        if (page.Document.WasRecentlyMutated(el))
+        {
+            return true;
+        }
+
+        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el))
+        {
+            return true;
+        }
+
+        foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static ComputedStyle? AnimatedStyle(LaidOutPage page, LayoutBox box, long nowMs)
+    {
+        if (box.Element is not { } el)
+        {
+            return null;
+        }
+
+        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el))
+        {
+            return page.Style.ComputeWithAnimations(el, nowMs);
+        }
+
+        foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el))
+        {
+            return page.Style.ComputeWithAnimations(el, nowMs);
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Stand up the active JS backend session, run every collected script
     /// against the shared <paramref name="document"/>, then drain microtasks and
@@ -1024,8 +1174,8 @@ public sealed class StarlingEngine
         var session = BeginScripts(document, baseUrl, scriptFetcher, layoutHost, viewport, ct);
         try
         {
-            RunCriticalScripts(session, deferAsync: false, ct);
-            await RunDeferredScriptsAsync(session, deferAsync: false, ct).ConfigureAwait(false);
+            RunCriticalScripts(session, deferAsync: false, includeParserDeferred: true, ct);
+            await RunDeferredScriptsAsync(session, deferAsync: false, runParserDeferred: false, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -1140,24 +1290,28 @@ public sealed class StarlingEngine
     /// (so they no longer block first paint); otherwise they run here, preserving
     /// the historical pre-DOMContentLoaded ordering.
     /// </summary>
-    private void RunCriticalScripts(ScriptSession s, bool deferAsync, CancellationToken ct)
+    private void RunCriticalScripts(
+        ScriptSession s,
+        bool deferAsync,
+        bool includeParserDeferred,
+        CancellationToken ct)
     {
         // Ordered scripts (neither async nor defer, then defer) run in document
         // order (HTML §4.12.1).
-        RunOrderedScripts(s, ct);
+        RunOrderedScripts(s, includeParserDeferred, ct);
         if (!deferAsync)
             RunAsyncScripts(s, ct);
 
         // Module scripts run after the classic scripts, deferred and in document
         // order, before DOMContentLoaded.
-        RunModuleScripts(s, ct);
+        if (includeParserDeferred)
+            RunModuleScripts(s, ct);
 
         // Mark every parser-batch script "already started" so a deferred loader's
         // later `src` write never re-runs a script that already executed. The
         // backend owns the started flag (HTML §4.12.1); the engine notifies it
         // per element since the run entry points are element-agnostic.
-        foreach (var sc in s.Fetcher.Scripts) s.Session.MarkScriptStarted(sc.Element);
-        foreach (var sc in s.Fetcher.ModuleScripts) s.Session.MarkScriptStarted(sc.Element);
+        MarkParserBatchScriptsStarted(s);
 
         // DOMContentLoaded — synchronous handlers see the parsed DOM.
         s.Session.FireDomContentLoaded();
@@ -1171,10 +1325,22 @@ public sealed class StarlingEngine
     /// pump. This is where analytics/beacon work and lazily-injected scripts
     /// settle.
     /// </summary>
-    private async Task RunDeferredScriptsAsync(ScriptSession s, bool deferAsync, CancellationToken ct)
+    private async Task RunDeferredScriptsAsync(
+        ScriptSession s,
+        bool deferAsync,
+        bool runParserDeferred,
+        CancellationToken ct)
     {
         // DIAG (open-time investigation): time each sub-step of the deferred phase.
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (runParserDeferred)
+        {
+            RunDeferredClassicScripts(s, ct);
+            RunModuleScripts(s, ct);
+            MarkParserBatchScriptsStarted(s);
+        }
+
+        var tParserDeferred = sw.ElapsedMilliseconds;
         if (deferAsync)
             RunAsyncScripts(s, ct);
         var tAsync = sw.ElapsedMilliseconds;
@@ -1192,7 +1358,7 @@ public sealed class StarlingEngine
         await PumpToQuiescenceAsync(s, ct).ConfigureAwait(false);
 
         _diag.Log(DiagLevel.Info, "engine",
-            $"deferred.summary: async={tAsync}ms pump1={tPump1 - tAsync}ms fireLoad={tFireLoad - tPump1}ms pump2={sw.ElapsedMilliseconds - tFireLoad}ms total={sw.ElapsedMilliseconds}ms");
+            $"deferred.summary: parser={tParserDeferred}ms async={tAsync - tParserDeferred}ms pump1={tPump1 - tAsync}ms fireLoad={tFireLoad - tPump1}ms pump2={sw.ElapsedMilliseconds - tFireLoad}ms total={sw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -1219,18 +1385,32 @@ public sealed class StarlingEngine
     /// scripts with neither attribute first, then the <c>defer</c> scripts, both
     /// in source order (HTML §4.12.1). Inline scripts are always
     /// <see cref="ScriptDisposition.None"/>.</summary>
-    private void RunOrderedScripts(ScriptSession s, CancellationToken ct)
+    private void RunOrderedScripts(ScriptSession s, bool includeDefer, CancellationToken ct)
     {
         foreach (var script in s.Fetcher.Scripts)
         {
             if (script.Disposition == ScriptDisposition.None)
                 ExecuteScript(s, script, ct);
         }
+        if (!includeDefer)
+            return;
+
+        RunDeferredClassicScripts(s, ct);
+    }
+
+    private void RunDeferredClassicScripts(ScriptSession s, CancellationToken ct)
+    {
         foreach (var script in s.Fetcher.Scripts)
         {
             if (script.Disposition == ScriptDisposition.Defer)
                 ExecuteScript(s, script, ct);
         }
+    }
+
+    private static void MarkParserBatchScriptsStarted(ScriptSession s)
+    {
+        foreach (var sc in s.Fetcher.Scripts) s.Session.MarkScriptStarted(sc.Element);
+        foreach (var sc in s.Fetcher.ModuleScripts) s.Session.MarkScriptStarted(sc.Element);
     }
 
     /// <summary>Run the <c>async</c> classic scripts. Order is unspecified

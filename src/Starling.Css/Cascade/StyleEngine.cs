@@ -21,16 +21,8 @@ public sealed class StyleEngine
         = new(ReferenceEqualityComparer.Instance);
     private readonly IDiagnostics _diag;
     private MediaContext _mediaContext = MediaContext.Default;
-    // True when any active stylesheet contains a selector that the
-    // SharingKey signature cannot disambiguate (nth-child / nth-of-type /
-    // last-child / only-child / has(). Sharing is correctness-bounded:
-    // when these appear, two elements with identical (tag, attrs, parent
-    // style, prev-sibling) could still match selectors differently, so
-    // we disable the sharing cache for the whole engine. Pages without
-    // these selectors keep getting cache hits — most pages don't use
-    // positional pseudo-classes (the UA sheet's one `:first-child` is
-    // already handled via SharingKey.PreviousElementSiblingTag).
-    private bool _sharingDisabled;
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> s_emptyCustomProperties
+        = new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal);
 
     // True when any active stylesheet uses :has() or :empty — selectors whose
     // match for an element depends on its descendants/emptiness, so a child
@@ -146,10 +138,8 @@ public sealed class StyleEngine
         ArgumentNullException.ThrowIfNull(sheet);
         _sheets.Add(sheet);
         RegisterLayers(sheet.Rules, sheet.Origin, currentPath: null);
-        var index = BuildSheetIndex(sheet, _diag);
+        var index = BuildSheetIndex(sheet, _diag, _layerOrders[sheet.Origin]);
         _sheetIndexes[sheet] = index;
-        if (!_sharingDisabled && SheetUsesUnshareableSelectors(index))
-            _sharingDisabled = true;
         if (!_structuralRebuildSensitive && SheetUsesHasOrEmpty(index))
             _structuralRebuildSensitive = true;
         CollectReferencedAttributes(index, _referencedAttributes);
@@ -163,8 +153,6 @@ public sealed class StyleEngine
         ArgumentNullException.ThrowIfNull(sheet);
         _sheets.Remove(sheet);
         _sheetIndexes.Remove(sheet);
-        // Re-evaluate whether sharing can be re-enabled after removal.
-        _sharingDisabled = _sheetIndexes.Values.Any(SheetUsesUnshareableSelectors);
         _structuralRebuildSensitive = _sheetIndexes.Values.Any(SheetUsesHasOrEmpty);
         _referencedAttributes.Clear();
         foreach (var idx in _sheetIndexes.Values)
@@ -211,28 +199,6 @@ public sealed class StyleEngine
             RegisterKeyframesFromSheet(remaining);
     }
 
-    /// <summary>
-    /// True if any selector in <paramref name="index"/> uses a pseudo-class
-    /// whose result depends on more than the element's own attributes, its
-    /// parent's computed style, and its previous element sibling's tag —
-    /// inputs the <see cref="SharingKey"/> can capture. Positional pseudos
-    /// like <c>:nth-child</c>, <c>:last-child</c>, <c>:only-of-type</c>, and
-    /// <c>:has()</c> can't be expressed in the signature without making it
-    /// O(siblings) or O(subtree), so the cache is disabled outright when
-    /// any of them appear. <c>:first-child</c> is OK because
-    /// "previous element sibling is null" is in the signature already.
-    /// </summary>
-    private static bool SheetUsesUnshareableSelectors(SheetIndex index)
-    {
-        foreach (var parsed in index.ParsedSelectorLists.Values)
-            foreach (var complex in parsed.Selectors)
-                foreach (var part in complex.Parts)
-                    foreach (var simple in part.Compound.SimpleSelectors)
-                        if (simple is PseudoClassSelector pc && IsUnshareablePseudoClass(pc.Name))
-                            return true;
-        return false;
-    }
-
     /// <summary>True if any selector in <paramref name="index"/> uses
     /// <c>:has()</c> or <c>:empty</c> (recursing into <c>:is()</c>/<c>:where()</c>/
     /// <c>:not()</c>/<c>:has()</c> arguments). Those make an element's match
@@ -240,7 +206,7 @@ public sealed class StyleEngine
     /// outside the changed parent's subtree.</summary>
     private static bool SheetUsesHasOrEmpty(SheetIndex index)
     {
-        foreach (var parsed in index.ParsedSelectorLists.Values)
+        foreach (var parsed in index.SelectorLists)
             if (SelectorListUsesHasOrEmpty(parsed))
                 return true;
         return false;
@@ -251,7 +217,7 @@ public sealed class StyleEngine
     /// into <paramref name="sink"/>. Selector-aware invalidation (plan §7).</summary>
     private static void CollectReferencedAttributes(SheetIndex index, HashSet<string> sink)
     {
-        foreach (var parsed in index.ParsedSelectorLists.Values)
+        foreach (var parsed in index.SelectorLists)
             CollectReferencedAttributes(parsed, sink);
     }
 
@@ -292,40 +258,55 @@ public sealed class StyleEngine
         return false;
     }
 
-    private static bool IsUnshareablePseudoClass(string name) => name switch
-    {
-        "nth-child" or "nth-last-child" or "nth-of-type" or "nth-last-of-type"
-            or "last-child" or "only-child"
-            or "first-of-type" or "last-of-type" or "only-of-type"
-            or "has" => true,
-        _ => false,
-    };
-
     /// <summary>
-    /// Per-sheet selector bucketing. Each top-level <see cref="StyleRule"/>
-    /// reachable through at-rule containers (<c>@media</c>, <c>@supports</c>,
-    /// <c>@layer</c>) is indexed by the rightmost simple selector of each
-    /// selector in its prelude. Rules nested *inside* a <see cref="StyleRule"/>
-    /// (CSS Nesting) are not indexed because their effective selector depends
-    /// on parent-selector context resolved at cascade time.
+    /// Per-sheet cascade plan. Style rules are flattened through
+    /// <c>@media</c>/<c>@supports</c>/<c>@container</c>/<c>@layer</c> and CSS
+    /// nesting, then bucketed by the rightmost simple selector so per-element
+    /// cascade starts from candidates instead of walking every rule.
     /// </summary>
     private sealed class SheetIndex
     {
-        public SelectorIndex<StyleRule> Selectors { get; } = new();
-        public Dictionary<StyleRule, SelectorList> ParsedSelectorLists { get; }
-            = new(ReferenceEqualityComparer.Instance);
-        public HashSet<StyleRule> IndexedRules { get; }
-            = new(ReferenceEqualityComparer.Instance);
+        public SelectorIndex<IndexedStyleRule> Selectors { get; } = new();
+        public List<SelectorList> SelectorLists { get; } = [];
     }
 
-    private static SheetIndex BuildSheetIndex(StyleSheet sheet, IDiagnostics diag)
+    private sealed class IndexedStyleRule(
+        StyleRule rule,
+        IReadOnlyList<RuleCondition> conditions,
+        int sourceOrder,
+        string? layerPath)
+    {
+        public StyleRule Rule { get; } = rule;
+        public IReadOnlyList<RuleCondition> Conditions { get; } = conditions;
+        public int SourceOrder { get; } = sourceOrder;
+        public string? LayerPath { get; } = layerPath;
+    }
+
+    private static SheetIndex BuildSheetIndex(StyleSheet sheet, IDiagnostics diag, LayerOrder layerOrder)
     {
         var index = new SheetIndex();
-        IndexRules(index, sheet.Rules, diag);
+        var sourceOrder = 0;
+        IndexRules(
+            index,
+            sheet.Rules,
+            diag,
+            layerOrder,
+            currentLayerPath: null,
+            parentSelectors: null,
+            conditions: [],
+            ref sourceOrder);
         return index;
     }
 
-    private static void IndexRules(SheetIndex index, IReadOnlyList<CssRule> rules, IDiagnostics diag)
+    private static void IndexRules(
+        SheetIndex index,
+        IReadOnlyList<CssRule> rules,
+        IDiagnostics diag,
+        LayerOrder layerOrder,
+        string? currentLayerPath,
+        SelectorList? parentSelectors,
+        IReadOnlyList<RuleCondition> conditions,
+        ref int sourceOrder)
     {
         foreach (var rule in rules)
         {
@@ -338,27 +319,112 @@ public sealed class StyleEngine
                     SelectorList parsed;
                     try
                     {
-                        parsed = SelectorParser.ParseSelectorList(styleRule.Prelude);
+                        parsed = parentSelectors is null
+                            ? SelectorParser.ParseSelectorList(styleRule.Prelude)
+                            : ResolveSelectorList(styleRule.Prelude, parentSelectors);
                     }
                     catch (FormatException ex)
                     {
                         diag.Log(DiagLevel.Warn, "css", $"dropping rule with invalid selector: {ex.Message}");
                         break;
                     }
-                    index.ParsedSelectorLists[styleRule] = parsed;
-                    index.IndexedRules.Add(styleRule);
-                    index.Selectors.Add(parsed, styleRule);
-                    // Do NOT recurse into styleRule.NestedRulesOrEmpty — nested rules
-                    // need parent-selector context resolved at cascade time.
+                    index.SelectorLists.Add(parsed);
+                    if (styleRule.Declarations.Count > 0)
+                    {
+                        var indexedRule = new IndexedStyleRule(
+                            styleRule,
+                            conditions,
+                            sourceOrder++,
+                            currentLayerPath);
+                        index.Selectors.Add(parsed, indexedRule);
+                    }
+                    if (styleRule.NestedRulesOrEmpty.Count > 0)
+                    {
+                        IndexRules(
+                            index,
+                            styleRule.NestedRulesOrEmpty,
+                            diag,
+                            layerOrder,
+                            currentLayerPath,
+                            parsed,
+                            conditions,
+                            ref sourceOrder);
+                    }
                     break;
-                case AtRule atRule
-                    when atRule.Name.Equals("media", StringComparison.OrdinalIgnoreCase)
-                      || atRule.Name.Equals("supports", StringComparison.OrdinalIgnoreCase)
-                      || atRule.Name.Equals("layer", StringComparison.OrdinalIgnoreCase):
-                    IndexRules(index, atRule.Rules, diag);
+                case AtRule atRule when atRule.Name.Equals("media", StringComparison.OrdinalIgnoreCase):
+                    IndexRules(
+                        index,
+                        atRule.Rules,
+                        diag,
+                        layerOrder,
+                        currentLayerPath,
+                        parentSelectors,
+                        AppendCondition(conditions, new RuleCondition(RuleConditionKind.Media, atRule)),
+                        ref sourceOrder);
+                    break;
+                case AtRule atRule when atRule.Name.Equals("supports", StringComparison.OrdinalIgnoreCase):
+                    IndexRules(
+                        index,
+                        atRule.Rules,
+                        diag,
+                        layerOrder,
+                        currentLayerPath,
+                        parentSelectors,
+                        AppendCondition(conditions, new RuleCondition(RuleConditionKind.Supports, atRule)),
+                        ref sourceOrder);
+                    break;
+                case AtRule atRule when atRule.Name.Equals("container", StringComparison.OrdinalIgnoreCase):
+                    IndexRules(
+                        index,
+                        atRule.Rules,
+                        diag,
+                        layerOrder,
+                        currentLayerPath,
+                        parentSelectors,
+                        AppendCondition(conditions, new RuleCondition(RuleConditionKind.Container, atRule)),
+                        ref sourceOrder);
+                    break;
+                case AtRule atRule when atRule.Name.Equals("layer", StringComparison.OrdinalIgnoreCase):
+                    var layerNames = ParseLayerNamesFromPrelude(atRule.Prelude);
+                    if (atRule.Rules.Count == 0 && atRule.Declarations.Count == 0)
+                        break;
+
+                    string layerPath;
+                    if (layerNames.Count == 0)
+                    {
+                        layerPath = Combine(
+                            currentLayerPath,
+                            "__anon" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(atRule).ToString());
+                        layerOrder.RegisterLayer(layerPath);
+                    }
+                    else
+                    {
+                        layerPath = Combine(currentLayerPath, layerNames[0]);
+                    }
+
+                    IndexRules(
+                        index,
+                        atRule.Rules,
+                        diag,
+                        layerOrder,
+                        layerPath,
+                        parentSelectors,
+                        conditions,
+                        ref sourceOrder);
                     break;
             }
         }
+    }
+
+    private static RuleCondition[] AppendCondition(
+        IReadOnlyList<RuleCondition> conditions,
+        RuleCondition condition)
+    {
+        var next = new RuleCondition[conditions.Count + 1];
+        for (var i = 0; i < conditions.Count; i++)
+            next[i] = conditions[i];
+        next[^1] = condition;
+        return next;
     }
 
     public bool MatchMedia(string query) => MatchMedia(query, _mediaContext);
@@ -429,8 +495,8 @@ public sealed class StyleEngine
     ///   overhead outweighs the work.</item>
     /// </list>
     /// Thread safety: <see cref="CascadeCache"/> uses ConcurrentDictionary
-    /// internally so concurrent <c>Set</c>/<c>SetShared</c> from worker threads
-    /// is safe. <c>Compute</c> itself is otherwise re-entrant — it reads
+    /// internally so concurrent element and shared writes from worker threads
+    /// are safe. <c>Compute</c> itself is otherwise re-entrant — it reads
     /// <c>_sheets</c>/<c>_sheetIndexes</c>/<c>_layerOrders</c> which are not
     /// mutated during cascade.
     /// </remarks>
@@ -505,15 +571,10 @@ public sealed class StyleEngine
         // separate cache for each pseudo-class state.
         var effectiveCache = context is null ? cache : null;
 
-        using var _ = _diag.Span("css", "cascade");
         try
         {
             var elementsStyled = 0;
-            var result = ComputeWithAncestors(element, context, effectiveCache, ref elementsStyled);
-            Activity.Current?.SetTag("css.elements_styled", elementsStyled);
-            Activity.Current?.SetTag("css.sheets", _sheets.Count);
-            _diag.Counter("css.cascades", 1);
-            return result;
+            return ComputeWithAncestors(element, context, effectiveCache, ref elementsStyled);
         }
         catch (Exception ex)
         {
@@ -536,30 +597,51 @@ public sealed class StyleEngine
             ? null
             : ComputeWithAncestors(parent, context, cache, ref elementsStyled);
 
-        // Style sharing: two elements with identical selector-relevant inputs
-        // produce identical cascade results. Build a signature from those
-        // inputs and consult the sharing cache before doing the real work.
+        // Style sharing: the key narrows likely matches. The stored selector
+        // profile must also match this element before the style can be reused.
         SharingKey? sharingKey = null;
-        if (cache is not null && !_sharingDisabled)
+        if (cache is not null)
         {
             sharingKey = BuildSharingKey(element, parentStyle);
-            if (cache.TryGetShared(sharingKey.Value, out var shared))
+            if (cache.TryGetSharedEntry(sharingKey.Value, out var shared)
+                && CanReuseSharedStyle(element, shared.Validation, context))
             {
-                cache.Set(element, shared);
-                _diag.Counter("css.style_sharing.hit", 1);
-                return shared;
+                cache.Set(element, shared.Style);
+                return shared.Style;
             }
         }
 
         elementsStyled++;
-        var computed = Compute(element, parentStyle, context);
+        var validation = sharingKey is null ? null : new List<SelectorValidationResult>();
+        var computed = Compute(element, parentStyle, context, validation);
         cache?.Set(element, computed);
         if (sharingKey is { } key)
         {
-            cache!.SetShared(key, computed);
-            _diag.Counter("css.style_sharing.miss", 1);
+            cache!.SetSharedEntry(
+                key,
+                new SharedStyleEntry(computed, validation));
         }
         return computed;
+    }
+
+    private bool CanReuseSharedStyle(
+        Element element,
+        IReadOnlyList<SelectorValidationResult>? validation,
+        SelectorMatchContext? context)
+    {
+        if (validation is null)
+            return false;
+
+        var matchContext = context ?? new SelectorMatchContext();
+        foreach (var result in validation)
+        {
+            var matched = ConditionsMatch(result.Conditions, element)
+                && SelectorMatcher.Matches(result.Selector, element, matchContext);
+            if (matched != result.Matched)
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -568,7 +650,7 @@ public sealed class StyleEngine
     /// sharing cache supports: tag, sorted attribute set, parent computed
     /// style (reference), and previous element sibling's tag (null when the
     /// element is the first element child — handles <c>:first-child</c> and
-    /// <c>+</c>/<c>~</c> combinators that look one back).
+    /// adjacent-sibling selectors that only look one element back).
     /// </summary>
     private static SharingKey BuildSharingKey(Element element, ComputedStyle? parentStyle)
         => new(
@@ -655,48 +737,111 @@ public sealed class StyleEngine
         return Compute(element, parentStyle: elementStyle, context: pseudoContext);
     }
 
-    private ComputedStyle Compute(Element element, ComputedStyle? parentStyle, SelectorMatchContext? context = null)
+    /// <summary>
+    /// Compute a pseudo-element only when it can generate a layout box through a
+    /// matching <c>content</c> declaration. CSSOM callers that need the computed
+    /// pseudo style should use <see cref="ComputePseudoElement"/>.
+    /// </summary>
+    public ComputedStyle? ComputeGeneratedPseudoElement(
+        Element element,
+        PseudoElement pseudo,
+        ComputedStyle elementStyle,
+        SelectorMatchContext? baseContext = null)
     {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentNullException.ThrowIfNull(elementStyle);
+
+        var b = baseContext ?? SelectorMatchContext.Default;
+        var pseudoContext = new SelectorMatchContext
+        {
+            HoveredElement = b.HoveredElement,
+            ActiveElement = b.ActiveElement,
+            FocusedElement = b.FocusedElement,
+            TargetElement = b.TargetElement,
+            ScopeElement = b.ScopeElement,
+            DocumentUrl = b.DocumentUrl,
+            VisitedHrefs = b.VisitedHrefs,
+            PseudoElement = pseudo,
+        };
+        return HasMatchingPseudoContentDeclaration(element, pseudo, pseudoContext)
+            ? Compute(element, parentStyle: elementStyle, context: pseudoContext)
+            : null;
+    }
+
+    private bool HasMatchingPseudoContentDeclaration(
+        Element element,
+        PseudoElement pseudo,
+        SelectorMatchContext context)
+    {
+        var selectorScratch = new List<SelectorIndexEntry<IndexedStyleRule>>();
+        var selectorScratchSeen = new HashSet<int>();
+
+        foreach (var sheet in _sheets)
+        {
+            if (!_sheetIndexes.TryGetValue(sheet, out var sheetIndex))
+                continue;
+
+            sheetIndex.Selectors.GetCandidates(
+                element,
+                selectorScratch,
+                selectorScratchSeen,
+                filterPseudoElement: true,
+                pseudoElement: pseudo);
+
+            foreach (var entry in selectorScratch)
+            {
+                var indexedRule = entry.Value;
+                if (!RuleDeclaresContent(indexedRule.Rule)
+                    || !ConditionsMatch(indexedRule.Conditions, element)
+                    || !SelectorMatcher.Matches(entry.Selector, element, context))
+                    continue;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool RuleDeclaresContent(StyleRule rule)
+    {
+        foreach (var declaration in rule.Declarations)
+            if (declaration.Name.Equals("content", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private ComputedStyle Compute(
+        Element element,
+        ComputedStyle? parentStyle,
+        SelectorMatchContext? context = null,
+        List<SelectorValidationResult>? validation = null)
+    {
+        context ??= new SelectorMatchContext();
         var allCandidates = new Dictionary<PropertyId, List<CascadedValue>>();
         var customCandidates = new Dictionary<string, List<CustomPropertyValue>>(StringComparer.Ordinal);
-        var customProperties = parentStyle?.CustomProperties.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value,
-            StringComparer.Ordinal) ?? new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal);
+        var inheritedCustomProperties = parentStyle?.CustomProperties ?? s_emptyCustomProperties;
         var order = 0;
+        var selectorScratch = new List<SelectorIndexEntry<IndexedStyleRule>>();
+        var selectorScratchSeen = new HashSet<int>();
 
         foreach (var sheet in _sheets)
         {
             var layerOrder = _layerOrders[sheet.Origin];
             var sheetIndex = _sheetIndexes.GetValueOrDefault(sheet);
-            // Compute the candidate set for this sheet once per element. Each entry
-            // is a (StyleRule, matching-ComplexSelector) pair; multiple entries may
-            // share a rule. We group them so each top-level StyleRule is processed
-            // at most once, restricted to its bucket-matching selectors.
-            Dictionary<StyleRule, List<ComplexSelector>>? candidateRules = null;
             if (sheetIndex is not null)
-            {
-                candidateRules = new Dictionary<StyleRule, List<ComplexSelector>>(ReferenceEqualityComparer.Instance);
-                foreach (var entry in sheetIndex.Selectors.GetCandidates(element))
-                {
-                    if (!candidateRules.TryGetValue(entry.Value, out var list))
-                        candidateRules[entry.Value] = list = new List<ComplexSelector>();
-                    list.Add(entry.Selector);
-                }
-            }
-            GatherFromRules(
-                sheet.Rules,
-                sheet.Origin,
-                element,
-                allCandidates,
-                customCandidates,
-                context,
-                ref order,
-                layerOrder,
-                currentLayerPath: null,
-                parentSelectors: null,
-                sheetIndex,
-                candidateRules);
+                GatherFromIndexedRules(
+                    sheetIndex,
+                    sheet.Origin,
+                    element,
+                    allCandidates,
+                    customCandidates,
+                    context,
+                    validation,
+                    ref order,
+                    layerOrder,
+                    selectorScratch,
+                    selectorScratchSeen);
         }
 
         var inlineStyle = element.GetAttribute("style");
@@ -749,15 +894,26 @@ public sealed class StyleEngine
                 customWinners[kvp.Key] = best;
         }
 
-        foreach (var pair in customWinners)
-            customProperties[pair.Key] = pair.Value.Value;
+        IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> customProperties = inheritedCustomProperties;
+        if (customWinners.Count > 0)
+        {
+            var mergedCustomProperties = inheritedCustomProperties.Count == 0
+                ? new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal)
+                : inheritedCustomProperties.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value,
+                    StringComparer.Ordinal);
+            foreach (var pair in customWinners)
+                mergedCustomProperties[pair.Key] = pair.Value.Value;
 
-        // CSS Variables L1 §3.3: a custom property whose var() references form a
-        // cycle is invalid at computed-value time and computes to the
-        // guaranteed-invalid value. Drop every property in a cycle from the map
-        // so it reads as undefined — any var() pointing at it then takes its
-        // fallback, or makes the using property invalid-at-computed-value-time.
-        RemoveCyclicCustomProperties(customProperties);
+            // CSS Variables L1 §3.3: a custom property whose var() references form a
+            // cycle is invalid at computed-value time and computes to the
+            // guaranteed-invalid value. Drop every property in a cycle from the map
+            // so it reads as undefined — any var() pointing at it then takes its
+            // fallback, or makes the using property invalid-at-computed-value-time.
+            RemoveCyclicCustomProperties(mergedCustomProperties);
+            customProperties = mergedCustomProperties;
+        }
 
         var values = new Dictionary<PropertyId, CssValue>();
         foreach (var property in PropertyRegistry.All)
@@ -869,38 +1025,11 @@ public sealed class StyleEngine
     // Name matching is not implemented yet, so the nearest container is used. The
     // remaining condition is a size feature query evaluated against the container
     // box (reusing the media-feature evaluator with a container-sized context).
-    private bool ContainerQueryMatches(AtRule rule, Element element)
+    private bool ContainerQueryMatches(MediaQueryList queryList, Element element)
     {
-        // Split the optional leading <container-name> from the condition.
-        var prelude = rule.Prelude;
-        var conditionStart = 0;
-        for (var i = 0; i < prelude.Count; i++)
-        {
-            if (prelude[i] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
-            {
-                conditionStart = i + 1;
-                continue;
-            }
-            if (prelude[i] is CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var ident } }
-                && !ident.Equals("not", StringComparison.OrdinalIgnoreCase))
-                conditionStart = i + 1; // a leading name; condition follows
-            break;
-        }
-        var condition = prelude.Skip(conditionStart).ToList();
-        if (condition.Count == 0)
-            return false;
-
         var (cw, ch) = ResolveContainerSize(element);
         var ctx = _mediaContext with { ViewportWidthPx = cw, ViewportHeightPx = ch };
-        try
-        {
-            var list = MediaQueryParser.ParseList(condition);
-            return MediaQueryEvaluator.Evaluate(list, ctx);
-        }
-        catch
-        {
-            return false;
-        }
+        return MediaQueryEvaluator.Evaluate(queryList, ctx);
     }
 
     private static string ExtractFontFamily(Dictionary<PropertyId, CssValue> values)
@@ -1030,221 +1159,95 @@ public sealed class StyleEngine
     private static string Combine(string? parent, string child)
         => string.IsNullOrEmpty(parent) ? child : parent + "." + child;
 
-    private void GatherFromRules(
-        IReadOnlyList<CssRule> rules,
+    private void GatherFromIndexedRules(
+        SheetIndex sheetIndex,
         StyleOrigin origin,
         Element element,
         Dictionary<PropertyId, List<CascadedValue>> candidates,
         Dictionary<string, List<CustomPropertyValue>> customCandidates,
         SelectorMatchContext? context,
+        List<SelectorValidationResult>? validation,
         ref int order,
         LayerOrder layerOrder,
-        string? currentLayerPath,
-        SelectorList? parentSelectors,
-        SheetIndex? sheetIndex,
-        Dictionary<StyleRule, List<ComplexSelector>>? candidateRules)
+        List<SelectorIndexEntry<IndexedStyleRule>> selectorScratch,
+        HashSet<int> selectorScratchSeen)
     {
-        foreach (var rule in rules)
+        sheetIndex.Selectors.GetCandidates(
+            element,
+            selectorScratch,
+            selectorScratchSeen,
+            filterPseudoElement: true,
+            pseudoElement: context?.PseudoElement);
+
+        IndexedStyleRule? currentRule = null;
+        bool currentConditionsMatched = false;
+        int currentLayerIndex = LayerOrder.UnlayeredIndex;
+
+        foreach (var entry in selectorScratch)
         {
-            switch (rule)
+            var indexedRule = entry.Value;
+            if (!ReferenceEquals(indexedRule, currentRule))
             {
-                case StyleRule styleRule:
-                    // Bucket filter: for top-level (non-nested) rules covered by
-                    // the index, restrict the selectors we evaluate to those whose
-                    // rightmost compound could match the element's id/class/tag
-                    // buckets. If none match AND the rule has no nested rules
-                    // (which require their own evaluation against the element via
-                    // CSS Nesting), we can skip the rule entirely.
-                    List<ComplexSelector>? matchedSelectors = null;
-                    var bucketFiltered = false;
-                    if (parentSelectors is null && sheetIndex is not null
-                        && sheetIndex.IndexedRules.Contains(styleRule))
-                    {
-                        bucketFiltered = true;
-                        if (candidateRules is null || !candidateRules.TryGetValue(styleRule, out matchedSelectors))
-                        {
-                            // No selector in this rule's own prelude can match.
-                            // If there are no nested rules, skip outright. Otherwise
-                            // recurse into nested rules with an empty matched-set
-                            // so the parent declarations aren't applied.
-                            if (styleRule.NestedRulesOrEmpty.Count == 0)
-                                break;
-                            matchedSelectors = new List<ComplexSelector>();
-                        }
-                    }
-                    ProcessStyleRule(
-                        styleRule,
-                        origin,
-                        element,
-                        candidates,
-                        customCandidates,
-                        context,
-                        ref order,
-                        layerOrder,
-                        currentLayerPath,
-                        parentSelectors,
-                        sheetIndex,
-                        candidateRules,
-                        bucketFiltered ? matchedSelectors : null);
-                    break;
-                case AtRule { Name: var name } atRule when name.Equals("media", StringComparison.OrdinalIgnoreCase):
-                    var mqList = MediaQueryParser.ParseList(atRule.Prelude);
-                    if (MediaQueryEvaluator.Evaluate(mqList, _mediaContext))
-                    {
-                        GatherFromRules(
-                            atRule.Rules,
-                            origin,
-                            element,
-                            candidates,
-                            customCandidates,
-                            context,
-                            ref order,
-                            layerOrder,
-                            currentLayerPath,
-                            parentSelectors,
-                            sheetIndex,
-                            candidateRules);
-                    }
-                    break;
-                case AtRule { Name: var name2 } atRule2 when name2.Equals("supports", StringComparison.OrdinalIgnoreCase):
-                    if (SupportsEvaluator.Evaluate(atRule2.Prelude))
-                    {
-                        GatherFromRules(
-                            atRule2.Rules,
-                            origin,
-                            element,
-                            candidates,
-                            customCandidates,
-                            context,
-                            ref order,
-                            layerOrder,
-                            currentLayerPath,
-                            parentSelectors,
-                            sheetIndex,
-                            candidateRules);
-                    }
-                    break;
-                case AtRule { Name: var nameC } atRuleC when nameC.Equals("container", StringComparison.OrdinalIgnoreCase):
-                    if (ContainerQueryMatches(atRuleC, element))
-                    {
-                        GatherFromRules(
-                            atRuleC.Rules,
-                            origin,
-                            element,
-                            candidates,
-                            customCandidates,
-                            context,
-                            ref order,
-                            layerOrder,
-                            currentLayerPath,
-                            parentSelectors,
-                            sheetIndex,
-                            candidateRules);
-                    }
-                    break;
-                case AtRule { Name: var name3 } atRule3 when name3.Equals("layer", StringComparison.OrdinalIgnoreCase):
-                    var layerNames = ParseLayerNamesFromPrelude(atRule3.Prelude);
-                    if (atRule3.Rules.Count == 0 && atRule3.Declarations.Count == 0)
-                    {
-                        // Statement form — no rules to gather.
-                        break;
-                    }
-                    string layerPath;
-                    if (layerNames.Count == 0)
-                    {
-                        // Anonymous — already registered an anon path; we cannot recover it exactly here,
-                        // so pick a "fresh" unique anon for ordering purposes. We register and reuse the
-                        // index by registering with a stable-per-rule key derived from the rule reference.
-                        layerPath = Combine(currentLayerPath, "__anon" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(atRule3).ToString());
-                        layerOrder.RegisterLayer(layerPath);
-                    }
-                    else
-                    {
-                        layerPath = Combine(currentLayerPath, layerNames[0]);
-                    }
-                    GatherFromRules(
-                        atRule3.Rules,
-                        origin,
-                        element,
-                        candidates,
-                        customCandidates,
-                        context,
-                        ref order,
-                        layerOrder,
-                        layerPath,
-                        parentSelectors,
-                        sheetIndex,
-                        candidateRules);
-                    break;
+                currentRule = indexedRule;
+                currentConditionsMatched = ConditionsMatch(indexedRule.Conditions, element);
+                currentLayerIndex = currentConditionsMatched
+                    ? layerOrder.GetIndex(indexedRule.LayerPath)
+                    : LayerOrder.UnlayeredIndex;
             }
+
+            if (!currentConditionsMatched)
+            {
+                validation?.Add(new SelectorValidationResult(
+                    entry.Selector,
+                    indexedRule.Conditions,
+                    Matched: false));
+                continue;
+            }
+
+            var selectorMatched = SelectorMatcher.Matches(entry.Selector, element, context);
+            validation?.Add(new SelectorValidationResult(
+                entry.Selector,
+                indexedRule.Conditions,
+                selectorMatched));
+            if (!selectorMatched)
+                continue;
+
+            AddDeclarations(
+                indexedRule.Rule.Declarations,
+                origin,
+                inline: false,
+                entry.Selector.Specificity,
+                candidates,
+                customCandidates,
+                ref order,
+                currentLayerIndex,
+                indexedRule.LayerPath);
         }
     }
 
-    private void ProcessStyleRule(
-        StyleRule styleRule,
-        StyleOrigin origin,
-        Element element,
-        Dictionary<PropertyId, List<CascadedValue>> candidates,
-        Dictionary<string, List<CustomPropertyValue>> customCandidates,
-        SelectorMatchContext? context,
-        ref int order,
-        LayerOrder layerOrder,
-        string? currentLayerPath,
-        SelectorList? parentSelectors,
-        SheetIndex? sheetIndex,
-        Dictionary<StyleRule, List<ComplexSelector>>? candidateRules,
-        List<ComplexSelector>? bucketMatchedSelectors)
+    private bool ConditionsMatch(IReadOnlyList<RuleCondition> conditions, Element element)
     {
-        SelectorList effectiveSelectorList;
-        IReadOnlyList<ComplexSelector> selectorsToEvaluate;
-
-        if (parentSelectors is null && sheetIndex is not null
-            && sheetIndex.ParsedSelectorLists.TryGetValue(styleRule, out var cached))
+        foreach (var condition in conditions)
         {
-            effectiveSelectorList = cached;
-            // Restrict evaluation to bucket-matching selectors when available;
-            // these are a superset filter — SelectorMatcher still confirms.
-            selectorsToEvaluate = bucketMatchedSelectors ?? (IReadOnlyList<ComplexSelector>)cached.Selectors;
-        }
-        else
-        {
-            effectiveSelectorList = ResolveSelectorList(styleRule.Prelude, parentSelectors);
-            selectorsToEvaluate = effectiveSelectorList.Selectors;
-        }
-
-        var layerIndex = layerOrder.GetIndex(currentLayerPath);
-        foreach (var selector in selectorsToEvaluate)
-        {
-            if (!SelectorMatcher.Matches(selector, element, context))
-                continue;
-            AddDeclarations(
-                styleRule.Declarations,
-                origin,
-                inline: false,
-                selector.Specificity,
-                candidates,
-                customCandidates,
-                ref order,
-                layerIndex,
-                currentLayerPath);
+            switch (condition.Kind)
+            {
+                case RuleConditionKind.Media:
+                    if (condition.QueryList is null ||
+                        !MediaQueryEvaluator.Evaluate(condition.QueryList, _mediaContext))
+                        return false;
+                    break;
+                case RuleConditionKind.Supports:
+                    if (!condition.SupportsResult)
+                        return false;
+                    break;
+                case RuleConditionKind.Container:
+                    if (condition.QueryList is null || !ContainerQueryMatches(condition.QueryList, element))
+                        return false;
+                    break;
+            }
         }
 
-        if (styleRule.NestedRulesOrEmpty.Count > 0)
-        {
-            GatherFromRules(
-                styleRule.NestedRulesOrEmpty,
-                origin,
-                element,
-                candidates,
-                customCandidates,
-                context,
-                ref order,
-                layerOrder,
-                currentLayerPath,
-                effectiveSelectorList,
-                sheetIndex,
-                candidateRules);
-        }
+        return true;
     }
 
     private static SelectorList ResolveSelectorList(
@@ -1949,4 +1952,86 @@ public sealed class StyleEngine
             (StyleOrigin.UserAgent, true) => 5,
             _ => 0,
         };
+}
+
+internal enum RuleConditionKind
+{
+    Media,
+    Supports,
+    Container,
+}
+
+internal sealed class RuleCondition
+{
+    public RuleCondition(RuleConditionKind kind, AtRule rule)
+    {
+        Kind = kind;
+
+        switch (kind)
+        {
+            case RuleConditionKind.Media:
+                QueryList = TryParseMediaQueryList(rule.Prelude);
+                break;
+            case RuleConditionKind.Supports:
+                SupportsResult = TryEvaluateSupports(rule.Prelude);
+                break;
+            case RuleConditionKind.Container:
+                QueryList = TryParseContainerQueryList(rule.Prelude);
+                break;
+        }
+    }
+
+    public RuleConditionKind Kind { get; }
+    public MediaQueryList? QueryList { get; }
+    public bool SupportsResult { get; }
+
+    private static MediaQueryList? TryParseMediaQueryList(IReadOnlyList<CssComponentValue> values)
+    {
+        try
+        {
+            return MediaQueryParser.ParseList(values);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool TryEvaluateSupports(IReadOnlyList<CssComponentValue> values)
+    {
+        try
+        {
+            return SupportsEvaluator.Evaluate(values);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static MediaQueryList? TryParseContainerQueryList(IReadOnlyList<CssComponentValue> prelude)
+    {
+        var conditionStart = 0;
+        for (var i = 0; i < prelude.Count; i++)
+        {
+            if (prelude[i] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            {
+                conditionStart = i + 1;
+                continue;
+            }
+
+            if (prelude[i] is CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var ident } }
+                && !ident.Equals("not", StringComparison.OrdinalIgnoreCase))
+                conditionStart = i + 1;
+            break;
+        }
+
+        if (conditionStart >= prelude.Count)
+            return null;
+
+        var condition = new List<CssComponentValue>(prelude.Count - conditionStart);
+        for (var i = conditionStart; i < prelude.Count; i++)
+            condition.Add(prelude[i]);
+        return TryParseMediaQueryList(condition);
+    }
 }

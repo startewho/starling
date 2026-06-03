@@ -876,7 +876,7 @@ public sealed partial class JsCompiler
         foreach (var s in body) PreallocateCapturedInStatement(s);
     }
 
-    private void PreallocateCapturedInStatement(Statement? s)
+    private void PreallocateCapturedInStatement(Statement? s, bool inBlock = false)
     {
         if (s is null) return;
         switch (s)
@@ -888,13 +888,20 @@ public sealed partial class JsCompiler
                     // declaration's initializer throws ReferenceError even through a
                     // closure. `var` keeps the undefined-seeded cell.
                     var lexical = vd.Kind is "let" or "const";
+                    // A captured let/const INSIDE a nested block is reserved at block
+                    // entry instead (HoistLexicalName), in the block's own frame, so
+                    // it gets its OWN cell rather than sharing — and clobbering — a
+                    // same-named function-scoped binding's cell (function decl / var)
+                    // hoisted into this function frame. `var` stays function-scoped
+                    // and must still be preallocated here even inside a block.
+                    if (lexical && inBlock) return;
                     foreach (var d in vd.Declarations) PreallocateCapturedInPattern(d.Id, lexical);
                     return;
                 }
             // ClassDeclaration: block-scoped class TDZ is deferred; the class
             // name still binds on the global object (EmitClassDeclaration), so
             // it is not preallocated as a captured lexical cell here.
-            case BlockStatement b: foreach (var x in b.Body) PreallocateCapturedInStatement(x); return;
+            case BlockStatement b: foreach (var x in b.Body) PreallocateCapturedInStatement(x, inBlock: true); return;
             case IfStatement i:
                 PreallocateCapturedInStatement(i.Consequent);
                 PreallocateCapturedInStatement(i.Alternate);
@@ -1119,12 +1126,25 @@ public sealed partial class JsCompiler
         // Global-lexical TDZ is deferred — a top-level script let/const binds on
         // the global object, so don't reserve a local slot for it here.
         if (IsGlobalLexicalScope) return;
-        // Captured lexical bindings are preallocated (as TDZ cells) at function
-        // entry and marked lexical there — leave them alone.
-        if (IsNameCaptured(name)) return;
-        // Already instantiated in this scope (e.g. a redeclaration the parser
-        // let through, or double-processing) — keep the first slot.
+        // Already instantiated in THIS frame: either a function top-level captured
+        // lexical the pre-pass placed here (reuse its cell), or a redeclaration the
+        // parser let through — keep the first slot.
         if (_scopes[^1].ContainsKey(name)) return;
+        // A captured lexical not yet in this frame is a BLOCK-scoped binding (the
+        // pre-pass defers block lexicals and only seeds the function's top-level
+        // ones). Reserve its OWN captured cell in this block's frame so it does
+        // not share — and clobber — a same-named function-scoped binding's cell
+        // (function declaration / var) resolved from an enclosing frame. This was
+        // the github high-contrast-cookie "not a function: [object Object]" bug.
+        if (IsNameCaptured(name))
+        {
+            var cellSlot = _b.ReserveLocal();
+            _scopes[^1][name] = cellSlot;
+            _b.MarkCaptured(cellSlot);
+            MarkLexical(name);
+            _b.EmitSlot(Opcode.InitCellLocalTdz, cellSlot);
+            return;
+        }
         var slot = _b.ReserveLocal();
         _scopes[^1][name] = slot;
         MarkLexical(name);
@@ -3069,6 +3089,41 @@ public sealed partial class JsCompiler
                 throw new NotSupportedException("update of super property not yet supported (wp:M3-15)");
 
             var isIncrement = up.Op == "++";
+
+            // §13.4 — a private member target (obj.#x++ / ++obj.#x / …) reads and
+            // writes through PrivateGet/PrivateSet on a dup'd receiver, mirroring
+            // the guarded compound-assignment path in EmitAssignment. Without this
+            // guard the non-computed arm below would cast the PrivateNameExpression
+            // property to Identifier and throw.
+            if (!me.Computed && me.Property is PrivateNameExpression pne)
+            {
+                // PrivateSet pops [obj, newVal] and RE-PUSHES newVal (same contract
+                // as StoreProperty), so the postfix arm recovers oldNum = newVal ∓ 1
+                // without any temporary locals.
+                //
+                // Prefix  (++obj.#x):
+                //   EmitObj, Dup, PrivateGet(#x), UnaryPlus,
+                //   LoadConst(1), Add/Sub, PrivateSet(#x)             → [newVal]
+                //
+                // Postfix (obj.#x++):
+                //   …same…, PrivateSet(#x), LoadConst(1), Sub/Add     → [oldNum]
+                var mangled = ResolvePrivateName(pne.Name, pne.Start);
+                var pneIdx = _b.AddConstant(mangled);
+                EmitExpression(me.Object);                              // [obj]
+                _b.Emit(Opcode.Dup);                                    // [obj, obj]
+                _b.EmitU16(Opcode.PrivateGet, pneIdx);                  // [obj, oldVal]
+                _b.Emit(Opcode.UnaryPlus);                              // [obj, oldNum]   ToNumber
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));      // [obj, oldNum, 1]
+                _b.Emit(isIncrement ? Opcode.Add : Opcode.Sub);         // [obj, newVal]
+                _b.EmitU16(Opcode.PrivateSet, pneIdx);                  // [newVal]
+                if (!up.Prefix)
+                {
+                    // Postfix: result = oldNum = newVal ∓ 1 (reverse the ±1 step).
+                    _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));  // [newVal, 1]
+                    _b.Emit(isIncrement ? Opcode.Sub : Opcode.Add);     // [oldNum]
+                }
+                return;
+            }
 
             if (!me.Computed)
             {

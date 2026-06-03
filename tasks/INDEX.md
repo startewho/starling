@@ -196,6 +196,12 @@ features previously listed as deferred — `:has`, `:nth-*`, `:is`, `:where`,
 > 12/16 are layout/CSS-only (disjoint); 13/14/15 share the paint display-list +
 > backend switch and are reconciled on merge by the orchestrator.
 
+## M10 — Hardening, security, perf
+
+| ID | Status | Owner | Subsystem |
+|---|---|---|---|
+| [wp:M10-01-diagnostics-hot-path](M10/wp-M10-01-diagnostics-hot-path.md) | 🔵 available | — | cross-cutting |
+
 ## M12 — Tiled compositor + layer tree
 
 Long-term fix for "we render the entire page in one bitmap" (the architectural

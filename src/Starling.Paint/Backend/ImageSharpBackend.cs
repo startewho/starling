@@ -69,7 +69,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         _diag = diagnostics ?? NoopDiagnostics.Instance;
         _useWebGpu = useWebGpu;
         _fontCollection = ImageSharpFontLookup.LoadCollection(webFonts);
-        _boxShadowCache = new BoxShadowRasterCache(_diag);
+        _boxShadowCache = new BoxShadowRasterCache();
     }
 
     public string Name => _useWebGpu ? "imagesharp-webgpu" : "imagesharp";
@@ -335,7 +335,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     /// </summary>
     private void ReplayList(DrawingCanvas canvas, PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool clearWhite, DisposableBag pendingImageSources, bool flush)
     {
-        Activity.Current?.SetTag("raster.items", list.Items.Count);
         if (clearWhite)
         {
             canvas.Clear(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
@@ -346,21 +345,10 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         canvas.Save(new DrawingOptions { Transform = ToCanvasMatrix(viewportTransform, scale) });
 
         var target = new LayoutRect(0, 0, width / scale, height / scale);
-        var stats = new RasterStats();
-        // replay_items isolates the display-list walk (recording + TextBlock build)
-        // from the pixel work, matching the CPU/GPU span split.
-        using (_diag.Span("paint", "raster.replay_items"))
-        {
-            foreach (var item in list.Items)
-            {
-                var start = Stopwatch.GetTimestamp();
-                Apply(canvas, item, scale, pendingImageSources, transforms, stats, target);
-                stats.Record(item, Stopwatch.GetTimestamp() - start);
-            }
-        }
+        foreach (var item in list.Items)
+            Apply(canvas, item, scale, pendingImageSources, transforms, target);
 
         canvas.Restore();
-        stats.Emit(Activity.Current);
 
         if (flush)
         {
@@ -374,8 +362,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     /// <summary>
     /// Applies the specified <paramref name="item"/> to the given <paramref name="canvas"/>
     /// at the provided <paramref name="scale"/> using the transformation stack <paramref name="transforms"/>.
-    /// Updates <paramref name="stats"/> with rasterization details and utilizes
-    /// <paramref name="pendingImageSources"/> for managing temporary image assets.
+    /// Uses <paramref name="pendingImageSources"/> for managing temporary image assets.
     /// The operation is confined to the designated <paramref name="target"/> layout bounds.
     /// </summary>
     /// <param name="canvas">The drawing surface on which the display item is applied.</param>
@@ -383,10 +370,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     /// <param name="scale">The scaling factor to adjust for rendering resolution.</param>
     /// <param name="pendingImageSources">A collection of disposable image resources used during the rendering process.</param>
     /// <param name="transforms">A stack of transformation matrices applied to the display item.</param>
-    /// <param name="stats">An object gathering statistics about the rasterization process.</param>
     /// <param name="target">The layout bounds restricting the rendering area on the canvas.</param>
     private void Apply(DrawingCanvas canvas, DisplayItem item, float scale, DisposableBag pendingImageSources,
-        Stack<Matrix2D> transforms, RasterStats stats, LayoutRect target)
+        Stack<Matrix2D> transforms, LayoutRect target)
     {
         switch (item)
         {
@@ -398,16 +384,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                     Transform = ToCanvasMatrix(matrix, scale),
                 });
 
-                _diag.Counter("paint.push_transform", 1);
                 break;
             case DisplayList.PopTransform:
                 canvas.Restore();
                 transforms.Pop();
-                _diag.Counter("paint.pop_transform", 1);
                 break;
             case FillRect fill:
                 if (fill.Bounds.Width <= 0 || fill.Bounds.Height <= 0) return;
-                _diag.Counter("paint.fill_rect", 1);
                 var rectPath = fill.PixelAlignment == FillRectPixelAlignment.SnapToDevicePixels
                     ? ToSnappedLayoutRectPath(fill.Bounds, scale)
                     : ToRectPath(fill.Bounds);
@@ -415,7 +398,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 canvas.Fill(Brushes.Solid(ToColor(fill.Color)), rectPath);
                 break;
             case StrokeRect stroke:
-                _diag.Counter("paint.stroke_rect", 1);
                 {
                     var penWidth = (float)stroke.Width;
                     var pen = Pens.Solid(ToColor(stroke.Color), penWidth);
@@ -425,7 +407,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 break;
             case FillRoundedRect roundFill:
                 if (roundFill.Bounds.Width <= 0 || roundFill.Bounds.Height <= 0) return;
-                _diag.Counter("paint.fill_rounded_rect", 1);
                 {
                     var path = BuildRoundedRectPath(roundFill.Bounds, roundFill.Radii);
                     canvas.Fill(Brushes.Solid(ToColor(roundFill.Color)), path);
@@ -433,7 +414,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 break;
             case StrokeRoundedRect roundStroke:
                 if (roundStroke.Bounds.Width <= 0 || roundStroke.Bounds.Height <= 0 || roundStroke.Width <= 0) return;
-                _diag.Counter("paint.stroke_rounded_rect", 1);
                 {
                     var path = BuildRoundedRectPath(roundStroke.Bounds, roundStroke.Radii);
                     canvas.Draw(Pens.Solid(ToColor(roundStroke.Color), (float)roundStroke.Width), path);
@@ -441,27 +421,21 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 break;
             case DrawBoxShadow shadow:
                 if (!BoxShadowIntersectsTarget(shadow, transforms.Peek(), target)) return;
-                _diag.Counter("paint.box_shadow", 1);
                 DrawBoxShadow(canvas, shadow, scale, pendingImageSources);
                 break;
             case DrawText text:
-                _diag.Counter("paint.draw_text", 1);
-                DrawText(canvas, text, stats);
+                DrawText(canvas, text);
                 break;
             case DrawTextShadow shadow:
-                _diag.Counter("paint.draw_text_shadow", 1);
-                DrawTextShadow(canvas, shadow, pendingImageSources, stats);
+                DrawTextShadow(canvas, shadow, pendingImageSources);
                 break;
             case DrawTextDecoration decoration:
-                _diag.Counter("paint.draw_text_decoration", 1);
-                DrawTextDecoration(canvas, decoration, stats);
+                DrawTextDecoration(canvas, decoration);
                 break;
             case DrawImage img:
-                _diag.Counter("paint.draw_image", 1);
                 DrawImage(canvas, img, pendingImageSources);
                 break;
             case FillGradient grad:
-                _diag.Counter("paint.fill_gradient", 1);
                 FillGradient(canvas, grad);
                 break;
         }
@@ -619,15 +593,14 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         };
     }
 
-    private void DrawText(DrawingCanvas canvas, DrawText text, RasterStats stats)
+    private void DrawText(DrawingCanvas canvas, DrawText text)
     {
         if (string.IsNullOrEmpty(text.Text)) return;
-        stats.TextChars += text.Text.Length;
 
         var spec = FontSpecFromDrawText(text);
         var size = (float)text.FontSize;
         var probe = FirstCodepoint(text.Text);
-        var font = ResolveFont(spec, probe, size, stats);
+        var font = ResolveFont(spec, probe, size);
         var color = ToColor(text.Color);
 
         var originX = (float)text.X;
@@ -642,12 +615,10 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         if (text.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size)
         {
             textBlock = shaped.TextBlock;
-            stats.ShapedReused++;
         }
         else
         {
             textBlock = new TextBlock(text.Text, new TextOptions(font));
-            stats.ShapedRebuilt++;
         }
 
         canvas.DrawText(textBlock, new PointF(originX, originY), -1, brush, null);
@@ -655,13 +626,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
     // ---- CSS Text Decoration 3 (wp:M5-css-15) ----
 
-    private void DrawTextDecoration(DrawingCanvas canvas, DrawTextDecoration d, RasterStats stats)
+    private void DrawTextDecoration(DrawingCanvas canvas, DrawTextDecoration d)
     {
         if (d.Width <= 0 || d.Lines == TextDecorationLines.None) return;
 
         var spec = new FontSpec(d.FontFamilies, d.Bold, d.Italic);
         var size = (float)d.FontSize;
-        var font = ResolveFont(spec, probeCodepoint: 'x', size, stats);
+        var font = ResolveFont(spec, probeCodepoint: 'x', size);
         var fm = font.FontMetrics;
         var unitsScale = fm.UnitsPerEm > 0 ? size / (float)fm.UnitsPerEm : size / 1000f;
 
@@ -770,14 +741,14 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         return pb.Build();
     }
 
-    private void DrawTextShadow(DrawingCanvas canvas, DrawTextShadow s, DisposableBag pendingImageSources, RasterStats stats)
+    private void DrawTextShadow(DrawingCanvas canvas, DrawTextShadow s, DisposableBag pendingImageSources)
     {
         if (string.IsNullOrEmpty(s.Text)) return;
 
         var spec = new FontSpec(s.FontFamilies, s.Bold, s.Italic);
         var size = (float)s.FontSize;
         var probe = FirstCodepoint(s.Text);
-        var font = ResolveFont(spec, probe, size, stats);
+        var font = ResolveFont(spec, probe, size);
         var color = ToColor(s.Color);
         var brush = Brushes.Solid(color);
 
@@ -788,12 +759,10 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         if (s.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size)
         {
             textBlock = shaped.TextBlock;
-            stats.ShapedReused++;
         }
         else
         {
             textBlock = new TextBlock(s.Text, new TextOptions(font));
-            stats.ShapedRebuilt++;
         }
 
         if (s.Blur <= 0)
@@ -826,17 +795,11 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         // This offscreen glyph render + Gaussian blur is a full nested
         // rasterization that the lazy outer command_record span never sees;
         // its own span makes shadow-heavy pages attributable.
-        using (_diag.Span("paint", "raster.text_shadow_blur"))
-        {
-            Activity.Current?.SetTag("raster.text_shadow.width", width);
-            Activity.Current?.SetTag("raster.text_shadow.height", height);
-            Activity.Current?.SetTag("raster.text_shadow.blur", s.Blur);
-            // The display-list DrawText origin (s.X, s.Y) is the top of the line box;
-            // render the glyph run at (pad, pad) inside the layer so it matches.
-            glyphLayer.Mutate(ctx => ctx.Paint(c =>
-                c.DrawText(new TextBlock(s.Text, new TextOptions(font)), new PointF(pad, pad), -1, brush, null)));
-            glyphLayer.Mutate(ctx => ctx.GaussianBlur((float)s.Blur));
-        }
+        // The display-list DrawText origin (s.X, s.Y) is the top of the line box;
+        // render the glyph run at (pad, pad) inside the layer so it matches.
+        glyphLayer.Mutate(ctx => ctx.Paint(c =>
+            c.DrawText(new TextBlock(s.Text, new TextOptions(font)), new PointF(pad, pad), -1, brush, null)));
+        glyphLayer.Mutate(ctx => ctx.GaussianBlur((float)s.Blur));
 
         // Composite at the offset origin minus the padding we added.
         var destRect = new RectangleF(originX - pad, originY - pad, width, height);
@@ -892,23 +855,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         return 0;
     }
 
-    private Font ResolveFont(FontSpec spec, int probeCodepoint, float size, RasterStats? stats = null)
+    private Font ResolveFont(FontSpec spec, int probeCodepoint, float size)
     {
         var key = new FontCacheKey(spec, size, probeCodepoint);
         if (_fontCache.TryGetValue(key, out var cached))
             return cached;
 
-        // Cache miss: CreateFont resolves the family against the collection,
-        // expensive and cold-start-heavy. Attribute the build to the render so
-        // the trace separates cold font work from steady-state draw_text cost.
-        var start = Stopwatch.GetTimestamp();
         var font = _fontCache.GetOrAdd(key, k => CreateFont(k.Spec, k.Size));
-        if (stats is not null)
-        {
-            stats.FontCacheMiss++;
-            stats.AddFontCreate(Stopwatch.GetTimestamp() - start);
-        }
-        _diag.Counter("paint.font.cache_miss", 1);
         return font;
     }
 
@@ -1056,15 +1009,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var shape = BuildRoundedRectPath(silhouette, grown);
 
         var shadowImage = new Image<Rgba32>(geometry.ImageWidth, geometry.ImageHeight, new Rgba32(0, 0, 0, 0));
-        using (_diag.Span("paint", "raster.box_shadow_blur"))
-        {
-            Activity.Current?.SetTag("raster.box_shadow.width", geometry.ImageWidth);
-            Activity.Current?.SetTag("raster.box_shadow.height", geometry.ImageHeight);
-            Activity.Current?.SetTag("raster.box_shadow.blur", Math.Max(0, shadow.Blur));
-            shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
-            if (shadow.Blur > 0)
-                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
-        }
+        shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
+        if (shadow.Blur > 0)
+            shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
 
         return shadowImage;
     }
@@ -1167,73 +1114,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             G(r.BottomLeftX, by), G(r.BottomLeftY, by));
     }
 
-    /// <summary>
-    /// Per-render rasterization timing/quality counters accumulated during the
-    /// display-list replay and emitted as tags on the <c>raster.command_record</c>
-    /// span. The per-type <see cref="Record"/> timings cover <em>recording</em>
-    /// time only (the <see cref="Apply"/> dispatch, including paint-time
-    /// TextBlock builds); ImageSharp rasterizes lazily at scope unwind, so the
-    /// pixel-fill cost is <c>command_record − replay_items</c>, not any single
-    /// bucket here.
-    /// </summary>
-    private sealed class RasterStats
-    {
-        private long _fillRect, _strokeRect, _fillRounded, _strokeRounded;
-        private long _boxShadow, _text, _textShadow, _textDecoration;
-        private long _image, _gradient, _transform, _fontCreate;
-
-        public int TextChars;
-        public int ShapedReused;
-        public int ShapedRebuilt;
-        public int FontCacheMiss;
-
-        public void Record(DisplayItem item, long ticks)
-        {
-            // Qualify with DisplayList.* because several record names (DrawText,
-            // DrawImage, FillGradient, …) collide with method names on the
-            // enclosing backend, which would otherwise bind as constant patterns.
-            switch (item)
-            {
-                case DisplayList.FillRect: _fillRect += ticks; break;
-                case DisplayList.StrokeRect: _strokeRect += ticks; break;
-                case DisplayList.FillRoundedRect: _fillRounded += ticks; break;
-                case DisplayList.StrokeRoundedRect: _strokeRounded += ticks; break;
-                case DisplayList.DrawBoxShadow: _boxShadow += ticks; break;
-                case DisplayList.DrawText: _text += ticks; break;
-                case DisplayList.DrawTextShadow: _textShadow += ticks; break;
-                case DisplayList.DrawTextDecoration: _textDecoration += ticks; break;
-                case DisplayList.DrawImage: _image += ticks; break;
-                case DisplayList.FillGradient: _gradient += ticks; break;
-                case DisplayList.PushTransform:
-                case DisplayList.PopTransform: _transform += ticks; break;
-            }
-        }
-
-        public void AddFontCreate(long ticks) => _fontCreate += ticks;
-
-        public void Emit(Activity? activity)
-        {
-            if (activity is null) return;
-            static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
-            activity.SetTag("raster.time.fill_rect_ms", Ms(_fillRect));
-            activity.SetTag("raster.time.stroke_rect_ms", Ms(_strokeRect));
-            activity.SetTag("raster.time.fill_rounded_rect_ms", Ms(_fillRounded));
-            activity.SetTag("raster.time.stroke_rounded_rect_ms", Ms(_strokeRounded));
-            activity.SetTag("raster.time.box_shadow_ms", Ms(_boxShadow));
-            activity.SetTag("raster.time.draw_text_ms", Ms(_text));
-            activity.SetTag("raster.time.text_shadow_ms", Ms(_textShadow));
-            activity.SetTag("raster.time.text_decoration_ms", Ms(_textDecoration));
-            activity.SetTag("raster.time.draw_image_ms", Ms(_image));
-            activity.SetTag("raster.time.gradient_ms", Ms(_gradient));
-            activity.SetTag("raster.time.transform_ms", Ms(_transform));
-            activity.SetTag("raster.time.font_create_ms", Ms(_fontCreate));
-            activity.SetTag("raster.text.chars", TextChars);
-            activity.SetTag("raster.text.shaped_reused", ShapedReused);
-            activity.SetTag("raster.text.shaped_rebuilt", ShapedRebuilt);
-            activity.SetTag("raster.font.cache_miss", FontCacheMiss);
-        }
-    }
-
     private sealed class DisposableBag : IDisposable
     {
         private readonly List<IDisposable> _items = [];
@@ -1248,7 +1128,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         }
     }
 
-    private sealed class BoxShadowRasterCache(IDiagnostics diag) : IDisposable
+    private sealed class BoxShadowRasterCache : IDisposable
     {
         private const long DefaultBudgetBytes = 64L * 1024 * 1024;
 
@@ -1273,13 +1153,11 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                     _lru.Remove(node);
                     _lru.AddFirst(node);
                     image = node.Value.Image;
-                    diag.Counter("paint.box_shadow.cache_hit", 1);
                     return true;
                 }
             }
 
             image = null!;
-            diag.Counter("paint.box_shadow.cache_miss", 1);
             return false;
         }
 
@@ -1289,7 +1167,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             if (bytes > _maxBytes)
             {
                 deferredDisposals.Add(image);
-                diag.Counter("paint.box_shadow.cache_oversize", 1);
                 return false;
             }
 
@@ -1304,7 +1181,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 _map[key] = node;
                 _bytes += bytes;
                 EvictToBudget(deferredDisposals);
-                diag.Gauge("paint.box_shadow.cache_bytes", _bytes);
                 return true;
             }
         }
@@ -1314,7 +1190,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             while (_bytes > _maxBytes && _lru.Last is { } last)
             {
                 Remove(last, deferredDisposals);
-                diag.Counter("paint.box_shadow.cache_evict", 1);
             }
         }
 

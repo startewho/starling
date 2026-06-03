@@ -49,6 +49,8 @@ internal sealed class Compositor
     /// </summary>
     internal bool DisableFastBlit { get; init; }
 
+    internal bool DisableGpuBlend { get; init; }
+
     // /// <summary>
     // /// Renders <paramref name="root"/> (the layer tree's root) into a bitmap
     // /// sized to <paramref name="viewport"/> at <paramref name="scale"/>. Each
@@ -100,6 +102,87 @@ internal sealed class Compositor
     //     return new RenderedBitmap(width, height, output);
     // }
 
+    public RenderedBitmap Render(CompositorLayer root, LayoutRect viewport, float scale)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (viewport.Width <= 0 || viewport.Height <= 0)
+            throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        if (!(scale > 0f))
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+
+        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        var output = new byte[checked(width * height * 4)];
+        FillWhite(output);
+
+        var ops = new List<LayerBlend>();
+        CollectOps(root, ops, viewport, scale,
+            ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
+            textureCache: null);
+
+        if (ops.Count > 0)
+        {
+            if (DisableGpuBlend)
+            {
+                foreach (var op in ops)
+                    BlendOp(op, output, width, height, fastBlit: !DisableFastBlit);
+            }
+            else
+            {
+                var gpu = GpuLayerCompositor.Shared
+                    ?? throw new InvalidOperationException("WebGPU composite blend is unavailable for the selected paint backend.");
+                gpu.Composite(output, width, height, ops);
+            }
+        }
+
+        EmitTileFrameMetrics();
+        return new RenderedBitmap(width, height, output);
+    }
+
+    public RenderedBitmap RenderGpuTextures(
+        CompositorLayer root,
+        LayoutRect viewport,
+        float scale,
+        IReadOnlyList<SurfaceOverlayRect>? overlays = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (viewport.Width <= 0 || viewport.Height <= 0)
+            throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        if (!(scale > 0f))
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+
+        var gpu = GpuLayerCompositor.Shared
+            ?? throw new InvalidOperationException("WebGPU composite blend is unavailable for the selected paint backend.");
+
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+
+        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        var output = new byte[checked(width * height * 4)];
+        FillWhite(output);
+
+        var ops = new List<LayerBlend>();
+        CollectOps(root, ops, viewport, scale,
+            ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
+            textureCache: gpu);
+        if (overlays is { Count: > 0 })
+        {
+            AppendOverlayOps(ops, viewport, scale, overlays);
+        }
+
+        if (ops.Count > 0)
+        {
+            gpu.Composite(output, width, height, ops);
+        }
+
+        EmitTileFrameMetrics();
+        return new RenderedBitmap(width, height, output);
+    }
+
     public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter,
         IReadOnlyList<SurfaceOverlayRect>? overlays = null)
     {
@@ -114,51 +197,47 @@ internal sealed class Compositor
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
         var ops = new List<LayerBlend>();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var textureCache = new SurfaceTextureCache(presenter);
         CollectOps(root, ops, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
-            surfacePresenter: presenter);
-        var tRaster = sw.ElapsedMilliseconds;
+            textureCache: textureCache);
 
         // Overlays (caret, selection, find flash) blend on top of the page as
         // solid-colour quads. Appended last so they draw over every page layer.
-        // if (overlays is { Count: > 0 })
-        //     AppendOverlayOps(ops, viewport, scale, overlays);
+        if (overlays is { Count: > 0 })
+            AppendOverlayOps(ops, viewport, scale, overlays);
 
         var presented = presenter.PresentOps(width, height, ops);
         if (!presented)
             throw new InvalidOperationException("GPU surface presenter did not present the frame.");
 
         EmitTileFrameMetrics();
-        if (sw.ElapsedMilliseconds > 100)
-            _diag.Log(DiagLevel.Info, "paint",
-                $"renderToSurface.cold: collectOps(raster)={tRaster}ms presentOps(gpu)={sw.ElapsedMilliseconds - tRaster}ms ops={ops.Count}");
         return presented;
     }
 
 
-    // private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, RenderedBitmap> _overlaySwatches = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, RenderedBitmap> _overlaySwatches = new();
 
-    // private static void AppendOverlayOps(
-    //     List<LayerBlend> ops, LayoutRect viewport, float scale, IReadOnlyList<SurfaceOverlayRect> overlays)
-    // {
-    //     var s = (double)scale;
-    //     // Same page→device map the layer ops use, so overlays align with page content.
-    //     var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
-    //     foreach (var o in overlays)
-    //     {
-    //         if (o.W <= 0 || o.H <= 0 || o.A == 0) continue;
-    //         var packed = ((uint)o.R << 24) | ((uint)o.G << 16) | ((uint)o.B << 8) | o.A;
-    //         var swatch = _overlaySwatches.GetOrAdd(packed, static p =>
-    //             new RenderedBitmap(1, 1, new byte[] { (byte)(p >> 24), (byte)(p >> 16), (byte)(p >> 8), (byte)p }));
-    //         // The 1×1 swatch's local space is the unit square; map it onto the
-    //         // overlay's page rect, then to device.
-    //         var localToDevice = pageToDevice
-    //             .Multiply(Matrix2D.Translate(o.X, o.Y))
-    //             .Multiply(Matrix2D.Scale(o.W, o.H));
-    //         ops.Add(LayerBlend.Bitmap(swatch, OverlayContentHash(packed), localToDevice, 1f, clipDevice: null));
-    //     }
-    // }
+    private static void AppendOverlayOps(
+        List<LayerBlend> ops, LayoutRect viewport, float scale, IReadOnlyList<SurfaceOverlayRect> overlays)
+    {
+        var s = (double)scale;
+        // Same page-to-device map the layer ops use, so overlays align with page content.
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        foreach (var o in overlays)
+        {
+            if (o.W <= 0 || o.H <= 0 || o.A == 0) continue;
+            var packed = ((uint)o.R << 24) | ((uint)o.G << 16) | ((uint)o.B << 8) | o.A;
+            var swatch = _overlaySwatches.GetOrAdd(packed, static p =>
+                new RenderedBitmap(1, 1, new[] { (byte)(p >> 24), (byte)(p >> 16), (byte)(p >> 8), (byte)p }));
+            // The 1x1 swatch's local space is the unit square. Map it onto the
+            // overlay's page rect, then to device.
+            var localToDevice = pageToDevice
+                .Multiply(Matrix2D.Translate(o.X, o.Y))
+                .Multiply(Matrix2D.Scale(o.W, o.H));
+            ops.Add(LayerBlend.Bitmap(swatch, OverlayContentHash(packed), localToDevice, 1f, clipDevice: null));
+        }
+    }
 
     // Tag overlay content hashes into a high range so a swatch never collides with a
     // real layer's slice hash (which would make the engine evict + re-upload both).
@@ -185,9 +264,10 @@ internal sealed class Compositor
         GpuSurfacePresenter presenter)
     {
         var local = new List<LayerBlend>();
+        var textureCache = new SurfaceTextureCache(presenter);
         CollectOps(root, local, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
-            surfacePresenter: presenter);
+            textureCache: textureCache);
 
         var offset = Matrix2D.Translate(destOriginXDevice, destOriginYDevice);
         foreach (var op in local)
@@ -220,7 +300,7 @@ internal sealed class Compositor
         Matrix2D ancestorTransform,
         float ancestorOpacity,
         Rect? ancestorClip,
-        GpuSurfacePresenter? surfacePresenter)
+        IGpuLayerTextureCache? textureCache)
     {
         // Effective transform = ancestor × this layer's transform (post-multiply
         // so the ancestor's frame wraps the descendant, matching CSS Transforms
@@ -236,14 +316,14 @@ internal sealed class Compositor
         if (layer.Bounds.Width > 0 && layer.Bounds.Height > 0 && effectiveOpacity > 0f)
         {
             EmitLayerTiles(layer, ops, viewport, scale,
-                effectiveTransform, effectiveOpacity, effectiveClip, surfacePresenter);
+                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
         }
 
         // Children already in paint order (z-index sorted at build time).
         foreach (var child in layer.Children)
         {
             CollectOps(child, ops, viewport, scale,
-                effectiveTransform, effectiveOpacity, effectiveClip, surfacePresenter);
+                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
         }
     }
 
@@ -264,7 +344,7 @@ internal sealed class Compositor
     private void EmitLayerTiles(
         CompositorLayer layer, List<LayerBlend> ops,
         LayoutRect viewport, float scale, Matrix2D effectiveTransform,
-        float effectiveOpacity, Rect? effectiveClip, GpuSurfacePresenter? surfacePresenter)
+        float effectiveOpacity, Rect? effectiveClip, IGpuLayerTextureCache? textureCache)
     {
         var s = (double)scale;
         var bounds = layer.Bounds;
@@ -340,17 +420,13 @@ internal sealed class Compositor
 
                 var key = new TileKey(layer.LayerId, col, row, scale);
                 var opHash = TileOpHash(tileHash, col, row);
-                // TileGrid.TryGetTile already emits paint.tile.cache_hit/cache_miss;
-                // here we only tally per-frame for the miss-ratio + rasters-per-frame
-                // signals it doesn't produce (a Compositor is one frame, so these
-                // instance fields are this frame's totals).
                 var tileLocalToDevice = pageToDevice.Multiply(effectiveTransform)
                     .Multiply(Matrix2D.Translate(tilePageX, tilePageY).Multiply(Matrix2D.Scale(1d / s, 1d / s)));
 
-                if (surfacePresenter is not null)
+                if (textureCache is not null)
                 {
-                    EmitSurfaceTile(ops, layer.Items, tileRectPage, scale, key, tileHash, opHash,
-                        tileLocalToDevice, effectiveOpacity, clipDev, surfacePresenter);
+                    EmitGpuTextureTile(ops, layer.Items, tileRectPage, scale, key, tileHash, opHash,
+                        tileLocalToDevice, effectiveOpacity, clipDev, textureCache);
                     continue;
                 }
 
@@ -374,7 +450,7 @@ internal sealed class Compositor
         }
     }
 
-    private void EmitSurfaceTile(
+    private void EmitGpuTextureTile(
         List<LayerBlend> ops,
         DisplayList.DisplayList items,
         LayoutRect tileRectPage,
@@ -385,12 +461,11 @@ internal sealed class Compositor
         Matrix2D tileLocalToDevice,
         float effectiveOpacity,
         Rect? clipDev,
-        GpuSurfacePresenter surfacePresenter)
+        IGpuLayerTextureCache textureCache)
     {
         if (_tileGrid.TryGetResidentTile(key, tileHash, out var resident)
-            && surfacePresenter.HasResidentTexture(opHash, resident.Width, resident.Height))
+            && textureCache.HasResidentTexture(opHash, resident.Width, resident.Height))
         {
-            _diag.Counter(RenderMetrics.TileCacheHit, 1);
             _frameTileHits++;
             ops.Add(LayerBlend.ResidentTexture(
                 resident.Width,
@@ -402,7 +477,6 @@ internal sealed class Compositor
             return;
         }
 
-        _diag.Counter(RenderMetrics.TileCacheMiss, 1);
         _frameTileMisses++;
         if (_backend is not IGpuTexturePaintBackend gpuBackend)
         {
@@ -417,9 +491,9 @@ internal sealed class Compositor
                 tileRectPage,
                 scale,
                 opaqueBackground: false,
-                surfacePresenter.ImageSharpContext);
+                textureCache.ImageSharpContext);
 
-            surfacePresenter.AdoptTexture(opHash, texture);
+            textureCache.AdoptTexture(opHash, texture);
             _tileGrid.PutResidentTile(key, tileHash, texture.Width, texture.Height);
             ops.Add(LayerBlend.ResidentTexture(
                 texture.Width,
@@ -434,6 +508,17 @@ internal sealed class Compositor
         {
             texture?.Dispose();
         }
+    }
+
+    private readonly struct SurfaceTextureCache(GpuSurfacePresenter presenter) : IGpuLayerTextureCache
+    {
+        public bool HasResidentTexture(long contentHash, int width, int height)
+            => presenter.HasResidentTexture(contentHash, width, height);
+
+        public GpuPaintDeviceContext ImageSharpContext => presenter.ImageSharpContext;
+
+        public void AdoptTexture(long contentHash, GpuPaintTexture texture)
+            => presenter.AdoptTexture(contentHash, texture);
     }
 
     /// <summary>
