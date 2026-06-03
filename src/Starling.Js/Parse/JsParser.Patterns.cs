@@ -26,7 +26,7 @@ public sealed partial class JsParser
         // §13.3.10.1 / §16.2.1.6.2 — in an await context (async function OR
         // Module top level), `await` is the AwaitExpression keyword and may NOT
         // be a BindingIdentifier.
-        if (AwaitIsKeyword && Check(JsTokenKind.Identifier) && _current.Lexeme == "await")
+        if (AwaitIsKeyword && Check(JsTokenKind.Identifier) && _current.TextEquals("await"))
             throw new JsParseException(
                 "'await' may not be used as a binding identifier in an await context", _current.Start);
         var id = Expect(JsTokenKind.Identifier, "expected binding name or pattern");

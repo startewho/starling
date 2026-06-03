@@ -262,7 +262,7 @@ public sealed partial class JsParser
         // §12.7.2 — the contextual `async` keyword may NOT contain a Unicode
         // escape (`async () => {}` is not an async arrow; it falls through
         // and is rejected as an ordinary expression).
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("async")
             && !_current.ContainsEscape)
         {
             var asyncPeek = _lex.Peek();
@@ -276,7 +276,7 @@ public sealed partial class JsParser
                     var paramTok = Advance();
                     // §15.8 — `await` is forbidden as the BindingIdentifier param
                     // of an async arrow (`async await => …`).
-                    if (paramTok.Lexeme == "await")
+                    if (paramTok.TextEquals("await"))
                         throw new JsParseException(
                             "'await' may not be used as a binding identifier in an async context", paramTok.Start);
                     var param = new Identifier(paramTok.Lexeme, paramTok.Start, paramTok.End);
@@ -358,7 +358,7 @@ public sealed partial class JsParser
             // §15.8 — in an async context (e.g. the param list of an enclosing
             // async arrow), `await` is the AwaitExpression keyword and may not be
             // a single-identifier arrow parameter (`await => {}`).
-            if (_inAsync && paramTok.Lexeme == "await")
+            if (_inAsync && paramTok.TextEquals("await"))
                 throw new JsParseException(
                     "'await' may not be used as a binding identifier in an async context", paramTok.Start);
             var param = new Identifier(paramTok.Lexeme, paramTok.Start, paramTok.End);
@@ -816,7 +816,7 @@ public sealed partial class JsParser
                             "optional chain is not a valid assignment target", arg.Start);
                     return new UpdateExpression(t.Lexeme, arg, Prefix: true, t.Start, arg.End);
                 }
-            case JsTokenKind.Identifier when _current.Lexeme == "await" && !_current.ContainsEscape:
+            case JsTokenKind.Identifier when _current.TextEquals("await") && !_current.ContainsEscape:
                 {
                     // B1b-2c — await expression. Treat as a unary prefix in any
                     // context; the runtime errors if used outside an async fn.
@@ -913,7 +913,7 @@ public sealed partial class JsParser
         {
             Advance(); // '.'
             var meta = ExpectIdentifierName("expected 'target' after 'new.'");
-            if (meta.Lexeme != "target")
+            if (!meta.TextEquals("target"))
                 throw new JsParseException(
                     $"the only valid meta-property for new is 'new.target' (got 'new.{meta.Lexeme}')",
                     meta.Start);
@@ -1156,7 +1156,7 @@ public sealed partial class JsParser
         // expression; mirroring it here makes the async function EXPRESSION
         // valid in every expression position. §15.8 — no LineTerminator is
         // permitted between the `async` keyword and `function`.
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("async")
             && !_current.ContainsEscape)
         {
             var asyncPeek = _lex.Peek();
@@ -1175,7 +1175,7 @@ public sealed partial class JsParser
                 return new NumericLiteral((double)t.Value!, t.Start, t.End);
             case JsTokenKind.BigIntLiteral:
                 Advance();
-                return new BigIntLiteral(ParseBigIntLexeme(t.Lexeme, t.Start), t.Start, t.End);
+                return new BigIntLiteral(ParseBigIntToken(t), t.Start, t.End);
             case JsTokenKind.StringLiteral:
                 CheckLegacyOctalLiteral(t);
                 Advance();
@@ -1183,7 +1183,7 @@ public sealed partial class JsParser
             case JsTokenKind.RegExpLiteral:
                 {
                     Advance();
-                    var (pattern, flags) = ((string, string))t.Value!;
+                    var (pattern, flags) = t.RegExpPatternAndFlags();
                     // §12.9.5 / §22.2.1 — a RegularExpressionLiteral whose pattern or
                     // flags fail to parse is an early SyntaxError (negative phase
                     // "parse"). Validate eagerly here by compiling through the same
@@ -1207,7 +1207,7 @@ public sealed partial class JsParser
                 // there (e.g. `new await`, `void await`). The AwaitExpression form
                 // is handled in ParseUnary; reaching here with `await` means it is
                 // being used as a bare reference, which is illegal.
-                if (t.Lexeme == "await" && (_module || AwaitIsKeyword))
+                if (t.TextEquals("await") && (_module || AwaitIsKeyword))
                     throw new JsParseException(
                         "'await' may not be used as an identifier reference in a module or async context",
                         t.Start);
@@ -1372,12 +1372,12 @@ public sealed partial class JsParser
 
     private static string TemplateRaw(in JsToken t)
     {
-        var lex = t.Lexeme;
+        var lex = t.LexemeSpan;
         var trim = t.Kind is JsTokenKind.TemplateHead or JsTokenKind.TemplateMiddle ? 2 : 1;
         var raw = trim <= lex.Length ? lex[..^trim] : lex;
-        if (raw.IndexOf('\r') >= 0)
-            raw = raw.Replace("\r\n", "\n").Replace('\r', '\n');
-        return raw;
+        if (raw.IndexOf('\r') < 0)
+            return raw.ToString();
+        return raw.ToString().Replace("\r\n", "\n").Replace('\r', '\n');
     }
 
     private ArrayExpression ParseArrayLiteral()
@@ -1489,7 +1489,7 @@ public sealed partial class JsParser
         // followed (on the same line) by a property-name start. Otherwise it is
         // an ordinary key — `{ async }`, `{ async: 1 }`, `{ async() {} }`.
         bool mGenerator = false, mAsync = false;
-        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "async")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.TextEquals("async"))
         {
             var peek = _lex.Peek();
             if (!peek.PrecededByLineTerminator && IsMethodNameStartAfterModifier(peek.Kind))
@@ -1519,12 +1519,12 @@ public sealed partial class JsParser
         // (`get x(){}`) is NOT the contextual accessor keyword (§12.7.2), so
         // it never introduces an accessor — `get`/`set` here must be unescaped.
         if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape
-            && (_current.Lexeme == "get" || _current.Lexeme == "set"))
+            && (_current.TextEquals("get") || _current.TextEquals("set")))
         {
             var peek = _lex.Peek();
             if (IsAccessorPropertyNameStart(peek.Kind))
             {
-                var kind = _current.Lexeme == "get" ? MethodKind.Get : MethodKind.Set;
+                var kind = _current.TextEquals("get") ? MethodKind.Get : MethodKind.Set;
                 Advance(); // consume 'get' / 'set'
                 var (akey, acomputed) = ParsePropertyKey();
                 var (parameters, body, endPos, astrict) = ParseMethodTail();
@@ -1764,7 +1764,7 @@ public sealed partial class JsParser
         // §13.2.5.1 / §13.3.10.1 — in an async context `await` is the
         // AwaitExpression keyword and is not a valid shorthand IdentifierReference
         // (`({ await })` inside an async function / class static block).
-        if (keyToken.Kind == JsTokenKind.Identifier && keyToken.Lexeme == "await" && _inAsync)
+        if (keyToken.Kind == JsTokenKind.Identifier && keyToken.TextEquals("await") && _inAsync)
             throw new JsParseException(
                 "'await' may not be used as a shorthand property in an async context", keyToken.Start);
         // A genuine reserved-keyword token (other than the contextually-allowed
@@ -1798,6 +1798,25 @@ public sealed partial class JsParser
     /// <summary>B4-3 — decode a BigInt lexeme into a
     /// <see cref="System.Numerics.BigInteger"/>. The lexeme is the raw source
     /// slice, including any radix prefix and the trailing <c>n</c>.</summary>
+    private static System.Numerics.BigInteger ParseBigIntToken(in JsToken token)
+    {
+        var lexeme = token.LexemeSpan;
+        var digits = token.BigIntDigits;
+        if (lexeme.Length > 2 && lexeme[0] == '0')
+        {
+            var p = lexeme[1];
+            if (p == 'x' || p == 'X')
+                return System.Numerics.BigInteger.Parse("0" + digits,
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture);
+            if (p == 'b' || p == 'B') return ParseRadixBigInt(digits, 2, token.Start);
+            if (p == 'o' || p == 'O') return ParseRadixBigInt(digits, 8, token.Start);
+        }
+        return System.Numerics.BigInteger.Parse(digits,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     private static System.Numerics.BigInteger ParseBigIntLexeme(string lexeme, JsPosition pos)
     {
         if (lexeme.Length > 0 && lexeme[^1] == 'n')

@@ -174,7 +174,7 @@ public sealed partial class JsParser
     {
         // A lexical declaration head is never a valid Statement here.
         if (_current.Kind is JsTokenKind.Const
-            || (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "let"
+            || (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
                 && IsLetDeclarationStart()))
             throw new JsParseException(
                 "lexical declaration cannot appear in a single-statement context",
@@ -196,7 +196,7 @@ public sealed partial class JsParser
                     _current.Start);
         }
         // `async function …` declaration is never allowed as a sub-statement.
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("async")
             && _lex.Peek().Kind == JsTokenKind.Function)
             throw new JsParseException(
                 "async function declaration cannot appear in a single-statement context",

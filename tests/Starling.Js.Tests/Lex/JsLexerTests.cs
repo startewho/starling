@@ -568,6 +568,33 @@ public class JsLexerTests
         t.Value.Should().Be(1_000_000.0);
     }
 
+    [TestMethod]
+    public void Source_backed_tokens_preserve_public_text_and_values()
+    {
+        var lex = new JsLexer("alpha += 1_000n; 'plain'");
+
+        var identifier = lex.Next();
+        identifier.Kind.Should().Be(JsTokenKind.Identifier);
+        identifier.TextEquals("alpha").Should().BeTrue();
+        identifier.Lexeme.Should().Be("alpha");
+
+        var op = lex.Next();
+        op.Kind.Should().Be(JsTokenKind.PlusEq);
+        op.LexemeSpan.ToString().Should().Be("+=");
+
+        var bigint = lex.Next();
+        bigint.Kind.Should().Be(JsTokenKind.BigIntLiteral);
+        bigint.Lexeme.Should().Be("1_000n");
+        bigint.Value.Should().Be("1000");
+
+        lex.Next().Kind.Should().Be(JsTokenKind.Semicolon);
+
+        var str = lex.Next();
+        str.Kind.Should().Be(JsTokenKind.StringLiteral);
+        str.Lexeme.Should().Be("'plain'");
+        str.Value.Should().Be("plain");
+    }
+
     // ----- Numeric separator early errors ----------------------------------
 
     [Spec("ecma262", "https://tc39.es/ecma262/#prod-NumericLiteralSeparator", "12.9.3 Numeric Literals")]
