@@ -598,18 +598,17 @@ internal sealed class BoxTreeBuilder
             return;
         }
 
-        // An empty focused field renders no placeholder so the caret sits alone
-        // in the control while the user types (and after they clear it).
-        var focused = ReferenceEquals(input.OwnerDocument?.FocusedElement, input);
-
         // Default labels for submit/reset buttons match what browsers show
-        // when `value` is omitted — per HTML spec localised defaults.
+        // when `value` is omitted — per HTML spec localised defaults. For text
+        // fields the placeholder stays visible until the user actually types
+        // (HTML, the placeholder attribute) — focusing the field does not clear
+        // it, so we key on the value alone, not on focus.
         var fallback = type switch
         {
             "submit" => "Submit",
             "reset" => "Reset",
             "button" => "",
-            _ => focused ? "" : (input.GetAttribute("placeholder") ?? ""),
+            _ => input.GetAttribute("placeholder") ?? "",
         };
         if (!string.IsNullOrEmpty(fallback))
             box.AppendChild(new TextBox(fallback, style));
@@ -632,8 +631,9 @@ internal sealed class BoxTreeBuilder
             return;
         }
 
-        var focused = ReferenceEquals(element.OwnerDocument?.FocusedElement, element);
-        if (!focused && element.GetAttribute("placeholder") is { Length: > 0 } placeholder)
+        // Like text inputs, the placeholder shows until the user types — focus
+        // alone does not clear it.
+        if (element.GetAttribute("placeholder") is { Length: > 0 } placeholder)
             box.AppendChild(new TextBox(placeholder, style));
     }
 

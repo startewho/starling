@@ -114,10 +114,17 @@ public static class FontFaceParser
                     // need to re-emit hex-clean. We emit the raw digits the
                     // tokenizer saw via integer ToString — fractional values
                     // aren't legal here.
-                    sb.Append(((long)token.Token.Number).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    AppendUnicodeRangeNumber(sb, token.Token.Number);
                     break;
                 case CssTokenType.Dimension:
-                    sb.Append(((long)token.Token.Number).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    // The range separator '-' in "U+0000-00FF" gets swallowed
+                    // into the second value when its hex digits include a letter:
+                    // "-00FF" tokenizes as a Dimension (number -0, unit "FF"),
+                    // and -0 stringifies as "0", dropping the '-'. That collapses
+                    // the whole range to the single codepoint U+00FF. Recover the
+                    // sign from the token (double.IsNegative is true for -0) and
+                    // re-emit the '-' so the range survives.
+                    AppendUnicodeRangeNumber(sb, token.Token.Number);
                     sb.Append(token.Token.Unit);
                     break;
                 case CssTokenType.Delim:
@@ -130,6 +137,15 @@ public static class FontFaceParser
         }
         Flush();
         return ranges.Count == 0 ? null : new UnicodeRangeSet(ranges);
+    }
+
+    // Re-emit a unicode-range numeric token's digits, preserving a leading '-'
+    // (the range separator) that the tokenizer folded into the value's sign.
+    // double.IsNegative catches -0, which a plain comparison would miss.
+    private static void AppendUnicodeRangeNumber(System.Text.StringBuilder sb, double number)
+    {
+        if (double.IsNegative(number)) sb.Append('-');
+        sb.Append(((long)Math.Abs(number)).ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private static bool TryParseSingleRange(string spec, out int start, out int end)

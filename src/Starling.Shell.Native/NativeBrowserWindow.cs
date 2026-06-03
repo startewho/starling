@@ -33,17 +33,63 @@ internal sealed class NativeBrowserWindow : IDisposable
 {
     // ── Chrome ───────────────────────────────────────────────────────────────
 
-    // Chrome is two stacked rows: a tab strip on top, the URL bar below. The page
-    // viewport is the window minus the whole chrome, so ChromeHeightCss stays the
-    // single offset every hit-test / present uses.
-    private const double TabStripHeightCss = 32;
-    private const double UrlBarHeightCss = 44;
-    private const double ChromeHeightCss = TabStripHeightCss + UrlBarHeightCss;
-    private const double NewTabBtnW = 28;
+    // The native shell mirrors the Avalonia layout: a 232px sidebar at the left
+    // and a toolbar above the page on the right.
+    private const double SidebarWidthCss = 232;
+    private const double ToolbarHeightCss = 58;
+    private const double ChromeHeightCss = ToolbarHeightCss;
+    private const double StatusBarHeightCss = 32;
+    private const double ToolbarPadX = 16;
+    private const double ToolbarButtonW = 34;
+    private const double ToolbarButtonGap = 2;
+    private const double UrlBarHeightCss = 38;
+    private const double UrlFindChipW = 112;
+    private const double SidebarWordmarkHeightCss = 54;
+    private const double SidebarSectionHeightCss = 25;
+    private const double SidebarRowHeightCss = 34;
+    private const double SidebarRowGapCss = 1;
+    private const double SidebarRowXCss = 10;
+    private const double SidebarRowWCss = SidebarWidthCss - SidebarRowXCss * 2;
+    private const string SansFont = "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+    private const string MonoFont = "\"Geist Mono\", \"SFMono-Regular\", Menlo, Consolas, monospace";
+
+    // Chrome icons — the same 16×16 stroked SVG paths the Avalonia shell uses
+    // (Starling.Gui/Chrome/Icons.cs). Rendered as inline <svg> through the
+    // managed SVG rasterizer (see ChromeImageResolver) instead of Unicode glyphs.
+    private const string IconBack = "M9.5 3.5 5 8l4.5 4.5";
+    private const string IconFwd = "M6.5 3.5 11 8l-4.5 4.5";
+    private const string IconReload = "M13 8a5 5 0 1 1-1.5-3.5M13 3v2h-2";
+    private const string IconStop = "M4.5 4.5h7v7h-7z";
+    private const string IconFind = "M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM14 14l-3.2-3.2";
+    private const string IconBug = "M5 5.5V4a3 3 0 0 1 6 0v1.5M5 5.5h6v4a3 3 0 0 1-6 0v-4ZM3 7h2M11 7h2M3 11h2M11 11h2M8 5.5v8";
+    private const string IconLock = "M4.5 7V5.5a3.5 3.5 0 0 1 7 0V7M3.5 7h9v6h-9z";
+    private const string IconSun = "M8 5.25a2.75 2.75 0 1 0 0 5.5 2.75 2.75 0 0 0 0-5.5ZM8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1M12.6 12.6l-1.1-1.1M4.5 4.5l-1.1-1.1";
+    private const string IconMoon = "M13.25 9.5A5 5 0 1 1 6.5 2.75a4 4 0 0 0 6.75 6.75Z";
+
+    // An inline <svg> icon that inherits the surrounding `color` via
+    // stroke="currentColor", stroked at 1.5px on a 16×16 grid like the Avalonia set.
+    private static string Icon(string d, double size = 17) =>
+        $"<svg width=\"{size}\" height=\"{size}\" viewBox=\"0 0 16 16\" fill=\"none\" " +
+        "stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" " +
+        $"stroke-linejoin=\"round\"><path d=\"{d}\"/></svg>";
 
     // Context menu geometry (one shared definition for render + click hit-test).
     private const double MenuItemH = 26;
     private const double MenuW = 200;
+
+    private static readonly NativeBookmark[] Bookmarks =
+    [
+        new("b0t", "localhost:8088", "Todo", "http://localhost:8088/todo/"),
+        new("b0n", "localhost:8088", "Animations", "http://localhost:8088/animations/"),
+        new("b0a", "example.com", "Example", "https://example.com"),
+        new("b0b", "jsonplaceholder.typicode.com", "Todos", "https://jsonplaceholder.typicode.com/todos"),
+        new("b0c", "netclaw.dev", "netclaw.dev", "https://netclaw.dev/"),
+        new("b1", "google.com", "Google", "https://google.com"),
+        new("b2", "localhost:8088", "Words", "http://localhost:8088/words/"),
+        new("b3", "ladybird.org", "Ladybird", "https://ladybird.org/"),
+        new("b4", "www.mcmaster.com", "McMaster-Carr", "https://www.mcmaster.com/"),
+        new("b5", "github.com", "GitHub", "https://github.com/"),
+    ];
 
     // ── Demo HTML written to temp files ─────────────────────────────────────
 
@@ -132,59 +178,259 @@ internal sealed class NativeBrowserWindow : IDisposable
     private static string EscapeHtml(string s) => s
         .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 
-    /// <summary>
-    /// Width of one tab in the strip: the available width (minus the new-tab
-    /// button) split evenly across the open tabs, clamped to a sane range. Both
-    /// the renderer and the click hit-test use this so they never drift.
-    /// </summary>
-    private static double TabWidth(float logicalW, int tabCount) =>
-        Math.Clamp((logicalW - NewTabBtnW) / Math.Max(1, tabCount), 60, 220);
+    private static float PageViewportWidth(float logicalW) =>
+        Math.Max(1, logicalW - (float)SidebarWidthCss);
 
-    /// <summary>
-    /// Lays out the chrome as one HTML document — a tab strip stacked over the URL
-    /// bar — at <paramref name="logicalW"/> × <see cref="ChromeHeightCss"/> CSS px.
-    /// Uses the layout engine directly, the same pattern as the page demo.
-    /// </summary>
-    private static BlockBox BuildChrome(
-        float logicalW, List<string> tabLabels, int activeIndex,
-        double tabWidth, string url, bool urlFocused)
+    private static float PageViewportHeight(float logicalH) =>
+        Math.Max(1, logicalH - (float)ChromeHeightCss - (float)StatusBarHeightCss);
+
+    private static double ToolbarButtonX(int index) =>
+        ToolbarPadX + index * (ToolbarButtonW + ToolbarButtonGap);
+
+    private static double UrlBarX() =>
+        ToolbarPadX + (ToolbarButtonW + ToolbarButtonGap) * 3 + 12;
+
+    // The right cluster has two buttons: DevTools (inner) then the theme toggle
+    // (rightmost). The URL bar fills the gap between the nav buttons and the
+    // cluster. These mirror the flex layout in BuildChrome for click hit-testing.
+    private static double ThemeToggleBtnX(float contentW) =>
+        Math.Max(UrlBarX() + 188, contentW - ToolbarPadX - ToolbarButtonW - ToolbarButtonGap);
+
+    private static double DevToolsBtnX(float contentW) =>
+        ThemeToggleBtnX(contentW) - ToolbarButtonW - ToolbarButtonGap;
+
+    private static double UrlBarW(float contentW) =>
+        Math.Max(120, DevToolsBtnX(contentW) - UrlBarX() - 12);
+
+    private static int SidebarBookmarkIndexAt(double y)
     {
-        var multi = tabLabels.Count > 1;
-        var sb = new StringBuilder();
-        sb.Append($"<body style=\"margin:0;padding:0;background:#1f1f1f;width:{logicalW}px;" +
-                  $"height:{ChromeHeightCss}px;font-family:sans-serif\">");
+        var localY = y - SidebarWordmarkHeightCss - SidebarSectionHeightCss;
+        if (localY < 0) return -1;
+        var stride = SidebarRowHeightCss + SidebarRowGapCss;
+        var idx = (int)(localY / stride);
+        if (idx < 0 || idx >= Bookmarks.Length) return -1;
+        return localY - idx * stride < SidebarRowHeightCss ? idx : -1;
+    }
 
-        // Tab strip.
-        sb.Append($"<div style=\"display:flex;height:{TabStripHeightCss}px;align-items:stretch\">");
-        for (var i = 0; i < tabLabels.Count; i++)
+    private static string HostKey(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "";
+        return uri.IsDefaultPort ? uri.Host : uri.Authority;
+    }
+
+    private static string BookmarkColor(string host)
+    {
+        string[] colors = ["#e07a55", "#4a8a78", "#6e7fc6", "#d18a3d", "#9d6fb5", "#c25e7a", "#5a8a5a"];
+        var hash = 0;
+        foreach (var ch in host) hash = unchecked(hash * 31 + ch);
+        return colors[(int)((uint)hash % colors.Length)];
+    }
+
+    private static char BookmarkInitial(NativeBookmark bookmark)
+    {
+        var source = bookmark.Title.Length > 0 ? bookmark.Title : bookmark.Host;
+        return source.Length == 0 ? '?' : char.ToUpperInvariant(source[0]);
+    }
+
+    private static string JsEngineLabel() =>
+        Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") is { Length: > 0 } engine
+            ? engine
+            : "jint";
+
+    private static string RenderBackendLabel() =>
+        Environment.GetEnvironmentVariable("STARLING_PAINT_BACKEND") is { Length: > 0 } backend
+            ? backend
+            : "imagesharp-gpu";
+
+    private static (string Scheme, string Sep, string Host, string Path) UrlSegments(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return ("", "", "", "");
+        var schemeIdx = url.IndexOf("://", StringComparison.Ordinal);
+        if (schemeIdx < 0) return ("", "", url, "");
+
+        var scheme = url[..schemeIdx];
+        var rest = url[(schemeIdx + 3)..];
+        var slashIdx = rest.IndexOfAny(['/', '?', '#']);
+        if (slashIdx < 0) return (scheme, "://", rest, "");
+        return (scheme, "://", rest[..slashIdx], rest[slashIdx..]);
+    }
+
+    private static BlockBox BuildChrome(
+        float contentW, NativeTheme t, ChromeImageResolver icons, string url, bool urlFocused,
+        bool canGoBack, bool canGoForward, bool loading, bool devtoolsActive, NativeThemeMode themeMode)
+    {
+        string ToolbarButton(string label, string iconSvg, bool enabled, bool on = false)
         {
-            var bg = i == activeIndex ? "#3d3d3d" : "#2b2b2b";
-            var fg = i == activeIndex ? "#ffffff" : "#bbbbbb";
-            sb.Append($"<div style=\"width:{tabWidth:F0}px;background:{bg};color:{fg};font-size:12px;" +
-                      "padding:0 8px;display:flex;align-items:center;border-right:1px solid #1f1f1f;" +
-                      "white-space:nowrap;overflow:hidden\">");
-            sb.Append($"<span style=\"flex:1;overflow:hidden;text-overflow:ellipsis\">{EscapeHtml(tabLabels[i])}</span>");
-            if (multi) sb.Append("<span style=\"margin-left:6px;color:#888\">&#215;</span>");
-            sb.Append("</div>");
+            var fg = enabled ? (on ? t.Accent : t.Text2) : t.Faint;
+            var bg = on ? t.AccentBg : "transparent";
+            return $"<div title=\"{EscapeHtml(label)}\" style=\"width:{ToolbarButtonW}px;height:{ToolbarButtonW}px;" +
+                   $"margin-right:{ToolbarButtonGap}px;border-radius:9px;background:{bg};color:{fg};" +
+                   $"display:flex;align-items:center;justify-content:center\">{iconSvg}</div>";
         }
-        sb.Append($"<div style=\"width:{NewTabBtnW:F0}px;color:#bbb;font-size:18px;" +
-                  "display:flex;align-items:center;justify-content:center\">+</div>");
-        sb.Append("</div>");
 
-        // URL bar. A caret is appended (before escaping) while it is focused.
+        var sb = new StringBuilder();
+        sb.Append($"<body style=\"margin:0;padding:0;background:{t.Bg};width:{contentW}px;" +
+                  $"height:{ChromeHeightCss}px;font-family:{SansFont}\">");
+
         var shown = urlFocused ? url + "│" : url;
         var field = urlFocused
-            ? "background:#454545;border:1px solid #5b9dd9"
-            : "background:#3d3d3d;border:1px solid #3d3d3d";
-        sb.Append($"<div style=\"height:{UrlBarHeightCss}px;background:#2b2b2b;display:flex;align-items:center\">");
-        sb.Append($"<div style=\"flex:1;margin:6px 12px;padding:6px 11px;{field};border-radius:6px;" +
-                  "font-size:13px;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">" +
-                  $"{EscapeHtml(shown)}</div>");
+            ? $"background:{t.Surface};border:1px solid {t.Accent};box-shadow:0 0 0 3px {t.AccentBg}"
+            : $"background:{t.Surface};border:1px solid {t.Border}";
+        var secure = url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        var showWhole = urlFocused || shown.StartsWith("Find:", StringComparison.Ordinal);
+        var segments = UrlSegments(shown);
+
+        sb.Append($"<div style=\"height:{ToolbarHeightCss}px;background:{t.Bg};display:flex;align-items:center;" +
+                  $"padding:0 {ToolbarPadX}px\">");
+        sb.Append(ToolbarButton("Back", Icon(IconBack), canGoBack));
+        sb.Append(ToolbarButton("Forward", Icon(IconFwd), canGoForward));
+        sb.Append(ToolbarButton("Reload", Icon(loading ? IconStop : IconReload), true, loading));
+
+        // URL bar.
+        sb.Append($"<div style=\"height:{UrlBarHeightCss}px;flex:1;margin:0 12px;{field};border-radius:10px;" +
+                  $"display:flex;align-items:center;overflow:hidden;color:{t.Text}\">");
+        sb.Append($"<div style=\"width:38px;color:{(secure ? t.Accent : t.Muted)};" +
+                  $"display:flex;align-items:center;justify-content:center\">{Icon(IconLock, 13)}</div>");
+        sb.Append($"<div style=\"flex:1;font-family:{MonoFont};font-size:13px;white-space:nowrap;" +
+                  $"overflow:hidden;text-overflow:ellipsis;color:{t.Text};display:flex;align-items:center\">");
+        if (showWhole)
+        {
+            sb.Append($"<span style=\"color:{t.Text};overflow:hidden;text-overflow:ellipsis\">" +
+                      $"{EscapeHtml(shown)}</span>");
+        }
+        else
+        {
+            sb.Append($"<span style=\"color:{t.Faint}\">{EscapeHtml(segments.Scheme)}</span>");
+            sb.Append($"<span style=\"color:{t.Faint}\">{EscapeHtml(segments.Sep)}</span>");
+            sb.Append($"<span style=\"color:{t.Text}\">{EscapeHtml(segments.Host)}</span>");
+            sb.Append($"<span style=\"color:{t.Muted};overflow:hidden;text-overflow:ellipsis\">{EscapeHtml(segments.Path)}</span>");
+        }
+        sb.Append("</div>");
+
+        // Loading progress pill (mirrors the Avalonia URL-bar pill).
+        if (loading)
+            sb.Append($"<div style=\"display:flex;align-items:center;border-radius:999px;background:{t.AccentBg};" +
+                      $"color:{t.Accent};font-family:{MonoFont};font-size:10.5px;padding:3px 10px;margin-right:6px;" +
+                      "white-space:nowrap\">loading</div>");
+
+        // Divider + find chip.
+        sb.Append($"<div style=\"width:1px;height:22px;background:{t.Border};margin:0 12px\"></div>");
+        sb.Append($"<div style=\"display:flex;align-items:center;color:{t.Muted};font-family:{SansFont};" +
+                  "font-size:12px;padding-right:14px;white-space:nowrap\">" +
+                  $"<span style=\"display:flex;align-items:center;margin-right:7px\">{Icon(IconFind, 13)}</span>" +
+                  $"<span>Find</span><span style=\"font-family:{MonoFont};font-size:10px;" +
+                  $"color:{t.Faint};border:1px solid {t.Border};border-radius:4px;padding:0 5px;margin-left:7px\">&#8984;F</span></div>");
+        sb.Append("</div>"); // end URL bar
+
+        // Right cluster: DevTools (inner) then the theme toggle (rightmost).
+        sb.Append(ToolbarButton("DevTools", Icon(IconBug), true, devtoolsActive));
+        var toggleIcon = themeMode == NativeThemeMode.Light ? IconMoon : IconSun;
+        sb.Append(ToolbarButton("Toggle theme", Icon(toggleIcon), true));
+        sb.Append("</div></body>");
+
+        return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance, icons)
+            .LayoutDocument(HtmlParser.Parse(sb.ToString()),
+                new LayoutSize(contentW, ChromeHeightCss));
+    }
+
+    private static BlockBox BuildSidebar(float logicalH, NativeTheme t, string activeBookmarkHost)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<body style=\"margin:0;padding:0;background:{t.Panel};width:{SidebarWidthCss}px;" +
+                  $"height:{logicalH}px;font-family:{SansFont};position:relative;color:{t.Text};" +
+                  $"border-right:1px solid {t.Border}\">");
+
+        sb.Append("<div style=\"position:absolute;left:18px;top:16px;height:22px;" +
+                  "display:flex;align-items:center\">");
+        sb.Append($"<div style=\"width:22px;height:22px;border-radius:7px;" +
+                  $"background:linear-gradient(135deg,{t.Accent},{t.Accent2});box-shadow:0 1px 2px {t.AccentLine};" +
+                  "color:#ffffff;font-size:13px;font-weight:700;display:flex;" +
+                  "align-items:center;justify-content:center;margin-right:9px\">S</div>");
+        sb.Append($"<div style=\"font-size:15.5px;font-weight:600;color:{t.Text}\">Starling</div>");
+        sb.Append("</div>");
+
+        sb.Append($"<div style=\"position:absolute;left:22px;top:{SidebarWordmarkHeightCss + 8}px;" +
+                  $"width:{SidebarWidthCss - 44}px;height:11px;display:flex;align-items:center;" +
+                  $"color:{t.Muted};font-size:11px;font-weight:500\">");
+        sb.Append("<div style=\"flex:1\">Bookmarks</div>");
+        sb.Append($"<div style=\"font-family:monospace;color:{t.Faint};font-size:10px\">{Bookmarks.Length}</div>");
+        sb.Append("</div>");
+
+        for (var i = 0; i < Bookmarks.Length; i++)
+        {
+            var b = Bookmarks[i];
+            var top = SidebarWordmarkHeightCss + SidebarSectionHeightCss + i * (SidebarRowHeightCss + SidebarRowGapCss);
+            var active = string.Equals(activeBookmarkHost, b.Host, StringComparison.OrdinalIgnoreCase);
+            var bg = active ? t.Surface : "transparent";
+            var border = active ? t.Hair : "transparent";
+            var shadow = active ? ";box-shadow:0 1px 2px rgba(0,0,0,0.20)" : "";
+            var fg = active ? t.Text : t.Text2;
+            sb.Append($"<div style=\"position:absolute;left:{SidebarRowXCss}px;top:{top}px;" +
+                      $"width:{SidebarRowWCss - 2}px;height:{SidebarRowHeightCss}px;border-radius:7px;" +
+                      $"border:1px solid {border};background:{bg}{shadow};" +
+                      "position:relative;overflow:hidden\">");
+            sb.Append($"<div style=\"position:absolute;left:10px;top:9px;width:16px;height:16px;" +
+                      $"border-radius:4px;background:{BookmarkColor(b.Host)};color:#ffffff;" +
+                      "font-size:9px;font-weight:600;text-align:center;line-height:16px\">" +
+                      $"{BookmarkInitial(b)}</div>");
+            sb.Append($"<div style=\"position:absolute;left:37px;top:8px;width:{SidebarRowWCss - 50}px;" +
+                      $"height:18px;font-size:13px;color:{fg};white-space:nowrap;overflow:hidden;" +
+                      $"text-overflow:ellipsis\">{EscapeHtml(b.Title)}</div>");
+            sb.Append("</div>");
+        }
+
+        const double footerHeight = 76;
+        var footerTop = Math.Max(SidebarWordmarkHeightCss + SidebarSectionHeightCss + Bookmarks.Length * (SidebarRowHeightCss + SidebarRowGapCss) + 16,
+            logicalH - footerHeight);
+        sb.Append($"<div style=\"position:absolute;left:18px;top:{footerTop}px;width:{SidebarWidthCss - 36}px;height:{footerHeight}px\">");
+        sb.Append(BuildFactsRenderer.Render(JsEngineLabel(), RenderBackendLabel(), t.Faint, t.Muted));
+        sb.Append("</div>");
         sb.Append("</div></body>");
 
         return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
             .LayoutDocument(HtmlParser.Parse(sb.ToString()),
-                new LayoutSize(logicalW, ChromeHeightCss));
+                new LayoutSize(SidebarWidthCss, logicalH));
+    }
+
+    // The bottom status bar — mirrors Starling.Gui/Chrome/StatusBar.cs: a state
+    // dot + label, a hint, then View / Doc / Hist cells with hairline separators.
+    private static BlockBox BuildStatusBar(
+        float contentW, NativeTheme t, NativeStatusState state, string hint,
+        string view, string doc, string hist)
+    {
+        var (dot, label) = state switch
+        {
+            NativeStatusState.Loading => (t.Warn, "Loading"),
+            NativeStatusState.Error => (t.Err, "Error"),
+            _ => (t.Accent, "Ready"),
+        };
+        var labelColor = state == NativeStatusState.Error ? t.Err : t.Text2;
+        var hintColor = state == NativeStatusState.Error ? t.Err : t.Text2;
+
+        string Kv(string key, string value) =>
+            $"<div style=\"border-left:1px solid {t.Border};padding:0 13px;height:{StatusBarHeightCss}px;" +
+            "display:flex;align-items:center\">" +
+            $"<span style=\"font-size:10.5px;color:{t.Faint}\">{EscapeHtml(key)}</span>" +
+            $"<span style=\"margin-left:7px;font-family:{MonoFont};font-size:11px;color:{t.Text2}\">{EscapeHtml(value)}</span></div>";
+
+        var sb = new StringBuilder();
+        sb.Append($"<body style=\"margin:0;padding:0;background:{t.Panel};width:{contentW}px;" +
+                  $"height:{StatusBarHeightCss}px;font-family:{SansFont};border-top:1px solid {t.Border}\">");
+        sb.Append($"<div style=\"height:{StatusBarHeightCss}px;display:flex;align-items:center\">");
+        sb.Append("<div style=\"padding:0 14px 0 16px;display:flex;align-items:center\">");
+        sb.Append($"<div style=\"width:6px;height:6px;border-radius:3px;background:{dot}\"></div>");
+        sb.Append($"<span style=\"margin-left:8px;font-size:11.5px;font-weight:500;color:{labelColor}\">{label}</span></div>");
+        sb.Append($"<div style=\"flex:1;padding:0 14px;font-family:{MonoFont};font-size:11px;color:{hintColor};" +
+                  "white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">" +
+                  $"{EscapeHtml(hint)}</div>");
+        sb.Append(Kv("View", view));
+        sb.Append(Kv("Doc", doc));
+        sb.Append(Kv("Hist", hist));
+        sb.Append("</div></body>");
+
+        return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+            .LayoutDocument(HtmlParser.Parse(sb.ToString()),
+                new LayoutSize(contentW, StatusBarHeightCss));
     }
 
     // ── Window loop ──────────────────────────────────────────────────────────
@@ -269,9 +515,22 @@ internal sealed class NativeBrowserWindow : IDisposable
         string urlBarText = "";
 
         // Chrome state — rebuilt only when its signature (tabs / active index /
-        // labels / URL text / focus / width) changes.
+        // labels / URL text / focus / width / theme / status) changes.
         BlockBox? chromeBox = null;
+        BlockBox? sidebarBox = null;
+        BlockBox? statusBox = null;
         string chromeSig = "";
+
+        // Theme. Like the Avalonia shell, the selection lives in memory and starts
+        // on Dark; the toolbar sun/moon button cycles Dark → Light → Contrast.
+        var themeMode = NativeThemeMode.Dark;
+
+        // The icon resolver rasterizes the chrome's inline <svg> glyphs; one
+        // instance for the window's lifetime so decoded icons stay cached.
+        using var icons = new ChromeImageResolver();
+
+        // Whether the most recent navigation failed — drives the status-bar state.
+        bool lastNavError = false;
 
         // Hover + animation styling. hoverElement is the innermost element
         // under the pointer; hoverOverrides maps each affected element to its
@@ -326,7 +585,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         // the page when the task completes. Page viewport is the window minus the
         // chrome strip at the top.
         var firstSession = new BrowserSession();
-        var options = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
+        var options = new RenderOptions(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
         tabs.Add(new Tab(firstSession));
         activeIndex = 0;
         session = firstSession;
@@ -354,7 +613,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             mouse.Scroll += (_, wheel) =>
             {
                 if (page is null) return;
-                var maxScroll = Math.Max(0, page.DocumentHeight - (logicalH - ChromeHeightCss));
+                var maxScroll = Math.Max(0, page.DocumentHeight - PageViewportHeight(logicalH));
                 var newScroll = Math.Clamp(scrollY - wheel.Y * 40, 0, maxScroll);
                 if (newScroll != scrollY) { scrollY = newScroll; needsPresent = true; }
             };
@@ -363,16 +622,15 @@ internal sealed class NativeBrowserWindow : IDisposable
             {
                 if (page is null) return;
 
-                // Pointer is over the chrome strip — use default cursor, drop any
-                // page hover, skip the page hit-test.
-                if (pos.Y < ChromeHeightCss)
+                // Pointer is over chrome. Use default cursor and skip page hover.
+                if (pos.X < SidebarWidthCss || pos.Y < ChromeHeightCss)
                 {
                     SetCursor(m.Cursor, "default");
                     UpdateHover(null);
                     return;
                 }
 
-                var pageX = pos.X;
+                var pageX = pos.X - SidebarWidthCss;
                 var pageY = (pos.Y - ChromeHeightCss) + scrollY;
 
                 var hit = BoxHitTester.HitTest(
@@ -394,8 +652,6 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             mouse.MouseDown += (m, button) =>
             {
-                if (page is null) return;
-
                 var pos = m.Position;
 
                 // An open context menu eats the next click: run the item under it,
@@ -421,49 +677,81 @@ internal sealed class NativeBrowserWindow : IDisposable
                 // Right-click opens the context menu.
                 if (button == MouseButton.Right)
                 {
+                    if (page is null) return;
                     OpenMenuAt(pos.X, pos.Y);
                     return;
                 }
 
                 if (button != MouseButton.Left) return;
 
-                // Click is over the tab strip — switch / close / new tab.
-                if (pos.Y < TabStripHeightCss)
+                // Sidebar bookmarks.
+                if (pos.X < SidebarWidthCss)
                 {
-                    var n = tabs.Count;
-                    var tw = TabWidth(logicalW, n);
-                    var x = pos.X;
-                    if (x >= n * tw && x < n * tw + NewTabBtnW) { NewTab(startUrl); return; }
-                    var idx = (int)(x / tw);
-                    if (idx >= 0 && idx < n)
+                    if (pos.X >= SidebarRowXCss && pos.X <= SidebarRowXCss + SidebarRowWCss)
                     {
-                        // Right ~18px of a tab is its close affordance when >1 tab.
-                        if (n > 1 && x - idx * tw > tw - 18) CloseTab(idx);
-                        else SwitchTab(idx);
+                        var idx = SidebarBookmarkIndexAt(pos.Y);
+                        if (idx >= 0) Navigate(Bookmarks[idx].Url);
                     }
                     return;
                 }
 
-                // Click is over the URL bar — focus + select it.
+                // Toolbar buttons and the URL bar.
                 if (pos.Y < ChromeHeightCss)
                 {
-                    if (focusedInput is not null)
+                    var x = pos.X - SidebarWidthCss;
+                    if (x >= ToolbarButtonX(0) && x < ToolbarButtonX(0) + ToolbarButtonW) { GoBack(); return; }
+                    if (x >= ToolbarButtonX(1) && x < ToolbarButtonX(1) + ToolbarButtonW) { GoForward(); return; }
+                    if (x >= ToolbarButtonX(2) && x < ToolbarButtonX(2) + ToolbarButtonW) { Reload(); return; }
+
+                    var contentW = PageViewportWidth(logicalW);
+                    var toggle = ThemeToggleBtnX(contentW);
+                    if (x >= toggle && x < toggle + ToolbarButtonW)
                     {
-                        page.Scripting?.DispatchEvent(focusedInput,
-                            new FocusEvent("blur", new EventInit(Bubbles: false)));
-                        focusedInput = null;
-                        page.Document.FocusedElement = null;
+                        themeMode = NativeTheme.Next(themeMode);
+                        chromeSig = "";   // force a chrome rebuild under the new theme
+                        needsPresent = true;
+                        return;
                     }
-                    urlBarFocused = true;
-                    urlBarText = page.Url ?? "";
-                    needsPresent = true;
+
+                    var devtools = DevToolsBtnX(contentW);
+                    if (x >= devtools && x < devtools + ToolbarButtonW)
+                    {
+                        devtoolsActive = !devtoolsActive;
+                        devtoolsOverlay = null;
+                        needsPresent = true;
+                        return;
+                    }
+
+                    var ux = UrlBarX();
+                    var uw = UrlBarW(PageViewportWidth(logicalW));
+                    if (x >= ux && x < ux + uw)
+                    {
+                        if (x >= ux + Math.Max(0, uw - UrlFindChipW))
+                        {
+                            OpenFind();
+                            return;
+                        }
+
+                        if (focusedInput is not null && page is not null)
+                        {
+                            page.Scripting?.DispatchEvent(focusedInput,
+                                new FocusEvent("blur", new EventInit(Bubbles: false)));
+                            focusedInput = null;
+                            page.Document.FocusedElement = null;
+                        }
+                        urlBarFocused = true;
+                        urlBarText = page?.Url ?? loadingUrl;
+                        needsPresent = true;
+                    }
                     return;
                 }
+
+                if (page is null) return;
 
                 // Click landed in the page — drop URL-bar focus.
                 if (urlBarFocused) { urlBarFocused = false; needsPresent = true; }
 
-                var pageX = pos.X;
+                var pageX = pos.X - SidebarWidthCss;
                 var pageY = (pos.Y - ChromeHeightCss) + scrollY;
 
                 var hit = BoxHitTester.HitTest(
@@ -863,14 +1151,36 @@ internal sealed class NativeBrowserWindow : IDisposable
                 urlFocusVisual = urlBarFocused;
             }
 
-            var labels = new List<string>(tabs.Count);
-            for (var i = 0; i < tabs.Count; i++) labels.Add(LabelOf(i));
-            var sig = $"{activeIndex}|{string.Join((char)1, labels)}|{shownUrl}|{urlFocusVisual}|{logicalW}";
+            var contentW = PageViewportWidth(logicalW);
+            var activeBookmarkHost = HostKey(page?.Url ?? loadingUrl);
+            var loadingNav = pendingNav is not null;
+            var theme = NativeTheme.For(themeMode);
+
+            // Status-bar fields — real engine state, mirroring the Avalonia bar.
+            var statusState = loadingNav ? NativeStatusState.Loading
+                            : lastNavError ? NativeStatusState.Error
+                            : NativeStatusState.Ready;
+            var statusHint = statusState switch
+            {
+                NativeStatusState.Loading => "Loading…",
+                NativeStatusState.Error => "Load failed",
+                _ => page?.Url ?? "",
+            };
+            var statusView = page is not null ? $"{page.Viewport.Width}×{page.Viewport.Height}" : "—";
+            var statusDoc = page is not null ? $"{(int)page.DocumentHeight} px" : "—";
+            var statusHist = $"{session.History.Index + 1}/{Math.Max(1, session.History.Count)}";
+
+            var sig = $"{shownUrl}|{urlFocusVisual}|{contentW}|{logicalH}|{activeBookmarkHost}|" +
+                      $"{session.History.CanGoBack}|{session.History.CanGoForward}|{loadingNav}|{devtoolsActive}|" +
+                      $"{themeMode}|{statusState}|{statusHint}|{statusView}|{statusDoc}|{statusHist}";
             if (chromeBox is null || sig != chromeSig)
             {
                 chromeBox = BuildChrome(
-                    logicalW, labels, activeIndex,
-                    TabWidth(logicalW, tabs.Count), shownUrl, urlFocusVisual);
+                    contentW, theme, icons, shownUrl, urlFocusVisual,
+                    session.History.CanGoBack,
+                    session.History.CanGoForward, loadingNav, devtoolsActive, themeMode);
+                sidebarBox = BuildSidebar(logicalH, theme, activeBookmarkHost);
+                statusBox = BuildStatusBar(contentW, theme, statusState, statusHint, statusView, statusDoc, statusHist);
                 chromeSig = sig;
             }
 
@@ -886,7 +1196,11 @@ internal sealed class NativeBrowserWindow : IDisposable
                     Scale = dpr,
                     ChromeRoot = chromeBox,
                     ChromeHeightCss = ChromeHeightCss,
+                    LeftChromeRoot = sidebarBox,
+                    LeftChromeWidthCss = SidebarWidthCss,
                     PageRoot = loadingBox,
+                    BottomChromeRoot = statusBox,
+                    BottomChromeHeightCss = StatusBarHeightCss,
                 }, target);
                 var okLoad = loadFrame.Presented;
                 if (okLoad) presented++; else failures++;
@@ -906,6 +1220,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                     Scale = dpr,
                     ChromeRoot = chromeBox,
                     ChromeHeightCss = ChromeHeightCss,
+                    LeftChromeRoot = sidebarBox,
+                    LeftChromeWidthCss = SidebarWidthCss,
                     PageRoot = page!.Root,
                     ScrollX = 0,
                     ScrollY = scrollY,
@@ -914,6 +1230,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                     Images = page.ImageResolver,
                     OverlayRoot = findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
                     ScreenOverlayRoot = screenOverlay,
+                    BottomChromeRoot = statusBox,
+                    BottomChromeHeightCss = StatusBarHeightCss,
                 }, target);
                 var ok = frame.Presented;
 
@@ -948,7 +1266,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         void RefreshLayout()
         {
             if (page is null) return;
-            var reOpts = new RenderOptions(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
+            var reOpts = new RenderOptions(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
             var successor = session.RelayoutCurrent(page, reOpts);
             page.Dispose();
             page = successor;
@@ -962,9 +1280,9 @@ internal sealed class NativeBrowserWindow : IDisposable
             PushA11y();
         }
 
-        // The page viewport is the window minus the chrome strip at the top.
+        // The page viewport is the window minus the sidebar and toolbar.
         RenderOptions NavOpts() =>
-            new(new Size((int)logicalW, (int)(logicalH - ChromeHeightCss)));
+            new(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
 
         // Swap a freshly-laid-out page into the ACTIVE tab. On the initial load the
         // old page is null (the tab opened on a loading state). On a failed load the
@@ -973,10 +1291,12 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             if (navResult.IsErr)
             {
+                lastNavError = true;
                 Console.Error.WriteLine($"browser: nav failed: {navResult.Error.Message}");
                 return;
             }
 
+            lastNavError = false;
             var oldPage = page;
             renderer.ResetForNavigation();
             scrollY = 0;
@@ -1037,6 +1357,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             loadingUrl = url;
             pendingNav = session.NavigateInteractiveAsync(url, NavOpts());
             pendingNavTab = activeIndex;
+            needsPresent = true;
         }
 
         void GoBack()
@@ -1044,6 +1365,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (!session.History.CanGoBack) return;
             pendingNav = session.BackInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
+            needsPresent = true;
         }
 
         void GoForward()
@@ -1051,12 +1373,15 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (!session.History.CanGoForward) return;
             pendingNav = session.ForwardInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
+            needsPresent = true;
         }
 
         void Reload()
         {
+            if (session.History.Current is null) return;
             pendingNav = session.ReloadInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
+            needsPresent = true;
         }
 
         // ── Tabs ───────────────────────────────────────────────────────────────
@@ -1147,15 +1472,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             LoadActive();
         }
 
-        // The active tab's label tracks the live page; others use their saved page.
-        string LabelOf(int i)
-        {
-            var p = i == activeIndex ? page : tabs[i].Page;
-            if (!string.IsNullOrWhiteSpace(p?.Title)) return p!.Title!;
-            var u = p?.Url;
-            return string.IsNullOrEmpty(u) ? "New Tab" : u;
-        }
-
         // ── Find-in-page ─────────────────────────────────────────────────────
 
         void OpenFind()
@@ -1215,10 +1531,10 @@ internal sealed class NativeBrowserWindow : IDisposable
 
                 findCursor = idx;
                 var f = frags[idx];
-                var viewportH = logicalH - ChromeHeightCss;
+                var viewportH = PageViewportHeight(logicalH);
                 var maxScroll = Math.Max(0, page.DocumentHeight - viewportH);
                 scrollY = Math.Clamp(f.Y - viewportH / 3, 0, maxScroll);
-                findOverlay = BuildFindOverlay(f, logicalW, page.DocumentHeight);
+                findOverlay = BuildFindOverlay(f, PageViewportWidth(logicalW), page.DocumentHeight);
                 break;
             }
             needsPresent = true;
@@ -1234,13 +1550,13 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             var html =
                 $"<body style=\"margin:0;padding:0;position:relative;" +
-                $"width:{logicalW}px;height:{page.DocumentHeight}px\">" +
+                $"width:{PageViewportWidth(logicalW)}px;height:{page.DocumentHeight}px\">" +
                 $"<div style=\"position:absolute;left:{pos.X + 4}px;top:{pos.Y + 2}px;" +
                 "background:#fff3c4;color:#000;font-size:13px;text-decoration:underline;" +
                 $"padding:0 2px;white-space:nowrap\">{EscapeHtml(preedit)}</div></body>";
             return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
                 .LayoutDocument(HtmlParser.Parse(html),
-                    new LayoutSize(logicalW, (float)Math.Max(1, page.DocumentHeight)));
+                    new LayoutSize(PageViewportWidth(logicalW), (float)Math.Max(1, page.DocumentHeight)));
         }
 
         // ── Context menu ─────────────────────────────────────────────────────
@@ -1274,10 +1590,10 @@ internal sealed class NativeBrowserWindow : IDisposable
             menuItems.Clear();
 
             // Link under the pointer (page area only) adds link actions.
-            if (y >= ChromeHeightCss)
+            if (x >= SidebarWidthCss && y >= ChromeHeightCss)
             {
                 var hit = BoxHitTester.HitTest(
-                    page.Root, x, (y - ChromeHeightCss) + scrollY,
+                    page.Root, x - SidebarWidthCss, (y - ChromeHeightCss) + scrollY,
                     viewportX: 0, viewportY: scrollY, scrollOffsets: null);
                 if (hit.LinkAnchor is { } a)
                 {
@@ -1306,13 +1622,14 @@ internal sealed class NativeBrowserWindow : IDisposable
         // The page-area placeholder shown while the first page loads.
         BlockBox BuildLoadingPage()
         {
-            var h = Math.Max(1, logicalH - ChromeHeightCss);
+            var w = PageViewportWidth(logicalW);
+            var h = PageViewportHeight(logicalH);
             var html =
                 $"<body style=\"margin:0;padding:0;background:#ffffff;font-family:sans-serif;" +
-                $"width:{logicalW}px;height:{h}px;display:flex;align-items:center;justify-content:center\">" +
+                $"width:{w}px;height:{h}px;display:flex;align-items:center;justify-content:center\">" +
                 "<div style=\"font-size:15px;color:#888\">Loading…</div></body>";
             return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
-                .LayoutDocument(HtmlParser.Parse(html), new LayoutSize(logicalW, (float)h));
+                .LayoutDocument(HtmlParser.Parse(html), new LayoutSize(w, (float)h));
         }
 
         // ── Devtools (read-only DOM inspector) ───────────────────────────────
@@ -1321,7 +1638,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             const double panelW = 380;
             var panelX = Math.Max(0, logicalW - panelW);
-            var panelH = logicalH - ChromeHeightCss;
+            panelX = Math.Max(SidebarWidthCss, panelX);
+            var panelH = PageViewportHeight(logicalH);
             var maxRows = Math.Max(0, (int)((panelH - 30) / 16));
 
             var sb = new StringBuilder();
@@ -1483,6 +1801,10 @@ internal sealed class NativeBrowserWindow : IDisposable
             return null;
         }
     }
+
+    // ── Chrome models ─────────────────────────────────────────────────────────
+
+    private sealed record NativeBookmark(string Id, string Host, string Title, string Url);
 
     // ── Tab ───────────────────────────────────────────────────────────────────
 

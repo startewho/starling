@@ -7,8 +7,9 @@ namespace Starling.Layout.Tests;
 /// <summary>
 /// Verifies the editable-input layout hooks: the live <c>Element.InputValue</c>
 /// (typed text / scripted assignment) renders in place of the <c>value</c>
-/// content attribute, and a focused empty field drops its placeholder so the
-/// caret sits alone — both prerequisites for click-to-type.
+/// content attribute, the placeholder survives focus (it only clears once the
+/// user types), and an empty text field keeps one line box of height instead of
+/// collapsing — all prerequisites for click-to-type that doesn't jump the box.
 /// </summary>
 [TestClass]
 public sealed class FocusedInputLayoutTests
@@ -29,13 +30,15 @@ public sealed class FocusedInputLayoutTests
     }
 
     [TestMethod]
-    public void Focused_empty_input_drops_its_placeholder()
+    public void Focused_empty_input_keeps_its_placeholder()
     {
+        // The placeholder clears only once the user types — focusing the field
+        // must not drop it, or the box visibly changes the moment it's clicked.
         var doc = HtmlParser.Parse("<body><input type=\"text\" placeholder=\"search\"></body>");
         doc.FocusedElement = doc.GetElementsByTagName("input")[0];
 
         Texts(FindBox(Layout(doc, new Size(800, 600)), "input")!)
-            .Should().NotContain("search");
+            .Should().Contain("search");
     }
 
     [TestMethod]
@@ -45,6 +48,38 @@ public sealed class FocusedInputLayoutTests
 
         Texts(FindBox(Layout(doc, new Size(800, 600)), "input")!)
             .Should().Contain("search");
+    }
+
+    [TestMethod]
+    public void Typed_value_clears_the_placeholder()
+    {
+        var doc = HtmlParser.Parse("<body><input type=\"text\" placeholder=\"search\"></body>");
+        var input = doc.GetElementsByTagName("input")[0];
+        doc.FocusedElement = input;
+        input.InputValue = "hi";
+
+        var labels = Texts(FindBox(Layout(doc, new Size(800, 600)), "input")!);
+        labels.Should().Contain("hi");
+        labels.Should().NotContain("search");
+    }
+
+    [TestMethod]
+    public void Empty_text_input_keeps_its_line_height_on_focus()
+    {
+        // An empty text field (no value, no placeholder) reserves one line box,
+        // so focusing it does not collapse the control to padding+border. The
+        // box height must be the same focused and unfocused.
+        const string html = "<body><input type=\"text\" style=\"font: 16px sans-serif; padding:0; border:0\"></body>";
+
+        var unfocused = HtmlParser.Parse(html);
+        var unfocusedHeight = FindBox(Layout(unfocused, new Size(800, 600)), "input")!.Frame.Height;
+
+        var focused = HtmlParser.Parse(html);
+        focused.FocusedElement = focused.GetElementsByTagName("input")[0];
+        var focusedHeight = FindBox(Layout(focused, new Size(800, 600)), "input")!.Frame.Height;
+
+        unfocusedHeight.Should().BeGreaterThan(0);
+        focusedHeight.Should().BeApproximately(unfocusedHeight, 0.5);
     }
 
     // ---------------------------------------------------------------- helpers

@@ -26,7 +26,8 @@ internal sealed class StarlingTlsClient : DefaultTlsClient
     public CertificateSummary? PeerCertificate { get; private set; }
 
     public override TlsAuthentication GetAuthentication() =>
-        new StarlingTlsAuthentication(_options, _roots, cert => PeerCertificate = cert);
+        new StarlingTlsAuthentication(
+            _options, _roots, RevocationSet.Default, cert => PeerCertificate = cert);
 
     public override IDictionary<int, byte[]> GetClientExtensions()
     {

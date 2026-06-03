@@ -1319,6 +1319,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             return;
         }
 
+        // The value can change under us without going through the edit path —
+        // a script clearing the field on submit, for instance — so the stored
+        // index may now point past the end. Clamp before measuring (HTML places
+        // the caret at the end of a freshly-assigned value; clearing → index 0).
+        _caretIndex = Math.Clamp(_caretIndex, 0, CurrentValue().Length);
+
         if (ComputeCaretRect(_currentPage.Root, _focusedInput, _caretIndex) is not { } c)
         {
             CaretLog($"RenderCaret: ComputeCaretRect NULL idx={_caretIndex} val='{CurrentValue()}'");
@@ -1359,7 +1365,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var cx = found.X + inputBox.Border.Left + inputBox.Padding.Left;
         var cy = found.Y + inputBox.Border.Top + inputBox.Padding.Top;
 
-        var tb = FindValueTextBox(inputBox, cx, cy);
+        // The caret tracks the field's value only. An empty field still shows
+        // its placeholder as a text box, but the placeholder is not editable
+        // content — measuring the caret into its glyphs would strand it
+        // mid-word after the value is cleared (e.g. submitting a to-do leaves
+        // the caret in the middle of "What needs doing?"). So an empty value
+        // skips the text walk and drops to the content-origin branch below.
+        var tb = HtmlFormControls.Value(input).Length > 0
+            ? FindValueTextBox(inputBox, cx, cy)
+            : null;
         if (tb is { } th)
         {
             // The value is laid out as one fragment per whitespace-delimited token

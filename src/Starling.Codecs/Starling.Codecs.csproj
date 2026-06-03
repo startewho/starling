@@ -16,4 +16,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Starling.Common\Starling.Common.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->
+    <InternalsVisibleTo Include="Starling.Shell.Native" />
+  </ItemGroup>
 </Project>

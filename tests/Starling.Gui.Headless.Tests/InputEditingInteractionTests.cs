@@ -62,6 +62,53 @@ public class InputEditingInteractionTests
         page.Document.FocusedElement.Should().BeNull("clicking off the field clears focus");
     }
 
+    [AvaloniaFact]
+    public async Task Clearing_a_focused_field_keeps_the_caret_at_the_origin()
+    {
+        // Reproduces the to-do submit bug: after the field's value is cleared
+        // (the page's submit handler resets it) the empty field shows its
+        // placeholder again, and the caret must snap back to the content origin
+        // — not stay measured into the placeholder glyphs at the stale index,
+        // which stranded it in the middle of "What needs doing?".
+        var fixture = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"starling-caret-{Guid.NewGuid():N}.html");
+        System.IO.File.WriteAllText(fixture,
+            "<!doctype html><html><body><input type=\"text\" id=\"q\" placeholder=\"What needs doing?\"></body></html>");
+
+        var engine = new StarlingEngine();
+        var opts = new RenderOptions(new EngineSize(800, 600), FontSize: 16f);
+        var result = await engine.LayoutPageAsync(
+            "file://" + fixture.Replace('\\', '/'), opts, CancellationToken.None);
+        result.IsOk.Should().BeTrue(result.IsErr ? result.Error.Message : "");
+
+        var page = result.Value;
+        var input = page.Document.GetElementById("q")!;
+
+        // Focus the empty field and re-lay-out so the focused box tree (with the
+        // placeholder) is current — this is the state right after a submit clear.
+        page.Document.FocusedElement = input;
+        var laid = engine.RelayoutPage(page, opts)!;
+
+        var atOrigin = ComputeCaretX(laid.Root, input, caretIndex: 0);
+        var atStaleIndex = ComputeCaretX(laid.Root, input, caretIndex: 8);
+
+        atOrigin.Should().NotBeNull("the focused empty field still has a caret");
+        atStaleIndex.Should().BeApproximately(atOrigin!.Value, 0.5,
+            "an empty field's caret stays at the content origin for any index — never inside the placeholder");
+    }
+
+    /// <summary>X of the caret rect <see cref="WebviewPanel"/> would draw for
+    /// <paramref name="caretIndex"/> inside <paramref name="input"/>, via the
+    /// private static <c>ComputeCaretRect</c>; null when no rect is produced.</summary>
+    private static double? ComputeCaretX(
+        Starling.Layout.Box.BlockBox root, Starling.Dom.Element input, int caretIndex)
+    {
+        var method = typeof(WebviewPanel).GetMethod(
+            "ComputeCaretRect", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var rect = method.Invoke(null, new object?[] { root, input, caretIndex });
+        return rect is null ? null : (double)rect.GetType().GetField("Item1")!.GetValue(rect)!;
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static async Task<(Window Window, WebviewPanel Panel, LaidOutPage Page, Starling.Dom.Element Input)>
