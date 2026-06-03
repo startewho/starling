@@ -128,6 +128,45 @@ internal sealed class NativeBrowserWindow : IDisposable
         </html>
         """;
 
+    private const string StatusIslandHtml = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Starling status island</title></head>
+        <body style="margin:0;background:#18171a;color:#b8b6b3;font-family:sans-serif">
+          <div id="wasm-island" style="height:32px;display:flex;align-items:center;border-top:1px solid #343238;padding:0 14px;cursor:pointer">
+            <span style="width:6px;height:6px;border-radius:3px;background:#7ec59e"></span>
+            <span style="margin-left:8px;font-size:11.5px;font-weight:600;color:#ececec">WASM island</span>
+            <span id="wasm-state" style="margin-left:12px;flex:1;font-family:monospace;font-size:11px;color:#82807c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">booting</span>
+            <button id="wasm-clicks" style="height:22px;min-width:40px;border:1px solid #343238;border-radius:6px;background:#232225;color:#b8b6b3;font-family:monospace;font-size:11px">0</button>
+          </div>
+          <script>
+          (function () {
+            var state = document.getElementById('wasm-state');
+            var island = document.getElementById('wasm-island');
+            var clicks = document.getElementById('wasm-clicks');
+            var count = 0;
+            island.addEventListener('click', function () {
+              count = count + 1;
+              clicks.textContent = String(count);
+            });
+            var bytes = new Uint8Array([
+              0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+              0x01,0x07,0x01,0x60,0x02,0x7f,0x7f,0x01,0x7f,
+              0x03,0x02,0x01,0x00,
+              0x07,0x07,0x01,0x03,0x61,0x64,0x64,0x00,0x00,
+              0x0a,0x09,0x01,0x07,0x00,0x20,0x00,0x20,0x01,0x6a,0x0b
+            ]);
+            WebAssembly.instantiate(bytes).then(function (result) {
+              state.textContent = 'DotWasm add(19, 23) = ' + result.instance.exports.add(19, 23);
+            }, function (err) {
+              state.textContent = 'WASM failed: ' + (err && err.message ? err.message : String(err));
+            });
+          })();
+          </script>
+        </body>
+        </html>
+        """;
+
     // ── Fields ───────────────────────────────────────────────────────────────
 
     private readonly int _maxFrames;
@@ -149,11 +188,14 @@ internal sealed class NativeBrowserWindow : IDisposable
         // as file:// URLs.
         var page1Path = Path.Combine(Path.GetTempPath(), $"starling_p1_{Environment.ProcessId}.html");
         var page2Path = Path.Combine(Path.GetTempPath(), $"starling_p2_{Environment.ProcessId}.html");
+        var statusPath = Path.Combine(Path.GetTempPath(), $"starling_status_{Environment.ProcessId}.html");
         var page1Url = "file://" + page1Path.Replace('\\', '/');
         var page2Url = "file://" + page2Path.Replace('\\', '/');
+        var statusUrl = "file://" + statusPath.Replace('\\', '/');
 
         File.WriteAllText(page1Path, Page1Html.Replace("PAGE2URL", page2Url));
         File.WriteAllText(page2Path, Page2Html.Replace("PAGE1URL", page1Url));
+        File.WriteAllText(statusPath, StatusIslandHtml);
 
         // A --url argument opens that address at launch (normalized like the URL
         // bar, so `--url example.com` becomes https://example.com). Otherwise the
@@ -164,12 +206,13 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         try
         {
-            return RunWindow(startUrl);
+            return RunWindow(startUrl, statusUrl);
         }
         finally
         {
             try { File.Delete(page1Path); } catch { /* best-effort */ }
             try { File.Delete(page2Path); } catch { /* best-effort */ }
+            try { File.Delete(statusPath); } catch { /* best-effort */ }
         }
     }
 
@@ -235,7 +278,7 @@ internal sealed class NativeBrowserWindow : IDisposable
     private static string JsEngineLabel() =>
         Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") is { Length: > 0 } engine
             ? engine
-            : "jint";
+            : "starling";
 
     private static string RenderBackendLabel() =>
         Environment.GetEnvironmentVariable("STARLING_PAINT_BACKEND") is { Length: > 0 } backend
@@ -435,7 +478,7 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     // ── Window loop ──────────────────────────────────────────────────────────
 
-    private int RunWindow(string startUrl)
+    private int RunWindow(string startUrl, string statusUrl)
     {
         Silk.NET.Windowing.Glfw.GlfwWindowing.Use();
         Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
@@ -520,6 +563,10 @@ internal sealed class NativeBrowserWindow : IDisposable
         BlockBox? sidebarBox = null;
         BlockBox? statusBox = null;
         string chromeSig = "";
+        BrowserSession? statusSession = null;
+        Task<Result<LaidOutPage, RenderError>>? pendingStatusNav = null;
+        LaidOutPage? statusPage = null;
+        int statusLastLayoutVersion = -1;
 
         // Theme. Like the Avalonia shell, the selection lives in memory and starts
         // on Dark; the toolbar sun/moon button cycles Dark → Light → Contrast.
@@ -593,6 +640,10 @@ internal sealed class NativeBrowserWindow : IDisposable
         pendingNavTab = 0;
         Console.WriteLine($"browser: loading {startUrl} …");
 
+        statusSession = new BrowserSession();
+        pendingStatusNav = statusSession.NavigateInteractiveAsync(statusUrl, StatusOpts());
+        Console.WriteLine($"browser: loading status island {statusUrl} …");
+
         // Push the accessibility tree to the OS after a (re)layout or navigation.
         void PushA11y()
         {
@@ -623,7 +674,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (page is null) return;
 
                 // Pointer is over chrome. Use default cursor and skip page hover.
-                if (pos.X < SidebarWidthCss || pos.Y < ChromeHeightCss)
+                if (pos.X < SidebarWidthCss || pos.Y < ChromeHeightCss || IsStatusBarPoint(pos.X, pos.Y))
                 {
                     SetCursor(m.Cursor, "default");
                     UpdateHover(null);
@@ -692,6 +743,12 @@ internal sealed class NativeBrowserWindow : IDisposable
                         var idx = SidebarBookmarkIndexAt(pos.Y);
                         if (idx >= 0) Navigate(Bookmarks[idx].Url);
                     }
+                    return;
+                }
+
+                if (IsStatusBarPoint(pos.X, pos.Y))
+                {
+                    DispatchStatusClick(pos.X - SidebarWidthCss, pos.Y - (logicalH - StatusBarHeightCss));
                     return;
                 }
 
@@ -1073,6 +1130,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             // Apply a finished navigation (incl. the initial load) on the main thread.
             PollNav();
+            PollStatusNav();
+            PumpStatusIsland(clock.ElapsedMilliseconds);
 
             if (page is null) return;
 
@@ -1119,6 +1178,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 logicalH = fb.Y / dpr;
                 lastFb = fb;
                 RefreshLayout();
+                RefreshStatusLayout();
             }
 
             // Present every frame. The present is what keeps the on-screen surface
@@ -1183,6 +1243,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 statusBox = BuildStatusBar(contentW, theme, statusState, statusHint, statusView, statusDoc, statusHist);
                 chromeSig = sig;
             }
+            var bottomChrome = statusPage?.Root ?? statusBox;
 
             // While the first page loads, present the chrome over a "Loading…" page
             // so the window is live instead of gray.
@@ -1199,7 +1260,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     LeftChromeRoot = sidebarBox,
                     LeftChromeWidthCss = SidebarWidthCss,
                     PageRoot = loadingBox,
-                    BottomChromeRoot = statusBox,
+                    BottomChromeRoot = bottomChrome,
                     BottomChromeHeightCss = StatusBarHeightCss,
                 }, target);
                 var okLoad = loadFrame.Presented;
@@ -1230,7 +1291,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     Images = page.ImageResolver,
                     OverlayRoot = findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
                     ScreenOverlayRoot = screenOverlay,
-                    BottomChromeRoot = statusBox,
+                    BottomChromeRoot = bottomChrome,
                     BottomChromeHeightCss = StatusBarHeightCss,
                 }, target);
                 var ok = frame.Presented;
@@ -1257,6 +1318,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         window.Run();
 
         SaveActive();
+        statusPage?.Dispose();
+        statusSession?.Dispose();
         foreach (var t in tabs) t.Dispose();
         Console.WriteLine(
             $"BROWSER OK: {presented} frames presented zero-copy ({failures} surface-reconfig frames)");
@@ -1283,6 +1346,88 @@ internal sealed class NativeBrowserWindow : IDisposable
         // The page viewport is the window minus the sidebar and toolbar.
         RenderOptions NavOpts() =>
             new(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
+
+        RenderOptions StatusOpts() =>
+            new(new Size((int)PageViewportWidth(logicalW), (int)StatusBarHeightCss));
+
+        bool IsStatusBarPoint(double x, double y) =>
+            x >= SidebarWidthCss && y >= logicalH - StatusBarHeightCss && y < logicalH;
+
+        void RefreshStatusLayout()
+        {
+            if (statusPage is null || statusSession is null) return;
+            var successor = statusSession.RelayoutCurrent(statusPage, StatusOpts());
+            statusPage.Dispose();
+            statusPage = successor;
+            statusLastLayoutVersion = statusPage.Document.LayoutInvalidationVersion;
+            needsPresent = true;
+        }
+
+        void ApplyStatusNav(Result<LaidOutPage, RenderError> result)
+        {
+            if (result.IsErr)
+            {
+                Console.Error.WriteLine($"browser: status island failed: {result.Error.Message}");
+                return;
+            }
+
+            statusPage?.Dispose();
+            statusPage = result.Value;
+            statusLastLayoutVersion = statusPage.Document.LayoutInvalidationVersion;
+            if (statusPage.Viewport.Width != StatusOpts().Viewport.Width)
+                RefreshStatusLayout();
+            needsPresent = true;
+            Console.WriteLine("browser: loaded status island");
+        }
+
+        void PollStatusNav()
+        {
+            if (pendingStatusNav is not { IsCompleted: true }) return;
+            var task = pendingStatusNav;
+            pendingStatusNav = null;
+            try
+            {
+                ApplyStatusNav(task.GetAwaiter().GetResult());
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"browser: status island failed: {ex.Message}");
+            }
+        }
+
+        void PumpStatusIsland(long clockMs)
+        {
+            if (statusPage is null) return;
+            statusPage.Document.DecayRecentMutations();
+            statusPage.Scripting?.PumpFrame(clockMs);
+            if (statusPage.Document.LayoutInvalidationVersion != statusLastLayoutVersion)
+                RefreshStatusLayout();
+        }
+
+        void DispatchStatusClick(double x, double y)
+        {
+            if (statusPage?.Scripting is null) return;
+            var hit = BoxHitTester.HitTest(statusPage.Root, x, y, 0, 0, scrollOffsets: null);
+            if (FindClickTarget(hit.Box) is not { } targetElement) return;
+            if (statusPage.Scripting.DispatchEvent(targetElement,
+                new MouseEvent("click", new EventInit(Bubbles: true, Cancelable: true))
+                {
+                    ClientX = x,
+                    ClientY = y,
+                    Button = 0,
+                }))
+            {
+                RefreshStatusLayout();
+            }
+        }
+
+        static Element? FindClickTarget(Starling.Layout.Box.Box? box)
+        {
+            for (var b = box; b is not null; b = b.Parent)
+                if (b.Element is Element el)
+                    return el;
+            return null;
+        }
 
         // Swap a freshly-laid-out page into the ACTIVE tab. On the initial load the
         // old page is null (the tab opened on a loading state). On a failed load the
