@@ -27,10 +27,16 @@ public static class BooleanCtor
             return JsValue.Boolean(b);
         }, isConstructor: true);
         DefineData(ctor, "prototype", JsValue.Object(proto), false, false, false);
-        DefineData(proto, "constructor", JsValue.Object(ctor), true, false, true);
 
-        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0, (thisV, _) => JsValue.String(ThisBoolean(realm, thisV) ? "true" : "false"));
-        IntrinsicHelpers.DefineMethod(realm, proto, "valueOf", 0, (thisV, _) => JsValue.Boolean(ThisBoolean(realm, thisV)));
+        // Bulk-install constructor + the two prototype methods by adopting one
+        // precomputed shape. Same creation order (constructor, toString, valueOf),
+        // so getOwnPropertyNames order is unchanged and the result is byte-identical.
+        IntrinsicHelpers.BulkInstallBuiltins(realm, proto, new[]
+        {
+            new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
+            new IntrinsicHelpers.BulkMember("toString", 0, (thisV, _) => JsValue.String(ThisBoolean(realm, thisV) ? "true" : "false")),
+            new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, _) => JsValue.Boolean(ThisBoolean(realm, thisV))),
+        });
 
         realm.BooleanConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Boolean", PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));
