@@ -278,9 +278,12 @@ internal sealed class FlexLayout
         // they stack (align-content: flex-start).
         var lineCrossSize = singleLine && !double.IsNaN(crossSize) && crossSize > 0 ? crossSize : maxCrossOuter;
 
-        // align-items: stretch grows auto-cross items to the line.
+        // align-items: stretch grows auto-cross items to the line. A percentage
+        // cross size that resolved to `auto` (indefinite container cross, see
+        // MeasureCrossSize) is auto for stretch too.
+        var crossIndefinite = props.IsRow && double.IsNaN(crossSize);
         for (var i = start; i < end; i++)
-            if (props.Align == AlignItems.Stretch && ChildCrossSizeIsAuto(items[i].Box, props))
+            if (props.Align == AlignItems.Stretch && ChildCrossSizeIsAuto(items[i].Box, props, crossIndefinite))
                 items[i].CrossSize = Math.Max(0, lineCrossSize - items[i].CrossPad);
 
         for (var i = start; i < end; i++)
@@ -591,9 +594,22 @@ internal sealed class FlexLayout
     private double MeasureCrossSize(Box.Box child, FlexContainerProps props, double itemMainSize, double containerWidth, double containerCross)
     {
         var crossProperty = props.IsRow ? PropertyId.Height : PropertyId.Width;
-        var crossBasis = props.IsRow ? (double.IsNaN(containerCross) ? _viewport.Height : containerCross) : containerWidth;
-        var explicitCross = BlockLayout.ResolveLength(child.Style, crossProperty, crossBasis, _viewport, allowAuto: true);
-        if (explicitCross is { } c) return Math.Max(0, c);
+        // CSS 2.1 §10.5: a child's percentage cross size resolves to `auto` when
+        // the container's cross size is indefinite. For a row container the cross
+        // axis is height, and an auto-height container has an indefinite cross
+        // (containerCross is NaN). Resolving `height: 100%` against the viewport
+        // there would inflate the item to a near-viewport height — angular.dev's
+        // search `<input>` (`height: 100%` inside an auto-height flex row) blew up
+        // to ~900px, dragging the whole banner past its container. When the cross
+        // basis is indefinite we treat a percentage cross size as auto and fall
+        // through to the content/stretch path below.
+        var crossIsIndefinite = props.IsRow && double.IsNaN(containerCross);
+        if (!(crossIsIndefinite && child.Style?.Get(crossProperty) is CssPercentage))
+        {
+            var crossBasis = props.IsRow ? (double.IsNaN(containerCross) ? _viewport.Height : containerCross) : containerWidth;
+            var explicitCross = BlockLayout.ResolveLength(child.Style, crossProperty, crossBasis, _viewport, allowAuto: true);
+            if (explicitCross is { } c) return Math.Max(0, c);
+        }
 
         // Auto cross size: lay out the child at the chosen main size and let
         // its natural content height settle. For row direction the child's
@@ -614,11 +630,15 @@ internal sealed class FlexLayout
         }
     }
 
-    private static bool ChildCrossSizeIsAuto(Box.Box child, FlexContainerProps props)
+    private static bool ChildCrossSizeIsAuto(Box.Box child, FlexContainerProps props, bool crossIndefinite)
     {
         var crossProperty = props.IsRow ? PropertyId.Height : PropertyId.Width;
         if (child.Style is null) return true;
-        return child.Style.Get(crossProperty) is CssKeyword { Name: "auto" };
+        var value = child.Style.Get(crossProperty);
+        if (value is CssKeyword { Name: "auto" }) return true;
+        // A percentage cross size against an indefinite container cross resolves
+        // to auto (CSS 2.1 §10.5), so it stretches like an auto item would.
+        return crossIndefinite && value is CssPercentage;
     }
 
     /// <summary>

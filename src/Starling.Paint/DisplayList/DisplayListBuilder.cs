@@ -322,23 +322,37 @@ public sealed class DisplayListBuilder
             // painted best-effort (the outer drop shadow is the supported path).
             EmitBoxShadows(box, bounds, radii, list, current, cull, style);
 
-            var bg = style.GetColor(PropertyId.BackgroundColor);
-            if (bg is { A: > 0 })
+            // CSS Backgrounds 3 §3.8 — `background-clip: text`. The background
+            // (gradient or solid color) is clipped to the union of the
+            // element's text glyphs instead of filling the box. Detect it here
+            // and, when present, emit a single glyph-clipped fill in place of
+            // the normal background fill + background-image gradient.
+            if (IsTextClip(style) && TryEmitBackgroundTextClip(box, frameX, frameY, list, current, cull, style, styleOverride))
             {
-                if (radii.IsZero)
-                    Emit(list, new FillRect(bounds, bg, FillRectPixelAlignment.Preserve), bounds, current, cull);
-                else
-                    Emit(list, new FillRoundedRect(bounds, radii, bg), bounds, current, cull);
+                // Borders still paint normally below; only the background was
+                // diverted to the glyph-clipped item.
+                EmitBorders(box, frameX, frameY, list, current, cull, style, radii);
             }
+            else
+            {
+                var bg = style.GetColor(PropertyId.BackgroundColor);
+                if (bg is { A: > 0 })
+                {
+                    if (radii.IsZero)
+                        Emit(list, new FillRect(bounds, bg, FillRectPixelAlignment.Preserve), bounds, current, cull);
+                    else
+                        Emit(list, new FillRoundedRect(bounds, radii, bg), bounds, current, cull);
+                }
 
-            // CSS Backgrounds 3 §3 — background-image paints inside the
-            // box's padding box (border-box is the default origin per spec,
-            // but at this layout fidelity the padding+border distinction
-            // is unobservable and using the frame is correct).
-            EmitBackgroundImage(box, frameX, frameY, list, current, cull, style, images);
+                // CSS Backgrounds 3 §3 — background-image paints inside the
+                // box's padding box (border-box is the default origin per spec,
+                // but at this layout fidelity the padding+border distinction
+                // is unobservable and using the frame is correct).
+                EmitBackgroundImage(box, frameX, frameY, list, current, cull, style, images);
 
-            // Borders. Painter renders one stroke per side that has a non-zero width.
-            EmitBorders(box, frameX, frameY, list, current, cull, style, radii);
+                // Borders. Painter renders one stroke per side that has a non-zero width.
+                EmitBorders(box, frameX, frameY, list, current, cull, style, radii);
+            }
         }
 
         // Inline content: text fragments live on TextBoxes, positioned in their
@@ -456,6 +470,104 @@ public sealed class DisplayListBuilder
         var right = Math.Min(a.Right, b.Right);
         var bottom = Math.Min(a.Bottom, b.Bottom);
         return new Rect(x, y, Math.Max(0, right - x), Math.Max(0, bottom - y));
+    }
+
+    /// <summary>
+    /// CSS Backgrounds 3 §3.8 — true when this box's <c>background-clip</c>
+    /// resolves to the <c>text</c> keyword (set directly or via the
+    /// <c>-webkit-background-clip: text</c> alias, both of which parse to the
+    /// same keyword value).
+    /// </summary>
+    private static bool IsTextClip(ComputedStyle style)
+        => style.Get(PropertyId.BackgroundClip) is CssKeyword k
+           && k.Name.Equals("text", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// CSS Backgrounds 3 §3.8 — paint the box background clipped to its text
+    /// glyphs. Resolves the background paint (a gradient when
+    /// <c>background-image</c> is a paintable gradient, otherwise the solid
+    /// <c>background-color</c>), gathers every descendant glyph run, and emits a
+    /// single <see cref="FillBackgroundTextClip"/>. Returns false (so the caller
+    /// falls back to the normal background path) when there is no paintable
+    /// background or no text to clip to.
+    /// </summary>
+    private bool TryEmitBackgroundTextClip(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style, Func<Box, ComputedStyle?>? styleOverride)
+    {
+        if (box.Frame.Width <= 0 || box.Frame.Height <= 0) return false;
+
+        // The background paint: a paintable gradient takes priority over the
+        // solid color (matching the layering order of `background`).
+        CssGradient? gradient = null;
+        if (style.Get(PropertyId.BackgroundImage) is CssFunctionValue gradientFn
+            && CssGradientParser.TryParseFunction(gradientFn, out var g)
+            && g.IsPaintable)
+        {
+            gradient = g;
+        }
+
+        var color = style.GetColor(PropertyId.BackgroundColor);
+        if (gradient is null && color.A == 0) return false;
+
+        // Gather descendant glyph runs in document space. The clip element's own
+        // text lives in descendant text boxes whose frames are relative to this
+        // box's content origin.
+        var glyphs = new List<ClipGlyphRun>();
+        var contentX = frameX + box.Border.Left + box.Padding.Left;
+        var contentY = frameY + box.Border.Top + box.Padding.Top;
+        foreach (var child in box.Children)
+            CollectClipGlyphRuns(child, contentX, contentY, styleOverride, glyphs);
+
+        if (glyphs.Count == 0) return false;
+
+        var bounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+        Emit(list, new FillBackgroundTextClip(bounds, gradient, color, glyphs), bounds, current, cull);
+        return true;
+    }
+
+    /// <summary>
+    /// Walk a subtree collecting every text fragment as a
+    /// <see cref="ClipGlyphRun"/> in document-space coordinates. <paramref name="originX"/>
+    /// / <paramref name="originY"/> are the document-space top-left of
+    /// <paramref name="box"/>'s parent content box, matching how the painter
+    /// pushes the content origin when it descends.
+    /// </summary>
+    private void CollectClipGlyphRuns(Box box, double originX, double originY, Func<Box, ComputedStyle?>? styleOverride, List<ClipGlyphRun> glyphs)
+    {
+        var frameX = originX + box.Frame.X;
+        var frameY = originY + box.Frame.Y;
+
+        if (box is TextBox textBox)
+        {
+            if (textBox.Fragments.Count == 0) return;
+            var style = EffectiveStyle(textBox, styleOverride);
+            var fontSize = style?.Get(PropertyId.FontSize) switch
+            {
+                CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
+                _ => 16d,
+            };
+            var spec = FontSpec.FromStyle(style);
+            foreach (var frag in textBox.Fragments)
+            {
+                if (frag.Text.Length == 0 || string.IsNullOrWhiteSpace(frag.Text)) continue;
+                glyphs.Add(new ClipGlyphRun(
+                    frag.Text,
+                    frameX + frag.X,
+                    frameY + frag.Y,
+                    fontSize,
+                    spec.Families,
+                    spec.Bold,
+                    spec.Italic,
+                    frag.Shaped));
+            }
+            return; // Text boxes have no children.
+        }
+
+        if (box is ImageBox) return; // Replaced content contributes no glyphs.
+
+        var contentX = frameX + box.Border.Left + box.Padding.Left;
+        var contentY = frameY + box.Border.Top + box.Padding.Top;
+        foreach (var child in box.Children)
+            CollectClipGlyphRuns(child, contentX, contentY, styleOverride, glyphs);
     }
 
     /// <summary>
