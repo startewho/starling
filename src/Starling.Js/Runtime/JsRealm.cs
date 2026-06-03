@@ -329,7 +329,7 @@ public sealed class JsRealm
         AsyncIteratorPrototype = new JsObject(ObjectPrototype);
         AsyncGeneratorPrototype = new JsObject(AsyncIteratorPrototype);
 
-        GlobalObject = new JsObject(ObjectPrototype);
+        GlobalObject = new JsGlobalObject(ObjectPrototype);
     }
 
     /// <summary>Allocate a fresh ordinary object inheriting from
