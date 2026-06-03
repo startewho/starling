@@ -1,27 +1,25 @@
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
+using Avalonia.Threading;
+using Starling.Gui.Core.Rendering;
 
 namespace Starling.Gui.Controls;
 
 /// <summary>
-/// Embeds a GPU swapchain surface in the page region of the Avalonia window so the
-/// page can be presented straight to it (zero-copy), while the chrome stays
-/// Avalonia. On macOS the host creates a click-through <c>NSView</c> backed by a
-/// <c>CAMetalLayer</c>: the layer is the wgpu render target, and the view's
-/// <c>hitTest:</c> returns nil so pointer/scroll events fall through to the
-/// Avalonia content (the page canvas) beneath it. The raw layer pointer is exposed
-/// via <see cref="MetalLayerPtr"/> for the compositor to build its swapchain on.
+/// Embeds a native GPU surface in the page region while the chrome stays in
+/// Avalonia. macOS uses an <c>NSView</c> with a <c>CAMetalLayer</c>. Windows uses
+/// a child <c>HWND</c>. Linux uses an X11 child window.
 /// </summary>
-/// <remarks>
-/// Windows (child HWND) and X11 (child window) are not wired yet, so
-/// <see cref="MetalLayerPtr"/> is 0 off macOS and the caller keeps the readback
-/// present path.
-/// </remarks>
 internal sealed class PageSurfaceHost : NativeControlHost
 {
     private nint _view;
     private nint _metalLayer;
+    private nint _win32Hwnd;
+    private nint _win32Hinstance;
+    private nint _x11Display;
+    private nint _x11Window;
+    private NativePageSurface? _surface;
 
     /// <summary>The window's device-pixel scale, applied to the metal layer's contentsScale.</summary>
     public double Scale { get; set; } = 1.0;
@@ -30,14 +28,9 @@ internal sealed class PageSurfaceHost : NativeControlHost
     public event Action? SurfaceReady;
 
     /// <summary>True once a presentable native surface handle exists.</summary>
-    public bool HasSurface => _metalLayer != 0;
+    public bool HasSurface => _surface.HasValue;
 
-    /// <summary>
-    /// The raw <c>CAMetalLayer*</c> the surface present path binds its wgpu
-    /// swapchain to, or 0 before the control is attached / off macOS. The caller
-    /// retains no ownership — the host releases it in <see cref="DestroyNativeControlCore"/>.
-    /// </summary>
-    public nint MetalLayerPtr => _metalLayer;
+    public NativePageSurface? Surface => _surface;
 
     protected override IPlatformHandle CreateNativeControlCore(IPlatformHandle parent)
     {
@@ -47,15 +40,55 @@ internal sealed class PageSurfaceHost : NativeControlHost
             if (_view != 0)
             {
                 if (_metalLayer != 0)
-                    SurfaceReady?.Invoke();
+                {
+                    _surface = NativePageSurface.MetalLayer(_metalLayer);
+                    NotifySurfaceReady();
+                }
                 return new PlatformHandle(_view, "NSView");
             }
         }
 
-        // Unsupported platform (or view creation failed): hand back a default child so
-        // the control still attaches; the caller keeps the readback present path.
+        if (OperatingSystem.IsWindows() &&
+            parent.Handle != 0 &&
+            string.Equals(parent.HandleDescriptor, "HWND", StringComparison.Ordinal))
+        {
+            _win32Hinstance = Win32PageSurface.GetCurrentModuleHandle();
+            _win32Hwnd = Win32PageSurface.CreateChild(parent.Handle, _win32Hinstance);
+            if (_win32Hwnd != 0)
+            {
+                _surface = NativePageSurface.WindowsHwnd(_win32Hwnd, _win32Hinstance);
+                NotifySurfaceReady();
+                return new PlatformHandle(_win32Hwnd, "HWND");
+            }
+        }
+
+        if (OperatingSystem.IsLinux() &&
+            parent.Handle != 0 &&
+            string.Equals(parent.HandleDescriptor, "XID", StringComparison.Ordinal))
+        {
+            _x11Display = X11PageSurface.OpenDisplay();
+            if (_x11Display != 0)
+            {
+                _x11Window = X11PageSurface.CreateChild(_x11Display, parent.Handle);
+                if (_x11Window != 0)
+                {
+                    _surface = NativePageSurface.XlibWindow(
+                        _x11Display,
+                        X11PageSurface.ToWindowId(_x11Window));
+                    NotifySurfaceReady();
+                    return new PlatformHandle(_x11Window, "XID");
+                }
+
+                X11PageSurface.CloseDisplay(_x11Display);
+                _x11Display = 0;
+            }
+        }
+
         return base.CreateNativeControlCore(parent);
     }
+
+    private void NotifySurfaceReady()
+        => Dispatcher.UIThread.Post(() => SurfaceReady?.Invoke());
 
     protected override void DestroyNativeControlCore(IPlatformHandle control)
     {
@@ -63,11 +96,35 @@ internal sealed class PageSurfaceHost : NativeControlHost
         {
             MacMetal.Release(_metalLayer);
             MacMetal.Release(_view);
+            _surface = null;
             _metalLayer = 0;
             _view = 0;
             return;
         }
 
+        if (OperatingSystem.IsWindows() && _win32Hwnd != 0)
+        {
+            Win32PageSurface.Destroy(_win32Hwnd);
+            _surface = null;
+            _win32Hwnd = 0;
+            _win32Hinstance = 0;
+            return;
+        }
+
+        if (OperatingSystem.IsLinux() && _x11Display != 0)
+        {
+            if (_x11Window != 0)
+            {
+                X11PageSurface.Destroy(_x11Display, _x11Window);
+            }
+            X11PageSurface.CloseDisplay(_x11Display);
+            _surface = null;
+            _x11Display = 0;
+            _x11Window = 0;
+            return;
+        }
+
+        _surface = null;
         base.DestroyNativeControlCore(control);
     }
 
@@ -78,6 +135,159 @@ internal sealed class PageSurfaceHost : NativeControlHost
         if (_metalLayer != 0)
         {
             MacMetal.SetContentsScale(_metalLayer, scale);
+        }
+    }
+}
+
+internal static class Win32PageSurface
+{
+    private const uint WsChild = 0x40000000;
+    private const uint WsVisible = 0x10000000;
+    private const uint WsClipChildren = 0x02000000;
+    private const uint WsClipSiblings = 0x04000000;
+
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode)]
+    private static extern nint GetModuleHandle(string? moduleName);
+
+    [DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CreateWindowEx(
+        uint exStyle,
+        string className,
+        string? windowName,
+        uint style,
+        int x,
+        int y,
+        int width,
+        int height,
+        nint parent,
+        nint menu,
+        nint instance,
+        nint param);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyWindow(nint hwnd);
+
+    public static nint GetCurrentModuleHandle() => GetModuleHandle(null);
+
+    public static nint CreateChild(nint parent, nint hinstance)
+    {
+        try
+        {
+            return CreateWindowEx(
+                0,
+                "STATIC",
+                null,
+                WsChild | WsVisible | WsClipChildren | WsClipSiblings,
+                0,
+                0,
+                1,
+                1,
+                parent,
+                0,
+                hinstance,
+                0);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public static void Destroy(nint hwnd)
+    {
+        try
+        {
+            DestroyWindow(hwnd);
+        }
+        catch
+        {
+            /* best effort */
+        }
+    }
+}
+
+internal static class X11PageSurface
+{
+    private const string X11 = "libX11.so.6";
+
+    [DllImport(X11)]
+    private static extern nint XOpenDisplay(string? displayName);
+
+    [DllImport(X11)]
+    private static extern int XCloseDisplay(nint display);
+
+    [DllImport(X11)]
+    private static extern nint XCreateSimpleWindow(
+        nint display,
+        nint parent,
+        int x,
+        int y,
+        uint width,
+        uint height,
+        uint borderWidth,
+        ulong border,
+        ulong background);
+
+    [DllImport(X11)]
+    private static extern int XDestroyWindow(nint display, nint window);
+
+    [DllImport(X11)]
+    private static extern int XFlush(nint display);
+
+    public static nint OpenDisplay()
+    {
+        try
+        {
+            return XOpenDisplay(null);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public static nint CreateChild(nint display, nint parent)
+    {
+        try
+        {
+            var window = XCreateSimpleWindow(display, parent, 0, 0, 1, 1, 0, 0, 0);
+            if (window != 0)
+            {
+                XFlush(display);
+            }
+            return window;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public static ulong ToWindowId(nint window) => (ulong)(nuint)window;
+
+    public static void Destroy(nint display, nint window)
+    {
+        try
+        {
+            XDestroyWindow(display, window);
+            XFlush(display);
+        }
+        catch
+        {
+            /* best effort */
+        }
+    }
+
+    public static void CloseDisplay(nint display)
+    {
+        try
+        {
+            XCloseDisplay(display);
+        }
+        catch
+        {
+            /* best effort */
         }
     }
 }

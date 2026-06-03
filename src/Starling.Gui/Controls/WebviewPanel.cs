@@ -325,10 +325,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         rootGrid.Children.Add(_scroll);
         Grid.SetRow(_scroll, 1);
 
-        // Zero-copy GPU present surface. Stand it up only where it can work: macOS
-        // with a render session that supports surface targets. The actual surface
-        // target is created lazily in OnSurfaceReady.
-        if (OperatingSystem.IsMacOS() && _renderSession.SupportsSurfaceTargets)
+        // Zero-copy GPU present surface. The native handle is created by
+        // PageSurfaceHost, then the surface target is built in OnSurfaceReady.
+        if (_renderSession.SupportsSurfaceTargets)
         {
             _pageSurfaceHost = new PageSurfaceHost
             {
@@ -522,8 +521,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Renders the current viewport region and positions the bitmap at the
-    /// scroll offset so it stays aligned with the page-coordinate overlays.
+    /// Renders the current viewport region to the native GPU surface.
     /// </summary>
     private void RenderViewportRegion()
     {
@@ -532,11 +530,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         ArgumentNullException.ThrowIfNull(_pageSurfaceHost);
 
-        PresentSurface(rect);
-
         _pageSurfaceHost.Width = rect.Width;
         _pageSurfaceHost.Height = rect.Height;
         _pageSurfaceHost.IsVisible = true;
+        _pageSurfaceHost.TryUpdateNativeControlPosition();
+
+        EnsureSurfaceTarget();
+        PresentSurface(rect);
+
         if (_pageImage.IsVisible) _pageImage.IsVisible = false;
     }
 
@@ -550,21 +551,35 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// </summary>
     private void OnSurfaceReady()
     {
+        var wasActive = _useSurface && _surfaceTarget is not null;
+        EnsureSurfaceTarget();
+        if (!wasActive && _currentPage is not null)
+        {
+            RenderViewportRegion();
+        }
+    }
+
+    private void EnsureSurfaceTarget()
+    {
+        if (_useSurface && _surfaceTarget is not null)
+        {
+            return;
+        }
+
         if (_pageSurfaceHost is null || !_renderSession.SupportsSurfaceTargets)
         {
             return;
         }
 
-        var layer = _pageSurfaceHost.MetalLayerPtr;
-        if (layer == 0)
+        var surface = _pageSurfaceHost.Surface;
+        if (!surface.HasValue)
         {
             return;
         }
 
         try
         {
-            // Build the surface target bound to the host's CAMetalLayer.
-            _surfaceTarget = MetalLayerFrameTarget.TryCreate(layer, _diag);
+            _surfaceTarget = NativePageSurfaceFrameTarget.TryCreate(surface.Value, _diag);
             if (_surfaceTarget is null)
             {
                 throw new InvalidOperationException("GPU page surface unavailable.");
@@ -585,17 +600,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _useSurface = false;
             throw;
         }
-
-        if (_currentPage is not null)
-        {
-            RenderViewportRegion();
-        }
     }
 
     /// <summary>
-    /// Presents <paramref name="rect"/> (page-coord viewport) straight to the GPU
-    /// surface — no readback, no WriteableBitmap. Returns false only when the
-    /// surface is not active or not ready yet.
+    /// Presents <paramref name="rect"/> straight to the GPU surface. This path
+    /// does not use readback or WriteableBitmap.
     /// </summary>
     private void PresentSurface(Starling.Layout.Rect rect)
     {

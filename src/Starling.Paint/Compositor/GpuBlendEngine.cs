@@ -136,27 +136,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
             if (instance == null) return null;
 
             var surf = window.CreateWebGPUSurface(api, instance);
-            if (surf == null) { api.InstanceRelease(instance); return null; }
-
-            if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
-            {
-                api.SurfaceRelease(surf);
-                api.InstanceRelease(instance);
-                return null;
-            }
-
-            // Pick a supported format. wgpu surfaces on Metal prefer Bgra8Unorm;
-            // the shader writes logical RGBA, so the target's channel order is
-            // handled by the API — either format reproduces the colours.
-            var caps = default(SurfaceCapabilities);
-            api.SurfaceGetCapabilities(surf, GetAdapterForCaps(api, instance, surf), ref caps);
-            format = PickFormat(caps);
-
-            // The instance is intentionally NOT released: wgpu keeps the surface
-            // tied to it. We leak one instance per presenter, which lives for the
-            // whole process.
-            surface = (nint)surf;
-            return new GpuBlendEngine(api, poll, device, queue);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
         }
         catch
         {
@@ -192,29 +172,104 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
             };
             var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&metal };
             var surf = api.InstanceCreateSurface(instance, in desc);
-            if (surf == null) { api.InstanceRelease(instance); return null; }
-
-            if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
-            {
-                api.SurfaceRelease(surf);
-                api.InstanceRelease(instance);
-                return null;
-            }
-
-            var caps = default(SurfaceCapabilities);
-            api.SurfaceGetCapabilities(surf, GetAdapterForCaps(api, instance, surf), ref caps);
-            format = PickFormat(caps);
-
-            // Instance intentionally NOT released: wgpu ties the surface to it (leaked
-            // for the process lifetime, one per presenter — see CreateForSurface).
-            surface = (nint)surf;
-            return new GpuBlendEngine(api, poll, device, queue);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
         }
         catch
         {
             _ = WgpuNativeLoader.Diagnose();
             return null;
         }
+    }
+
+    internal static GpuBlendEngine? CreateForWindowsHwnd(nint hwnd, nint hinstance, out nint surface, out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (hwnd == 0) return null;
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+
+            var windows = new SurfaceDescriptorFromWindowsHWND
+            {
+                Chain = new ChainedStruct { Next = null, SType = SType.SurfaceDescriptorFromWindowsHwnd },
+                Hinstance = (void*)hinstance,
+                Hwnd = (void*)hwnd,
+            };
+            var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&windows };
+            var surf = api.InstanceCreateSurface(instance, in desc);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
+    internal static GpuBlendEngine? CreateForXlibWindow(nint display, ulong window, out nint surface, out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (display == 0 || window == 0) return null;
+        try
+        {
+            var api = WebGPU.GetApi();
+            var instance = api.CreateInstance((InstanceDescriptor*)null);
+            if (instance == null) return null;
+
+            var xlib = new SurfaceDescriptorFromXlibWindow
+            {
+                Chain = new ChainedStruct { Next = null, SType = SType.SurfaceDescriptorFromXlibWindow },
+                Display = (void*)display,
+                Window = window,
+            };
+            var desc = new SurfaceDescriptor { NextInChain = (ChainedStruct*)&xlib };
+            var surf = api.InstanceCreateSurface(instance, in desc);
+            return CreateForCreatedSurface(api, instance, surf, out surface, out format);
+        }
+        catch
+        {
+            _ = WgpuNativeLoader.Diagnose();
+            return null;
+        }
+    }
+
+    private static GpuBlendEngine? CreateForCreatedSurface(
+        WebGPU api,
+        Instance* instance,
+        Surface* surf,
+        out nint surface,
+        out TextureFormat format)
+    {
+        surface = 0;
+        format = TextureFormat.Bgra8Unorm;
+        if (surf == null)
+        {
+            api.InstanceRelease(instance);
+            return null;
+        }
+
+        if (!RequestDevice(api, instance, compatibleSurface: surf, out var device, out var queue, out var poll))
+        {
+            api.SurfaceRelease(surf);
+            api.InstanceRelease(instance);
+            return null;
+        }
+
+        var caps = default(SurfaceCapabilities);
+        var capsAdapter = GetAdapterForCaps(api, instance, surf);
+        if (capsAdapter != null)
+        {
+            api.SurfaceGetCapabilities(surf, capsAdapter, ref caps);
+            api.AdapterRelease(capsAdapter);
+        }
+        format = PickFormat(caps);
+
+        surface = (nint)surf;
+        return new GpuBlendEngine(api, poll, device, queue);
     }
 
     // Requesting capabilities needs an adapter; rather than thread it out of

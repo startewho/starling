@@ -338,11 +338,15 @@ public static class UrlParser
         {
             if (_isSpecial && (c == '/' || c == '\\'))
             {
+                // Protocol-relative ("//host/path"): a fresh authority follows,
+                // so the base path inherited in NoScheme must not leak in.
+                _pathSegments.Clear();
                 _state = State.SpecialAuthorityIgnoreSlashes;
                 return null;
             }
             if (c == '/')
             {
+                _pathSegments.Clear();
                 _state = State.Authority;
                 return null;
             }
