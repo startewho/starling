@@ -22,6 +22,8 @@ public sealed class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        MacDockIcon.Apply();
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             _mainWindow = new MainWindow();

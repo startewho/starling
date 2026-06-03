@@ -67,6 +67,28 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
     }
 
+    public static GpuSurfacePresenter? CreateForWindowsHwnd(
+        nint hwnd,
+        nint hinstance,
+        IDiagnostics? diagnostics = null)
+    {
+        if (hwnd == 0) return null;
+        var engine = GpuBlendEngine.CreateForWindowsHwnd(hwnd, hinstance, out var surface, out var format);
+        if (engine is null || surface == 0) return null;
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+    }
+
+    public static GpuSurfacePresenter? CreateForXlibWindow(
+        nint display,
+        ulong window,
+        IDiagnostics? diagnostics = null)
+    {
+        if (display == 0 || window == 0) return null;
+        var engine = GpuBlendEngine.CreateForXlibWindow(display, window, out var surface, out var format);
+        if (engine is null || surface == 0) return null;
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+    }
+
     /// <summary>The swapchain colour format wgpu chose for this surface.</summary>
     public TextureFormat Format => _format;
 

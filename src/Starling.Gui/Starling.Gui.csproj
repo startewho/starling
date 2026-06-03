@@ -16,9 +16,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Starling.Gui</RootNamespace>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-    <!-- The macOS page surface attaches a CAMetalLayer to a click-through NSView via
-         Objective-C runtime interop (objc_msgSend / class_addMethod with an unmanaged
-         hitTest: callback). Confined to Controls/PageSurfaceHost.cs. -->
+    <!-- The page surface hosts native child views or windows for WebGPU present.
+         macOS uses Objective-C runtime calls for NSView/CAMetalLayer. Windows
+         uses a child HWND. Linux uses an X11 child window. Confined to
+         Controls/PageSurfaceHost.cs. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- A handful of analyzer rules are noisy on chrome scaffolding (lots of
