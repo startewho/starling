@@ -100,6 +100,38 @@ internal sealed class Compositor
     //     return new RenderedBitmap(width, height, output);
     // }
 
+    public RenderedBitmap Render(CompositorLayer root, LayoutRect viewport, float scale)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (viewport.Width <= 0 || viewport.Height <= 0)
+            throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
+        if (!(scale > 0f))
+            throw new ArgumentException("Scale must be positive.", nameof(scale));
+
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+
+        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        var output = new byte[checked(width * height * 4)];
+        FillWhite(output);
+
+        var ops = new List<LayerBlend>();
+        CollectOps(root, ops, viewport, scale,
+            ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
+            surfacePresenter: null);
+
+        if (ops.Count > 0)
+        {
+            var gpu = GpuLayerCompositor.Shared
+                ?? throw new InvalidOperationException("WebGPU composite blend is unavailable for the selected paint backend.");
+            gpu.Composite(output, width, height, ops);
+        }
+
+        EmitTileFrameMetrics();
+        return new RenderedBitmap(width, height, output);
+    }
+
     public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter,
         IReadOnlyList<SurfaceOverlayRect>? overlays = null)
     {

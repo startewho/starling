@@ -31,19 +31,38 @@ public sealed class SelectorIndex<T>
     public IReadOnlyList<SelectorIndexEntry<T>> GetCandidates(Element element)
     {
         ArgumentNullException.ThrowIfNull(element);
-        var entries = new Dictionary<int, SelectorIndexEntry<T>>();
+        var results = new List<SelectorIndexEntry<T>>();
+        var seen = new HashSet<int>();
+        GetCandidates(element, results, seen);
+        return results;
+    }
+
+    public void GetCandidates(
+        Element element,
+        List<SelectorIndexEntry<T>> results,
+        HashSet<int> seenSequences,
+        bool filterPseudoElement = false,
+        PseudoElement? pseudoElement = null)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentNullException.ThrowIfNull(seenSequences);
+
+        results.Clear();
+        seenSequences.Clear();
+
         if (!string.IsNullOrEmpty(element.Id) && _ids.TryGetValue(element.Id, out var idEntries))
-            AddEntries(entries, idEntries);
+            AddEntries(results, seenSequences, idEntries, filterPseudoElement, pseudoElement);
         foreach (var className in element.ClassList)
             if (_classes.TryGetValue(className, out var classEntries))
-                AddEntries(entries, classEntries);
+                AddEntries(results, seenSequences, classEntries, filterPseudoElement, pseudoElement);
         foreach (var attribute in element.Attributes)
             if (_attributes.TryGetValue(attribute.Name, out var attributeEntries))
-                AddEntries(entries, attributeEntries);
+                AddEntries(results, seenSequences, attributeEntries, filterPseudoElement, pseudoElement);
         if (_tags.TryGetValue(element.LocalName, out var tagEntries))
-            AddEntries(entries, tagEntries);
-        AddEntries(entries, _universal);
-        return entries.Values.OrderBy(entry => entry.Sequence).ToList();
+            AddEntries(results, seenSequences, tagEntries, filterPseudoElement, pseudoElement);
+        AddEntries(results, seenSequences, _universal, filterPseudoElement, pseudoElement);
+        results.Sort(static (left, right) => left.Sequence.CompareTo(right.Sequence));
     }
 
     private static void AddTo(
@@ -169,11 +188,19 @@ public sealed class SelectorIndex<T>
     }
 
     private static void AddEntries(
-        Dictionary<int, SelectorIndexEntry<T>> target,
-        IEnumerable<SelectorIndexEntry<T>> entries)
+        List<SelectorIndexEntry<T>> target,
+        HashSet<int> seenSequences,
+        IEnumerable<SelectorIndexEntry<T>> entries,
+        bool filterPseudoElement,
+        PseudoElement? pseudoElement)
     {
         foreach (var entry in entries)
-            target.TryAdd(entry.Sequence, entry);
+        {
+            if (filterPseudoElement && entry.PseudoElementTarget != pseudoElement)
+                continue;
+            if (seenSequences.Add(entry.Sequence))
+                target.Add(entry);
+        }
     }
 
     private enum BucketKind
