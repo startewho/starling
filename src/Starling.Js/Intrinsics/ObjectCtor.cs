@@ -53,10 +53,6 @@ public static class ObjectCtor
             PropertyDescriptor.Data(JsValue.String("Object"), writable: false, enumerable: false, configurable: true));
         ctor.DefineOwnProperty("length",
             PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
-        // Object.prototype.constructor → Object (writable, non-enumerable, configurable).
-        objectProto.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-
         // -------------------------------------------------------- Static methods
         DefineMethod(realm, ctor, "assign", Assign, length: 2);
         DefineMethod(realm, ctor, "create", (thisV, args) => Create(realm, args), length: 2);
@@ -82,12 +78,22 @@ public static class ObjectCtor
         DefineMethod(realm, ctor, "hasOwn", (thisV, args) => HasOwn(args), length: 2);
 
         // -------------------------------------------------------- Prototype methods
-        DefineMethod(realm, objectProto, "hasOwnProperty", (thisV, args) => ProtoHasOwnProperty(realm, thisV, args), length: 1);
-        DefineMethod(realm, objectProto, "isPrototypeOf", (thisV, args) => ProtoIsPrototypeOf(realm, thisV, args), length: 1);
-        DefineMethod(realm, objectProto, "propertyIsEnumerable", (thisV, args) => ProtoPropertyIsEnumerable(realm, thisV, args), length: 1);
-        DefineMethod(realm, objectProto, "toString", (thisV, args) => ProtoToString(realm, thisV), length: 0);
-        DefineMethod(realm, objectProto, "valueOf", (thisV, args) => ProtoValueOf(realm, thisV), length: 0);
-        DefineMethod(realm, objectProto, "toLocaleString", (thisV, args) => ProtoToLocaleString(realm, thisV), length: 0);
+        // Bulk-install the constructor back-reference + the six prototype methods
+        // by adopting one precomputed shape. Creation order (and thus
+        // getOwnPropertyNames order) is exactly: constructor, hasOwnProperty,
+        // isPrototypeOf, propertyIsEnumerable, toString, valueOf, toLocaleString —
+        // unchanged from the prior sequential install. All are string-keyed builtin
+        // data properties (W=true/E=false/C=true), so the result is byte-identical.
+        IntrinsicHelpers.BulkInstallBuiltins(realm, objectProto, new[]
+        {
+            new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
+            new IntrinsicHelpers.BulkMember("hasOwnProperty", 1, (thisV, args) => ProtoHasOwnProperty(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("isPrototypeOf", 1, (thisV, args) => ProtoIsPrototypeOf(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("propertyIsEnumerable", 1, (thisV, args) => ProtoPropertyIsEnumerable(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("toString", 0, (thisV, args) => ProtoToString(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, args) => ProtoValueOf(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, args) => ProtoToLocaleString(realm, thisV)),
+        });
 
         realm.ObjectConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Object",
