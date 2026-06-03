@@ -2852,9 +2852,20 @@ public sealed class JsVm
                             JsValue baseClassValue = JsValue.Undefined;
                             if (template.HasExtends) baseClassValue = Pop();
 
+                            // §15.7.14 — the inner class-name binding (a named
+                            // class expression's `Inner` cell) must hold the
+                            // constructor BEFORE static field initializers run, so
+                            // `static x = new Inner()` resolves the class by name.
+                            // The cell lives in this frame's captured locals; pass
+                            // it through so BuildClassRuntime can set it at the
+                            // right moment.
+                            Cell? selfNameCell = null;
+                            if (template.SelfNameSlot >= 0)
+                                selfNameCell = (Cell)locals[template.SelfNameSlot].AsObject;
+
                             var classCtor = BuildClassRuntime(template, baseClassValue,
                                 ctorUps, methodUpvalues, fieldUpvalues, staticBlockUpvalues,
-                                methodComputedKeys, fieldComputedKeys);
+                                methodComputedKeys, fieldComputedKeys, selfNameCell);
                             Push(classCtor);
                             break;
                         }
@@ -3414,7 +3425,8 @@ public sealed class JsVm
         JsValue[][] fieldUpvalues,
         JsValue[][] staticBlockUpvalues,
         JsValue[] methodComputedKeys,
-        JsValue[] fieldComputedKeys)
+        JsValue[] fieldComputedKeys,
+        Cell? selfNameCell = null)
     {
         var realm = _runtime.Realm;
         JsObject? parentCtor = null;
@@ -3532,6 +3544,17 @@ public sealed class JsVm
         if (template.BindNameToGlobal && template.Name.Length > 0)
             AbstractOperations.Set(this, realm.GlobalObject, template.Name,
                 JsValue.Object(ctorInstance), JsValue.Object(realm.GlobalObject));
+
+        // §15.7.14 — for a named class expression, initialize the inner
+        // class-name binding to the constructor here, BEFORE static field
+        // initializers and static blocks run. Static elements (and instance
+        // method/field closures) capture this same Cell as an upvalue, so the
+        // store makes `new Inner()` / `Inner.x` resolve during static init.
+        // The compiler also re-stores the value after BuildClass returns (for
+        // closures formed later); both writes target the same cell, so this is
+        // idempotent.
+        if (selfNameCell is not null)
+            selfNameCell.Value = JsValue.Object(ctorInstance);
 
         // Static fields + static blocks: run in interleaved declaration order
         // per ES2022. Field thunks and static-block thunks both invoked with

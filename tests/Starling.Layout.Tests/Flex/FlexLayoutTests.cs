@@ -194,6 +194,56 @@ public sealed class FlexLayoutTests
     }
 
     [TestMethod]
+    public void Column_with_auto_height_and_justify_center_packs_items_from_the_top()
+    {
+        // Regression: a `flex-direction: column` container with `height: auto`
+        // has an INDEFINITE main size. It must size to its content, not fall back
+        // to the viewport height. Before the fix the viewport height (600) became
+        // the column's main size, so `justify-content: center` distributed ~270px
+        // of phantom free space and shoved the items far below the box
+        // (angular.dev's nav-button icon/label landing at y≈422 in a 96px box).
+        var root = Layout("""
+            <body><div id="c" style="display:flex; flex-direction:column;
+                        align-items:center; justify-content:center; width:120px">
+              <div style="width:16px; height:16px"></div>
+              <div style="width:40px; height:14px"></div>
+            </div></body>
+            """, new Size(800, 600));
+
+        var items = FlexChildren(root);
+        // Items pack from the main-start edge: there is no free space to
+        // distribute, so justify-content is a no-op.
+        items[0].Frame.Y.Should().BeApproximately(0, 0.5);
+        items[1].Frame.Y.Should().BeApproximately(16, 0.5);
+
+        // The container sizes its content box to the stacked item heights.
+        var container = FindBox(root, b => b.Element?.GetAttribute("id") == "c")!;
+        container.Frame.Height.Should().BeApproximately(30, 0.5);
+    }
+
+    [TestMethod]
+    public void Column_with_auto_height_and_min_height_distributes_only_the_real_slack()
+    {
+        // A `min-height` floor gives a column a definite minimum: justify-content
+        // distributes the slack between the content (30px) and the floor (100px),
+        // i.e. 70px, centering it (35px leading) — but never the viewport height.
+        var root = Layout("""
+            <body><div id="c" style="display:flex; flex-direction:column;
+                        justify-content:center; min-height:100px; width:120px">
+              <div style="width:16px; height:16px"></div>
+              <div style="width:40px; height:14px"></div>
+            </div></body>
+            """, new Size(800, 600));
+
+        var items = FlexChildren(root);
+        items[0].Frame.Y.Should().BeApproximately(35, 0.5);
+        items[1].Frame.Y.Should().BeApproximately(51, 0.5);
+
+        var container = FindBox(root, b => b.Element?.GetAttribute("id") == "c")!;
+        container.Frame.Height.Should().BeApproximately(100, 0.5);
+    }
+
+    [TestMethod]
     public void Flex_direction_row_reverse_reverses_visual_order_but_keeps_paint_order()
     {
         // Reverse direction: the items are positioned right-to-left visually,

@@ -78,4 +78,33 @@ public class NamedClassExpressionSelfRefTests
             typeof Inner;
         ").AsString.Should().Be("undefined");
     }
+
+    [TestMethod]
+    public void Static_field_initializer_sees_own_class_name()
+    {
+        // §15.7.14 — a static field initializer runs during class definition and
+        // must see the inner class-name binding already set to the constructor.
+        // Previously the inner-name cell was stored only AFTER BuildClass (which
+        // runs static initializers), so `new e(...)` saw `e` === undefined and
+        // threw "not a constructor". This is the exact angular.dev pattern:
+        //   Un = class e extends Error { static IDLE = new e("IDLE"); }
+        Eval(@"
+            var C = class e extends Error {
+              constructor(t){ super(t); }
+              static IDLE = new e('IDLE');
+            };
+            (C.IDLE instanceof C) && C.IDLE.message === 'IDLE';
+        ").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Static_field_initializer_references_own_class_name_as_value()
+    {
+        // The inner name also resolves as a plain value reference (not just a
+        // `new` callee) inside a static field initializer.
+        Eval(@"
+            var C = class Inner { static self = Inner; static n = 7; };
+            (C.self === C) && C.n === 7;
+        ").AsBool.Should().BeTrue();
+    }
 }

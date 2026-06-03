@@ -104,13 +104,9 @@ public sealed class NativeViewportRenderer : IDisposable
     }
 
     /// <summary>
-    /// Presents engine-rendered chrome (a strip <paramref name="chromeHeightCss"/>
-    /// CSS px tall at the top) composited above the page, in one zero-copy frame.
-    /// Both are real Starling documents: <paramref name="chromeRoot"/> is laid out
-    /// at the window width × the chrome height, <paramref name="pageRoot"/> fills
-    /// the region below. They blend into a single swapchain present — no overlay,
-    /// no airspace. <paramref name="surfaceWidth"/>/<paramref name="surfaceHeight"/>
-    /// are the swapchain's device-pixel dimensions.
+    /// Presents engine-rendered chrome composited above and beside the page, in
+    /// one zero-copy frame. The chrome documents and page blend into one
+    /// swapchain present.
     /// </summary>
     public bool PresentComposited(
         GpuSurfacePresenter presenter,
@@ -119,6 +115,8 @@ public sealed class NativeViewportRenderer : IDisposable
         float scale,
         BlockBox chromeRoot,
         double chromeHeightCss,
+        BlockBox? leftChromeRoot,
+        double leftChromeWidthCss,
         BlockBox pageRoot,
         double scrollX = 0,
         double scrollY = 0,
@@ -126,7 +124,9 @@ public sealed class NativeViewportRenderer : IDisposable
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         BlockBox? overlayRoot = null,
-        BlockBox? screenOverlayRoot = null)
+        BlockBox? screenOverlayRoot = null,
+        BlockBox? bottomChromeRoot = null,
+        double bottomChromeHeightCss = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -143,10 +143,21 @@ public sealed class NativeViewportRenderer : IDisposable
         }
 
         var chromeDevH = (int)Math.Ceiling(chromeHeightCss * scale);
+        var bottomChromeCss = bottomChromeRoot is null ? 0 : bottomChromeHeightCss;
+        var bottomDevH = bottomChromeRoot is null ? 0 : (int)Math.Ceiling(bottomChromeCss * scale);
+        var leftChromeCss = leftChromeRoot is null ? 0 : leftChromeWidthCss;
+        var leftDevW = leftChromeRoot is null ? 0 : (int)Math.Ceiling(leftChromeCss * scale);
         var logicalW = surfaceWidth / scale;
         var logicalH = surfaceHeight / scale;
+        var pageLogicalW = Math.Max(1, logicalW - leftChromeCss);
+        var pageLogicalH = Math.Max(1, logicalH - chromeHeightCss - bottomChromeCss);
+        var contentDevW = Math.Max(1, surfaceWidth - leftDevW);
+        var contentDevH = Math.Max(1, surfaceHeight - chromeDevH - bottomDevH);
 
         var chromeTree = new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(chromeRoot);
+        var leftChromeTree = leftChromeRoot is null
+            ? null
+            : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(leftChromeRoot);
         var pageTree = new LayerTreeBuilder(styleOverride, images, _diag,
             isAnimatingLayerRoot: pageAnimating, layerIdFor: _tiles.LayerIdFor).Build(pageRoot);
         // Optional overlay (find highlight, context menu, …) drawn in page space,
@@ -159,24 +170,38 @@ public sealed class NativeViewportRenderer : IDisposable
         var screenOverlayTree = screenOverlayRoot is null
             ? null
             : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(screenOverlayRoot);
+        // Bottom chrome (status bar): same width as the page, fixed at the window
+        // bottom to the right of the sidebar.
+        var bottomChromeTree = bottomChromeRoot is null
+            ? null
+            : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRoot);
 
         var compositor = new Compositor(_backend, _diag, _tiles);
         var ops = new List<LayerBlend>();
 
-        // Chrome: top strip, no offset.
+        // Sidebar: left strip, full height.
+        if (leftChromeTree is not null)
+            compositor.AppendSurfaceOps(
+                leftChromeTree,
+                new LayoutRect(0, 0, leftChromeCss, logicalH),
+                scale, destOriginXDevice: 0, destOriginYDevice: 0,
+                regionClipDevice: new LayoutRect(0, 0, leftDevW, surfaceHeight),
+                ops, presenter);
+
+        // Top chrome: to the right of the sidebar.
         compositor.AppendSurfaceOps(
             chromeTree,
-            new LayoutRect(0, 0, logicalW, chromeHeightCss),
-            scale, destOriginXDevice: 0, destOriginYDevice: 0,
-            regionClipDevice: new LayoutRect(0, 0, surfaceWidth, chromeDevH),
+            new LayoutRect(0, 0, pageLogicalW, chromeHeightCss),
+            scale, destOriginXDevice: leftDevW, destOriginYDevice: 0,
+            regionClipDevice: new LayoutRect(leftDevW, 0, contentDevW, chromeDevH),
             ops, presenter);
 
-        // Page: below the chrome, scrolled, clipped to the content region.
-        var pageRegion = new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss);
-        var pageClip = new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH);
+        // Page: below the toolbar and to the right of the sidebar.
+        var pageRegion = new LayoutRect(scrollX, scrollY, pageLogicalW, pageLogicalH);
+        var pageClip = new LayoutRect(leftDevW, chromeDevH, contentDevW, contentDevH);
         compositor.AppendSurfaceOps(
             pageTree, pageRegion,
-            scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+            scale, destOriginXDevice: leftDevW, destOriginYDevice: chromeDevH,
             regionClipDevice: pageClip,
             ops, presenter);
 
@@ -184,8 +209,19 @@ public sealed class NativeViewportRenderer : IDisposable
         if (overlayTree is not null)
             compositor.AppendSurfaceOps(
                 overlayTree, pageRegion,
-                scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+                scale, destOriginXDevice: leftDevW, destOriginYDevice: chromeDevH,
                 regionClipDevice: pageClip,
+                ops, presenter);
+
+        // Bottom chrome (status bar): the strip below the page, same width as the
+        // page region, fixed at the window bottom. Drawn after the page so it sits
+        // over any page content that would otherwise bleed into the strip.
+        if (bottomChromeTree is not null)
+            compositor.AppendSurfaceOps(
+                bottomChromeTree,
+                new LayoutRect(0, 0, pageLogicalW, bottomChromeCss),
+                scale, destOriginXDevice: leftDevW, destOriginYDevice: surfaceHeight - bottomDevH,
+                regionClipDevice: new LayoutRect(leftDevW, surfaceHeight - bottomDevH, contentDevW, bottomDevH),
                 ops, presenter);
 
         // Screen overlay: whole window, no scroll, on top of everything.

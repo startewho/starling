@@ -144,6 +144,104 @@ public sealed class McMasterCompatBindingsTests
         engine.Evaluate("hit.target === document.getElementById('main')").AsBoolean().Should().BeTrue();
     }
 
+    [TestMethod]
+    public void TextEncoder_and_TextDecoder_are_global_constructors()
+    {
+        var (engine, _) = NewSession(Html);
+        // Angular's main bundle does `new TextDecoder()` during module eval;
+        // without the global it threw "ReferenceError: TextDecoder is not defined".
+        engine.Evaluate("typeof TextEncoder").AsString().Should().Be("function");
+        engine.Evaluate("typeof TextDecoder").AsString().Should().Be("function");
+        engine.Evaluate("new TextEncoder().encoding").AsString().Should().Be("utf-8");
+        engine.Evaluate("new TextDecoder().encoding").AsString().Should().Be("utf-8");
+    }
+
+    [TestMethod]
+    public void TextEncoder_encodes_utf8_to_a_uint8array()
+    {
+        var (engine, _) = NewSession(Html);
+        engine.Evaluate("new TextEncoder().encode('hi') instanceof Uint8Array").AsBoolean().Should().BeTrue();
+        engine.Evaluate("Array.from(new TextEncoder().encode('hi')).join(',')").AsString().Should().Be("104,105");
+        // Multi-byte: '€' is E2 82 AC in UTF-8.
+        engine.Evaluate("Array.from(new TextEncoder().encode('€')).join(',')").AsString().Should().Be("226,130,172");
+    }
+
+    [TestMethod]
+    public void TextDecoder_round_trips_utf8_bytes()
+    {
+        var (engine, _) = NewSession(Html);
+        engine.Evaluate(
+            "(function(){ var b = new TextEncoder().encode('héllo €');" +
+            "return new TextDecoder().decode(b); })()")
+            .AsString().Should().Be("héllo €");
+        // Decode accepts the underlying ArrayBuffer too.
+        engine.Evaluate(
+            "(function(){ var b = new TextEncoder().encode('abc');" +
+            "return new TextDecoder().decode(b.buffer); })()")
+            .AsString().Should().Be("abc");
+    }
+
+    [TestMethod]
+    public void URL_is_a_global_constructor_with_parsed_components()
+    {
+        var (engine, _) = NewSession(Html);
+        // Angular constructs `new URL(...)` during boot; without the global it
+        // threw "ReferenceError: URL is not defined".
+        engine.Evaluate("typeof URL").AsString().Should().Be("function");
+        engine.Evaluate("new URL('https://a.example.com:8443/p/q?x=1&y=2#frag').protocol")
+            .AsString().Should().Be("https:");
+        engine.Evaluate("new URL('https://a.example.com:8443/p/q?x=1#frag').host")
+            .AsString().Should().Be("a.example.com:8443");
+        engine.Evaluate("new URL('https://a.example.com/p/q?x=1#frag').pathname")
+            .AsString().Should().Be("/p/q");
+        engine.Evaluate("new URL('https://a.example.com/p?x=1#frag').search")
+            .AsString().Should().Be("?x=1");
+        engine.Evaluate("new URL('https://a.example.com/p#frag').hash")
+            .AsString().Should().Be("#frag");
+    }
+
+    [TestMethod]
+    public void URL_resolves_against_a_base()
+    {
+        var (engine, _) = NewSession(Html);
+        engine.Evaluate("new URL('../c', 'https://h.example.com/a/b/').href")
+            .AsString().Should().Be("https://h.example.com/a/c");
+        engine.Evaluate("new URL('/abs', 'https://h.example.com/a/b').pathname")
+            .AsString().Should().Be("/abs");
+    }
+
+    [TestMethod]
+    public void URLSearchParams_reads_and_mutates()
+    {
+        var (engine, _) = NewSession(Html);
+        engine.Evaluate("typeof URLSearchParams").AsString().Should().Be("function");
+        engine.Evaluate("new URLSearchParams('a=1&b=2').get('b')").AsString().Should().Be("2");
+        engine.Evaluate(
+            "(function(){ var p = new URLSearchParams('a=1'); p.append('a','2');" +
+            "return p.getAll('a').join(','); })()").AsString().Should().Be("1,2");
+        engine.Evaluate(
+            "(function(){ var u = new URL('https://h.example.com/?a=1');" +
+            "u.searchParams.set('a','9'); u.searchParams.append('b','x');" +
+            "return u.search; })()").AsString().Should().Be("?a=9&b=x");
+    }
+
+    [TestMethod]
+    public void Named_class_expression_static_field_can_construct_via_inner_name()
+    {
+        // The exact angular.dev pattern that crashed the Starling engine:
+        //   Un = class e extends Error { static IDLE = new e("IDLE"); }
+        // Jint handles this natively; this guards the cross-engine contract.
+        var (engine, _) = NewSession(Html);
+        engine.Evaluate(@"
+            globalThis.__C = class e extends Error {
+              constructor(t){ super(t); }
+              static IDLE = new e('IDLE');
+            };
+        ");
+        engine.Evaluate("__C.IDLE instanceof __C").AsBoolean().Should().BeTrue();
+        engine.Evaluate("__C.IDLE.message").AsString().Should().Be("IDLE");
+    }
+
     private JintBackendContext? _lastCtx;
 
     private (global::Jint.Engine Engine, Document Doc) NewSession(

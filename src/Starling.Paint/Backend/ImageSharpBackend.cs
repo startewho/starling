@@ -51,7 +51,7 @@ namespace Starling.Paint.Backend;
 /// </remarks>
 internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 {
-    private readonly IResampler _resampler = KnownResamplers.NearestNeighbor;
+    private readonly IResampler _resampler = KnownResamplers.Bicubic;
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
     private readonly IDiagnostics _diag;

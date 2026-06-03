@@ -3715,6 +3715,24 @@ public sealed partial class JsCompiler
         if (!call.Optional && call.Callee is MemberExpression me)
         {
             EmitExpression(me.Object);          // [obj]
+
+            // §13.3 OptionalChain — `base?.method(args)`. A nullish base
+            // short-circuits the WHOLE call to undefined: the property is not
+            // loaded and the arguments are not evaluated. Without this the
+            // method-call fast-path loaded `.method` off the nullish base
+            // (undefined) and then issued CallMethod, throwing "not a function"
+            // — e.g. Angular's `e.features?.forEach(...)`.
+            int? optDone = null;
+            if (me.Optional)
+            {
+                _b.Emit(Opcode.Dup);                                   // [obj, obj]
+                var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one → [obj]
+                _b.Emit(Opcode.Pop);                                   // [] (nullish base)
+                _b.Emit(Opcode.LoadUndefined);                         // [undefined]
+                optDone = _b.EmitJump(Opcode.Jump);                    // skip the call
+                _b.PatchJump(notNullish);                              // [obj] (proceed)
+            }
+
             _b.Emit(Opcode.Dup);                // [obj, obj]
             if (me.Computed)
             {
@@ -3740,11 +3758,13 @@ public sealed partial class JsCompiler
                 EmitArgsAsArray(call.Arguments);
                 RecordPos(call);
                 _b.Emit(Opcode.CallApplyMethod);
+                if (optDone is { } optDoneSpread) _b.PatchJump(optDoneSpread);
                 return;
             }
             foreach (var arg in call.Arguments) EmitExpression(arg);
             RecordPos(call);
             _b.Emit(Opcode.CallMethod, (byte)call.Arguments.Count);
+            if (optDone is { } optDonePlain) _b.PatchJump(optDonePlain);
             return;
         }
 
@@ -3808,16 +3828,33 @@ public sealed partial class JsCompiler
         }
 
         EmitExpression(call.Callee);
+
+        // §13.3 OptionalChain — `callee?.(args)`. A nullish callee short-circuits
+        // to undefined without evaluating the arguments. (A non-nullish callee
+        // that isn't callable still throws "not a function", per spec.)
+        int? optCallDone = null;
+        if (call.Optional)
+        {
+            _b.Emit(Opcode.Dup);                                   // [callee, callee]
+            var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one → [callee]
+            _b.Emit(Opcode.Pop);                                   // [] (nullish callee)
+            _b.Emit(Opcode.LoadUndefined);                         // [undefined]
+            optCallDone = _b.EmitJump(Opcode.Jump);                // skip the call
+            _b.PatchJump(notNullish);                              // [callee] (proceed)
+        }
+
         if (hasSpread)
         {
             EmitArgsAsArray(call.Arguments);
             RecordPos(call);
             _b.Emit(Opcode.CallApply);
+            if (optCallDone is { } optCallDoneSpread) _b.PatchJump(optCallDoneSpread);
             return;
         }
         foreach (var arg in call.Arguments) EmitExpression(arg);
         RecordPos(call);
         _b.Emit(Opcode.Call, (byte)call.Arguments.Count);
+        if (optCallDone is { } optCallDonePlain) _b.PatchJump(optCallDonePlain);
     }
 
     /// <summary>wp:M3-71 — is <paramref name="callee"/> a bare <c>eval</c>

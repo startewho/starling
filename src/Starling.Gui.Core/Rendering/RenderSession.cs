@@ -67,6 +67,8 @@ public sealed class CompositedFrameRequest
     public required float Scale { get; init; }
     public required BlockBox ChromeRoot { get; init; }
     public required double ChromeHeightCss { get; init; }
+    public BlockBox? LeftChromeRoot { get; init; }
+    public double LeftChromeWidthCss { get; init; }
     public required BlockBox PageRoot { get; init; }
     public double ScrollX { get; init; }
     public double ScrollY { get; init; }
@@ -75,6 +77,14 @@ public sealed class CompositedFrameRequest
     public IImageResolver? Images { get; init; }
     public BlockBox? OverlayRoot { get; init; }
     public BlockBox? ScreenOverlayRoot { get; init; }
+
+    /// <summary>
+    /// Optional bottom chrome (status bar) — a strip below the page, to the right
+    /// of the sidebar, the same width as the page region. Null leaves the page
+    /// filling all the way to the window bottom (the prior behaviour).
+    /// </summary>
+    public BlockBox? BottomChromeRoot { get; init; }
+    public double BottomChromeHeightCss { get; init; }
 }
 
 public enum FrameTargetKind
@@ -276,6 +286,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.Scale,
             request.ChromeRoot,
             request.ChromeHeightCss,
+            request.LeftChromeRoot,
+            request.LeftChromeWidthCss,
             request.PageRoot,
             request.ScrollX,
             request.ScrollY,
@@ -283,7 +295,9 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.StyleOverride,
             request.Images,
             request.OverlayRoot,
-            request.ScreenOverlayRoot);
+            request.ScreenOverlayRoot,
+            request.BottomChromeRoot,
+            request.BottomChromeHeightCss);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface compositor did not present the frame.");

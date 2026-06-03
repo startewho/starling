@@ -53,8 +53,13 @@ internal sealed class InlineLayout
         var runs = new List<InlineRun>();
         Flatten(container, runs);
 
-        // No content → zero height.
-        if (runs.Count == 0) return 0;
+        // No content. Editable text fields (text-family <input>, <textarea>)
+        // still reserve one empty line box so an empty field keeps a text
+        // line's height — and a place for the caret — instead of collapsing to
+        // padding+border the moment its value and placeholder are both gone.
+        // Every other empty container stays zero-height (an empty <div> is 0).
+        if (runs.Count == 0)
+            return ReservesEmptyTextLine(container.Element) ? lineHeight : 0;
 
         double cursorX = 0, cursorY = 0;
         double currentLineHeight = lineHeight;
@@ -827,6 +832,21 @@ internal sealed class InlineLayout
     /// inflate their width. Text-like input types default to 20 columns when
     /// the attribute is missing, matching the HTML spec.
     /// </summary>
+    /// <summary>
+    /// Whether an empty element still reserves one line box of height. True for
+    /// editable text fields — text-family <c>&lt;input&gt;</c>s and
+    /// <c>&lt;textarea&gt;</c> — which always show a text line (and a caret)
+    /// even with no value or placeholder, so their box must not collapse to
+    /// padding+border. Everything else collapses to zero height when empty.
+    /// </summary>
+    private static bool ReservesEmptyTextLine(Element? element)
+    {
+        if (element is null) return false;
+        if (string.Equals(element.LocalName, "textarea", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return ResolveInputSizeCols(element) > 0;
+    }
+
     private static int ResolveInputSizeCols(Element? element)
     {
         if (element is null) return 0;

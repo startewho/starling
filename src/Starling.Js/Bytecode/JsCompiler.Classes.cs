@@ -159,7 +159,8 @@ public sealed partial class JsCompiler
                 fieldEntries,
                 staticBlockEntries,
                 classId,
-                bindNameToGlobal);
+                bindNameToGlobal,
+                selfNameSlot);
             _b.EmitU16(Opcode.BuildClass, _b.AddConstant(template));
 
             // Initialize the inner class-name binding to the freshly-built

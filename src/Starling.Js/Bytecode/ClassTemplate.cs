@@ -58,6 +58,15 @@ public sealed class ClassTemplate
     /// scoped to the body.</summary>
     public bool BindNameToGlobal { get; }
 
+    /// <summary>§15.7.14 — for a named class <em>expression</em>, the parent
+    /// frame's captured local slot that backs the inner class-name binding (a
+    /// <c>Cell</c>). <c>BuildClass</c> stores the freshly-built constructor into
+    /// that cell <em>before</em> running static field initializers and static
+    /// blocks, so <c>static x = new Inner()</c> sees the class by name. -1 when
+    /// there is no inner-name binding (anonymous class, or a declaration whose
+    /// name is bound to a global instead).</summary>
+    public int SelfNameSlot { get; }
+
     public ClassTemplate(
         string name,
         JsFunction constructorTemplate,
@@ -67,7 +76,8 @@ public sealed class ClassTemplate
         IReadOnlyList<FieldEntry> fields,
         IReadOnlyList<StaticBlockEntry> staticBlocks,
         int classId,
-        bool bindNameToGlobal = false)
+        bool bindNameToGlobal = false,
+        int selfNameSlot = -1)
     {
         ConstructorUpvalueCount = constructorUpvalueCount;
         Name = name ?? throw new ArgumentNullException(nameof(name));
@@ -78,6 +88,7 @@ public sealed class ClassTemplate
         StaticBlocks = staticBlocks ?? throw new ArgumentNullException(nameof(staticBlocks));
         ClassId = classId;
         BindNameToGlobal = bindNameToGlobal;
+        SelfNameSlot = selfNameSlot;
     }
 
     private static int s_nextClassId;

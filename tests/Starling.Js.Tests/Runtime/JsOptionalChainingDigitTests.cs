@@ -46,6 +46,37 @@ public class JsOptionalChainingDigitTests
     public void Optional_chain_short_circuits_on_nullish()
         => Eval("var a=null; typeof (a?.b)").AsString.Should().Be("undefined");
 
+    // Regression (angular.dev `e.features?.forEach(...)`): an optional METHOD
+    // call must short-circuit the whole call — including evaluating the
+    // arguments — when the base is nullish, instead of loading the method off
+    // the nullish base and throwing "not a function".
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-optional-chains", "13.3.9 Optional Chains")]
+    public void Optional_method_call_short_circuits_on_nullish_base()
+        => Eval("var a={b:null}; typeof (a.b?.forEach(function(x){return x;}))").AsString.Should().Be("undefined");
+
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-optional-chains", "13.3.9 Optional Chains")]
+    public void Optional_method_call_invokes_on_present_base()
+        => Eval("var s=0; var a={b:[1,2,3]}; a.b?.forEach(function(x){s+=x;}); s").AsNumber.Should().Be(6);
+
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-optional-chains", "13.3.9 Optional Chains")]
+    public void Optional_method_call_does_not_evaluate_args_on_nullish_base()
+        => Eval("var n=0; var a={b:null}; a.b?.forEach((n=n+1)); n").AsNumber.Should().Be(0);
+
+    // Regression (angular.dev `yR?.(e)`): an optional CALL must short-circuit to
+    // undefined when the callee itself is nullish.
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-optional-chains", "13.3.9 Optional Chains")]
+    public void Optional_function_call_short_circuits_on_nullish_callee()
+        => Eval("var f=null; typeof (f?.(1,2))").AsString.Should().Be("undefined");
+
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-optional-chains", "13.3.9 Optional Chains")]
+    public void Optional_function_call_invokes_when_present()
+        => Eval("var f=function(x){return x*2;}; f?.(5)").AsNumber.Should().Be(10);
+
     private static JsValue Eval(string src)
     {
         var program = new JsParser(src).ParseProgram();

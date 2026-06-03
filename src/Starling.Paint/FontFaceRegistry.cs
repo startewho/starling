@@ -67,30 +67,38 @@ public sealed class FontFaceRegistry : IDisposable
     }
 
     /// <summary>
-    /// Adds every registered face to <paramref name="collection"/>. Used by
+    /// Adds every registered face to <paramref name="collection"/> and returns
+    /// an alias map from each declared <c>@font-face</c> <c>font-family</c> to
+    /// the <see cref="FontFamily"/> handles SixLabors created for it. Used by
     /// the paint backend (<see cref="ImageSharpFontLookup.LoadCollection(FontFaceRegistry?)"/>)
     /// to fold web fonts into the per-render <c>FontCollection</c> snapshot.
     /// <para>
-    /// SixLabors.Fonts identifies families from each font's own
-    /// <c>name</c> table on <c>FontCollection.Add</c>, not from an
-    /// externally-supplied alias. In practice this works because authors keep
-    /// the <c>@font-face</c> <c>font-family</c> descriptor in sync with the
-    /// font's internal family name; a stylesheet that uses a renamed family
-    /// will still register the font but only resolve by the font's own name.
+    /// SixLabors.Fonts names each family from the font's own <c>name</c> table
+    /// on <c>FontCollection.Add</c>, ignoring the declared family. Google Fonts'
+    /// per-weight instances mangle that name (the 500-weight Inter Tight file
+    /// reports "Inter Tight Medium", the 600 reports "Inter Tight SemiBold"), so
+    /// the collection can't be looked up by the name the CSS uses. The returned
+    /// alias map restores the CSS contract: the declared family resolves to the
+    /// faces registered for it, whatever the font files call themselves.
     /// </para>
     /// </summary>
-    internal void AddTo(FontCollection collection)
+    internal IReadOnlyDictionary<string, IReadOnlyList<FontFamily>> AddTo(FontCollection collection)
     {
-        if (_disposed) return;
+        var aliases = new Dictionary<string, IReadOnlyList<FontFamily>>(StringComparer.OrdinalIgnoreCase);
+        if (_disposed) return aliases;
 
-        foreach (var faces in _byFamily.Values)
+        foreach (var (declaredFamily, faces) in _byFamily)
         {
+            List<FontFamily>? loaded = null;
             foreach (var face in SelectRepresentativeFaces(faces))
             {
                 using var stream = new MemoryStream(face.FontBytes, writable: false);
-                collection.Add(stream);
+                (loaded ??= []).Add(collection.Add(stream));
             }
+            if (loaded is { Count: > 0 })
+                aliases[declaredFamily] = loaded;
         }
+        return aliases;
     }
 
     // SixLabors' FontCollection keys faces by the font's own (family, style)

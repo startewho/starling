@@ -35,6 +35,12 @@ public static class JintBindings
         TimersBinding.Install(ctx);
         AnimationFrameBinding.Install(ctx);
 
+        // Core URL + Encoding APIs. Install before FetchBinding: the fetch
+        // bootstrap's Response.blob().text() uses `new TextDecoder()`, and page
+        // code commonly resolves request URLs with `new URL(...)`.
+        UrlBinding.Install(ctx);
+        EncodingBinding.Install(ctx);
+
         // Network.
         FetchBinding.Install(ctx);
         XhrBinding.Install(ctx);
