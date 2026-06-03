@@ -235,6 +235,50 @@ public sealed partial class DotNetRegexMatcher : IRegexMatcher
 
         return new DotNetRegexMatch(m, input, _groupKey);
     }
+
+    public bool ExecSpans(string input, int start, int[] spanBuffer, out int matchStart, out int matchEnd)
+    {
+        if (start < 0) start = 0;
+        if (start > input.Length)
+        {
+            matchStart = -1;
+            matchEnd = -1;
+            return false;
+        }
+
+        var m = _regex.Match(input, start);
+        if (!m.Success || (_sticky && m.Index != start))
+        {
+            matchStart = -1;
+            matchEnd = -1;
+            return false;
+        }
+
+        // Group 0 is the whole match.
+        spanBuffer[0] = m.Index;
+        spanBuffer[1] = m.Index + m.Length;
+        for (int i = 1; i <= _captureCount; i++)
+        {
+            // _groupKey routes JS index → .NET group key (name for named,
+            // positional number for unnamed), the same resolution Group/
+            // GroupSpan use, so the JS numbering stays correct.
+            var g = i < _groupKey.Length ? m.Groups[_groupKey[i]] : null;
+            int si = i * 2;
+            if (g is { Success: true })
+            {
+                spanBuffer[si] = g.Index;
+                spanBuffer[si + 1] = g.Index + g.Length;
+            }
+            else
+            {
+                spanBuffer[si] = -1;
+                spanBuffer[si + 1] = -1;
+            }
+        }
+        matchStart = m.Index;
+        matchEnd = m.Index + m.Length;
+        return true;
+    }
 }
 
 /// <summary>Maps a .NET <see cref="Match"/> onto the JS match shape, using the

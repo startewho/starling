@@ -89,6 +89,14 @@ public sealed class JsRealm
     // B4-1: RegExp constructor — populated by RegExpCtor.Install.
     public JsObject? RegExpConstructor { get; internal set; }
 
+    // The built-in RegExp.prototype.exec and the global/unicode flag getters,
+    // captured at install time. The @@match global fast path checks identity
+    // against these to be sure the §22.2.7.1 RegExpExec delegation contract is
+    // unobserved (no user-overridden exec / flag getters) before short-circuiting.
+    public JsObject? RegExpBuiltinExec { get; internal set; }
+    public JsObject? RegExpGlobalGetter { get; internal set; }
+    public JsObject? RegExpUnicodeGetter { get; internal set; }
+
     // B4-2: Date constructor — populated by DateCtor.Install.
     public JsObject? DateConstructor { get; internal set; }
 

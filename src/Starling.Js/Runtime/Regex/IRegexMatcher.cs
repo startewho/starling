@@ -30,6 +30,19 @@ public interface IRegexMatcher
     /// at <paramref name="start"/>. Returns <c>null</c> on no match. Matches the
     /// Pike VM contract: a non-sticky run scans forward from <paramref name="start"/>.</summary>
     IRegexMatch? Exec(string input, int start);
+
+    /// <summary>Non-allocating exec: run the regex against <paramref name="input"/>
+    /// from <paramref name="start"/> and, on a match, fill
+    /// <paramref name="spanBuffer"/> with (start, end) int pairs for groups
+    /// 0..<see cref="CaptureCount"/> (group 0 is the whole match). A
+    /// non-participating group writes (-1, -1). The buffer length must be at
+    /// least 2*(<see cref="CaptureCount"/>+1); the caller owns it and may pool
+    /// it across iterations. Returns whether a match was found. Allocates no
+    /// substrings — group text is produced by the caller from the spans.
+    /// Honors the same sticky and start &gt; input.Length guards as
+    /// <see cref="Exec(string,int)"/>, and routes group indices through the same
+    /// JS↔.NET resolution so numbering stays JS-correct.</summary>
+    bool ExecSpans(string input, int start, int[] spanBuffer, out int matchStart, out int matchEnd);
 }
 
 /// <summary>A successful match from an <see cref="IRegexMatcher"/>.</summary>

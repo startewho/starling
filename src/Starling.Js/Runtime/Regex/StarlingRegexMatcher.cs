@@ -30,6 +30,43 @@ public sealed class StarlingRegexMatcher : IRegexMatcher
         var m = _compiled.Exec(input, start);
         return m is null ? null : new StarlingRegexMatch(m);
     }
+
+    public bool ExecSpans(string input, int start, int[] spanBuffer, out int matchStart, out int matchEnd)
+    {
+        var m = _compiled.Exec(input, start);
+        if (m is null)
+        {
+            matchStart = -1;
+            matchEnd = -1;
+            return false;
+        }
+        // The Pike VM already stores groups as (start, end) int pairs at
+        // Captures[i*2], Captures[i*2+1] with -1 for a non-participating slot —
+        // exactly our wire format. Copy each group 0..CaptureCount; write
+        // (-1,-1) for any slot the VM left short.
+        var caps = m.Captures;
+        int count = _compiled.CaptureCount;
+        for (int i = 0; i <= count; i++)
+        {
+            int si = i * 2;
+            if (si + 1 < caps.Length)
+            {
+                int cs = caps[si];
+                int ce = caps[si + 1];
+                if (cs < 0 || ce < 0) { cs = -1; ce = -1; }
+                spanBuffer[si] = cs;
+                spanBuffer[si + 1] = ce;
+            }
+            else
+            {
+                spanBuffer[si] = -1;
+                spanBuffer[si + 1] = -1;
+            }
+        }
+        matchStart = m.Start;
+        matchEnd = m.End;
+        return true;
+    }
 }
 
 /// <summary>1:1 wrapper over a Pike VM <see cref="RegexMatch"/>.</summary>
