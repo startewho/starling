@@ -22,6 +22,10 @@
     <ProjectReference Include="..\Starling.Url\Starling.Url.csproj" />
     <ProjectReference Include="..\Starling.Net\Starling.Net.csproj" />
     <ProjectReference Include="..\Starling.Html\Starling.Html.csproj" />
+    <!-- Opt-in AngleSharp HTML-parser backend (STARLING_HTML_PARSER=anglesharp).
+         The engine is the only project that references it; HtmlBackendSelector
+         installs it. Remove this line + the selector arm to delete AngleSharp. -->
+    <ProjectReference Include="..\Starling.Html.AngleSharp\Starling.Html.AngleSharp.csproj" />
     <ProjectReference Include="..\Starling.Dom\Starling.Dom.csproj" />
     <ProjectReference Include="..\Starling.Css\Starling.Css.csproj" />
     <ProjectReference Include="..\Starling.Layout\Starling.Layout.csproj" />

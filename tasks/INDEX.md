@@ -248,6 +248,7 @@ Parallel review track for targeted module audits. Each package records
 | [wp:M13-09-review-js](M13/wp-M13-09-review-js.md) | 🔵 available | — | Starling.Js | — |
 | [wp:M13-10-review-bindings](M13/wp-M13-10-review-bindings.md) | 🔵 available | — | Starling.Bindings | — |
 | [wp:M13-11-review-engine](M13/wp-M13-11-review-engine.md) | 🔵 available | — | Starling.Engine | — |
+| [wp:M13-12-anglesharp-html-backend](M13/wp-M13-12-anglesharp-html-backend.md) | 🟡 claimed | agent-claude-anglesharp | Starling.Html | — |
 
 ## Spec conformance (ongoing — CSS-V1)
 

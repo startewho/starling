@@ -27,6 +27,12 @@ internal static class Program
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STARLING_JS_ENGINE")))
             Environment.SetEnvironmentVariable("STARLING_JS_ENGINE", "jint");
 
+        // Default the HTML parser to the Starling parser. HtmlBackendSelector
+        // reads STARLING_HTML_PARSER lazily on first page load; an explicit value
+        // (Aspire, CI, shell) still wins. AngleSharp is opt-in via "anglesharp".
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STARLING_HTML_PARSER")))
+            Environment.SetEnvironmentVariable("STARLING_HTML_PARSER", "starling");
+
         // If STARLING_TELEMETRY_DAEMON is set, point the OpenTelemetry Protocol
         // exporter at the standalone daemon before telemetry is wired.
         OtelBootstrap.ConfigureDaemonExportFromEnv();
