@@ -10,7 +10,7 @@ namespace Starling.Gui.Chrome;
 
 /// <summary>Runtime build facts shown in the sidebar footer: the build's git
 /// commit (short SHA) and which JS / render engines this process is running.</summary>
-public sealed record BuildInfo(string? Commit, string? JsEngine, string? RenderEngine);
+public sealed record BuildInfo(string? Commit, string? JsEngine, string? RenderEngine, string? HtmlParser);
 
 /// <summary>
 /// 232px vertical bookmark sidebar — calm-modern redesign. A small gradient
@@ -296,7 +296,7 @@ public sealed class Sidebar : Grid
     };
 
     // Footer is a small column of build facts: commit / JS engine / render
-    // engine, each a faint label paired with a monospace value.
+    // engine / HTML parser, each a faint label paired with a monospace value.
     private static Control BuildFooter(ThemeManager tm, BuildInfo? build)
     {
         var t = tm.Tokens;
@@ -305,6 +305,7 @@ public sealed class Sidebar : Grid
         rows.Children.Add(FooterRow(tm, "commit", build?.Commit));
         rows.Children.Add(FooterRow(tm, "js", build?.JsEngine));
         rows.Children.Add(FooterRow(tm, "render", build?.RenderEngine));
+        rows.Children.Add(FooterRow(tm, "html", build?.HtmlParser));
 
         var content = new Border
         {
