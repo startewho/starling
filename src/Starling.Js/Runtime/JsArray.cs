@@ -19,9 +19,10 @@ public sealed class JsArray : JsObject
 {
     private readonly List<JsValue> _items = new();
 
-    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { }
+    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { DisableInlineCache(); }
     public JsArray(JsRealm realm, IReadOnlyList<JsValue> items) : base(realm.ArrayPrototype)
     {
+        DisableInlineCache();
         _items.AddRange(items);
     }
 

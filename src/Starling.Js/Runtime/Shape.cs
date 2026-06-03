@@ -161,3 +161,21 @@ internal readonly struct ShapeProp
     public bool Enumerable => (Flags & Shape.Enumerable) != 0;
     public bool Configurable => (Flags & Shape.Configurable) != 0;
 }
+
+/// <summary>
+/// Per-call-site monomorphic inline cache for a property read (and, later,
+/// write). Records the <see cref="Shape"/> an object had the last time this
+/// bytecode site ran and the slot the property occupied. A cached read is valid
+/// when <c>ReferenceEquals(obj.Shape, Shape)</c> — any structural change to an
+/// object replaces its shape, so a stale entry simply misses and refills. A
+/// null <see cref="Shape"/> is an empty (never-filled) cache.
+/// </summary>
+/// <remarks>Stored as a value type in <c>Chunk.Caches</c> (no per-entry
+/// allocation). The engine's generator/async worker threads execute a shared
+/// chunk cooperatively — only one thread runs at a time, handed off through
+/// event barriers — so cache reads and refills never truly race.</remarks>
+internal struct InlineCache
+{
+    public Shape? Shape;
+    public int Slot;
+}

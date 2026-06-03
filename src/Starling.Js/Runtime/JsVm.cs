@@ -1225,17 +1225,44 @@ public sealed class JsVm
                     case Opcode.LoadProperty:
                         {
                             var idx = ReadU16();
+                            var cacheId = ReadU16();
                             var name = (string)constants[idx]!;
                             _lastLoadName = name;
                             var obj = Pop();
-                            if (obj.IsObject) Push(AbstractOperations.Get(this, obj.AsObject, name));
-                            else if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
+                            if (obj.IsObject)
+                            {
+                                var o = obj.AsObject;
+                                var sh = o.Shape;
+                                if (cacheId != 0xFFFF)
+                                {
+                                    // Monomorphic inline cache: own data property at a
+                                    // known slot. A reference-equal shape proves the
+                                    // property still lives at the cached slot.
+                                    var ic = chunk.Caches[cacheId];
+                                    if (sh is not null && ReferenceEquals(sh, ic.Shape) && o.SupportsInlineCache)
+                                    {
+                                        Push(o.ReadSlot(ic.Slot));
+                                        break;
+                                    }
+                                    var result = AbstractOperations.Get(this, o, name);
+                                    // Refill only on an OWN data hit of a cache-capable
+                                    // object (sh.TryGet finds it on this object's shape).
+                                    if (sh is not null && o.SupportsInlineCache && sh.TryGet(name, out var hit))
+                                        chunk.Caches[cacheId] = new InlineCache { Shape = sh, Slot = hit.Slot };
+                                    Push(result);
+                                    break;
+                                }
+                                Push(AbstractOperations.Get(this, o, name));
+                                break;
+                            }
+                            if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
                             else Push(JsValue.Undefined);
                             break;
                         }
                     case Opcode.StoreProperty:
                         {
                             var idx = ReadU16();
+                            _ = ReadU16(); // cache id — reserved for the write IC (Step 3)
                             var name = (string)constants[idx]!;
                             var value = Pop();
                             var obj = Pop();

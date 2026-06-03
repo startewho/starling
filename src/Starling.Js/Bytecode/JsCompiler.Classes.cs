@@ -450,7 +450,7 @@ public sealed partial class JsCompiler
             }
             else
             {
-                sub._b.EmitU16(Opcode.StoreProperty, sub._b.AddConstant(staticKey!));
+                sub._b.EmitProperty(Opcode.StoreProperty, sub._b.AddConstant(staticKey!));
                 sub._b.Emit(Opcode.Pop);
             }
             sub._b.Emit(Opcode.ReturnUndefined);

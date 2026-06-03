@@ -51,12 +51,21 @@ public class JsObject
     /// must have validated <see cref="Shape"/> identity first.</summary>
     internal JsValue ReadSlot(int slot) => _slots[slot];
 
-    /// <summary>True iff this exact type stores its string data properties in
-    /// the shape/slots backing, so the inline cache may read a slot directly.
-    /// Exotic subclasses that override property access (arrays, proxies, string
-    /// objects, mapped arguments, typed arrays, module namespaces) set this
-    /// false so the cache always takes their slow path.</summary>
-    internal virtual bool SupportsInlineCache => true;
+    private bool _supportsInlineCache = true;
+
+    /// <summary>True iff this object stores its string data properties in the
+    /// shape/slots backing, so the inline cache may read a slot directly. Exotic
+    /// subclasses that override property access (arrays, proxies, string
+    /// objects, mapped arguments, typed arrays, module namespaces) disable it so
+    /// the cache always takes their slow path — important because such an exotic
+    /// can share a Shape with a plain object (e.g. a mapped <c>arguments</c>
+    /// object and <c>{0:…,1:…}</c>), and its overridden <c>Get</c> may return
+    /// something other than the raw slot (a live binding, a trap result).</summary>
+    internal bool SupportsInlineCache => _supportsInlineCache;
+
+    /// <summary>Opt this object out of inline-cache fast paths. Called from an
+    /// exotic subclass constructor.</summary>
+    private protected void DisableInlineCache() => _supportsInlineCache = false;
 
     /// <summary>Insert or update a string-keyed descriptor in dictionary mode,
     /// maintaining <see cref="_stringKeyOrder"/>. A brand-new key is appended
