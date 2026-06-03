@@ -218,6 +218,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // Focusable so the page surface can receive keyboard/text input once
             // an editable field is focused (links/selection only need pointers).
             Focusable = true,
+            // Pin to the top-left. ShowPage gives the canvas a fixed Width/Height
+            // (the page extent); with the default Stretch alignment the ScrollViewer
+            // centers a page shorter than the viewport, which shifts the pointer/
+            // hit-test space away from the native GPU surface (which always paints
+            // at the top). Centering them apart is what made clicks/hover land
+            // (viewportHeight - pageHeight)/2 px below the element.
+            HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left,
+            VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Top,
         };
         _pageCanvas.Children.Add(_pageImage);
         _pageCanvas.PointerMoved += OnPointerMoved;
@@ -963,6 +971,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (!e.GetCurrentPoint(_pageCanvas).Properties.IsLeftButtonPressed) return;
 
         var doc = PointerToDocSpace(e);
+
+        HitDiag(e, doc);
+
         if (doc is null) return;
 
         // Always collapse any prior selection on primary press; the new gesture
@@ -1249,6 +1260,48 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         try
         {
             System.IO.File.AppendAllText("/tmp/starling-caret.log", $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
+        }
+        catch
+        {
+        }
+    }
+
+    // TEMP click-coordinate diagnostic: dumps every coordinate space involved in
+    // mapping a pointer press to a box, so a visual/hit-test offset can be read
+    // straight off the numbers. Writes to /tmp/starling-hit.log.
+    private void HitDiag(PointerEventArgs e, (double X, double Y)? doc)
+    {
+        try
+        {
+            var pCanvas = e.GetPosition(_pageCanvas);
+            var pSelf = e.GetPosition(this);
+            var pHost = _pageSurfaceHost is not null ? e.GetPosition(_pageSurfaceHost) : default;
+            var tl = TopLevel.GetTopLevel(this);
+            var pTop = tl is not null ? e.GetPosition(tl) : default;
+            var rect = _currentPage is not null ? CurrentViewportRect() : default;
+
+            string hitDesc = "none";
+            if (doc is { } d)
+            {
+                var hit = HitTestPage(d.X, d.Y);
+                if (hit.Box is { } b)
+                {
+                    var el = FindClickTarget(b);
+                    hitDesc = $"<{el?.LocalName ?? b.Element?.LocalName ?? "?"}"
+                            + (el?.Id is { Length: > 0 } id ? $" #{id}" : "")
+                            + $"> frame=({b.Frame.X:F0},{b.Frame.Y:F0} {b.Frame.Width:F0}x{b.Frame.Height:F0})";
+                }
+            }
+
+            System.IO.File.AppendAllText("/tmp/starling-hit.log",
+                $"{DateTime.Now:HH:mm:ss.fff} CLICK\n" +
+                $"  pointer: canvas=({pCanvas.X:F1},{pCanvas.Y:F1}) panel=({pSelf.X:F1},{pSelf.Y:F1}) " +
+                $"host=({pHost.X:F1},{pHost.Y:F1}) toplevel=({pTop.X:F1},{pTop.Y:F1})\n" +
+                $"  doc: {(doc is { } dd ? $"({dd.X:F1},{dd.Y:F1})" : "null(out-of-bounds)")}\n" +
+                $"  canvas.Bounds={_pageCanvas.Bounds} host.Bounds={_pageSurfaceHost?.Bounds}\n" +
+                $"  scroll.Viewport={_scroll.Viewport} scroll.Offset={_scroll.Offset}\n" +
+                $"  scale={_currentScale} renderScaling={GetRenderScale()} viewportRect=({rect.X:F0},{rect.Y:F0} {rect.Width:F0}x{rect.Height:F0})\n" +
+                $"  hit: {hitDesc}\n");
         }
         catch
         {
