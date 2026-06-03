@@ -73,6 +73,22 @@ public class JsObject
         _shape = next;
     }
 
+    /// <summary>Install a precomputed fast-mode shape and a matching slot array
+    /// directly, bypassing the per-property <see cref="AddFastProperty"/> path.
+    /// Used by intrinsic bootstrap to build native functions and prototypes from a
+    /// shape built once via <see cref="Shape.Transition"/> plus a pre-filled value
+    /// array, instead of N sequential <see cref="DefineOwnProperty(string, PropertyDescriptor)"/>
+    /// calls. The result is byte-identical to the incremental path: same shared
+    /// Shape identity (so inline caches / migration see exactly what they expect),
+    /// same slot values, same attributes. The object must still be in its initial
+    /// fast state (root shape, no slots, no dictionary) — this is a one-shot
+    /// adopt at construction time.</summary>
+    internal void AdoptShape(Shape shape, JsValue[] slots)
+    {
+        _shape = shape;
+        _slots = slots;
+    }
+
     private bool _supportsInlineCache = true;
 
     /// <summary>Whether this object is the [[Prototype]] of some other object.
@@ -709,6 +725,17 @@ public sealed class JsNativeFunction : JsObject
         Length = 0;
     }
 
+    /// <summary>The shared fast-mode shape every native function adopts:
+    /// <c>Root → {name} → {name,length}</c>, both properties W=false/E=false/C=true
+    /// (§17 builtin function defaults). Built once via <see cref="Shape.Transition"/>
+    /// so its identity is exactly the shape an incremental two-property install
+    /// would have produced — inline caches and dictionary migration see no
+    /// difference. <c>name</c> lands in slot 0, <c>length</c> in slot 1.</summary>
+    internal static readonly Shape NameLengthShape =
+        Shape.Root
+            .Transition("name", Shape.Configurable)
+            .Transition("length", Shape.Configurable);
+
     /// <summary>Realm-aware constructor — wires
     /// <c>[[Prototype]] = realm.FunctionPrototype</c> and stamps
     /// own <c>name</c> + <c>length</c> data properties (W=false, E=false,
@@ -722,10 +749,10 @@ public sealed class JsNativeFunction : JsObject
         Body = body ?? throw new ArgumentNullException(nameof(body));
         IsConstructor = isConstructor;
         Length = length;
-        DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
-        DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(length), writable: false, enumerable: false, configurable: true));
+        // Adopt the shared name/length shape with a pre-filled 2-slot array
+        // instead of two DefineOwnProperty transitions. Byte-identical result,
+        // no per-property shape transition or table flatten at bootstrap.
+        AdoptShape(NameLengthShape, new[] { JsValue.String(name), JsValue.Number(length) });
     }
 
     /// <summary>Convenience overload for legacy (args-only) host functions.</summary>
