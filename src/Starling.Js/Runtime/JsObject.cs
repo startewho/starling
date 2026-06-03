@@ -51,6 +51,28 @@ public class JsObject
     /// must have validated <see cref="Shape"/> identity first.</summary>
     internal JsValue ReadSlot(int slot) => _slots[slot];
 
+    /// <summary>Overwrite a fast-mode data slot. The caller (write inline cache)
+    /// must have validated <see cref="Shape"/> identity, which guarantees the
+    /// slot exists and is writable (writability is part of shape identity).</summary>
+    internal void WriteSlot(int slot, JsValue value) => _slots[slot] = value;
+
+    /// <summary>Add a new data property by transitioning straight to a cached
+    /// child shape (the write inline cache's add path). The caller must have
+    /// validated that the current <see cref="Shape"/> is <paramref name="next"/>'s
+    /// parent; a fast-mode object is always extensible (non-extensible objects
+    /// are migrated to dictionary mode), so no extensibility check is needed.</summary>
+    internal void FastAdd(Shape next, int slot, JsValue value)
+    {
+        if (_slots.Length < next.SlotCount)
+        {
+            var cap = _slots.Length == 0 ? 4 : _slots.Length * 2;
+            if (cap < next.SlotCount) cap = next.SlotCount;
+            System.Array.Resize(ref _slots, cap);
+        }
+        _slots[slot] = value;
+        _shape = next;
+    }
+
     private bool _supportsInlineCache = true;
 
     /// <summary>True iff this object stores its string data properties in the
@@ -202,8 +224,16 @@ public class JsObject
     public virtual JsObject? GetPrototypeOf() => Prototype;
 
     /// <summary>§10.1.3 [[PreventExtensions]]. Virtual so <see cref="JsProxy"/>
-    /// can route through the <c>preventExtensions</c> trap.</summary>
-    public virtual bool PreventExtensions() { _extensible = false; return true; }
+    /// can route through the <c>preventExtensions</c> trap. Migrates to
+    /// dictionary mode so the invariant "fast-mode object is extensible" holds —
+    /// the write inline cache's add path relies on it to skip an extensibility
+    /// check.</summary>
+    public virtual bool PreventExtensions()
+    {
+        if (_shape is not null) MigrateToDictionary();
+        _extensible = false;
+        return true;
+    }
 
     /// <summary>Own string-keyed lookup over both storage modes. Returns true if
     /// the property exists (mirroring the legacy chain-walk's "stop here"

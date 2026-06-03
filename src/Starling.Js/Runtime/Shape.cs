@@ -176,6 +176,13 @@ internal readonly struct ShapeProp
 /// event barriers — so cache reads and refills never truly race.</remarks>
 internal struct InlineCache
 {
+    /// <summary>Shape the receiver must have for this cache to hit (the read
+    /// shape, or the write shape BEFORE an add). Null = empty.</summary>
     public Shape? Shape;
+    /// <summary>Slot the property occupies in <see cref="NextShape"/> (writes
+    /// that add) or in <see cref="Shape"/> (reads / writes to an existing slot).</summary>
     public int Slot;
+    /// <summary>For a write that ADDS a new property: the shape to transition the
+    /// object to. Null for a read cache or a write to an already-present slot.</summary>
+    public Shape? NextShape;
 }
