@@ -16,6 +16,7 @@
   <Folder Name="/tests/">
     <Project Path="bench/Starling.Bench/Starling.Bench.csproj" />
     <Project Path="bench/Starling.JsEngineBench/Starling.JsEngineBench.csproj" />
+    <Project Path="bench/Starling.HtmlParserBench/Starling.HtmlParserBench.csproj" />
     <Project Path="tests/Starling.Bindings.Jint.Tests/Starling.Bindings.Jint.Tests.csproj" />
     <Project Path="tests/Starling.Bindings.Tests/Starling.Bindings.Tests.csproj" />
     <Project Path="tests/Starling.Codecs.Tests/Starling.Codecs.Tests.csproj" />
