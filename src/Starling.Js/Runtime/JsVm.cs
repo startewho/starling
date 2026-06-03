@@ -1235,20 +1235,34 @@ public sealed class JsVm
                                 var sh = o.Shape;
                                 if (cacheId != 0xFFFF)
                                 {
-                                    // Monomorphic inline cache: own data property at a
-                                    // known slot. A reference-equal shape proves the
-                                    // property still lives at the cached slot.
                                     var ic = chunk.Caches[cacheId];
                                     if (sh is not null && ReferenceEquals(sh, ic.Shape) && o.SupportsInlineCache)
                                     {
-                                        Push(o.ReadSlot(ic.Slot));
-                                        break;
+                                        // Own data property at a known slot.
+                                        if (ic.Holder is null) { Push(o.ReadSlot(ic.Slot)); break; }
+                                        // One-hop inherited data property. Same shape proves
+                                        // no own shadow; same direct prototype proves the
+                                        // same chain; unchanged epoch proves the holder
+                                        // still has the property at that slot.
+                                        if (ReferenceEquals(o.Prototype, ic.Holder) && ic.Epoch == JsObject.ProtoEpoch)
+                                        {
+                                            Push(ic.Holder.ReadSlot(ic.Slot));
+                                            break;
+                                        }
                                     }
                                     var result = AbstractOperations.Get(this, o, name);
-                                    // Refill only on an OWN data hit of a cache-capable
-                                    // object (sh.TryGet finds it on this object's shape).
-                                    if (sh is not null && o.SupportsInlineCache && sh.TryGet(name, out var hit))
-                                        chunk.Caches[cacheId] = new InlineCache { Shape = sh, Slot = hit.Slot };
+                                    if (sh is not null && o.SupportsInlineCache)
+                                    {
+                                        if (sh.TryGet(name, out var ownHit))
+                                            chunk.Caches[cacheId] = new InlineCache { Shape = sh, Slot = ownHit.Slot };
+                                        else if (o.Prototype is { Shape: { } dsh } dp && dp.SupportsInlineCache
+                                            && dsh.TryGet(name, out var pp))
+                                            // Property lives on the DIRECT prototype as fast
+                                            // data (one hop). Multi-hop and accessor/dict
+                                            // holders are left to the slow path.
+                                            chunk.Caches[cacheId] = new InlineCache
+                                            { Shape = sh, Slot = pp.Slot, Holder = dp, Epoch = JsObject.ProtoEpoch };
+                                    }
                                     Push(result);
                                     break;
                                 }
@@ -1273,22 +1287,30 @@ public sealed class JsVm
                                 if (cacheId != 0xFFFF && sh is not null && o.SupportsInlineCache)
                                 {
                                     var ic = chunk.Caches[cacheId];
-                                    // Hit: write to an existing own writable data slot.
-                                    // Safe regardless of the prototype chain — an own
-                                    // writable data property shadows any inherited
-                                    // setter/data, so OrdinarySet writes it directly.
-                                    // (Adds that create a new own property are deferred
-                                    // to Step 4, where prototype-shape validation guards
-                                    // against an inherited setter on a same-shape object.)
                                     if (ReferenceEquals(sh, ic.Shape))
                                     {
-                                        o.WriteSlot(ic.Slot, value);
-                                        Push(value);
-                                        break;
+                                        // Write an existing own writable data slot — an own
+                                        // writable data property shadows the chain, so this
+                                        // is safe regardless of the prototype.
+                                        if (ic.NextShape is null)
+                                        {
+                                            o.WriteSlot(ic.Slot, value);
+                                            Push(value);
+                                            break;
+                                        }
+                                        // Add a new property via the cached transition.
+                                        // Valid only for the same direct prototype (same
+                                        // chain) with an unchanged epoch (no inherited
+                                        // setter / non-writable data appeared for this name).
+                                        if (ReferenceEquals(o.Prototype, ic.Holder) && ic.Epoch == JsObject.ProtoEpoch)
+                                        {
+                                            o.FastAdd(ic.NextShape, ic.Slot, value);
+                                            Push(value);
+                                            break;
+                                        }
                                     }
-                                    // Miss: run the spec [[Set]], then cache only when it
-                                    // wrote an EXISTING own writable data slot (no shape
-                                    // transition).
+                                    // Miss: run the spec [[Set]], then cache an existing-slot
+                                    // write or an add transition.
                                     var okIc = AbstractOperations.Set(this, o, name, value);
                                     if (!okIc)
                                     {
@@ -1296,10 +1318,16 @@ public sealed class JsVm
                                             throw new JsThrow(_runtime.Realm.NewTypeError(
                                                 "Cannot assign to read-only property '" + name + "'"));
                                     }
-                                    else if (ReferenceEquals(o.Shape, sh)
-                                        && sh.TryGet(name, out var p) && p.Writable)
+                                    else
                                     {
-                                        chunk.Caches[cacheId] = new InlineCache { Shape = sh, Slot = p.Slot, NextShape = null };
+                                        var after = o.Shape;
+                                        if (after is not null && o.SupportsInlineCache
+                                            && after.TryGet(name, out var p) && p.Writable)
+                                        {
+                                            chunk.Caches[cacheId] = ReferenceEquals(after, sh)
+                                                ? new InlineCache { Shape = sh, Slot = p.Slot }
+                                                : new InlineCache { Shape = sh, Slot = p.Slot, NextShape = after, Holder = o.Prototype, Epoch = JsObject.ProtoEpoch };
+                                        }
                                     }
                                     Push(value);
                                     break;

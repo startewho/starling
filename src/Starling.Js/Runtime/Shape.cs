@@ -179,10 +179,18 @@ internal struct InlineCache
     /// <summary>Shape the receiver must have for this cache to hit (the read
     /// shape, or the write shape BEFORE an add). Null = empty.</summary>
     public Shape? Shape;
-    /// <summary>Slot the property occupies in <see cref="NextShape"/> (writes
-    /// that add) or in <see cref="Shape"/> (reads / writes to an existing slot).</summary>
+    /// <summary>Slot the property occupies: in <see cref="Holder"/> for a
+    /// prototype read, in <see cref="NextShape"/> for a write that adds, else in
+    /// <see cref="Shape"/> (own read / write to an existing slot).</summary>
     public int Slot;
     /// <summary>For a write that ADDS a new property: the shape to transition the
     /// object to. Null for a read cache or a write to an already-present slot.</summary>
     public Shape? NextShape;
+    /// <summary>For a prototype read: the prototype object that holds the data
+    /// property at <see cref="Slot"/>. Null for an own-property cache.</summary>
+    public JsObject? Holder;
+    /// <summary>Snapshot of <see cref="JsObject.ProtoEpoch"/> when this entry was
+    /// filled. Checked on a hit for prototype reads and add transitions: an
+    /// unchanged epoch proves no prototype anywhere gained or lost the name.</summary>
+    public int Epoch;
 }

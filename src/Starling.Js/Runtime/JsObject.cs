@@ -75,6 +75,28 @@ public class JsObject
 
     private bool _supportsInlineCache = true;
 
+    /// <summary>Whether this object is the [[Prototype]] of some other object.
+    /// Set when an object is created with it as prototype (or relinked to it).
+    /// Only mutations to such objects bump <see cref="ProtoEpoch"/>, so the
+    /// overwhelmingly common case — adding properties to a leaf object — never
+    /// disturbs prototype-chain inline caches.</summary>
+    private bool _isUsedAsPrototype;
+
+    /// <summary>Global prototype-mutation epoch. Bumped whenever an object that
+    /// is used as a prototype changes its string-key structure (add / delete /
+    /// redefine / migrate to dictionary mode) or is relinked. A proto-chain read
+    /// cache and an add-transition write cache snapshot this and re-check it on a
+    /// hit: an unchanged epoch proves no prototype anywhere gained or lost the
+    /// cached name, so the cached holder slot / add transition stays valid. The
+    /// engine runs JS on one thread at a time (cooperative generator handoff), so
+    /// this plain counter needs no synchronization.</summary>
+    internal static int ProtoEpoch;
+
+    private void BumpEpochIfPrototype()
+    {
+        if (_isUsedAsPrototype) ProtoEpoch++;
+    }
+
     /// <summary>True iff this object stores its string data properties in the
     /// shape/slots backing, so the inline cache may read a slot directly. Exotic
     /// subclasses that override property access (arrays, proxies, string
@@ -97,6 +119,7 @@ public class JsObject
     {
         if (!_properties!.ContainsKey(name)) _stringKeyOrder!.Add(name);
         _properties[name] = desc;
+        BumpEpochIfPrototype();
     }
 
     /// <summary>Remove a string-keyed descriptor, keeping
@@ -105,6 +128,7 @@ public class JsObject
     {
         if (!_properties!.Remove(name)) return false;
         _stringKeyOrder!.Remove(name);
+        BumpEpochIfPrototype();
         return true;
     }
 
@@ -132,6 +156,7 @@ public class JsObject
         }
         _slots[next.AddedSlot] = value;
         _shape = next;
+        BumpEpochIfPrototype();
     }
 
     /// <summary>Collapse fast-mode shape/slots into the dictionary backing. Used
@@ -154,6 +179,9 @@ public class JsObject
         _stringKeyOrder = order;
         _shape = null;
         _slots = System.Array.Empty<JsValue>();
+        // A prototype leaving fast mode invalidates any proto-read cache that
+        // referenced one of its slots.
+        BumpEpochIfPrototype();
     }
 
     /// <summary>The [[Prototype]] internal slot. Mutate via
@@ -205,15 +233,26 @@ public class JsObject
 
     public JsObject() { }
 
-    public JsObject(JsObject? prototype) { Prototype = prototype; }
+    public JsObject(JsObject? prototype)
+    {
+        Prototype = prototype;
+        if (prototype is not null) prototype._isUsedAsPrototype = true;
+    }
 
     /// <summary>§10.1.2 [[SetPrototypeOf]]. Returns true on success.</summary>
     public virtual bool SetPrototypeOf(JsObject? proto)
     {
-        if (!Extensible && !ReferenceEquals(proto, Prototype)) return false;
+        if (ReferenceEquals(proto, Prototype)) return true; // §10.1.2 — same prototype is a no-op success
+        if (!Extensible) return false;
         // Cycle check: walking up the new chain must not lead back to this.
         for (var p = proto; p is not null; p = p.Prototype)
             if (ReferenceEquals(p, this)) return false;
+        // A relink changes the chain for any object whose prototype is this one,
+        // and migrating to dictionary mode drops this object's own shape so its
+        // own caches miss. Both keep inline caches correct across __proto__ swaps.
+        if (_shape is not null) MigrateToDictionary();
+        BumpEpochIfPrototype();
+        if (proto is not null) proto._isUsedAsPrototype = true;
         Prototype = proto;
         return true;
     }
