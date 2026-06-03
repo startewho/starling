@@ -557,8 +557,8 @@ public sealed class StarlingHttpClientOptions
     /// <summary>
     /// Optional diagnostics sink. When set, the client emits per-request
     /// spans (http / dns / tcp_connect / tls_handshake / h1_request /
-    /// h1_response) and counters (net.http.*, net.dns.*, net.tcp.*,
-    /// net.tls.*, net.h1.*) — feeding the Aspire dashboard. Defaults to
+    /// h1_response / h2_request) and counters (net.http.*, net.dns.*,
+    /// net.tcp.*, net.tls.*, net.h1.*, net.h2.*). Defaults to
     /// <see cref="NoopDiagnostics.Instance"/>.
     /// </summary>
     public IDiagnostics? Diagnostics { get; init; }

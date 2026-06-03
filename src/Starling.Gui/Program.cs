@@ -26,11 +26,12 @@ internal static class Program
 
         Services = BuildServices();
 
-        // Sample this process's CPU/memory as gauges so the daemon can correlate
-        // render spans with local-machine resource use.
-        s_resourceSampler = new ProcessResourceSampler(Services.GetRequiredService<IDiagnostics>());
-
         var otlp = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+        // Sample this process's CPU/memory only when telemetry is being exported
+        // or detailed local diagnostics are enabled.
+        if (DiagnosticsMode.ProcessSampler || !string.IsNullOrWhiteSpace(otlp))
+            s_resourceSampler = new ProcessResourceSampler(Services.GetRequiredService<IDiagnostics>());
+
         var log = Services.GetRequiredService<ILoggerFactory>()
             .CreateLogger("Starling.Gui.Startup");
         if (!string.IsNullOrWhiteSpace(otlp))

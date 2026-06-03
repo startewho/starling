@@ -571,15 +571,10 @@ public sealed class StyleEngine
         // separate cache for each pseudo-class state.
         var effectiveCache = context is null ? cache : null;
 
-        using var _ = _diag.Span("css", "cascade");
         try
         {
             var elementsStyled = 0;
-            var result = ComputeWithAncestors(element, context, effectiveCache, ref elementsStyled);
-            Activity.Current?.SetTag("css.elements_styled", elementsStyled);
-            Activity.Current?.SetTag("css.sheets", _sheets.Count);
-            _diag.Counter("css.cascades", 1);
-            return result;
+            return ComputeWithAncestors(element, context, effectiveCache, ref elementsStyled);
         }
         catch (Exception ex)
         {
@@ -612,7 +607,6 @@ public sealed class StyleEngine
                 && CanReuseSharedStyle(element, shared.Validation, context))
             {
                 cache.Set(element, shared.Style);
-                _diag.Counter("css.style_sharing.hit", 1);
                 return shared.Style;
             }
         }
@@ -626,7 +620,6 @@ public sealed class StyleEngine
             cache!.SetSharedEntry(
                 key,
                 new SharedStyleEntry(computed, validation));
-            _diag.Counter("css.style_sharing.miss", 1);
         }
         return computed;
     }

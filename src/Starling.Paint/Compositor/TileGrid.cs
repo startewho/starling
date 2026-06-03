@@ -40,7 +40,6 @@ internal sealed class TileGrid
 
     private const long DefaultBudgetBytes = 256L * 1024 * 1024; // 256 MB
 
-    private readonly IDiagnostics _diag;
     private readonly long _maxBytes;
     private readonly Dictionary<TileKey, LinkedListNode<Entry>> _map = new();
     private readonly LinkedList<Entry> _lru = new(); // First = MRU, Last = LRU
@@ -67,7 +66,6 @@ internal sealed class TileGrid
 
     public TileGrid(IDiagnostics? diagnostics = null, long? maxBytes = null)
     {
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
         _maxBytes = maxBytes ?? ReadBudgetEnv();
     }
 
@@ -118,11 +116,9 @@ internal sealed class TileGrid
             _lru.Remove(node);
             _lru.AddFirst(node);
             bitmap = residentBitmap;
-            _diag.Counter(RenderMetrics.TileCacheHit, 1);
             return true;
         }
         bitmap = null!;
-        _diag.Counter(RenderMetrics.TileCacheMiss, 1);
         return false;
     }
 
@@ -167,7 +163,6 @@ internal sealed class TileGrid
         _bytes += bytes;
 
         EvictToBudget();
-        _diag.Gauge(RenderMetrics.TileBytes, _bytes);
     }
 
     public void PutResidentTile(in TileKey key, long contentHash, int width, int height)
@@ -192,7 +187,6 @@ internal sealed class TileGrid
         _bytes += bytes;
 
         EvictToBudget();
-        _diag.Gauge(RenderMetrics.TileBytes, _bytes);
     }
 
     private void EvictToBudget()
@@ -205,7 +199,6 @@ internal sealed class TileGrid
             _bytes -= last.Value.Bytes;
             _map.Remove(last.Value.Key);
             _lru.RemoveLast();
-            _diag.Counter(RenderMetrics.TileEvict, 1);
         }
     }
 
