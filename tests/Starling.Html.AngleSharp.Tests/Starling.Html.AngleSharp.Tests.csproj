@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MSTest" />
+    <PackageReference Include="AwesomeAssertions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Starling.Html.AngleSharp\Starling.Html.AngleSharp.csproj" />
+    <ProjectReference Include="..\..\src\Starling.Html\Starling.Html.csproj" />
+    <ProjectReference Include="..\Starling.Spec.Common\Starling.Spec.Common.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,5 @@
 using BenchmarkDotNet.Attributes;
+using Starling.Html.AngleSharp;
 using AngleSharpParser = AngleSharp.Html.Parser.HtmlParser;
 using StarlingParser = Starling.Html.HtmlParser;
 
@@ -9,10 +10,19 @@ namespace Starling.HtmlParserBench;
 // numbers compare fairly — the HTML-parsing analogue of
 // bench/engine-comparison.md (Starling vs Jint).
 //
-// Both methods parse to a full DOM and then read TextContent, which forces a
-// complete tree walk so neither engine can skip materializing the tree. That
-// keeps the comparison apples-to-apples: tokenize + tree-construct + a full
-// node traversal. AngleSharp's HtmlParser is reusable, so it is built once in
+// Three columns:
+//   Starling        — the Starling parser to its own DOM (baseline).
+//   AngleSharp       — AngleSharp to ITS OWN DOM (the raw reference number).
+//   AngleSharpCopy   — AngleSharp parse PLUS the tree copy into the Starling DOM,
+//                      i.e. exactly what the opt-in in-engine backend does. This
+//                      is strictly more work than the raw AngleSharp number, so
+//                      it keeps the "AngleSharp is a correctness oracle, not a
+//                      speed upgrade" claim honest (see the plan's perf note).
+//
+// Every method parses to a full DOM and then reads TextContent, which forces a
+// complete tree walk so no engine can skip materializing the tree. That keeps
+// the comparison apples-to-apples: tokenize + tree-construct + a full node
+// traversal. AngleSharp's HtmlParser is reusable, so it is built once in
 // GlobalSetup (matching how a long-lived consumer would use it).
 [MemoryDiagnoser]
 public class HtmlParserComparisonBench
@@ -30,11 +40,13 @@ public class HtmlParserComparisonBench
 
     private string _html = string.Empty;
     private AngleSharpParser _angle = null!;
+    private AngleSharpHtmlBackend _angleBackend = null!;
 
     [GlobalSetup]
     public void Setup()
     {
         _angle = new AngleSharpParser();
+        _angleBackend = new AngleSharpHtmlBackend();
         _html = Fixture switch
         {
             Page.Tiny => Fixtures.Tiny,
@@ -50,4 +62,7 @@ public class HtmlParserComparisonBench
 
     [Benchmark]
     public int AngleSharp() => _angle.ParseDocument(_html).DocumentElement.TextContent.Length;
+
+    [Benchmark]
+    public int AngleSharpCopy() => _angleBackend.Parse(_html, null, scriptingEnabled: false).TextContent.Length;
 }
