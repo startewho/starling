@@ -2,14 +2,14 @@
 // typically http://localhost:18888) and launches the registered resources.
 // Run with:
 //
-//     aspire run                            # defaults: --jint --imagesharp-gpu
-//     aspire run -- --starling              # Starling JS backend
+//     aspire run                         # defaults: --starling --imagesharp-gpu
+//     aspire run -- --jint               # Jint JS backend
 //     aspire run -- --starling --imagesharp # Starling + CPU paint backend
 //
 // Runtime-selection flags (everything after `aspire run --` lands in args) are
 // parsed here and forwarded to BOTH the gui and headless resources:
 //
-//     --starling | --jint                JS engine     (default: --jint)
+//     --starling | --jint                JS engine     (default: --starling)
 //     --imagesharp | --imagesharp-gpu    paint backend (default: --imagesharp-gpu)
 //
 // A command-line flag wins over the matching env var (STARLING_JS_ENGINE /
@@ -20,7 +20,7 @@
 
 // Resolve selection up front so the flags can be stripped from the args handed
 // to Aspire. Left in, they'd be parsed as bogus configuration keys.
-var jsEngine = SelectJsEngine(args) ?? Env("STARLING_JS_ENGINE") ?? "jint";
+var jsEngine = SelectJsEngine(args) ?? Env("STARLING_JS_ENGINE") ?? "starling";
 var paintBackend = SelectPaintBackend(args) ?? Env("STARLING_PAINT_BACKEND") ?? "imagesharp-gpu";
 
 var builder = DistributedApplication.CreateBuilder(

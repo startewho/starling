@@ -156,15 +156,10 @@ aspire run -- --starling --gpu        # Starling JS backend + WebGPU paint
 
 Flags win over `STARLING_JS_ENGINE` and `STARLING_PAINT_BACKEND`.
 
-The default JS engine is **Jint** — both the Aspire `gui`/`headless` resources
-(`src/Starling.AppHost/AppHost.cs`) and the desktop `Starling.Gui` startup
-(`src/Starling.Gui/Program.cs`) default to it; pass `--starling` (or set
-`STARLING_JS_ENGINE=starling`) to use the Starling engine instead. Binding /
-DOM / JS-OM work and `tasks/SPEC_COVERAGE.md` ✅ marks therefore target
-`src/Starling.Bindings.Jint` (tests in `tests/Starling.Bindings.Jint.Tests`)
-unless a task is explicitly about the Starling engine. (`JsEngineSelector.Parse`
-still returns Starling for a blank env var — the default lives in those two
-entry points, not the selector.)
+The default JS engine is **Starling**. Pass `--jint` (or set
+`STARLING_JS_ENGINE=jint`) to use the Jint backend instead. Binding / DOM /
+JS-OM work should target `src/Starling.Bindings` and its matching tests unless
+the task is explicitly about the Jint backend.
 
 There are three ways in, listed in the order you should reach for them.
 

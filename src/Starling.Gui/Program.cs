@@ -20,13 +20,6 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // Default the JS engine to Jint for the desktop app. JsEngineSelector
-        // reads STARLING_JS_ENGINE lazily on first use, so seed it here before
-        // any page runs scripts. An explicit STARLING_JS_ENGINE (e.g. from
-        // Aspire, CI, or the shell) still wins — we only fill in the unset case.
-        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STARLING_JS_ENGINE")))
-            Environment.SetEnvironmentVariable("STARLING_JS_ENGINE", "jint");
-
         // If STARLING_TELEMETRY_DAEMON is set, point the OpenTelemetry Protocol
         // exporter at the standalone daemon before telemetry is wired.
         OtelBootstrap.ConfigureDaemonExportFromEnv();

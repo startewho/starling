@@ -78,6 +78,7 @@
          runtime via STARLING_JS_ENGINE=jint; removable by deleting the backend
          project + this line. -->
     <PackageVersion Include="Jint" Version="4.9.2" />
+    <PackageVersion Include="DotWasm" Version="0.1.0" />
 
     <!-- Legacy single-byte / CJK encodings (pure-managed; Rule-0 clean).
          Consumed by Starling.Engine for WHATWG-table charset support. -->

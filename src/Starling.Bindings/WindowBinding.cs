@@ -211,6 +211,9 @@ public static class WindowBinding
         // 14) CSS Font Loading 3: document.fonts (FontFaceSet) + FontFace ctor,
         //     seeded from the document's @font-face rules.
         FontFaceBinding.Install(realm, document);
+
+        // 15) Small WebAssembly JS API spike backed by DotWasm.
+        WebAssemblyBinding.Install(runtime);
     }
 
     /// <summary>Resolve the runtime that backs the given realm. Returns null
