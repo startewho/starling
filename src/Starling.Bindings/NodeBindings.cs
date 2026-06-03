@@ -525,6 +525,11 @@ public static class NodeBindings
             var ctx = IFrameBinding.EnsureContext(e);
             return JsValue.Object(IFrameBinding.EnsureContentWindow(realm, ctx));
         });
+        // HTML §4.12.3 — HTMLTemplateElement.content returns the template's
+        // content fragment. Non-template elements get null, matching the IDL.
+        EventTargetBinding.DefineAccessor(realm, elProto, "content", (thisV, _) =>
+            DomWrappers.UnwrapElement(thisV) is HtmlTemplateElement t
+                ? JsValue.Object(DomWrappers.Wrap(realm, t.Content)) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, elProto, "id",
             (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.Id) : JsValue.String(""),
             (thisV, args) =>
@@ -2325,7 +2330,7 @@ public static class NodeBindings
     private static DocumentFragment ParseFragment(Element context, string markup)
     {
         var ownerDocument = context.OwnerDocument ?? new Document();
-        return HtmlTreeBuilder.ParseFragment(markup, context, ownerDocument);
+        return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument, null);
     }
 
     /// <summary>Lookup a method on a parent prototype and call it bound to

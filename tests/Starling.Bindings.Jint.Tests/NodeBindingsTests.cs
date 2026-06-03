@@ -34,6 +34,20 @@ public sealed class NodeBindingsTests
     }
 
     [TestMethod]
+    public void Template_content_exposes_parsed_fragment_not_children()
+    {
+        var (engine, _) = NewSession("<body><template id='t'><div>hi</div></template></body>");
+        // content is a DocumentFragment (nodeType 11) holding the parsed markup.
+        engine.Evaluate("document.querySelector('#t').content.nodeType").AsNumber().Should().Be(11);
+        engine.Evaluate("document.querySelector('#t').content.firstChild.tagName").AsString().Should().Be("DIV");
+        engine.Evaluate("document.querySelector('#t').content.firstChild.textContent").AsString().Should().Be("hi");
+        // The <div> is template content, not a normal child of the element.
+        engine.Evaluate("document.querySelector('#t').childNodes.length").AsNumber().Should().Be(0);
+        // Non-template elements have no content.
+        engine.Evaluate("document.body.content").IsNull().Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Invalid_selector_throws_SyntaxError()
     {
         var (engine, _) = NewSession(Html);

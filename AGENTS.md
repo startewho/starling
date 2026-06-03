@@ -161,6 +161,20 @@ The default JS engine is **Starling**. Pass `--jint` (or set
 JS-OM work should target `src/Starling.Bindings` and its matching tests unless
 the task is explicitly about the Jint backend.
 
+The default HTML parser is the **Starling parser**. The Aspire resources and the
+desktop `Starling.Gui` startup both default to it. Pass `--anglesharp-html` (or
+set `STARLING_HTML_PARSER=anglesharp`) to swap in the AngleSharp backend instead.
+AngleSharp is a mature pure-managed parser. We keep it as a reference oracle, not
+a speed upgrade — it parses to its own tree and then copies that tree into the
+Starling DOM, which is strictly more work, so it is usually slower in the engine
+(see `bench/Starling.HtmlParserBench`, the `AngleSharpCopy` column). It is opt-in
+and off by default. You can delete it by removing one project reference
+(`src/Starling.Engine`) and the `AngleSharp` arm of `HtmlBackendSelector`. That
+selector reads `STARLING_HTML_PARSER` once and installs the choice into
+`HtmlParsing.Backend` (in `src/Starling.Html`), which every parse path reads —
+full document load and fragment parsing (`innerHTML`) alike. The flag beats the
+env var, which beats the default, the same as the JS engine.
+
 There are three ways in, listed in the order you should reach for them.
 
 **1. Aspire MCP tools (preferred — already wired in `.mcp.json` via `aspire agent mcp`).**

@@ -7,7 +7,6 @@ using Jint.Runtime.Interop;
 using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Html;
-using Starling.Html.TreeBuilder;
 
 namespace Starling.Bindings.Jint;
 
@@ -206,6 +205,10 @@ internal static class NodeBindings
             (t, _) => w.UnwrapElement(t) is { } e ? JintInterop.Str(e.LocalName) : JintInterop.Str(""));
         Accessor(ctx, proto, "namespaceURI",
             (t, _) => w.UnwrapElement(t) is { } e ? JintInterop.Str(e.Namespace) : JsValue.Null);
+        // HTML §4.12.3 — HTMLTemplateElement.content. Non-template elements get
+        // null, matching the IDL.
+        Accessor(ctx, proto, "content",
+            (t, _) => w.UnwrapElement(t) is HtmlTemplateElement tpl ? w.Wrap(tpl.Content) : JsValue.Null);
         Accessor(ctx, proto, "id",
             (t, _) => w.UnwrapElement(t) is { } e ? JintInterop.Str(e.Id) : JintInterop.Str(""),
             (t, args) =>
@@ -1209,7 +1212,7 @@ internal static class NodeBindings
     private static DocumentFragment ParseFragment(Element context, string markup)
     {
         var ownerDocument = context.OwnerDocument ?? new Document();
-        return HtmlTreeBuilder.ParseFragment(markup, context, ownerDocument);
+        return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument, null);
     }
 
     private static void InsertAdjacent(JintDomWrapper w, Node parent, JsValue arg, Node? before)

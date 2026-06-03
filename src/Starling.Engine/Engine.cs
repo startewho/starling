@@ -155,6 +155,11 @@ public sealed class StarlingEngine
             return Fail(ex.Message);
         }
 
+        // Install the selected HTML parser backend (Starling by default, or
+        // AngleSharp when STARLING_HTML_PARSER=anglesharp) before the first
+        // parse. Idempotent, so the progressive-paint path below can repeat it.
+        HtmlBackendSelector.EnsureInstalled();
+
         Document doc;
         using (_diag.Span("engine", "parse_html"))
         {
@@ -544,6 +549,7 @@ public sealed class StarlingEngine
 
             // Scripting flag ENABLED — the engine executes page JS, so <noscript>
             // contents must parse as inert raw text (WHATWG HTML §13.2.6.4.4).
+            HtmlBackendSelector.EnsureInstalled();
             var doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
             _diag.Log(DiagLevel.Info, "engine", $"phase: html_parsed@{pageSw.ElapsedMilliseconds}ms");
 

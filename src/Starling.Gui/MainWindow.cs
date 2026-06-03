@@ -484,10 +484,10 @@ public sealed class MainWindow : Window, IBrowserController
     private void OnWebviewStatus(string text, bool isError) => _statusBar.SetHint(text, isError);
 
     // Build facts for the sidebar footer: the build's commit plus the JS engine,
-    // render engine, and layout mode this process actually selected (single
+    // render engine, and HTML parser this process actually selected (single
     // source of truth — the same selectors the engine/paint pipeline read).
     private static BuildInfo GetBuildInfo()
-        => new(GetBuildLabel(), GetJsEngineLabel(), GetRenderBackendLabel());
+        => new(GetBuildLabel(), GetJsEngineLabel(), GetRenderBackendLabel(), GetHtmlParserLabel());
 
     private static string GetBuildLabel()
     {
@@ -514,6 +514,13 @@ public sealed class MainWindow : Window, IBrowserController
     {
         PaintBackendKind.ImageSharpWebGpu => "imagesharp-gpu",
         _ => "imagesharp",
+    };
+
+    // Matches the AppHost selection flags (--starling-html / --anglesharp-html).
+    private static string GetHtmlParserLabel() => HtmlBackendSelector.Selected switch
+    {
+        HtmlBackendKind.AngleSharp => "anglesharp",
+        _ => "starling",
     };
 
     private async void OnSidebarTabActivated(TabInfo tab)
