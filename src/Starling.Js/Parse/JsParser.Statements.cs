@@ -143,13 +143,13 @@ public sealed partial class JsParser
         }
         // 'let' is contextual; treat as variable decl when followed by an
         // identifier or pattern starter, else expression statement.
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "let"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
             && IsLetDeclarationStart())
         {
             return ParseVar("let");
         }
         // B1b-2c — `async function` at statement level → async function decl.
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("async")
             && _lex.Peek().Kind == JsTokenKind.Function)
         {
             var asyncStart = _current.Start;
@@ -310,7 +310,7 @@ public sealed partial class JsParser
         // wp:M3-04g — `for await (… of …)`. `await` is a contextual keyword
         // (an Identifier here); consume it and require an of-iteration form.
         bool isAwait = false;
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "await")
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("await"))
         {
             isAwait = true;
             Advance();
@@ -323,7 +323,7 @@ public sealed partial class JsParser
         {
             if (_current.Kind == JsTokenKind.Var
                 || _current.Kind == JsTokenKind.Const
-                || (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "let"
+                || (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
                     && IsLetDeclarationStart()))
             {
                 var kind = _current.Kind == JsTokenKind.Var ? "var"
@@ -387,7 +387,7 @@ public sealed partial class JsParser
     }
 
     private bool IsContextualOf()
-        => _current.Kind == JsTokenKind.Identifier && _current.Lexeme == "of";
+        => _current.Kind == JsTokenKind.Identifier && _current.TextEquals("of");
 
     private ForInStatement FinishForIn(JsPosition start, AstNode left)
     {
@@ -768,7 +768,7 @@ public sealed partial class JsParser
                 // §15.8.1 — an async FunctionExpression's BindingIdentifier is
                 // [+Await], so it may not be `await` (`async function await(){}`,
                 // `async function* await(){}`).
-                if (isAsync && tok.Lexeme == "await")
+                if (isAsync && tok.TextEquals("await"))
                     throw new JsParseException(
                         "'await' may not be used as the name of an async function", tok.Start);
                 fnName = new Identifier(tok.Lexeme, tok.Start, tok.End);

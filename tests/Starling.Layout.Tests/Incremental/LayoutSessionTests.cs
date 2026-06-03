@@ -285,6 +285,39 @@ public sealed class LayoutSessionTests
         diag.Counter("layout.incremental.relayout").Should().Be(2);
     }
 
+    // ---- form-control value: the todo-input typing case ---------------------
+
+    [TestMethod]
+    public void Input_value_change_relays_the_synthesized_label_incrementally()
+    {
+        // Typing into a text field sets Element.InputValue; the box tree's label
+        // text (a synthesized TextBox) reads from it. Because incremental layout
+        // is the default, the value change must record a layout mutation — without
+        // it the reconciler reuses the stale, empty input box and the typed text
+        // never appears (the GUI "can't type into the input" regression).
+        var doc = Parse("<body><input id=field type=text></body>");
+        var diag = new CountingDiagnostics();
+        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+
+        session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
+        diag.Counter("layout.incremental.full_rebuild").Should().Be(1);
+
+        doc.GetElementById("field")!.InputValue = "Buy milk";
+        var after = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
+
+        AllText(after).Should().Contain("Buy milk",
+            "the typed value must reach the synthesized input label after a relayout");
+        LayoutVerifier.FindFirstDivergence(after, FullRebuild(doc)).Should().BeNull();
+    }
+
+    private static IEnumerable<string> AllText(Box.Box box)
+    {
+        if (box is Box.TextBox { Text: { Length: > 0 } t }) yield return t;
+        foreach (var child in box.Children)
+            foreach (var nested in AllText(child))
+                yield return nested;
+    }
+
     private static Box.Box? FindById(Box.Box box, string id)
     {
         if (box.Element?.Id == id) return box;

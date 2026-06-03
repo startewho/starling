@@ -90,6 +90,13 @@ public class Element : Node
             if (string.Equals(_inputValue, value, StringComparison.Ordinal)) return;
             _inputValue = value;
             OnTreeMutated();
+            // The synthesized label box reads InputValue, but unlike an attribute
+            // write this is not a DOM mutation, so the incremental layout session
+            // would drain an empty batch and reuse the stale input box (the typed
+            // text never repaints). Record a layout mutation so the reconciler
+            // rebuilds this element's box subtree — or falls back to a full
+            // rebuild — and the new value reaches the box tree.
+            OwnerDocument?.RecordLayoutMutation(this, LayoutChangeKind.LayoutRelevantAttr);
         }
     }
 
