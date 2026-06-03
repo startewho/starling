@@ -52,13 +52,40 @@ Results land in `BenchmarkDotNet.Artifacts/results/` next to where you run it.
 
 ## Results
 
-Not filled in yet. The container that wrote this benchmark had no .NET SDK and
-no egress to install one, so the numbers need a run on a machine with the SDK.
-Paste the BenchmarkDotNet summary table here once you have it, the same way
-`engine-comparison.md` records its run.
+Run on an Apple M3 Max, .NET 10.0.8, BenchmarkDotNet v0.14.0 (2026-06-03).
+`Mean` is per parse. `Alloc` is managed memory allocated per parse.
 
-Read `Starling` against `AngleSharp` per page, on both time and allocation. The
-honest framing until then: we expect the span-based Starling tokenizer to do
-well, but we have no measured proof yet, and the one external comparison we do
-have (Starling JS engine vs Jint) currently favors the other engine on speed. So
-treat any "ours is faster" claim as unproven until this table is real.
+| Page | Starling | AngleSharp | Faster | Starling alloc | AngleSharp alloc |
+|---|--:|--:|---|--:|--:|
+| Tiny (~60 B) | 1.69 µs | 3.49 µs | **Starling, 2.1×** | 6.03 KB | 12.13 KB |
+| nginx.org (~6.4 KB) | 121.6 µs | 131.3 µs | Starling, 1.08× | 285.6 KB | 150.2 KB |
+| GitHub home (~567 KB) | 14.26 ms | 6.12 ms | **AngleSharp, 2.3×** | 16.87 MB | 5.88 MB |
+| Synthetic (~1 MB) | 51.7 ms | 33.0 ms | **AngleSharp, 1.6×** | 58.55 MB | 21.25 MB |
+
+### What this says
+
+The answer to "is ours faster?" is **no, not on real pages.** Starling only
+wins on tiny input, where its lower startup cost dominates. As the page grows,
+AngleSharp pulls ahead, and on a real 567 KB page it is more than twice as fast.
+
+- **Tiny:** Starling parses a 60-byte page in about half the time.
+- **nginx.org:** a near tie on time. Starling is about 8% faster but already
+  allocates almost twice as much memory.
+- **GitHub and the 1 MB tree:** AngleSharp is clearly ahead. It parses the
+  GitHub page in 6.1 ms against Starling's 14.3 ms, and the 1 MB tree in 33 ms
+  against 52 ms.
+
+### The lever: allocations
+
+On the large pages Starling allocates about 2.8× more than AngleSharp (16.9 MB
+vs 5.9 MB on GitHub, 58.6 MB vs 21.2 MB on the 1 MB tree). That extra garbage
+makes the garbage collector work harder. Starling triggers gen-2 collections on
+both large pages, the most expensive kind. The allocation gap is the most likely
+cause of the time gap, and it points straight at the allocation-conscious goals
+in the AGENTS.md performance policy. Cutting per-node and per-token allocations
+in the parser is the clearest path to closing it.
+
+One note on the budget: `04_HTML_PARSING.md` targets 1 MB in 50 ms or less.
+Starling lands at 51.7 ms on the 1 MB tree, right at the line. It meets its own
+budget, but a mature managed parser comes in over 1.5× under it.
+
