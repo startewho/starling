@@ -5,21 +5,25 @@ namespace Starling.Js.Runtime.Regex;
 /// <summary>The regex backends a build can select between.</summary>
 internal enum RegexBackendKind
 {
-    /// <summary>The Pike VM (<c>Starling.RegExp.CompiledRegex</c>). The default
-    /// and the source of truth for JS semantics.</summary>
+    /// <summary>The Pike VM (<c>Starling.RegExp.CompiledRegex</c>). The source
+    /// of truth for JS semantics; opt in with <c>STARLING_REGEX_ENGINE=starling</c>.</summary>
     Starling,
 
     /// <summary><c>System.Text.RegularExpressions</c> for the translatable
-    /// subset, falling back to the Pike VM per pattern.</summary>
+    /// subset, falling back to the Pike VM per pattern. The default — it is
+    /// dramatically faster on real regex workloads and the per-pattern fallback
+    /// keeps every JS-specific feature (u/v flags, property escapes, dotAll,
+    /// non-ASCII ignoreCase) on the Pike VM, so semantics are preserved.</summary>
     DotNet,
 }
 
 /// <summary>
 /// Reads <c>STARLING_REGEX_ENGINE</c> once and dispenses the matching regex
 /// backend. Mirrors <c>Starling.Engine.JsEngineSelector</c> /
-/// <c>PaintBackendSelector</c>: lazy, default <c>"starling"</c>, and a typo is
-/// rejected loudly rather than silently falling back, so a bad value in an
-/// Aspire manifest or CI matrix surfaces immediately.
+/// <c>PaintBackendSelector</c>: lazy, and a typo is rejected loudly rather than
+/// silently falling back, so a bad value in an Aspire manifest or CI matrix
+/// surfaces immediately. Default is <c>"dotnet"</c> (System.Text with a Pike-VM
+/// fallback); set <c>STARLING_REGEX_ENGINE=starling</c> to force the pure Pike VM.
 /// </summary>
 /// <remarks>
 /// Unlike the JS-engine seam, this selector lives in <c>Starling.Js</c> next to
@@ -39,7 +43,7 @@ public static class RegexBackendSelector
     internal static RegexBackendKind Parse(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
-            return RegexBackendKind.Starling;
+            return RegexBackendKind.DotNet;
 
         return raw.Trim().ToLowerInvariant() switch
         {
