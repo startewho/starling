@@ -1,9 +1,9 @@
 ---
 id: "wp:M10-01-diagnostics-hot-path"
 milestone: "M10"
-status: "available"
-claimed_by: ""
-claimed_at: ""
+status: "claimed"
+claimed_by: "agent-codex-cody"
+claimed_at: "2026-06-03T12:57:06Z"
 completed_at: ""
 branch: "main"
 depends_on: []
@@ -50,3 +50,4 @@ coarse frame, render, network, and failure signals available by default.
 ## Handoff log
 
 - 2026-06-03T12:55Z — created after hot-path diagnostics audit (agent-codex-cody)
+- 2026-06-03T12:57:06Z — claimed by agent-codex-cody, working on main
