@@ -191,6 +191,58 @@ public sealed class GpuCompositeParityTests
     }
 
     [TestMethod]
+    public void Gpu_texture_readback_blends_surface_overlays_on_top()
+    {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
+        const int W = 160, H = 120;
+        var root = Layout("<body style=\"margin:0;background-color:#102030\"></body>", W, H);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
+        var tree = new LayerTreeBuilder().Build(root);
+        var overlays = new[]
+        {
+            new SurfaceOverlayRect(20, 30, 50, 40, 255, 0, 0, 255),
+        };
+
+        using var rendered = new CompositorEngine(backend)
+            .RenderGpuTextures(tree, new LayoutRect(0, 0, W, H), 1.0f, overlays);
+
+        rendered.GetPixel(45, 50).Should().Be((255, 0, 0, 255),
+            "viewport readback must include surface overlay quads after page content");
+    }
+
+    [TestMethod]
+    public void Gpu_blend_skips_fully_clipped_ops_without_losing_the_frame()
+    {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
+        const int W = 120, H = 100;
+        var html =
+            "<body style=\"margin:0\">" +
+            "<div style=\"position:absolute;left:0;top:0;width:120px;height:100px;background-color:#123456\"></div>" +
+            "<div style=\"position:absolute;left:200px;top:200px;width:40px;height:40px;" +
+            "overflow:hidden;opacity:.9;background-color:#ff0000\"></div>" +
+            "</body>";
+        var root = Layout(html, W, H);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
+        var tree = new LayerTreeBuilder().Build(root);
+
+        using var rendered = new CompositorEngine(backend)
+            .RenderGpuTextures(tree, new LayoutRect(0, 0, W, H), 1.0f);
+
+        rendered.GetPixel(10, 10).Should().Be((18, 52, 86, 255),
+            "a fully clipped promoted layer must not invalidate the GPU command buffer");
+    }
+
+    [TestMethod]
     public void Rotated_layer_matches_cpu_blend_within_ssim_tolerance()
     {
         if (GpuLayerCompositor.Shared is null)

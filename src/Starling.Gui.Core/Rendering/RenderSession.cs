@@ -134,6 +134,44 @@ public sealed class MetalLayerFrameTarget : SurfaceFrameTarget
     }
 }
 
+public sealed class NativePageSurfaceFrameTarget : SurfaceFrameTarget
+{
+    private GpuSurfacePresenter? _presenter;
+
+    private NativePageSurfaceFrameTarget(GpuSurfacePresenter presenter) => _presenter = presenter;
+
+    internal override GpuSurfacePresenter? Presenter => _presenter;
+
+    public static NativePageSurfaceFrameTarget? TryCreate(
+        NativePageSurface surface,
+        IDiagnostics? diagnostics = null)
+    {
+        var presenter = surface.Kind switch
+        {
+            NativePageSurfaceKind.MetalLayer => GpuSurfacePresenter.CreateForMetalLayer(
+                surface.Handle,
+                diagnostics),
+            NativePageSurfaceKind.WindowsHwnd => GpuSurfacePresenter.CreateForWindowsHwnd(
+                surface.Handle,
+                surface.AuxiliaryHandle,
+                diagnostics),
+            NativePageSurfaceKind.XlibWindow => GpuSurfacePresenter.CreateForXlibWindow(
+                surface.AuxiliaryHandle,
+                surface.WindowId,
+                diagnostics),
+            _ => null,
+        };
+
+        return presenter is null ? null : new NativePageSurfaceFrameTarget(presenter);
+    }
+
+    public override void Dispose()
+    {
+        _presenter?.Dispose();
+        _presenter = null;
+    }
+}
+
 public sealed class WindowSurfaceFrameTarget : SurfaceFrameTarget
 {
     private GpuSurfacePresenter? _presenter;

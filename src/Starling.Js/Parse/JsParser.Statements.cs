@@ -293,7 +293,13 @@ public sealed partial class JsParser
         var test = ParseExpressionNoEof();
         Expect(JsTokenKind.RParen, "expected ')'");
         var end = _current.End;
-        ConsumeSemicolonOrAsi();
+        // ES2024 §12.10.1 rule 3 — the do-while-specific ASI rule: a semicolon
+        // is ALWAYS inserted after the closing ')' of a do-while, even with no
+        // line terminator and even when the next token is not '}' or EOF. So
+        // consume an OPTIONAL ';' here and never error (handles minified code
+        // like `do x();while(c)return 1`). Do NOT route through
+        // ConsumeSemicolonOrAsi — its strict callers still need to reject this.
+        Match(JsTokenKind.Semicolon);
         return new DoWhileStatement(body, test, start, end);
     }
 

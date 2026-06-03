@@ -45,6 +45,53 @@ public sealed class PerformanceTests
             .AsBool.Should().BeTrue();
     }
 
+    [TestMethod]
+    public void Timeline_methods_are_callable_and_return_undefined()
+    {
+        // Regression: github.com (and most RUM probes) call performance.mark at
+        // module entry. With mark absent the call threw "not a function" and
+        // aborted the whole bundle, so the page's JS never ran.
+        var runtime = BuildEnv();
+        Eval(runtime, """
+            performance.mark('a');
+            performance.measure('m', 'a');
+            performance.clearMarks('a');
+            performance.clearMeasures('m');
+            performance.clearResourceTimings();
+            performance.setResourceTimingBufferSize(150);
+            result = (typeof performance.mark === 'function') &&
+                     (performance.mark('b') === undefined) &&
+                     (typeof performance.measure === 'function');
+        """).AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void GetEntries_family_returns_empty_arrays()
+    {
+        var runtime = BuildEnv();
+        Eval(runtime, """
+            var a = performance.getEntries();
+            var b = performance.getEntriesByType('mark');
+            var c = performance.getEntriesByName('x');
+            result = Array.isArray(a) && Array.isArray(b) && Array.isArray(c) &&
+                     a.length === 0 && b.length === 0 && c.length === 0;
+        """).AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Legacy_timing_and_navigation_are_present()
+    {
+        var origin = 1_700_000_000_000d;
+        var runtime = BuildEnvWithClock(() => origin);
+        Eval(runtime, """
+            result = (typeof performance.timing.navigationStart === 'number') &&
+                     (performance.timing.navigationStart === 1700000000000) &&
+                     (performance.timing.domComplete === performance.timing.loadEventEnd) &&
+                     (performance.navigation.type === 0) &&
+                     (performance.navigation.redirectCount === 0);
+        """).AsBool.Should().BeTrue();
+    }
+
     private static JsRuntime BuildEnv()
     {
         var doc = new Document();

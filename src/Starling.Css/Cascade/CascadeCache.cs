@@ -34,7 +34,7 @@ public sealed class CascadeCache
     // separate code path.
     private readonly ConcurrentDictionary<Element, ComputedStyle> _styles
         = new(ReferenceEqualityComparer.Instance);
-    private readonly ConcurrentDictionary<SharingKey, ComputedStyle> _shared = new();
+    private readonly ConcurrentDictionary<SharingKey, SharedStyleEntry> _shared = new();
 
     public bool TryGet(Element element, out ComputedStyle style)
         => _styles.TryGetValue(element, out style!);
@@ -43,19 +43,31 @@ public sealed class CascadeCache
         => _styles[element] = style;
 
     /// <summary>
-    /// Style-sharing lookup: when two elements have the same selector-relevant
-    /// inputs (tag, attribute set, parent computed style, previous-element-
-    /// sibling tag), the cascade must produce an identical
-    /// <see cref="ComputedStyle"/>. A hit lets <see cref="StyleEngine"/> skip
-    /// the per-element cascade work entirely. Per-element caching above
-    /// continues to populate so a second lookup of the same element reference
-    /// goes through the cheaper TryGet(Element) path.
+    /// Style-sharing lookup. A public hit returns the stored style for callers
+    /// that know their key is valid. <see cref="StyleEngine"/> uses the
+    /// internal entry path below so it can recheck selector match results before
+    /// reusing the style.
     /// </summary>
     public bool TryGetShared(in SharingKey key, out ComputedStyle style)
-        => _shared.TryGetValue(key, out style!);
+    {
+        if (_shared.TryGetValue(key, out var entry))
+        {
+            style = entry.Style;
+            return true;
+        }
+
+        style = null!;
+        return false;
+    }
 
     public void SetShared(in SharingKey key, ComputedStyle style)
-        => _shared[key] = style;
+        => _shared[key] = new SharedStyleEntry(style, Validation: null);
+
+    internal bool TryGetSharedEntry(in SharingKey key, out SharedStyleEntry entry)
+        => _shared.TryGetValue(key, out entry!);
+
+    internal void SetSharedEntry(in SharingKey key, SharedStyleEntry entry)
+        => _shared[key] = entry;
 
     /// <summary>
     /// Iterates the per-element entries. Provided for diagnostics — call
@@ -80,14 +92,12 @@ public sealed class CascadeCache
 /// matching for an element: tag, every attribute (covers id, class, plus
 /// attribute selectors like <c>input[type=text]</c>), the parent's computed
 /// style (for inherited values), and the previous element sibling's tag
-/// (handles <c>+</c>/<c>~</c> combinators and <c>:first-child</c> via null).
+/// (handles <c>:first-child</c> via null, and adjacent-sibling selectors that
+/// only depend on that tag).
 /// <para>
-/// Two elements with the same key must produce the same cascade result. The
-/// signature is intentionally conservative — false negatives (cache miss when
-/// sharing would have been safe) are fine, false positives are not. Pages
-/// using positional pseudo-classes (<c>:nth-child</c>, <c>:last-child</c>,
-/// <c>:has</c>, etc.) disable sharing globally via
-/// <see cref="StyleEngine"/> on stylesheet add.
+/// The key narrows likely matches. <see cref="StyleEngine"/> also stores the
+/// source element's selector match results and rechecks them on the target
+/// element before it reuses a shared style.
 /// </para>
 /// </summary>
 public readonly struct SharingKey : IEquatable<SharingKey>
@@ -129,3 +139,12 @@ public readonly struct SharingKey : IEquatable<SharingKey>
     public static bool operator ==(SharingKey left, SharingKey right) => left.Equals(right);
     public static bool operator !=(SharingKey left, SharingKey right) => !left.Equals(right);
 }
+
+internal sealed record SharedStyleEntry(
+    ComputedStyle Style,
+    IReadOnlyList<SelectorValidationResult>? Validation);
+
+internal readonly record struct SelectorValidationResult(
+    ComplexSelector Selector,
+    IReadOnlyList<RuleCondition> Conditions,
+    bool Matched);
