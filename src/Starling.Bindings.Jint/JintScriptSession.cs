@@ -233,6 +233,8 @@ internal sealed class JintScriptSession : IScriptSession
         && !_dynamicRunner.HasPending
         && _loop.PendingAnimationFrameCount > 0;
 
+    public bool HasPendingHostAsyncWork => false;
+
     /// <summary>Drain every callback the post queue holds <i>now</i>, on the JS
     /// thread. A drained callback may enqueue further work; that lands on a later
     /// PumpOnce. Returns true if any callback ran.</summary>

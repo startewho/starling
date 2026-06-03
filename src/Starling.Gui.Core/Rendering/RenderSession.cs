@@ -84,6 +84,8 @@ public sealed class CompositedFrameRequest
     /// filling all the way to the window bottom (the prior behaviour).
     /// </summary>
     public BlockBox? BottomChromeRoot { get; init; }
+    public BlockBox? BottomChromeRightRoot { get; init; }
+    public double BottomChromeLeftWidthCss { get; init; }
     public double BottomChromeHeightCss { get; init; }
 }
 
@@ -297,6 +299,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.OverlayRoot,
             request.ScreenOverlayRoot,
             request.BottomChromeRoot,
+            request.BottomChromeRightRoot,
+            request.BottomChromeLeftWidthCss,
             request.BottomChromeHeightCss);
         if (!ok)
         {

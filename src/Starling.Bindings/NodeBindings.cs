@@ -123,6 +123,12 @@ public static class NodeBindings
             if (n is Document) return JsValue.Null; // documents have no owner
             return n?.OwnerDocument is { } d ? JsValue.Object(DomWrappers.Wrap(realm, d)) : JsValue.Null;
         });
+        EventTargetBinding.DefineAccessor(realm, nodeProto, "baseURI", (thisV, _) =>
+        {
+            var n = DomWrappers.UnwrapNode(thisV);
+            var d = n as Document ?? n?.OwnerDocument;
+            return d is { } ? JsValue.String(DocumentBaseUri(realm, d)) : JsValue.String("");
+        });
 
         EventTargetBinding.DefineMethod(realm, nodeProto, "appendChild", (thisV, args) =>
         {
@@ -1567,6 +1573,23 @@ public static class NodeBindings
     }
 
     // ---- helpers ---------------------------------------------------------
+
+    private static string DocumentBaseUri(JsRealm realm, Document doc)
+    {
+        var documentUrl = WindowBinding.UrlFor(realm, doc);
+        foreach (var el in doc.GetElementsByTagName("base"))
+        {
+            var href = el.GetAttribute("href");
+            if (string.IsNullOrWhiteSpace(href)) continue;
+            if (Uri.TryCreate(href, UriKind.Absolute, out var absolute))
+                return absolute.ToString();
+            if (Uri.TryCreate(documentUrl, UriKind.Absolute, out var baseUri)
+                && Uri.TryCreate(baseUri, href, out var resolved))
+                return resolved.ToString();
+            break;
+        }
+        return documentUrl;
+    }
 
     /// <summary>Build a DOMImplementation JS object for the given realm.
     /// DOM §4.5 — exposes <c>createHTMLDocument([title])</c>,

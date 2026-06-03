@@ -18,8 +18,22 @@ public sealed class JsArrayBuffer : JsObject
             PropertyDescriptor.Data(JsValue.Number(bytes.Length), writable: false, enumerable: false, configurable: true));
     }
 
-    public byte[] Bytes { get; }
+    public byte[] Bytes { get; private set; }
     public int ByteLength => Bytes.Length;
+
+    public static JsArrayBuffer Wrap(JsObject? prototype, byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        return new JsArrayBuffer(prototype, bytes);
+    }
+
+    public void ReplaceBytes(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        Bytes = bytes;
+        DefineOwnProperty("byteLength",
+            PropertyDescriptor.Data(JsValue.Number(bytes.Length), writable: false, enumerable: false, configurable: true));
+    }
 
     public JsArrayBuffer Slice(JsObject? prototype, int begin, int end)
     {

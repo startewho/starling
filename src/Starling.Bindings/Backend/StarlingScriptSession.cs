@@ -40,6 +40,8 @@ internal sealed class StarlingScriptSession : IScriptSession
     private readonly ScriptFetcherDelegate _fetcher;
     private readonly IDiagnostics _diag;
     private readonly StarlingDynamicScriptRunner _dynamicRunner;
+    private readonly StarlingModuleHost _moduleHost;
+    private readonly ModuleLoader _moduleLoader;
     private bool _disposed;
 
     // Live-phase (post-load) wall-clock baseline: the simulated-clock value at
@@ -97,6 +99,9 @@ internal sealed class StarlingScriptSession : IScriptSession
             _diag, _runtime, _baseUrl,
             (url, token) => _fetcher(url, token));
         ScriptSrcHook.Register(_runtime.Realm, _dynamicRunner.OnSrcSet);
+
+        _moduleHost = new StarlingModuleHost(_baseUrl, (url, token) => _fetcher(url, token), options.AbortToken);
+        _moduleLoader = new ModuleLoader(_runtime, _moduleHost);
     }
 
     public Action<ConsoleLevel, string> ConsoleSink
@@ -136,7 +141,7 @@ internal sealed class StarlingScriptSession : IScriptSession
             using (_diag.Span("js", "parse+compile"))
             {
                 var program = new JsParser(source).ParseProgram();
-                chunk = JsCompiler.Compile(program);
+                chunk = JsCompiler.Compile(program, label);
             }
             var vm = new JsVm(_runtime);
             using (_diag.Span("js", "execute"))
@@ -156,9 +161,6 @@ internal sealed class StarlingScriptSession : IScriptSession
         ArgumentNullException.ThrowIfNull(source);
         ct.ThrowIfCancellationRequested();
 
-        var host = new StarlingModuleHost(_baseUrl, (u, token) => _fetcher(u, token), ct);
-        var loader = new ModuleLoader(_runtime, host);
-
         // Entry modules with a real URL load from that URL; an inline module
         // (url == baseUrl with source provided) is registered under a synthetic
         // key so its imports resolve against the document base.
@@ -171,13 +173,13 @@ internal sealed class StarlingScriptSession : IScriptSession
             {
                 if (isInline)
                 {
-                    var key = host.RegisterInlineModule(source);
-                    loader.LoadAndEvaluate(key);
+                    var key = _moduleHost.RegisterInlineModule(source);
+                    _moduleLoader.LoadAndEvaluate(key);
                 }
                 else
                 {
-                    host.PrimeSource(url.ToString(), source);
-                    loader.LoadAndEvaluate(url.ToString());
+                    _moduleHost.PrimeSource(url.ToString(), source);
+                    _moduleLoader.LoadAndEvaluate(url.ToString());
                 }
             }
             catch (JsThrow ex)
@@ -244,7 +246,10 @@ internal sealed class StarlingScriptSession : IScriptSession
         _runtime.Realm.Microtasks.PendingCount == 0
         && _loop.PendingTimerCount == 0
         && !_dynamicRunner.HasPending
+        && !HasPendingHostAsyncWork
         && _loop.PendingAnimationFrameCount > 0;
+
+    public bool HasPendingHostAsyncWork => FetchBinding.HasPendingFetches(_runtime);
 
     public void OnScriptElementConnected(Node scriptEl)
     {

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="./">
+  <title>Blazor WASM Island</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app">
+    <div class="island-shell">
+      <span class="pulse pending"></span>
+      <span class="title">Blazor WASM Island</span>
+      <span id="blazor-boot" class="state">booting Blazor</span>
+      <button class="counter" type="button">0</button>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    var boot = document.getElementById('blazor-boot');
+    var reportedBlocker = false;
+    function text(value) {
+      return value && value.message ? value.message : String(value);
+    }
+    function report(value) {
+      if (reportedBlocker && String(value).indexOf('Blocked:') !== 0) return;
+      if (String(value).indexOf('Blocked:') === 0) reportedBlocker = true;
+      if (boot) boot.textContent = value;
+    }
+    function reportConsoleError(value) {
+      var message = text(value);
+      if (message.indexOf('MONO_WASM:') !== -1 ||
+          message.indexOf('WebAssembly function ') !== -1) {
+        report('Blocked: ' + message);
+      }
+    }
+    window.__starlingBlazorReport = report;
+    if (typeof console === 'object' && typeof console.error === 'function') {
+      var originalConsoleError = console.error;
+      console.error = function () {
+        if (arguments.length > 0) reportConsoleError(arguments[0]);
+        return originalConsoleError.apply(console, arguments);
+      };
+    }
+    window.addEventListener('error', function (event) {
+      report('Blocked: ' + (event.message || text(event.error)));
+    });
+    window.addEventListener('unhandledrejection', function (event) {
+      report('Blocked: ' + text(event.reason));
+    });
+    window.__starlingStartBlazor = function () {
+      var attempts = 0;
+      function schedule() {
+        attempts = attempts + 1;
+        if (attempts > 120) {
+          report('Blocked: window.Blazor.start missing');
+          return;
+        }
+        if (typeof window.setTimeout === 'function') {
+          window.setTimeout(startWhenReady, 25);
+        } else {
+          report('Blocked: window.setTimeout missing while waiting for Blazor');
+        }
+      }
+      function startWhenReady() {
+        var blazor = window.Blazor;
+        if (!blazor || typeof blazor.start !== 'function') {
+          report('waiting for Blazor loader');
+          schedule();
+          return;
+        }
+        if (blazor.__starlingStarted) {
+          return;
+        }
+        blazor.__starlingStarted = true;
+        report('starting Blazor runtime');
+        var settled = false;
+        var reachedBootResource = false;
+        var lastBootResource = '';
+        var watchdog = typeof window.setTimeout === 'function'
+          ? window.setTimeout(function () {
+              if (settled || reportedBlocker) return;
+              if (reachedBootResource) {
+                report('Blocked: Blazor.start() still pending after ' + lastBootResource);
+              } else {
+                report('Blocked: Blazor.start() did not reach dotnet.js load');
+              }
+            }, 1500)
+          : 0;
+        var options = {
+          loadBootResource: function (type, name, defaultUri, integrity, behavior) {
+            reachedBootResource = true;
+            lastBootResource = (behavior || type) + ': ' + name;
+            report('loading ' + lastBootResource);
+            return defaultUri;
+          },
+          configureRuntime: function () {
+            report('configuring .NET runtime');
+          }
+        };
+        blazor.start(options).then(function () {
+          settled = true;
+          if (watchdog && typeof window.clearTimeout === 'function') window.clearTimeout(watchdog);
+          report('Blazor runtime ready');
+        }, function (error) {
+          settled = true;
+          if (watchdog && typeof window.clearTimeout === 'function') window.clearTimeout(watchdog);
+          report('Blocked: ' + text(error));
+        });
+      }
+      try {
+        startWhenReady();
+      } catch (error) {
+        report('Blocked: ' + text(error));
+      }
+    };
+  })();
+  </script>
+  <script src="_framework/blazor.webassembly.js" autostart="false"></script>
+  <script>
+  (function () {
+    if (typeof window.__starlingStartBlazor === 'function') {
+      window.__starlingStartBlazor();
+    }
+  })();
+  </script>
+</body>
+</html>

@@ -92,6 +92,15 @@ public class JsLexerTests
         First("0xFF").Value.Should().Be(255.0);
     }
 
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-HexIntegerLiteral", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Large_hex_literal_decodes_as_number()
+    {
+        var t = First("0x8000000000000000");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(9223372036854775808.0);
+    }
+
     [TestMethod]
     public void Binary_literal()
     {

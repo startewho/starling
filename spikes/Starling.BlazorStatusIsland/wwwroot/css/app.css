@@ -1,0 +1,70 @@
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 32px;
+  overflow: hidden;
+  background: #151719;
+  color: #d7dde3;
+  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.island-shell {
+  box-sizing: border-box;
+  height: 32px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-top: 1px solid #30363d;
+  border-left: 1px solid #30363d;
+  background: #151719;
+}
+
+.pulse {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: #7ccf9b;
+}
+
+.pulse.pending {
+  background: #d6a85f;
+}
+
+.title {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: #eef2f6;
+  white-space: nowrap;
+}
+
+.state {
+  flex: 1;
+  min-width: 0;
+  color: #9ba7b4;
+  font: 11px "Geist Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.counter {
+  flex: none;
+  min-width: 40px;
+  height: 22px;
+  border: 1px solid #3b424b;
+  border-radius: 6px;
+  background: #20252b;
+  color: #d7dde3;
+  font: 11px "Geist Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  cursor: pointer;
+}
+
+.counter:active {
+  background: #28313a;
+}
