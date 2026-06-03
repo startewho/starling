@@ -1,0 +1,2 @@
+.preview-indicator-label:after{content:"Preview";bottom:var(--base-size-16);left:var(--base-size-16);padding:var(--base-size-8);background-color:var(--bgColor-danger-emphasis);color:var(--color-accent-fg);font-size:var(--text-body-size-medium);font-weight:var(--base-text-weight-semibold);border-radius:var(--borderRadius-medium);z-index:9999999;display:block;position:fixed}
+/*# sourceMappingURL=landing-pages-fe5bf6c46284a928-bd700181eaa4cb1e.css.map*/

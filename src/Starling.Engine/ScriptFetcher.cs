@@ -44,6 +44,7 @@ internal sealed class ScriptFetcher : IDisposable
     private readonly ConcurrentDictionary<string, string> _byUrl = new(StringComparer.Ordinal);
     private readonly List<LoadedScript> _scripts = new();
     private readonly List<LoadedScript> _moduleScripts = new();
+    private readonly HashSet<Element> _loadedElements = new(ReferenceEqualityComparer.Instance);
     private StarlingHttpClient? _sharedHttp;
     private readonly bool _ownsHttp;
 
@@ -83,6 +84,34 @@ internal sealed class ScriptFetcher : IDisposable
     public IReadOnlyList<LoadedScript> ModuleScripts => _moduleScripts;
 
     public async Task FetchAllAsync(Document document, StarlingUrl? baseUrl, CancellationToken ct)
+        => await FetchMatchingAsync(document, baseUrl, ScriptFetchPhase.All, ct).ConfigureAwait(false);
+
+    public async Task FetchBlockingAsync(Document document, StarlingUrl? baseUrl, CancellationToken ct)
+        => await FetchMatchingAsync(document, baseUrl, ScriptFetchPhase.Blocking, ct).ConfigureAwait(false);
+
+    public async Task FetchDeferredAsync(Document document, StarlingUrl? baseUrl, CancellationToken ct)
+        => await FetchMatchingAsync(document, baseUrl, ScriptFetchPhase.Deferred, ct).ConfigureAwait(false);
+
+    public static bool HasRunnableScripts(Document document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        foreach (var script in document.GetElementsByTagName("script"))
+        {
+            if (IsModuleScript(script) || IsClassicJavascript(script))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task FetchMatchingAsync(
+        Document document,
+        StarlingUrl? baseUrl,
+        ScriptFetchPhase phase,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -94,22 +123,42 @@ internal sealed class ScriptFetcher : IDisposable
         // synchronous prefix — DOM reads, cache probe — still runs sequentially
         // here; only the network I/O overlaps). Pass 2 awaits in order and
         // appends, preserving per-list document order.
-        var pending = new List<(bool IsModule, Task<LoadedScript?> Task)>();
+        var pending = new List<(Element Element, bool IsModule, Task<LoadedScript?> Task)>();
         foreach (var script in document.GetElementsByTagName("script"))
         {
             ct.ThrowIfCancellationRequested();
+            if (_loadedElements.Contains(script))
+            {
+                continue;
+            }
 
             // Module scripts take a separate branch: their src/inline source is
             // collected but evaluated via the ModuleLoader, not the classic VM.
             if (IsModuleScript(script))
             {
-                pending.Add((IsModule: true, LoadModuleAsync(script, baseUrl, ct)));
+                if (phase is ScriptFetchPhase.All or ScriptFetchPhase.Deferred)
+                {
+                    pending.Add((script, IsModule: true, LoadModuleAsync(script, baseUrl, ct)));
+                }
+
                 continue;
             }
 
             if (!IsClassicJavascript(script)) continue;
 
-            pending.Add((IsModule: false, LoadAsync(script, baseUrl, ct)));
+            var disposition = ClassifyDisposition(script);
+            var isBlocking = disposition == ScriptDisposition.None;
+            if (phase == ScriptFetchPhase.Blocking && !isBlocking)
+            {
+                continue;
+            }
+
+            if (phase == ScriptFetchPhase.Deferred && isBlocking)
+            {
+                continue;
+            }
+
+            pending.Add((script, IsModule: false, LoadAsync(script, baseUrl, ct)));
         }
 
         if (pending.Count == 0) return;
@@ -119,8 +168,9 @@ internal sealed class ScriptFetcher : IDisposable
         // also surfaces cancellation the same way the old sequential loop did.
         await Task.WhenAll(pending.Select(static p => p.Task)).ConfigureAwait(false);
 
-        foreach (var (isModule, task) in pending)
+        foreach (var (element, isModule, task) in pending)
         {
+            _loadedElements.Add(element);
             var loaded = task.Result; // completed; null = not runnable / fetch failed
             if (loaded is null) continue;
             if (isModule) _moduleScripts.Add(loaded);
@@ -415,9 +465,17 @@ internal sealed class ScriptFetcher : IDisposable
         _byUrl.Clear();
         _scripts.Clear();
         _moduleScripts.Clear();
+        _loadedElements.Clear();
         if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
+}
+
+internal enum ScriptFetchPhase
+{
+    All,
+    Blocking,
+    Deferred,
 }
 
 /// <summary>One <c>&lt;script&gt;</c>'s source text plus the URL syntax errors

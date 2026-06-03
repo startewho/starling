@@ -856,8 +856,8 @@ public sealed class MainWindow : Window, IBrowserController
         }
     }
 
-    // public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
-    //     => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
+    public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct)
+        => InputTool("screenshot viewport", () => _webview.CaptureViewportToPng(path));
 
     public Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct)
     {

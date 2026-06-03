@@ -311,19 +311,29 @@ internal static class Program
             return await RenderFrameSequence(engine, url, new RenderOptions(viewport, fontSize), output, frames, frameStepMs, ct);
         }
 
-        if (dumpLayout)
-        {
-            var page = await engine.LayoutPageAsync(url, new RenderOptions(viewport, fontSize), ct);
-            page.Match(p => { using (p) { DumpLayout(p.Root, 0); } return 0; }, _ => 1);
-        }
-
-        var result = await engine.RenderAsync(url, new RenderOptions(viewport, fontSize), output, ct);
-
+        var result = await engine.LayoutPageAsync(url, new RenderOptions(viewport, fontSize), ct);
         return result.Match(
-            ok =>
+            page =>
             {
-                Console.WriteLine($"rendered {ok.OutputPath} ({ok.Width}x{ok.Height})");
-                return 0;
+                using (page)
+                {
+                    if (dumpLayout)
+                    {
+                        DumpLayout(page.Root, 0);
+                    }
+
+                    try
+                    {
+                        var ok = engine.CaptureToPngGpu(page, output, nowMs: 0, fullPage: false);
+                        Console.WriteLine($"rendered {ok.OutputPath} ({ok.Width}x{ok.Height})");
+                        return 0;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"error: GPU render failed: {ex.Message}");
+                        return 1;
+                    }
+                }
             },
             err =>
             {
@@ -353,30 +363,39 @@ internal static class Program
                     var stem = Path.GetFileNameWithoutExtension(outputTemplate);
                     var ext = Path.GetExtension(outputTemplate);
                     if (string.IsNullOrEmpty(ext)) ext = ".png";
-
-                    for (var i = 0; i < frames; i++)
+                    try
                     {
-                        var nowMs = i * frameStepMs;
-                        var bitmap = engine.RenderFrame(page, nowMs);
-                        try
-                        {
-                            var name = $"{stem}{i.ToString("D" + pad, System.Globalization.CultureInfo.InvariantCulture)}{ext}";
-                            var path = string.IsNullOrEmpty(dir) ? name : Path.Combine(dir, name);
-                            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                            using var image = Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
-                                bitmap.Rgba, bitmap.Width, bitmap.Height);
-                            image.SaveAsPng(path);
-                            width = bitmap.Width; height = bitmap.Height;
-                            Console.WriteLine($"rendered {path} ({bitmap.Width}x{bitmap.Height}) @ t={nowMs}ms");
-                        }
-                        finally
-                        {
-                            bitmap.Dispose();
-                        }
-                    }
+                        using var renderer = engine.CreateCompositedRenderer(page);
 
-                    Console.WriteLine($"wrote {frames} frames ({width}x{height}) step={frameStepMs}ms.");
-                    return 0;
+                        for (var i = 0; i < frames; i++)
+                        {
+                            var nowMs = i * frameStepMs;
+                            var bitmap = engine.RenderFrameGpu(page, nowMs, renderer);
+                            try
+                            {
+                                var name = $"{stem}{i.ToString("D" + pad, System.Globalization.CultureInfo.InvariantCulture)}{ext}";
+                                var path = string.IsNullOrEmpty(dir) ? name : Path.Combine(dir, name);
+                                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                                using var image = Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+                                    bitmap.Rgba, bitmap.Width, bitmap.Height);
+                                image.SaveAsPng(path);
+                                width = bitmap.Width; height = bitmap.Height;
+                                Console.WriteLine($"rendered {path} ({bitmap.Width}x{bitmap.Height}) @ t={nowMs}ms");
+                            }
+                            finally
+                            {
+                                bitmap.Dispose();
+                            }
+                        }
+
+                        Console.WriteLine($"wrote {frames} frames ({width}x{height}) step={frameStepMs}ms.");
+                        return 0;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"error: GPU render failed: {ex.Message}");
+                        return 1;
+                    }
                 }
             },
             err =>

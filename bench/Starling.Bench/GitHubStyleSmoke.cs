@@ -20,6 +20,7 @@ internal static class GitHubStyleSmoke
         Measure("LayoutDocument_GitHubHome", () => bench.LayoutDocument_GitHubHome(layoutDiagnostics));
         layoutDiagnostics.Print();
         Measure("Render_GitHubHome_HtmlToDisplayList", bench.Render_GitHubHome_HtmlToDisplayList);
+        Measure("Render_GitHubHome_GpuTextureCompositor", bench.Render_GitHubHome_GpuTextureCompositor);
         return 0;
     }
 

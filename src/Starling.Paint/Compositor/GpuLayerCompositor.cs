@@ -1,6 +1,7 @@
 using Silk.NET.WebGPU;
 using Starling.Common.Image;
 using Starling.Css.Values;
+using Starling.Paint.Backend;
 using Rect = Starling.Layout.Rect;
 using WgpuBuffer = Silk.NET.WebGPU.Buffer;
 
@@ -62,7 +63,7 @@ internal readonly struct LayerBlend
 
     public static LayerBlend Bitmap(
         RenderedBitmap local, long contentHash, Matrix2D localToDevice, float opacity, Rect? clipDevice)
-        => new(null, local.Width, local.Height, contentHash, localToDevice, opacity, clipDevice);
+        => new(local, local.Width, local.Height, contentHash, localToDevice, opacity, clipDevice);
 
     public static LayerBlend ResidentTexture(
         int width,
@@ -92,7 +93,7 @@ internal readonly struct LayerBlend
 /// the GPU→CPU readback. The on-screen, readback-free sibling is
 /// <see cref="GpuSurfacePresenter"/>.
 /// </summary>
-internal sealed unsafe class GpuLayerCompositor : IDisposable
+internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDisposable
 {
     // One process-wide instance: device acquisition is expensive and there is
     // exactly one paint thread. Lazily probed; null when the host has no adapter.
@@ -121,6 +122,24 @@ internal sealed unsafe class GpuLayerCompositor : IDisposable
     {
         var engine = GpuBlendEngine.CreateOffscreen();
         return engine is null ? null : new GpuLayerCompositor(engine);
+    }
+
+    public bool HasResidentTexture(long contentHash, int width, int height)
+    {
+        lock (_gate)
+        {
+            return _engine.HasResidentTexture(contentHash, width, height);
+        }
+    }
+
+    public GpuPaintDeviceContext ImageSharpContext => _engine.ImageSharpContext;
+
+    public void AdoptTexture(long contentHash, GpuPaintTexture texture)
+    {
+        lock (_gate)
+        {
+            _engine.AdoptTexture(contentHash, texture);
+        }
     }
 
     /// <summary>

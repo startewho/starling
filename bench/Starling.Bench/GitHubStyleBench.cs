@@ -6,7 +6,9 @@ using Starling.Css.Parser;
 using Starling.Dom;
 using Starling.Html;
 using Starling.Layout;
+using Starling.Paint;
 using Starling.Paint.DisplayList;
+using LayoutRect = Starling.Layout.Rect;
 
 namespace Starling.Bench;
 
@@ -87,6 +89,19 @@ public class GitHubStyleBench
         var layout = new LayoutEngine(style).LayoutDocument(doc, Viewport);
         var displayList = new DisplayListBuilder().Build(layout);
         return displayList.Items.Count;
+    }
+
+    [Benchmark]
+    public int Render_GitHubHome_GpuTextureCompositor()
+    {
+        var doc = HtmlParser.Parse(_html);
+        var style = CreateStyleEngine(doc, useCachedInlineSheets: false);
+        var layout = new LayoutEngine(style).LayoutDocument(doc, Viewport);
+        using var renderer = new CompositedPageRenderer(diagnostics: null);
+        using var bitmap = renderer.Render(
+            layout,
+            new LayoutRect(0, 0, Viewport.Width, Viewport.Height));
+        return bitmap.Width;
     }
 
     private void LoadExternalSheets(Document doc)

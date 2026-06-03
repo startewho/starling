@@ -339,11 +339,15 @@ public sealed partial class JsParser
                     return ParseArrowBody(ps, asyncTok.Start, async: true);
                 }
             }
-            // `async function …` — async function expression.
+            // `async function …` — async function expression. Route it through
+            // the call/member tail (ContinueAssignment) so an immediately-invoked
+            // async function expression `async function(){…}(args)` attaches its
+            // call instead of orphaning the '(' — returning the bare function
+            // here skipped ParseCallAndMemberTail and broke github's async IIFEs.
             if (asyncPeek.Kind == JsTokenKind.Function)
             {
                 var asyncTok = Advance(); // async
-                return ParseFunctionExpression(asyncTok.Start, isAsync: true);
+                return ContinueAssignment(ParseFunctionExpression(asyncTok.Start, isAsync: true));
             }
         }
         // Arrow function fast path: a bare identifier followed by '=>' is the
@@ -1081,15 +1085,28 @@ public sealed partial class JsParser
         }
     }
 
-    /// <summary>Parse an AssignmentExpression that appears between square
-    /// brackets (a computed member key / index). Such an expression is always
-    /// <c>[+In]</c> per the grammar, so any active <c>for</c>-header [NoIn]
-    /// restriction is suspended for its duration.</summary>
+    /// <summary>Parse an Expression that appears between square brackets (a
+    /// computed member key / index). §13.3 uses <c>Expression</c>, which
+    /// includes the comma/sequence operator (e.g. <c>a[b, c]</c>), so collect a
+    /// SequenceExpression exactly as <see cref="ParseExpression"/> does. Such an
+    /// expression is always <c>[+In]</c> per the grammar, so any active
+    /// <c>for</c>-header [NoIn] restriction is suspended for its duration.</summary>
     private Expression ParseBracketedExpressionAllowingIn()
     {
         var savedNoIn = _disallowInDepth;
         _disallowInDepth = 0;
-        try { return ParseAssignment(); }
+        try
+        {
+            var expr = ParseAssignment();
+            if (Match(JsTokenKind.Comma))
+            {
+                var parts = new List<Expression> { expr };
+                do { parts.Add(ParseAssignment()); }
+                while (Match(JsTokenKind.Comma));
+                expr = new SequenceExpression(parts, parts[0].Start, parts[^1].End);
+            }
+            return expr;
+        }
         finally { _disallowInDepth = savedNoIn; }
     }
 
@@ -1132,6 +1149,22 @@ public sealed partial class JsParser
         {
             _lex.PushBack(_current);
             _current = _lex.ScanRegExp();
+        }
+        // `async function …` as a primary expression — reachable as a unary
+        // operand (`!async function(){}`), a call callee, etc. ParseAssignment
+        // already handles async arrows and a top-level async function
+        // expression; mirroring it here makes the async function EXPRESSION
+        // valid in every expression position. §15.8 — no LineTerminator is
+        // permitted between the `async` keyword and `function`.
+        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+            && !_current.ContainsEscape)
+        {
+            var asyncPeek = _lex.Peek();
+            if (asyncPeek.Kind == JsTokenKind.Function && !asyncPeek.PrecededByLineTerminator)
+            {
+                var asyncTok = Advance(); // async
+                return ParseFunctionExpression(asyncTok.Start, isAsync: true);
+            }
         }
         var t = _current;
         switch (t.Kind)
