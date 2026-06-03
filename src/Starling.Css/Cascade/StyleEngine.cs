@@ -944,38 +944,11 @@ public sealed class StyleEngine
     // Name matching is not implemented yet, so the nearest container is used. The
     // remaining condition is a size feature query evaluated against the container
     // box (reusing the media-feature evaluator with a container-sized context).
-    private bool ContainerQueryMatches(AtRule rule, Element element)
+    private bool ContainerQueryMatches(MediaQueryList queryList, Element element)
     {
-        // Split the optional leading <container-name> from the condition.
-        var prelude = rule.Prelude;
-        var conditionStart = 0;
-        for (var i = 0; i < prelude.Count; i++)
-        {
-            if (prelude[i] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
-            {
-                conditionStart = i + 1;
-                continue;
-            }
-            if (prelude[i] is CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var ident } }
-                && !ident.Equals("not", StringComparison.OrdinalIgnoreCase))
-                conditionStart = i + 1; // a leading name; condition follows
-            break;
-        }
-        var condition = prelude.Skip(conditionStart).ToList();
-        if (condition.Count == 0)
-            return false;
-
         var (cw, ch) = ResolveContainerSize(element);
         var ctx = _mediaContext with { ViewportWidthPx = cw, ViewportHeightPx = ch };
-        try
-        {
-            var list = MediaQueryParser.ParseList(condition);
-            return MediaQueryEvaluator.Evaluate(list, ctx);
-        }
-        catch
-        {
-            return false;
-        }
+        return MediaQueryEvaluator.Evaluate(queryList, ctx);
     }
 
     private static string ExtractFontFamily(Dictionary<PropertyId, CssValue> values)
@@ -1170,16 +1143,16 @@ public sealed class StyleEngine
             switch (condition.Kind)
             {
                 case RuleConditionKind.Media:
-                    var mqList = MediaQueryParser.ParseList(condition.Rule.Prelude);
-                    if (!MediaQueryEvaluator.Evaluate(mqList, _mediaContext))
+                    if (condition.QueryList is null ||
+                        !MediaQueryEvaluator.Evaluate(condition.QueryList, _mediaContext))
                         return false;
                     break;
                 case RuleConditionKind.Supports:
-                    if (!SupportsEvaluator.Evaluate(condition.Rule.Prelude))
+                    if (!condition.SupportsResult)
                         return false;
                     break;
                 case RuleConditionKind.Container:
-                    if (!ContainerQueryMatches(condition.Rule, element))
+                    if (condition.QueryList is null || !ContainerQueryMatches(condition.QueryList, element))
                         return false;
                     break;
             }
@@ -1899,8 +1872,77 @@ internal enum RuleConditionKind
     Container,
 }
 
-internal sealed class RuleCondition(RuleConditionKind kind, AtRule rule)
+internal sealed class RuleCondition
 {
-    public RuleConditionKind Kind { get; } = kind;
-    public AtRule Rule { get; } = rule;
+    public RuleCondition(RuleConditionKind kind, AtRule rule)
+    {
+        Kind = kind;
+
+        switch (kind)
+        {
+            case RuleConditionKind.Media:
+                QueryList = TryParseMediaQueryList(rule.Prelude);
+                break;
+            case RuleConditionKind.Supports:
+                SupportsResult = TryEvaluateSupports(rule.Prelude);
+                break;
+            case RuleConditionKind.Container:
+                QueryList = TryParseContainerQueryList(rule.Prelude);
+                break;
+        }
+    }
+
+    public RuleConditionKind Kind { get; }
+    public MediaQueryList? QueryList { get; }
+    public bool SupportsResult { get; }
+
+    private static MediaQueryList? TryParseMediaQueryList(IReadOnlyList<CssComponentValue> values)
+    {
+        try
+        {
+            return MediaQueryParser.ParseList(values);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool TryEvaluateSupports(IReadOnlyList<CssComponentValue> values)
+    {
+        try
+        {
+            return SupportsEvaluator.Evaluate(values);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static MediaQueryList? TryParseContainerQueryList(IReadOnlyList<CssComponentValue> prelude)
+    {
+        var conditionStart = 0;
+        for (var i = 0; i < prelude.Count; i++)
+        {
+            if (prelude[i] is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+            {
+                conditionStart = i + 1;
+                continue;
+            }
+
+            if (prelude[i] is CssTokenValue { Token: { Type: CssTokenType.Ident, Value: var ident } }
+                && !ident.Equals("not", StringComparison.OrdinalIgnoreCase))
+                conditionStart = i + 1;
+            break;
+        }
+
+        if (conditionStart >= prelude.Count)
+            return null;
+
+        var condition = new List<CssComponentValue>(prelude.Count - conditionStart);
+        for (var i = conditionStart; i < prelude.Count; i++)
+            condition.Add(prelude[i]);
+        return TryParseMediaQueryList(condition);
+    }
 }

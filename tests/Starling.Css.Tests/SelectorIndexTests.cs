@@ -44,4 +44,41 @@ public sealed class SelectorIndexTests
         var candidates = index.GetCandidates(el).Select(c => c.Value).ToList();
         candidates.Should().Contain(new[] { "id", "class", "tag", "universal" });
     }
+
+    [TestMethod]
+    public void Buckets_is_and_where_arguments_by_nested_keys()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("article");
+        el.Id = "hero";
+        el.ClassList.Add("card");
+        el.SetAttribute("data-kind", "issue");
+        doc.AppendChild(el);
+
+        var index = new SelectorIndex<string>();
+        index.Add(SelectorParser.ParseSelectorList(":where(.card)"), "where-class");
+        index.Add(SelectorParser.ParseSelectorList(":is(#hero, .other)"), "is-id-or-class");
+        index.Add(SelectorParser.ParseSelectorList(":where([data-kind])"), "where-attr");
+        index.Add(SelectorParser.ParseSelectorList(":is(article, section)"), "is-type");
+        index.Add(SelectorParser.ParseSelectorList(":is(:where(.card))"), "nested");
+        index.Add(SelectorParser.ParseSelectorList(":where(.missing)"), "missing");
+
+        var candidates = index.GetCandidates(el).Select(c => c.Value).ToList();
+
+        candidates.Should().Contain(new[] { "where-class", "is-id-or-class", "where-attr", "is-type", "nested" });
+        candidates.Should().NotContain("missing");
+    }
+
+    [TestMethod]
+    public void Buckets_is_and_where_as_universal_when_any_argument_has_no_key()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("article");
+        doc.AppendChild(el);
+
+        var index = new SelectorIndex<string>();
+        index.Add(SelectorParser.ParseSelectorList(":where(.card, *)"), "where-universal");
+
+        index.GetCandidates(el).Should().ContainSingle(c => c.Value == "where-universal");
+    }
 }
