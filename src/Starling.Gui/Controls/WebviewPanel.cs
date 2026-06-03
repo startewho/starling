@@ -20,6 +20,7 @@ using Starling.Dom.Events;
 using Starling.Engine;
 using Starling.Gui.Diagnostics;
 using Starling.Html;
+using Starling.Paint;
 using AvColor = Avalonia.Media.Color;
 using DomDocument = Starling.Dom.Document;
 using DomElement = Starling.Dom.Element;
@@ -43,6 +44,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Action<string> _onLinkActivated;
     private readonly Action<string, bool> _onStatus;
     private readonly IRenderSession _renderSession;
+    private CompositedPageRenderer? _viewportCaptureRenderer;
 
     // Given the current page and a new viewport size, reflows the page (reusing
     // its document/resources, no network) and returns the successor — or null
@@ -407,6 +409,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (isNavigation)
         {
             _renderSession.ResetForNavigation();
+            _viewportCaptureRenderer?.ResetForNavigation();
         }
 
 
@@ -2197,37 +2200,37 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 return new InputResult(false, "action must be copy, paste, read, or readSelection");
         }
     }
-    //
-    // /// <summary>Captures the current visible viewport to a PNG.</summary>
-    // public InputResult CaptureViewportToPng(string path)
-    // {
-    //     if (_currentPage is null) return new InputResult(false, "no page is loaded");
-    //     var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
-    //     var rect = CurrentViewportRect();
-    //     var (styleOverride, scrollLookup) = BuildRenderInputs();
-    //     var pageVersion = _animating
-    //         ? unchecked(_currentPage.DisplayListVersion + (int)_animClockMs)
-    //         : _currentPage.DisplayListVersion;
-    //
-    //     using var rendered = _renderSession.Render(new PageFrameRequest
-    //     {
-    //         Root = _currentPage.Root,
-    //         Scale = (float)_currentScale,
-    //         StyleOverride = styleOverride,
-    //         Images = _currentPage.ImageResolver,
-    //         Viewport = rect,
-    //         PageVersion = pageVersion,
-    //         ScrollOffsets = scrollLookup,
-    //     }, CpuBitmapFrameTarget.Instance);
-    //     var cpuFrame = rendered.Bitmap
-    //         ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
-    //     var dir = Path.GetDirectoryName(full);
-    //     if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-    //     using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
-    //         cpuFrame.Rgba.Span, cpuFrame.Width, cpuFrame.Height);
-    //     SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, full);
-    //     return new InputResult(true, $"wrote {full} ({cpuFrame.Width}x{cpuFrame.Height})");
-    // }
+    /// <summary>Captures the current visible viewport to a PNG.</summary>
+    public InputResult CaptureViewportToPng(string path)
+    {
+        if (_currentPage is null) return new InputResult(false, "no page is loaded");
+
+        var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
+        var rect = CurrentViewportRect();
+        var (styleOverride, scrollLookup) = BuildRenderInputs();
+        var overlays = CollectSurfaceOverlays();
+
+        using var rendered = ViewportCaptureRenderer().Render(
+            _currentPage.Root,
+            rect,
+            (float)_currentScale,
+            styleOverride,
+            _currentPage.ImageResolver,
+            IsElementAnimatingLayerRoot,
+            scrollLookup,
+            overlays);
+
+        var dir = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
+            rendered.Rgba, rendered.Width, rendered.Height);
+        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, full);
+        return new InputResult(true, $"wrote {full} ({rendered.Width}x{rendered.Height})");
+    }
+
+    private CompositedPageRenderer ViewportCaptureRenderer()
+        => _viewportCaptureRenderer ??= new CompositedPageRenderer(diagnostics: _diag);
 
     /// <summary>
     /// Debug report for the <c>browser_computed_style</c> MCP
@@ -3191,6 +3194,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _liveTimer.Stop();
         _surfaceTarget?.Dispose();
         _renderSession.Dispose();
+        _viewportCaptureRenderer?.Dispose();
         _currentPage?.Dispose();
         // Detach the bitmap before disposing it: a teardown layout pass can
         // otherwise measure the Image against an already-disposed bitmap.
