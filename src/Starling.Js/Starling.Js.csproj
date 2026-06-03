@@ -6,4 +6,9 @@
     <ProjectReference Include="..\Starling.Common\Starling.Common.csproj" />
     <ProjectReference Include="..\..\lib\starling-regexp\src\Starling.RegExp\Starling.RegExp.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The regex-backend parity tests drive both backends explicitly via the
+         internal RegexBackendSelector.Compile(..., RegexBackendKind) overload. -->
+    <InternalsVisibleTo Include="Starling.Js.Tests" />
+  </ItemGroup>
 </Project>
