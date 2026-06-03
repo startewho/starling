@@ -240,3 +240,43 @@ public sealed record DrawTextShadow(
     bool Bold,
     bool Italic,
     ShapedRun? Shaped = null) : DisplayItem;
+// ---------------------------------------------------------------------------
+// CSS Backgrounds 3 §3.8 — `background-clip: text`. Appended at the end per the
+// shared-paint-file etiquette.
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// One glyph run gathered from a descendant text box, in document-space
+/// coordinates. Carries the same shaping data as <see cref="DrawText"/> so the
+/// backend can render the run identically — here it is used as an alpha mask
+/// for a <c>background-clip: text</c> fill rather than as visible foreground
+/// text. <paramref name="X"/>/<paramref name="Y"/> are the top-left of the line
+/// box (matching <see cref="DrawText"/> origin semantics).
+/// </summary>
+public readonly record struct ClipGlyphRun(
+    string Text,
+    double X,
+    double Y,
+    double FontSize,
+    IReadOnlyList<string> FontFamilies,
+    bool Bold,
+    bool Italic,
+    ShapedRun? Shaped);
+
+/// <summary>
+/// Paints a box's background (a <see cref="CssGradient"/> when
+/// <paramref name="Gradient"/> is non-null, otherwise the solid
+/// <paramref name="Color"/>) clipped to the union of the element's text glyphs
+/// (CSS Backgrounds 3 §3.8 <c>background-clip: text</c>, with the
+/// <c>-webkit-background-clip: text</c> alias). The backend renders the
+/// background into an offscreen layer, keeps only the pixels covered by a glyph
+/// in <paramref name="Glyphs"/> (an alpha mask), then composites the result.
+/// The matching plain background fill and the now-transparent foreground text
+/// are not emitted, so the gradient shows through the glyph shapes and the rest
+/// of the box stays transparent.
+/// </summary>
+public sealed record FillBackgroundTextClip(
+    Rect Bounds,
+    CssGradient? Gradient,
+    CssColor Color,
+    IReadOnlyList<ClipGlyphRun> Glyphs) : DisplayItem;

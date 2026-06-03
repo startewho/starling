@@ -285,6 +285,21 @@ internal sealed class NativeBrowserWindow : IDisposable
             ? backend
             : "imagesharp-gpu";
 
+    // The sidebar footer (commit / js / render) is a Blazor render — expensive to
+    // build, but it only changes with the theme. Cache the HTML per theme so the
+    // sidebar can rebuild on every hover without re-running the renderer.
+    private static readonly Dictionary<NativeThemeMode, string> FooterHtmlCache = new();
+
+    private static string SidebarFooterHtml(NativeThemeMode mode, NativeTheme t)
+    {
+        if (!FooterHtmlCache.TryGetValue(mode, out var html))
+        {
+            html = BuildFactsRenderer.Render(JsEngineLabel(), RenderBackendLabel(), t.Faint, t.Muted);
+            FooterHtmlCache[mode] = html;
+        }
+        return html;
+    }
+
     private static (string Scheme, string Sep, string Host, string Path) UrlSegments(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return ("", "", "", "");
@@ -376,22 +391,28 @@ internal sealed class NativeBrowserWindow : IDisposable
                 new LayoutSize(contentW, ChromeHeightCss));
     }
 
-    private static BlockBox BuildSidebar(float logicalH, NativeTheme t, string activeBookmarkHost)
+    private static BlockBox BuildSidebar(
+        float logicalH, NativeTheme t, ChromeImageResolver icons,
+        string activeBookmarkHost, int hoveredIndex, string footerHtml)
     {
         var sb = new StringBuilder();
         sb.Append($"<body style=\"margin:0;padding:0;background:{t.Panel};width:{SidebarWidthCss}px;" +
                   $"height:{logicalH}px;font-family:{SansFont};position:relative;color:{t.Text};" +
                   $"border-right:1px solid {t.Border}\">");
 
+        // Wordmark: gradient app-mark (the chrome's one spot of brand color) +
+        // "Starling". The mark carries the same stroked spark glyph as the
+        // Avalonia shell.
         sb.Append("<div style=\"position:absolute;left:18px;top:16px;height:22px;" +
                   "display:flex;align-items:center\">");
         sb.Append($"<div style=\"width:22px;height:22px;border-radius:7px;" +
                   $"background:linear-gradient(135deg,{t.Accent},{t.Accent2});box-shadow:0 1px 2px {t.AccentLine};" +
-                  "color:#ffffff;font-size:13px;font-weight:700;display:flex;" +
-                  "align-items:center;justify-content:center;margin-right:9px\">S</div>");
+                  "color:#ffffff;display:flex;align-items:center;justify-content:center;margin-right:9px\">" +
+                  $"{Icon("M3 11 L7 5 L10 9 L13 4", 13)}</div>");
         sb.Append($"<div style=\"font-size:15.5px;font-weight:600;color:{t.Text}\">Starling</div>");
         sb.Append("</div>");
 
+        // Section label + count.
         sb.Append($"<div style=\"position:absolute;left:22px;top:{SidebarWordmarkHeightCss + 8}px;" +
                   $"width:{SidebarWidthCss - 44}px;height:11px;display:flex;align-items:center;" +
                   $"color:{t.Muted};font-size:11px;font-weight:500\">");
@@ -399,26 +420,31 @@ internal sealed class NativeBrowserWindow : IDisposable
         sb.Append($"<div style=\"font-family:monospace;color:{t.Faint};font-size:10px\">{Bookmarks.Length}</div>");
         sb.Append("</div>");
 
+        // Bookmark rows. Each row is a flex line (favicon + title vertically
+        // centered) so the list reads as a tight, evenly-spaced column — active
+        // and hovered rows get a filled background like the Avalonia tiles.
         for (var i = 0; i < Bookmarks.Length; i++)
         {
             var b = Bookmarks[i];
             var top = SidebarWordmarkHeightCss + SidebarSectionHeightCss + i * (SidebarRowHeightCss + SidebarRowGapCss);
             var active = string.Equals(activeBookmarkHost, b.Host, StringComparison.OrdinalIgnoreCase);
-            var bg = active ? t.Surface : "transparent";
+            var hovered = !active && i == hoveredIndex;
+            var bg = active ? t.Surface : hovered ? t.Hover : "transparent";
             var border = active ? t.Hair : "transparent";
             var shadow = active ? ";box-shadow:0 1px 2px rgba(0,0,0,0.20)" : "";
             var fg = active ? t.Text : t.Text2;
+            var weight = active ? "500" : "400";
             sb.Append($"<div style=\"position:absolute;left:{SidebarRowXCss}px;top:{top}px;" +
-                      $"width:{SidebarRowWCss - 2}px;height:{SidebarRowHeightCss}px;border-radius:7px;" +
+                      $"width:{SidebarRowWCss - 22}px;height:{SidebarRowHeightCss}px;border-radius:7px;" +
                       $"border:1px solid {border};background:{bg}{shadow};" +
-                      "position:relative;overflow:hidden\">");
-            sb.Append($"<div style=\"position:absolute;left:10px;top:9px;width:16px;height:16px;" +
+                      "display:flex;align-items:center;padding:0 10px;overflow:hidden\">");
+            sb.Append($"<div style=\"width:16px;height:16px;flex:none;margin-right:11px;" +
                       $"border-radius:4px;background:{BookmarkColor(b.Host)};color:#ffffff;" +
-                      "font-size:9px;font-weight:600;text-align:center;line-height:16px\">" +
+                      "font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center\">" +
                       $"{BookmarkInitial(b)}</div>");
-            sb.Append($"<div style=\"position:absolute;left:37px;top:8px;width:{SidebarRowWCss - 50}px;" +
-                      $"height:18px;font-size:13px;color:{fg};white-space:nowrap;overflow:hidden;" +
-                      $"text-overflow:ellipsis\">{EscapeHtml(b.Title)}</div>");
+            sb.Append($"<div style=\"flex:1;font-size:13px;font-weight:{weight};color:{fg};" +
+                      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">" +
+                      $"{EscapeHtml(b.Title)}</div>");
             sb.Append("</div>");
         }
 
@@ -426,11 +452,11 @@ internal sealed class NativeBrowserWindow : IDisposable
         var footerTop = Math.Max(SidebarWordmarkHeightCss + SidebarSectionHeightCss + Bookmarks.Length * (SidebarRowHeightCss + SidebarRowGapCss) + 16,
             logicalH - footerHeight);
         sb.Append($"<div style=\"position:absolute;left:18px;top:{footerTop}px;width:{SidebarWidthCss - 36}px;height:{footerHeight}px\">");
-        sb.Append(BuildFactsRenderer.Render(JsEngineLabel(), RenderBackendLabel(), t.Faint, t.Muted));
+        sb.Append(footerHtml);
         sb.Append("</div>");
         sb.Append("</div></body>");
 
-        return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+        return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance, icons)
             .LayoutDocument(HtmlParser.Parse(sb.ToString()),
                 new LayoutSize(SidebarWidthCss, logicalH));
     }
@@ -557,16 +583,23 @@ internal sealed class NativeBrowserWindow : IDisposable
         bool urlBarFocused = false;
         string urlBarText = "";
 
-        // Chrome state — rebuilt only when its signature (tabs / active index /
-        // labels / URL text / focus / width / theme / status) changes.
+        // Chrome state — the toolbar, sidebar, and status bar are cached
+        // independently, each rebuilt only when its own signature changes (so a
+        // sidebar hover doesn't re-lay-out the toolbar, a nav doesn't rebuild the
+        // sidebar, etc.).
         BlockBox? chromeBox = null;
         BlockBox? sidebarBox = null;
         BlockBox? statusBox = null;
         string chromeSig = "";
+        string sidebarSig = "";
+        string statusSig = "";
         BrowserSession? statusSession = null;
         Task<Result<LaidOutPage, RenderError>>? pendingStatusNav = null;
         LaidOutPage? statusPage = null;
         int statusLastLayoutVersion = -1;
+
+        // Which sidebar bookmark row the pointer is over (-1 = none), for hover.
+        int sidebarHover = -1;
 
         // Theme. Like the Avalonia shell, the selection lives in memory and starts
         // on Dark; the toolbar sun/moon button cycles Dark → Light → Contrast.
@@ -671,6 +704,16 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             mouse.MouseMove += (m, pos) =>
             {
+                // Sidebar bookmark hover — tracked even before the first page loads.
+                var newSidebarHover = pos.X >= SidebarRowXCss && pos.X <= SidebarRowXCss + SidebarRowWCss && pos.Y < logicalH
+                    ? SidebarBookmarkIndexAt(pos.Y)
+                    : -1;
+                if (newSidebarHover != sidebarHover)
+                {
+                    sidebarHover = newSidebarHover;
+                    needsPresent = true;
+                }
+
                 if (page is null) return;
 
                 // Pointer is over chrome. Use default cursor and skip page hover.
@@ -1230,18 +1273,35 @@ internal sealed class NativeBrowserWindow : IDisposable
             var statusDoc = page is not null ? $"{(int)page.DocumentHeight} px" : "—";
             var statusHist = $"{session.History.Index + 1}/{Math.Max(1, session.History.Count)}";
 
-            var sig = $"{shownUrl}|{urlFocusVisual}|{contentW}|{logicalH}|{activeBookmarkHost}|" +
-                      $"{session.History.CanGoBack}|{session.History.CanGoForward}|{loadingNav}|{devtoolsActive}|" +
-                      $"{themeMode}|{statusState}|{statusHint}|{statusView}|{statusDoc}|{statusHist}";
-            if (chromeBox is null || sig != chromeSig)
+            // Toolbar: depends on URL text/focus, nav state, width, theme.
+            var chromeSigNew = $"{shownUrl}|{urlFocusVisual}|{contentW}|" +
+                               $"{session.History.CanGoBack}|{session.History.CanGoForward}|{loadingNav}|" +
+                               $"{devtoolsActive}|{themeMode}";
+            if (chromeBox is null || chromeSigNew != chromeSig)
             {
                 chromeBox = BuildChrome(
                     contentW, theme, icons, shownUrl, urlFocusVisual,
                     session.History.CanGoBack,
                     session.History.CanGoForward, loadingNav, devtoolsActive, themeMode);
-                sidebarBox = BuildSidebar(logicalH, theme, activeBookmarkHost);
+                chromeSig = chromeSigNew;
+            }
+
+            // Sidebar: depends on height, active bookmark, hovered row, theme.
+            var sidebarSigNew = $"{logicalH}|{activeBookmarkHost}|{sidebarHover}|{themeMode}";
+            if (sidebarBox is null || sidebarSigNew != sidebarSig)
+            {
+                sidebarBox = BuildSidebar(
+                    logicalH, theme, icons, activeBookmarkHost, sidebarHover,
+                    SidebarFooterHtml(themeMode, theme));
+                sidebarSig = sidebarSigNew;
+            }
+
+            // Status bar: depends on width, state, hint, info cells, theme.
+            var statusSigNew = $"{contentW}|{statusState}|{statusHint}|{statusView}|{statusDoc}|{statusHist}|{themeMode}";
+            if (statusBox is null || statusSigNew != statusSig)
+            {
                 statusBox = BuildStatusBar(contentW, theme, statusState, statusHint, statusView, statusDoc, statusHist);
-                chromeSig = sig;
+                statusSig = statusSigNew;
             }
             var bottomChrome = statusPage?.Root ?? statusBox;
 

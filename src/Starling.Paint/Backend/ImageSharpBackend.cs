@@ -438,6 +438,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             case FillGradient grad:
                 FillGradient(canvas, grad);
                 break;
+            case FillBackgroundTextClip clip:
+                FillBackgroundTextClip(canvas, clip, scale, pendingImageSources);
+                break;
         }
     }
 
@@ -452,55 +455,177 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     {
         var bounds = item.Bounds;
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
-        var gradient = item.Gradient;
-        if (gradient.Stops.Count < 2) return;
+        var brush = BuildGradientBrush(item.Gradient, ToRectF(bounds));
+        if (brush is null) return;
+        canvas.Fill(brush, ToRectPath(bounds));
+    }
+
+    /// <summary>
+    /// Build the ImageSharp gradient brush for <paramref name="gradient"/> sized
+    /// to <paramref name="bounds"/> (CSS Images 3 §3). Returns null when the
+    /// gradient is degenerate (fewer than two stops, zero radius). Shared by the
+    /// plain <see cref="FillGradient"/> fill and the
+    /// <c>background-clip: text</c> path.
+    /// </summary>
+    private static Brush? BuildGradientBrush(CssGradient gradient, RectangleF bounds)
+    {
+        if (gradient.Stops.Count < 2) return null;
 
         var stops = ResolveColorStops(gradient, Math.Max(bounds.Width, bounds.Height));
-        if (stops.Length < 2) return;
+        if (stops.Length < 2) return null;
 
         var repetition = gradient.Repeating
             ? GradientRepetitionMode.Repeat
             : GradientRepetitionMode.None;
 
-        var x = (float)bounds.X;
-        var y = (float)bounds.Y;
-        var w = (float)bounds.Width;
-        var h = (float)bounds.Height;
-        var path = ToRectPath(bounds);
+        var x = bounds.X;
+        var y = bounds.Y;
+        var w = bounds.Width;
+        var h = bounds.Height;
 
-        Brush brush;
         if (gradient.Kind == CssGradientKind.Radial)
         {
             var pos = gradient.Position ?? CssGradientPosition.Center;
             var cx = x + (float)(pos.FractionX * w);
             var cy = y + (float)(pos.FractionY * h);
             var radius = RadialRadius(gradient, pos, w, h);
-            if (radius <= 0) return;
-            brush = new RadialGradientBrush(new PointF(cx, cy), radius, repetition, stops);
+            if (radius <= 0) return null;
+            return new RadialGradientBrush(new PointF(cx, cy), radius, repetition, stops);
+        }
+
+        // Linear: map the CSS gradient angle to two endpoints on the box.
+        // CSS measures angle clockwise from "to top" (0deg = up). The
+        // gradient line passes through the box center; endpoints sit where
+        // it meets the box edge, with the start offset so the full color
+        // range covers the projected box extent (CSS Images 3 §3.1).
+        var angleDeg = gradient.Line?.ToDegrees(w, h) ?? 180.0;
+        var rad = angleDeg * Math.PI / 180.0;
+        // Direction the gradient progresses (toward the end color).
+        var dx = Math.Sin(rad);
+        var dy = -Math.Cos(rad);
+        // Length of the projected gradient line: |w·sin| + |h·cos| keeps the
+        // 0%/100% stops anchored to the box corners for the cardinal cases.
+        var lineLen = Math.Abs(w * dx) + Math.Abs(h * dy);
+        var ccx = x + w / 2.0;
+        var ccy = y + h / 2.0;
+        var p0 = new PointF((float)(ccx - dx * lineLen / 2.0), (float)(ccy - dy * lineLen / 2.0));
+        var p1 = new PointF((float)(ccx + dx * lineLen / 2.0), (float)(ccy + dy * lineLen / 2.0));
+        return new LinearGradientBrush(p0, p1, repetition, stops);
+    }
+
+    /// <summary>
+    /// CSS Backgrounds 3 §3.8 — paint a box background clipped to its text
+    /// glyphs (<c>background-clip: text</c>). Renders the background (gradient or
+    /// solid color) into one offscreen layer and the element's glyphs (solid
+    /// white) into a second, then multiplies the background's alpha by the glyph
+    /// alpha so the background survives only inside the glyph shapes, and
+    /// composites the masked result onto the canvas. Follows the offscreen
+    /// pattern in <see cref="DrawTextShadow"/>.
+    /// </summary>
+    private void FillBackgroundTextClip(DrawingCanvas canvas, FillBackgroundTextClip clip, float scale, DisposableBag pendingImageSources)
+    {
+        var bounds = clip.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0 || clip.Glyphs.Count == 0) return;
+
+        // Render the offscreen layers at device resolution for crisp glyph
+        // edges; DrawImage blits them back through the canvas transform.
+        var px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+        var py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+        // Guard against pathological sizes that would allocate an enormous layer.
+        if ((long)px * py > 64L * 1024 * 1024) return;
+
+        var layerBounds = new RectangleF(0, 0, (float)bounds.Width, (float)bounds.Height);
+        Brush? fillBrush;
+        if (clip.Gradient is { } gradient)
+        {
+            fillBrush = BuildGradientBrush(gradient, layerBounds);
+            if (fillBrush is null && clip.Color.A > 0)
+                fillBrush = Brushes.Solid(ToColor(clip.Color));
         }
         else
         {
-            // Linear: map the CSS gradient angle to two endpoints on the box.
-            // CSS measures angle clockwise from "to top" (0deg = up). The
-            // gradient line passes through the box center; endpoints sit where
-            // it meets the box edge, with the start offset so the full color
-            // range covers the projected box extent (CSS Images 3 §3.1).
-            var angleDeg = gradient.Line?.ToDegrees(w, h) ?? 180.0;
-            var rad = angleDeg * Math.PI / 180.0;
-            // Direction the gradient progresses (toward the end color).
-            var dx = Math.Sin(rad);
-            var dy = -Math.Cos(rad);
-            // Length of the projected gradient line: |w·sin| + |h·cos| keeps the
-            // 0%/100% stops anchored to the box corners for the cardinal cases.
-            var lineLen = Math.Abs(w * dx) + Math.Abs(h * dy);
-            var ccx = x + w / 2.0;
-            var ccy = y + h / 2.0;
-            var p0 = new PointF((float)(ccx - dx * lineLen / 2.0), (float)(ccy - dy * lineLen / 2.0));
-            var p1 = new PointF((float)(ccx + dx * lineLen / 2.0), (float)(ccy + dy * lineLen / 2.0));
-            brush = new LinearGradientBrush(p0, p1, repetition, stops);
+            if (clip.Color.A == 0) return;
+            fillBrush = Brushes.Solid(ToColor(clip.Color));
         }
+        if (fillBrush is null) return;
 
-        canvas.Fill(brush, path);
+        var originX = (float)bounds.X;
+        var originY = (float)bounds.Y;
+        var scaleMatrix = Matrix4x4.CreateScale(scale, scale, 1f);
+
+        // Two offscreen layers, both at device resolution. The fill layer holds
+        // the background paint; the mask layer holds the glyphs rendered in
+        // solid white. We then multiply the fill's alpha by the mask's alpha so
+        // the background survives only inside the glyph shapes (an explicit
+        // per-pixel mask — more predictable than relying on a composition mode
+        // flowing through the DrawText path).
+        var fillLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        var maskLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(fillLayer);
+        pendingImageSources.Add(maskLayer);
+
+        fillLayer.Mutate(ctx => ctx.Paint(c =>
+        {
+            c.Save(new DrawingOptions { Transform = scaleMatrix });
+            c.Fill(fillBrush, new RectanglePolygon(layerBounds));
+            c.Restore();
+        }));
+
+        var glyphBrush = Brushes.Solid(Color.White);
+        maskLayer.Mutate(ctx => ctx.Paint(c =>
+        {
+            c.Save(new DrawingOptions { Transform = scaleMatrix });
+            foreach (var run in clip.Glyphs)
+            {
+                if (string.IsNullOrEmpty(run.Text)) continue;
+                var spec = new FontSpec(run.FontFamilies, run.Bold, run.Italic);
+                var size = (float)run.FontSize;
+                var probe = FirstCodepoint(run.Text);
+                var font = ResolveFont(spec, probe, size);
+                var glyphX = (float)(run.X - bounds.X);
+                var glyphY = (float)(run.Y - bounds.Y);
+                var textBlock = run.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size
+                    ? shaped.TextBlock
+                    : new TextBlock(run.Text, new TextOptions(font));
+                c.DrawText(textBlock, new PointF(glyphX, glyphY), -1, glyphBrush, null);
+            }
+            c.Restore();
+        }));
+
+        MultiplyAlphaByMask(fillLayer, maskLayer);
+
+        // Composite the masked layer at the box origin. DrawImage applies the
+        // canvas transform (which includes `scale`), so map the device-pixel
+        // layer back to the CSS-px box rectangle.
+        var destRect = new RectangleF(originX, originY, (float)bounds.Width, (float)bounds.Height);
+        canvas.DrawImage(fillLayer, new Rectangle(0, 0, px, py), destRect, _resampler);
+    }
+
+    /// <summary>
+    /// Multiply each pixel's alpha in <paramref name="target"/> by the alpha of
+    /// the matching pixel in <paramref name="mask"/> (both straight-alpha
+    /// Rgba32, identical dimensions). Used by <c>background-clip: text</c> to
+    /// keep the background paint only where a glyph was drawn.
+    /// </summary>
+    private static void MultiplyAlphaByMask(Image<Rgba32> target, Image<Rgba32> mask)
+    {
+        var height = Math.Min(target.Height, mask.Height);
+        target.ProcessPixelRows(mask, (targetAccessor, maskAccessor) =>
+        {
+            for (var y = 0; y < height; y++)
+            {
+                var targetRow = targetAccessor.GetRowSpan(y);
+                var maskRow = maskAccessor.GetRowSpan(y);
+                var width = Math.Min(targetRow.Length, maskRow.Length);
+                for (var x = 0; x < width; x++)
+                {
+                    // mask alpha 0..255 scales the fill alpha; (a*m + 127)/255
+                    // rounds to nearest.
+                    var a = (targetRow[x].A * maskRow[x].A + 127) / 255;
+                    targetRow[x].A = (byte)a;
+                }
+            }
+        });
     }
 
     /// <summary>
