@@ -31,7 +31,6 @@ public static class NumberCtor
             return JsValue.Number(n);
         }, isConstructor: true);
         DefineData(ctor, "prototype", JsValue.Object(proto), false, false, false);
-        DefineData(proto, "constructor", JsValue.Object(ctor), true, false, true);
 
         DefineConst(ctor, "EPSILON", Math.Pow(2, -52));
         DefineConst(ctor, "MAX_SAFE_INTEGER", MaxSafeInteger);
@@ -49,12 +48,21 @@ public static class NumberCtor
         IntrinsicHelpers.DefineMethod(realm, ctor, "parseFloat", 1, (_, args) => ParseFloat(args));
         IntrinsicHelpers.DefineMethod(realm, ctor, "parseInt", 2, (_, args) => ParseInt(args));
 
-        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 1, (thisV, args) => JsValue.String(NumberToString(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toFixed", 1, (thisV, args) => JsValue.String(ToFixed(ThisNumber(realm, thisV), ToDigits(args, 0), realm)));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toPrecision", 1, (thisV, args) => ToPrecision(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toExponential", 1, (thisV, args) => JsValue.String(ToExponential(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)));
-        IntrinsicHelpers.DefineMethod(realm, proto, "valueOf", 0, (thisV, _) => JsValue.Number(ThisNumber(realm, thisV)));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, _) => JsValue.String(JsValue.ToStringValue(JsValue.Number(ThisNumber(realm, thisV)))));
+        // Bulk-install constructor + the six prototype methods by adopting one
+        // precomputed shape. Same creation order as the prior sequential install
+        // (constructor was previously defined right after the prototype slot, then
+        // the methods), so getOwnPropertyNames order is unchanged and the result
+        // is byte-identical.
+        IntrinsicHelpers.BulkInstallBuiltins(realm, proto, new[]
+        {
+            new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
+            new IntrinsicHelpers.BulkMember("toString", 1, (thisV, args) => JsValue.String(NumberToString(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm))),
+            new IntrinsicHelpers.BulkMember("toFixed", 1, (thisV, args) => JsValue.String(ToFixed(ThisNumber(realm, thisV), ToDigits(args, 0), realm))),
+            new IntrinsicHelpers.BulkMember("toPrecision", 1, (thisV, args) => ToPrecision(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)),
+            new IntrinsicHelpers.BulkMember("toExponential", 1, (thisV, args) => JsValue.String(ToExponential(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm))),
+            new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, _) => JsValue.Number(ThisNumber(realm, thisV))),
+            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, _) => JsValue.String(JsValue.ToStringValue(JsValue.Number(ThisNumber(realm, thisV))))),
+        });
 
         realm.NumberConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Number", PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));
