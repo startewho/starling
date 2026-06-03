@@ -1569,6 +1569,13 @@ public sealed class StarlingEngine
                 continue;
             }
 
+            if (s.Session.HasPendingHostAsyncWork)
+            {
+                idle.Restart();
+                await Task.Delay(20, ct).ConfigureAwait(false);
+                continue;
+            }
+
             // Nothing pending in-process. Give off-thread fetch/XHR completions
             // a slot to enqueue resolve jobs; exit once the idle window elapses
             // with no new work observed.

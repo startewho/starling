@@ -176,6 +176,28 @@ public sealed class WindowDocumentTests
     }
 
     [TestMethod]
+    public void Node_base_uri_reflects_document_url()
+    {
+        var (runtime, _) = BuildEnv("https://example.com/app/index.html");
+        Eval(runtime, "result = document.baseURI;")
+            .AsString.Should().Be("https://example.com/app/index.html");
+        Eval(runtime, "result = document.body.baseURI;")
+            .AsString.Should().Be("https://example.com/app/index.html");
+    }
+
+    [TestMethod]
+    public void Node_base_uri_honors_first_base_href()
+    {
+        var (runtime, _) = BuildEnv("https://example.com/app/index.html");
+        Eval(runtime, """
+            var base = document.createElement('base');
+            base.setAttribute('href', './assets/');
+            document.body.appendChild(base);
+            result = document.baseURI;
+            """).AsString.Should().Be("https://example.com/app/assets/");
+    }
+
+    [TestMethod]
     public void Document_get_element_by_id_returns_wrapper()
     {
         var (runtime, doc) = BuildEnv();

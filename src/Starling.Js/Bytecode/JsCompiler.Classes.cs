@@ -22,22 +22,31 @@ public sealed partial class JsCompiler
 
     private void EmitClassDeclaration(ClassDeclaration cd)
     {
-        // §15.7 — ClassDeclaration introduces a `let` binding. For B1b-2a we
-        // emit a global write at the top level so static initializers and
-        // method bodies that read the class name resolve through LoadGlobal
-        // (which sees the post-BuildClass value) instead of through a
-        // snapshot-captured upvalue (which would see the pre-write value
-        // and force a TDZ workaround). Pin a follow-up to revisit when
-        // block-scoped classes are needed.
+        if (!IsGlobalLexicalScope && TryResolveLocal(cd.Name.Name, out var localSlot))
+        {
+            // Function/block class declarations are lexical. Keep their binding
+            // local so a nested IIFE class cannot resolve to a same-named outer
+            // function declaration.
+            EmitClassValue(
+                cd.Name,
+                cd.BaseClass,
+                cd.Body,
+                bindNameToGlobal: false,
+                selfNameSlotOverride: IsSlotCaptured(localSlot) ? localSlot : -1);
+            _b.Emit(Opcode.Dup);
+            EmitStoreLocalSlot(localSlot);
+            _b.Emit(Opcode.Pop);
+            return;
+        }
+
+        // §15.7 — script-top ClassDeclaration currently uses the global write
+        // path so static initializers and method bodies that read the class name
+        // resolve through LoadGlobal, preserving the existing class suite.
         // bindNameToGlobal: bind the name before static elements run so a
         // `static { … C … }` block or `static p = C.q` field sees the class.
         //
-        // TDZ note: block-scoped class-binding TDZ is deferred together with
-        // the script-top global-lexical TDZ work (see report). The class name
-        // is intentionally NOT lexically hoisted (HoistLexicalDeclarations
-        // skips class bindings when they would resolve here), so the global
-        // write path below remains the single source of truth and the many
-        // passing class tests don't regress.
+        // TDZ note: script-top global-lexical TDZ work is still deferred. The
+        // global write path below remains the single source of truth there.
         EmitClassValue(cd.Name, cd.BaseClass, cd.Body, bindNameToGlobal: true);
         _b.Emit(Opcode.Dup); // assignment is an expression — leave value on stack briefly
         // Declare the global binding first so the store is not rejected as an
@@ -55,7 +64,7 @@ public sealed partial class JsCompiler
     }
 
     private void EmitClassValue(Identifier? name, Expression? baseExpr, ClassBody body,
-        bool bindNameToGlobal = false)
+        bool bindNameToGlobal = false, int selfNameSlotOverride = -1)
     {
         // Evaluate the base class first (if any) so it's on the stack before
         // method upvalues.
@@ -77,14 +86,16 @@ public sealed partial class JsCompiler
         // At script top-level the captured-name set is empty (top-level names
         // are globals), so also bind when there is no parent compiler — the
         // class methods are nested functions that capture this script frame.
-        var selfNameSlot = -1;
-        if (!bindNameToGlobal && name is not null
+        var selfNameSlot = selfNameSlotOverride;
+        var pushedSelfNameScope = false;
+        if (selfNameSlot < 0 && !bindNameToGlobal && name is not null
             && (IsNameCaptured(name.Name) || _parent is null))
         {
             selfNameSlot = _b.ReserveLocal();
             _b.MarkCaptured(selfNameSlot);
             _b.EmitSlot(Opcode.InitCellLocal, selfNameSlot);
             PushScope();
+            pushedSelfNameScope = true;
             _scopes[^1][name.Name] = selfNameSlot;
             _lexicalScopes[^1].Add(name.Name);
         }
@@ -175,7 +186,7 @@ public sealed partial class JsCompiler
         finally
         {
             _privateScopes.Pop();
-            if (selfNameSlot >= 0) PopScope();
+            if (pushedSelfNameScope) PopScope();
         }
     }
 
@@ -264,6 +275,8 @@ public sealed partial class JsCompiler
             // EmitFunctionBody, so closures formed in the constructor body
             // capture a shared cell instead of a raw value.
             sub.PreallocateCapturedVarBindings(bodyBlock.Body);
+            sub.HoistVarDeclarations(bodyBlock.Body);
+            sub.HoistLexicalDeclarations(bodyBlock.Body); // TDZ
             sub.HoistFunctionDeclarations(bodyBlock.Body);
             // wp:M3-20 — class constructors are non-arrow functions; give them
             // an `arguments` object when the body reads it.
@@ -272,7 +285,6 @@ public sealed partial class JsCompiler
             // cell starts undefined and EmitSuperCall re-stores it once super()
             // binds `this` (StoreLexicalThisCell).
             sub.MaybeBindLexicalThis();
-            sub.HoistLexicalDeclarations(bodyBlock.Body); // TDZ
             foreach (var s in bodyBlock.Body) sub.EmitStatement(s);
         }
 
@@ -309,6 +321,8 @@ public sealed partial class JsCompiler
         // default region is an initializer context for the eval ContainsArguments rule.
         sub.BindFunctionParameters(md.Params, markInitializer: true);
         sub.PreallocateCapturedVarBindings(md.Body.Body);
+        sub.HoistVarDeclarations(md.Body.Body);
+        sub.HoistLexicalDeclarations(md.Body.Body); // TDZ
         sub.HoistFunctionDeclarations(md.Body.Body);
         // wp:M3-20 — methods/accessors are non-arrow functions; synthesize an
         // `arguments` object when the body reads it.
@@ -316,7 +330,6 @@ public sealed partial class JsCompiler
         // §10.2.1.1 — box `this` for a nested arrow that reads it (the common
         // `method(){ ... () => this.#x ... }` private-access case).
         sub.MaybeBindLexicalThis();
-        sub.HoistLexicalDeclarations(md.Body.Body); // TDZ
         // §10.2.1.3 — synchronous parameter-binding prologue boundary for
         // generator / async / async-generator methods; see EmitFunctionBody.
         sub.EmitPrologueEndIfSuspendable(md.Async, md.Generator);
@@ -478,10 +491,11 @@ public sealed partial class JsCompiler
         // plain function bodies.
         sub.RunCaptureAnalysisForFunction(Array.Empty<Expression>(), block.Body);
         sub.PreallocateCapturedVarBindings(block.Body);
+        sub.HoistVarDeclarations(block.Body);
+        sub.HoistLexicalDeclarations(block.Body); // TDZ
         sub.HoistFunctionDeclarations(block.Body);
         // §10.2.1.1 — box `this` (the constructor) for a nested arrow.
         sub.MaybeBindLexicalThis();
-        sub.HoistLexicalDeclarations(block.Body); // TDZ
         foreach (var s in block.Body) sub.EmitStatement(s);
         sub._b.Emit(Opcode.ReturnUndefined);
         // §16.1.7 — stamp in-scope private names for a direct eval in the block.

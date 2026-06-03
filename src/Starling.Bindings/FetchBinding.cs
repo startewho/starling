@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Starling.Dom;
 using Starling.Js.Intrinsics;
@@ -40,6 +41,8 @@ namespace Starling.Bindings;
 /// </remarks>
 public static class FetchBinding
 {
+    private static readonly ConditionalWeakTable<JsRuntime, PendingFetchCounter> PendingFetches = new();
+
     /// <summary>Install fetch + Headers + Request + Response + AbortController.
     /// Idempotent per realm.</summary>
     public static void Install(JsRuntime runtime, StarlingHttpClient client, Document document)
@@ -56,6 +59,12 @@ public static class FetchBinding
         InstallRequest(realm);
         InstallResponse(realm);
         InstallFetch(runtime, client, document);
+    }
+
+    public static bool HasPendingFetches(JsRuntime runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        return PendingFetches.TryGetValue(runtime, out var counter) && counter.Count > 0;
     }
 
     // =====================================================================
@@ -471,6 +480,9 @@ public static class FetchBinding
         {
             req.BodyUsed = true; // sending consumes the body
 
+            if (TryStartFileFetch(runtime, req, resolve, reject))
+                return;
+
             // Build wire request synchronously to surface URL errors as rejections.
             HttpRequest wire;
             try { wire = BuildWireRequest(realm, req); }
@@ -496,6 +508,7 @@ public static class FetchBinding
             }
 
             // Dispatch on the thread pool; settle via microtask queue.
+            var pending = TrackFetch(runtime);
             _ = Task.Run(async () =>
             {
                 try
@@ -543,9 +556,93 @@ public static class FetchBinding
                         AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
                     }));
                 }
+                finally
+                {
+                    pending.Dispose();
+                }
             });
         });
     }
+
+    private static bool TryStartFileFetch(JsRuntime runtime, RequestObject req, JsValue resolve, JsValue reject)
+    {
+        var realm = runtime.Realm;
+        if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) || uri.Scheme != "file")
+            return false;
+
+        if (!req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)
+            && !req.Method.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
+        {
+            realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+            {
+                var err = realm.NewTypeError($"Failed to fetch: file URL only supports GET or HEAD ({req.Method})");
+                AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
+            }));
+            return true;
+        }
+
+        var path = uri.LocalPath;
+        var pending = TrackFetch(runtime);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+                    {
+                        var err = realm.NewTypeError($"Failed to fetch: File not found: {path}");
+                        AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
+                    }));
+                    return;
+                }
+
+                var bytes = req.Method.Equals("HEAD", StringComparison.OrdinalIgnoreCase)
+                    ? Array.Empty<byte>()
+                    : await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+                realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+                {
+                    var headers = new HeadersObject(realm.HeadersPrototype);
+                    headers.Store.Set("content-type", GuessContentType(path));
+                    var response = new ResponseObject(
+                        realm.ResponsePrototype,
+                        200,
+                        "OK",
+                        headers,
+                        bytes,
+                        req.Url,
+                        redirected: false);
+                    AbstractOperations.Call(realm.ActiveVm, resolve, JsValue.Undefined,
+                        new[] { JsValue.Object(response) });
+                }));
+            }
+            catch (Exception ex)
+            {
+                realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+                {
+                    var err = realm.NewTypeError($"Failed to fetch: {ex.Message}");
+                    AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
+                }));
+            }
+            finally
+            {
+                pending.Dispose();
+            }
+        });
+        return true;
+    }
+
+    private static string GuessContentType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".css" => "text/css",
+        ".html" or ".htm" => "text/html",
+        ".js" or ".mjs" => "text/javascript",
+        ".json" => "application/json",
+        ".wasm" => "application/wasm",
+        ".br" => "application/octet-stream",
+        ".gz" => "application/octet-stream",
+        _ => "application/octet-stream",
+    };
 
     // =====================================================================
     // Building requests / responses
@@ -732,6 +829,33 @@ public static class FetchBinding
         err.DefineOwnProperty("message",
             PropertyDescriptor.Data(JsValue.String("The operation was aborted."), true, false, true));
         return JsValue.Object(err);
+    }
+
+    private static PendingFetchScope TrackFetch(JsRuntime runtime)
+    {
+        var counter = PendingFetches.GetValue(runtime, static _ => new PendingFetchCounter());
+        counter.Increment();
+        return new PendingFetchScope(counter);
+    }
+
+    private sealed class PendingFetchCounter
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Increment() => Interlocked.Increment(ref _count);
+
+        public void Decrement() => Interlocked.Decrement(ref _count);
+    }
+
+    private readonly struct PendingFetchScope : IDisposable
+    {
+        private readonly PendingFetchCounter _counter;
+
+        public PendingFetchScope(PendingFetchCounter counter) => _counter = counter;
+
+        public void Dispose() => _counter.Decrement();
     }
 }
 

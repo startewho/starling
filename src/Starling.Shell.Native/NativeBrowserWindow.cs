@@ -50,6 +50,7 @@ internal sealed class NativeBrowserWindow : IDisposable
     private const double SidebarRowGapCss = 1;
     private const double SidebarRowXCss = 10;
     private const double SidebarRowWCss = SidebarWidthCss - SidebarRowXCss * 2;
+    private const string DefaultBlazorIslandHttpUrl = "http://localhost:8088/blazor-status/";
     private const string SansFont = "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
     private const string MonoFont = "\"Geist Mono\", \"SFMono-Regular\", Menlo, Consolas, monospace";
 
@@ -171,11 +172,19 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     private readonly int _maxFrames;
     private readonly string? _startUrl;
+    private readonly string? _wasmIslandUrl;
+    private readonly string? _blazorIslandUrl;
 
-    public NativeBrowserWindow(int maxFrames = 0, string? startUrl = null)
+    public NativeBrowserWindow(
+        int maxFrames = 0,
+        string? startUrl = null,
+        string? wasmIslandUrl = null,
+        string? blazorIslandUrl = null)
     {
         _maxFrames = maxFrames;
         _startUrl = startUrl;
+        _wasmIslandUrl = wasmIslandUrl;
+        _blazorIslandUrl = blazorIslandUrl;
     }
 
     public void Dispose() { }
@@ -203,10 +212,16 @@ internal sealed class NativeBrowserWindow : IDisposable
         var startUrl = _startUrl is { Length: > 0 }
             ? UrlBarInputNormalizer.Normalize(_startUrl) ?? _startUrl
             : page1Url;
+        var wasmIslandUrl = _wasmIslandUrl is { Length: > 0 }
+            ? UrlBarInputNormalizer.Normalize(_wasmIslandUrl) ?? _wasmIslandUrl
+            : statusUrl;
+        var blazorIslandUrl = _blazorIslandUrl is { Length: > 0 }
+            ? UrlBarInputNormalizer.Normalize(_blazorIslandUrl) ?? _blazorIslandUrl
+            : DefaultBlazorIslandUrl();
 
         try
         {
-            return RunWindow(startUrl, statusUrl);
+            return RunWindow(startUrl, wasmIslandUrl, blazorIslandUrl);
         }
         finally
         {
@@ -220,6 +235,33 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     private static string EscapeHtml(string s) => s
         .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+
+    private static string DefaultBlazorIslandUrl()
+    {
+        var root = LocateRepoRoot();
+        if (root is not null)
+        {
+            var index = Path.Combine(root, "testdata", "sites", "blazor-status", "index.html");
+            if (File.Exists(index))
+                return "file://" + Path.GetFullPath(index).Replace('\\', '/');
+        }
+
+        return DefaultBlazorIslandHttpUrl;
+    }
+
+    private static string? LocateRepoRoot()
+    {
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            for (var dir = start; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+            {
+                if (File.Exists(Path.Combine(dir, "Starling.slnx")))
+                    return dir;
+            }
+        }
+
+        return null;
+    }
 
     private static float PageViewportWidth(float logicalW) =>
         Math.Max(1, logicalW - (float)SidebarWidthCss);
@@ -435,7 +477,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             var fg = active ? t.Text : t.Text2;
             var weight = active ? "500" : "400";
             sb.Append($"<div style=\"position:absolute;left:{SidebarRowXCss}px;top:{top}px;" +
-                      $"width:{SidebarRowWCss - 22}px;height:{SidebarRowHeightCss}px;border-radius:7px;" +
+                      $"width:{SidebarRowWCss}px;height:{SidebarRowHeightCss}px;border-radius:7px;" +
                       $"border:1px solid {border};background:{bg}{shadow};" +
                       "display:flex;align-items:center;padding:0 10px;overflow:hidden\">");
             sb.Append($"<div style=\"width:16px;height:16px;flex:none;margin-right:11px;" +
@@ -502,9 +544,35 @@ internal sealed class NativeBrowserWindow : IDisposable
                 new LayoutSize(contentW, StatusBarHeightCss));
     }
 
+    private static BlockBox BuildIslandFallbackBar(
+        float contentW,
+        NativeTheme t,
+        NativeStatusState state,
+        string label,
+        string hint)
+    {
+        var dot = state == NativeStatusState.Error ? t.Err : t.Warn;
+        var text = state == NativeStatusState.Error ? t.Err : t.Text2;
+        var sb = new StringBuilder();
+        sb.Append($"<body style=\"margin:0;padding:0;background:{t.Panel};width:{contentW}px;" +
+                  $"height:{StatusBarHeightCss}px;font-family:{SansFont};border-top:1px solid {t.Border}\">");
+        sb.Append($"<div style=\"height:{StatusBarHeightCss}px;display:flex;align-items:center;padding:0 14px;overflow:hidden\">");
+        sb.Append($"<div style=\"width:6px;height:6px;border-radius:3px;background:{dot};flex:none\"></div>");
+        sb.Append($"<span style=\"margin-left:8px;font-size:11.5px;font-weight:600;color:{text};white-space:nowrap\">" +
+                  $"{EscapeHtml(label)}</span>");
+        sb.Append($"<span style=\"margin-left:12px;flex:1;font-family:{MonoFont};font-size:11px;color:{text};" +
+                  "white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">" +
+                  $"{EscapeHtml(hint)}</span>");
+        sb.Append("</div></body>");
+
+        return new Starling.Layout.LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance)
+            .LayoutDocument(HtmlParser.Parse(sb.ToString()),
+                new LayoutSize(contentW, StatusBarHeightCss));
+    }
+
     // ── Window loop ──────────────────────────────────────────────────────────
 
-    private int RunWindow(string startUrl, string statusUrl)
+    private int RunWindow(string startUrl, string wasmIslandUrl, string blazorIslandUrl)
     {
         Silk.NET.Windowing.Glfw.GlfwWindowing.Use();
         Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
@@ -593,10 +661,22 @@ internal sealed class NativeBrowserWindow : IDisposable
         string chromeSig = "";
         string sidebarSig = "";
         string statusSig = "";
-        BrowserSession? statusSession = null;
-        Task<Result<LaidOutPage, RenderError>>? pendingStatusNav = null;
-        LaidOutPage? statusPage = null;
-        int statusLastLayoutVersion = -1;
+        BrowserSession? wasmIslandSession = null;
+        Task<Result<LaidOutPage, RenderError>>? pendingWasmIslandNav = null;
+        LaidOutPage? wasmIslandPage = null;
+        int wasmIslandLastLayoutVersion = -1;
+        string wasmIslandStatusHint = "Loading WASM island";
+        bool wasmIslandLoadError = false;
+        BlockBox? wasmIslandFallbackBox = null;
+        string wasmIslandFallbackSig = "";
+        BrowserSession? blazorIslandSession = null;
+        Task<Result<LaidOutPage, RenderError>>? pendingBlazorIslandNav = null;
+        LaidOutPage? blazorIslandPage = null;
+        int blazorIslandLastLayoutVersion = -1;
+        string blazorIslandStatusHint = "Loading Blazor WASM island";
+        bool blazorIslandLoadError = false;
+        BlockBox? blazorIslandFallbackBox = null;
+        string blazorIslandFallbackSig = "";
 
         // Which sidebar bookmark row the pointer is over (-1 = none), for hover.
         int sidebarHover = -1;
@@ -665,7 +745,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         // the page when the task completes. Page viewport is the window minus the
         // chrome strip at the top.
         var firstSession = new BrowserSession();
-        var options = new RenderOptions(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
+        var options = NavOpts();
         tabs.Add(new Tab(firstSession));
         activeIndex = 0;
         session = firstSession;
@@ -673,9 +753,13 @@ internal sealed class NativeBrowserWindow : IDisposable
         pendingNavTab = 0;
         Console.WriteLine($"browser: loading {startUrl} …");
 
-        statusSession = new BrowserSession();
-        pendingStatusNav = statusSession.NavigateInteractiveAsync(statusUrl, StatusOpts());
-        Console.WriteLine($"browser: loading status island {statusUrl} …");
+        wasmIslandSession = new BrowserSession();
+        pendingWasmIslandNav = wasmIslandSession.NavigateInteractiveAsync(wasmIslandUrl, IslandOpts());
+        Console.WriteLine($"browser: loading WASM island {wasmIslandUrl} …");
+
+        blazorIslandSession = new BrowserSession();
+        pendingBlazorIslandNav = blazorIslandSession.NavigateInteractiveAsync(blazorIslandUrl, IslandOpts());
+        Console.WriteLine($"browser: loading Blazor WASM island {blazorIslandUrl} …");
 
         // Push the accessibility tree to the OS after a (re)layout or navigation.
         void PushA11y()
@@ -791,7 +875,7 @@ internal sealed class NativeBrowserWindow : IDisposable
 
                 if (IsStatusBarPoint(pos.X, pos.Y))
                 {
-                    DispatchStatusClick(pos.X - SidebarWidthCss, pos.Y - (logicalH - StatusBarHeightCss));
+                    DispatchIslandClick(pos.X - SidebarWidthCss, pos.Y - (logicalH - StatusBarHeightCss));
                     return;
                 }
 
@@ -1173,8 +1257,12 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             // Apply a finished navigation (incl. the initial load) on the main thread.
             PollNav();
-            PollStatusNav();
-            PumpStatusIsland(clock.ElapsedMilliseconds);
+            PollIslandNav(wasmIslandSession, ref pendingWasmIslandNav, ref wasmIslandPage, ref wasmIslandLastLayoutVersion,
+                ref wasmIslandStatusHint, ref wasmIslandLoadError, "WASM island");
+            PollIslandNav(blazorIslandSession, ref pendingBlazorIslandNav, ref blazorIslandPage, ref blazorIslandLastLayoutVersion,
+                ref blazorIslandStatusHint, ref blazorIslandLoadError, "Blazor WASM island");
+            PumpIsland(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion);
+            PumpIsland(blazorIslandSession, ref blazorIslandPage, ref blazorIslandLastLayoutVersion);
 
             if (page is null) return;
 
@@ -1221,7 +1309,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                 logicalH = fb.Y / dpr;
                 lastFb = fb;
                 RefreshLayout();
-                RefreshStatusLayout();
+                RefreshIslandLayout(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion);
+                RefreshIslandLayout(blazorIslandSession, ref blazorIslandPage, ref blazorIslandLastLayoutVersion);
             }
 
             // Present every frame. The present is what keeps the on-screen surface
@@ -1303,7 +1392,30 @@ internal sealed class NativeBrowserWindow : IDisposable
                 statusBox = BuildStatusBar(contentW, theme, statusState, statusHint, statusView, statusDoc, statusHist);
                 statusSig = statusSigNew;
             }
-            var bottomChrome = statusPage?.Root ?? statusBox;
+            var islandW = BottomIslandWidth(logicalW);
+            BlockBox? bottomChrome = statusBox;
+            BlockBox? bottomChromeRight = null;
+            double bottomChromeLeftW = 0;
+            if (wasmIslandPage is not null || blazorIslandPage is not null)
+            {
+                bottomChrome = wasmIslandPage?.Root ?? IslandFallback(
+                    ref wasmIslandFallbackBox,
+                    ref wasmIslandFallbackSig,
+                    islandW,
+                    theme,
+                    "WASM island",
+                    wasmIslandStatusHint,
+                    wasmIslandLoadError);
+                bottomChromeRight = blazorIslandPage?.Root ?? IslandFallback(
+                    ref blazorIslandFallbackBox,
+                    ref blazorIslandFallbackSig,
+                    islandW,
+                    theme,
+                    "Blazor WASM island",
+                    blazorIslandStatusHint,
+                    blazorIslandLoadError);
+                bottomChromeLeftW = islandW;
+            }
 
             // While the first page loads, present the chrome over a "Loading…" page
             // so the window is live instead of gray.
@@ -1321,6 +1433,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                     LeftChromeWidthCss = SidebarWidthCss,
                     PageRoot = loadingBox,
                     BottomChromeRoot = bottomChrome,
+                    BottomChromeRightRoot = bottomChromeRight,
+                    BottomChromeLeftWidthCss = bottomChromeLeftW,
                     BottomChromeHeightCss = StatusBarHeightCss,
                 }, target);
                 var okLoad = loadFrame.Presented;
@@ -1352,6 +1466,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                     OverlayRoot = findActive ? findOverlay : (preedit.Length > 0 ? BuildPreeditOverlay() : null),
                     ScreenOverlayRoot = screenOverlay,
                     BottomChromeRoot = bottomChrome,
+                    BottomChromeRightRoot = bottomChromeRight,
+                    BottomChromeLeftWidthCss = bottomChromeLeftW,
                     BottomChromeHeightCss = StatusBarHeightCss,
                 }, target);
                 var ok = frame.Presented;
@@ -1378,8 +1494,10 @@ internal sealed class NativeBrowserWindow : IDisposable
         window.Run();
 
         SaveActive();
-        statusPage?.Dispose();
-        statusSession?.Dispose();
+        wasmIslandPage?.Dispose();
+        wasmIslandSession?.Dispose();
+        blazorIslandPage?.Dispose();
+        blazorIslandSession?.Dispose();
         foreach (var t in tabs) t.Dispose();
         Console.WriteLine(
             $"BROWSER OK: {presented} frames presented zero-copy ({failures} surface-reconfig frames)");
@@ -1389,7 +1507,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         void RefreshLayout()
         {
             if (page is null) return;
-            var reOpts = new RenderOptions(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
+            var reOpts = NavOpts();
             var successor = session.RelayoutCurrent(page, reOpts);
             page.Dispose();
             page = successor;
@@ -1404,72 +1522,150 @@ internal sealed class NativeBrowserWindow : IDisposable
         }
 
         // The page viewport is the window minus the sidebar and toolbar.
+        // FontSize is the document's root font size (1rem / the initial value for
+        // "medium"). The Avalonia host passes 16f — the standard browser default —
+        // so the page must too. Leaving it at the RenderOptions default (32f)
+        // rendered every page at 2× its real size ("viewport contents too big").
         RenderOptions NavOpts() =>
-            new(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)));
+            new(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)), FontSize: 16f);
 
-        RenderOptions StatusOpts() =>
-            new(new Size((int)PageViewportWidth(logicalW), (int)StatusBarHeightCss));
+        double BottomIslandWidth(double currentLogicalW) =>
+            Math.Max(1, PageViewportWidth((float)currentLogicalW) / 2);
+
+        RenderOptions IslandOpts() =>
+            new(new Size((int)BottomIslandWidth(logicalW), (int)StatusBarHeightCss));
 
         bool IsStatusBarPoint(double x, double y) =>
             x >= SidebarWidthCss && y >= logicalH - StatusBarHeightCss && y < logicalH;
 
-        void RefreshStatusLayout()
+        BlockBox IslandFallback(
+            ref BlockBox? fallbackBox,
+            ref string fallbackSig,
+            double width,
+            NativeTheme fallbackTheme,
+            string label,
+            string hint,
+            bool error)
         {
-            if (statusPage is null || statusSession is null) return;
-            var successor = statusSession.RelayoutCurrent(statusPage, StatusOpts());
-            statusPage.Dispose();
-            statusPage = successor;
-            statusLastLayoutVersion = statusPage.Document.LayoutInvalidationVersion;
+            var sig = $"{width}|{themeMode}|{label}|{hint}|{error}";
+            if (fallbackBox is null || sig != fallbackSig)
+            {
+                fallbackBox = BuildIslandFallbackBar(
+                    (float)width,
+                    fallbackTheme,
+                    error ? NativeStatusState.Error : NativeStatusState.Loading,
+                    label,
+                    hint);
+                fallbackSig = sig;
+            }
+
+            return fallbackBox;
+        }
+
+        void RefreshIslandLayout(
+            BrowserSession? islandSession,
+            ref LaidOutPage? islandPage,
+            ref int islandLastLayoutVersion)
+        {
+            if (islandPage is null || islandSession is null) return;
+            var successor = islandSession.RelayoutCurrent(islandPage, IslandOpts());
+            islandPage.Dispose();
+            islandPage = successor;
+            islandLastLayoutVersion = islandPage.Document.LayoutInvalidationVersion;
             needsPresent = true;
         }
 
-        void ApplyStatusNav(Result<LaidOutPage, RenderError> result)
+        void ApplyIslandNav(
+            BrowserSession? islandSession,
+            Result<LaidOutPage, RenderError> result,
+            ref LaidOutPage? islandPage,
+            ref int islandLastLayoutVersion,
+            ref string islandStatusHint,
+            ref bool islandLoadError,
+            string label)
         {
             if (result.IsErr)
             {
-                Console.Error.WriteLine($"browser: status island failed: {result.Error.Message}");
+                islandStatusHint = result.Error.Message;
+                islandLoadError = true;
+                Console.Error.WriteLine($"browser: {label} failed: {result.Error.Message}");
+                needsPresent = true;
                 return;
             }
 
-            statusPage?.Dispose();
-            statusPage = result.Value;
-            statusLastLayoutVersion = statusPage.Document.LayoutInvalidationVersion;
-            if (statusPage.Viewport.Width != StatusOpts().Viewport.Width)
-                RefreshStatusLayout();
+            islandPage?.Dispose();
+            islandPage = result.Value;
+            islandLastLayoutVersion = islandPage.Document.LayoutInvalidationVersion;
+            islandStatusHint = islandPage.Url ?? label;
+            islandLoadError = false;
+            if (islandPage.Viewport.Width != IslandOpts().Viewport.Width)
+                RefreshIslandLayout(islandSession, ref islandPage, ref islandLastLayoutVersion);
             needsPresent = true;
-            Console.WriteLine("browser: loaded status island");
+            Console.WriteLine($"browser: loaded {label}");
         }
 
-        void PollStatusNav()
+        void PollIslandNav(
+            BrowserSession? islandSession,
+            ref Task<Result<LaidOutPage, RenderError>>? pendingIslandNav,
+            ref LaidOutPage? islandPage,
+            ref int islandLastLayoutVersion,
+            ref string islandStatusHint,
+            ref bool islandLoadError,
+            string label)
         {
-            if (pendingStatusNav is not { IsCompleted: true }) return;
-            var task = pendingStatusNav;
-            pendingStatusNav = null;
+            if (pendingIslandNav is not { IsCompleted: true }) return;
+            var task = pendingIslandNav;
+            pendingIslandNav = null;
             try
             {
-                ApplyStatusNav(task.GetAwaiter().GetResult());
+                ApplyIslandNav(islandSession, task.GetAwaiter().GetResult(), ref islandPage, ref islandLastLayoutVersion,
+                    ref islandStatusHint, ref islandLoadError, label);
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"browser: status island failed: {ex.Message}");
+                islandStatusHint = ex.Message;
+                islandLoadError = true;
+                needsPresent = true;
+                Console.Error.WriteLine($"browser: {label} failed: {ex.Message}");
             }
         }
 
-        void PumpStatusIsland(long clockMs)
+        void PumpIsland(
+            BrowserSession? islandSession,
+            ref LaidOutPage? islandPage,
+            ref int islandLastLayoutVersion)
         {
-            if (statusPage is null) return;
-            statusPage.Document.DecayRecentMutations();
-            statusPage.Scripting?.PumpFrame(clockMs);
-            if (statusPage.Document.LayoutInvalidationVersion != statusLastLayoutVersion)
-                RefreshStatusLayout();
+            if (islandPage is null) return;
+            islandPage.Document.DecayRecentMutations();
+            islandPage.Scripting?.PumpFrame(clock.ElapsedMilliseconds);
+            if (islandPage.Document.LayoutInvalidationVersion != islandLastLayoutVersion)
+                RefreshIslandLayout(islandSession, ref islandPage, ref islandLastLayoutVersion);
         }
 
-        void DispatchStatusClick(double x, double y)
+        void DispatchIslandClick(double x, double y)
         {
-            if (statusPage?.Scripting is null) return;
-            var hit = BoxHitTester.HitTest(statusPage.Root, x, y, 0, 0, scrollOffsets: null);
+            var islandW = BottomIslandWidth(logicalW);
+            if (x < islandW)
+            {
+                DispatchIslandPageClick(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion, x, y);
+                return;
+            }
+
+            DispatchIslandPageClick(blazorIslandSession, ref blazorIslandPage, ref blazorIslandLastLayoutVersion,
+                x - islandW, y);
+        }
+
+        void DispatchIslandPageClick(
+            BrowserSession? islandSession,
+            ref LaidOutPage? islandPage,
+            ref int islandLastLayoutVersion,
+            double x,
+            double y)
+        {
+            if (islandPage?.Scripting is null) return;
+            var hit = BoxHitTester.HitTest(islandPage.Root, x, y, 0, 0, scrollOffsets: null);
             if (FindClickTarget(hit.Box) is not { } targetElement) return;
-            if (statusPage.Scripting.DispatchEvent(targetElement,
+            if (islandPage.Scripting.DispatchEvent(targetElement,
                 new MouseEvent("click", new EventInit(Bubbles: true, Cancelable: true))
                 {
                     ClientX = x,
@@ -1477,7 +1673,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     Button = 0,
                 }))
             {
-                RefreshStatusLayout();
+                RefreshIslandLayout(islandSession, ref islandPage, ref islandLastLayoutVersion);
             }
         }
 

@@ -79,6 +79,8 @@
          project + this line. -->
     <PackageVersion Include="Jint" Version="4.9.2" />
     <PackageVersion Include="DotWasm" Version="0.1.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.5" />
 
     <!-- Legacy single-byte / CJK encodings (pure-managed; Rule-0 clean).
          Consumed by Starling.Engine for WHATWG-table charset support. -->

@@ -771,6 +771,8 @@ internal static class CaptureAnalysis
             case LogicalExpression log: WalkExpressionInOuter(log.Left, captured); WalkExpressionInOuter(log.Right, captured); return;
             case UnaryExpression u: WalkExpressionInOuter(u.Argument, captured); return;
             case UpdateExpression up: WalkExpressionInOuter(up.Argument, captured); return;
+            case AwaitExpression aw: WalkExpressionInOuter(aw.Argument, captured); return;
+            case YieldExpression yld: WalkExpressionInOuter(yld.Argument, captured); return;
             case AssignmentExpression a: WalkExpressionInOuter(a.Target, captured); WalkExpressionInOuter(a.Value, captured); return;
             case AssignmentPattern a: WalkExpressionInOuter(a.Target, captured); WalkExpressionInOuter(a.Default, captured); return;
             case RestElement rest: WalkExpressionInOuter(rest.Argument, captured); return;
@@ -1158,6 +1160,8 @@ internal static class CaptureAnalysis
             case LogicalExpression log: InnerExpression(log.Left, scopes, outerCaptured); InnerExpression(log.Right, scopes, outerCaptured); return;
             case UnaryExpression u: InnerExpression(u.Argument, scopes, outerCaptured); return;
             case UpdateExpression up: InnerExpression(up.Argument, scopes, outerCaptured); return;
+            case AwaitExpression aw: InnerExpression(aw.Argument, scopes, outerCaptured); return;
+            case YieldExpression yld: InnerExpression(yld.Argument, scopes, outerCaptured); return;
             case AssignmentExpression a: InnerExpression(a.Target, scopes, outerCaptured); InnerExpression(a.Value, scopes, outerCaptured); return;
             case ConditionalExpression c:
                 InnerExpression(c.Test, scopes, outerCaptured);
