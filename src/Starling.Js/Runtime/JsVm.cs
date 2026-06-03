@@ -73,13 +73,6 @@ public sealed class JsVm
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
-    /// <summary>Per-opcode dispatch counts for this VM. Indexed by
-    /// <see cref="Opcode"/> byte value. Incremented once per dispatched
-    /// instruction inside <see cref="RunInner"/>; surfaced by the script
-    /// session's <c>js: execute</c> trace span so we can see which ops a slow
-    /// script burns time on without rebuilding the interpreter.</summary>
-    public readonly long[] OpcodeCounts = new long[256];
-
     /// <summary>The realm this VM dispatches against.</summary>
     public JsRealm Realm => _runtime.Realm;
 
@@ -642,7 +635,6 @@ public sealed class JsVm
             try
             {
                 var op = (Opcode)code[ip++];
-                OpcodeCounts[(byte)op]++;
                 switch (op)
                 {
                     case Opcode.Halt:

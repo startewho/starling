@@ -197,12 +197,10 @@ internal sealed class Compositor
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
         var ops = new List<LayerBlend>();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         var textureCache = new SurfaceTextureCache(presenter);
         CollectOps(root, ops, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
             textureCache: textureCache);
-        var tRaster = sw.ElapsedMilliseconds;
 
         // Overlays (caret, selection, find flash) blend on top of the page as
         // solid-colour quads. Appended last so they draw over every page layer.
@@ -214,9 +212,6 @@ internal sealed class Compositor
             throw new InvalidOperationException("GPU surface presenter did not present the frame.");
 
         EmitTileFrameMetrics();
-        if (sw.ElapsedMilliseconds > 100)
-            _diag.Log(DiagLevel.Info, "paint",
-                $"renderToSurface.cold: collectOps(raster)={tRaster}ms presentOps(gpu)={sw.ElapsedMilliseconds - tRaster}ms ops={ops.Count}");
         return presented;
     }
 
@@ -425,10 +420,6 @@ internal sealed class Compositor
 
                 var key = new TileKey(layer.LayerId, col, row, scale);
                 var opHash = TileOpHash(tileHash, col, row);
-                // TileGrid.TryGetTile already emits paint.tile.cache_hit/cache_miss;
-                // here we only tally per-frame for the miss-ratio + rasters-per-frame
-                // signals it doesn't produce (a Compositor is one frame, so these
-                // instance fields are this frame's totals).
                 var tileLocalToDevice = pageToDevice.Multiply(effectiveTransform)
                     .Multiply(Matrix2D.Translate(tilePageX, tilePageY).Multiply(Matrix2D.Scale(1d / s, 1d / s)));
 
@@ -475,7 +466,6 @@ internal sealed class Compositor
         if (_tileGrid.TryGetResidentTile(key, tileHash, out var resident)
             && textureCache.HasResidentTexture(opHash, resident.Width, resident.Height))
         {
-            _diag.Counter(RenderMetrics.TileCacheHit, 1);
             _frameTileHits++;
             ops.Add(LayerBlend.ResidentTexture(
                 resident.Width,
@@ -487,7 +477,6 @@ internal sealed class Compositor
             return;
         }
 
-        _diag.Counter(RenderMetrics.TileCacheMiss, 1);
         _frameTileMisses++;
         if (_backend is not IGpuTexturePaintBackend gpuBackend)
         {

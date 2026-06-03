@@ -21,12 +21,10 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        // Wire OpenTelemetry before we do anything observable. When launched by Aspire
-        // (`dotnet run --project src/Starling.AppHost`), OTEL_EXPORTER_OTLP_ENDPOINT
-        // is set and traces/metrics/logs flow to the Aspire dashboard. When
-        // run directly, the providers are still wired but the exporter is a
-        // no-op. We tee the OpenTelemetry-backed IDiagnostics with ConsoleDiagnostics
-        // so plain `dotnet run` still emits stderr trace lines.
+        // Wire OpenTelemetry before we do anything observable. When launched by
+        // Aspire, OTEL_EXPORTER_OTLP_ENDPOINT is set and traces/metrics/logs
+        // flow to the dashboard. Direct runs keep console diagnostics only
+        // unless trace output or MCP telemetry is enabled.
         //
         // When STARLING_HEADLESS_MCP_URL is set we also build the in-memory
         // ring-buffer sinks so the MCP server can hand
@@ -43,10 +41,12 @@ internal static class Program
         // on stderr. This is useful for backend perf comparisons without
         // spinning up an OpenTelemetry collector. Default stays Info to keep
         // normal CLI runs quiet.
-        var traceConsole = Environment.GetEnvironmentVariable("STARLING_DIAG_TRACE") == "1";
-        s_diagnostics = new CompositeDiagnostics(
-            new ConsoleDiagnostics { MinLevel = traceConsole ? DiagLevel.Trace : DiagLevel.Info },
-            telemetry.Diagnostics);
+        var traceConsole = DiagnosticsMode.TraceConsole;
+        var consoleDiagnostics = new ConsoleDiagnostics { MinLevel = traceConsole ? DiagLevel.Trace : DiagLevel.Info };
+        var hasOtlp = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+        s_diagnostics = hasOtlp || withInMemorySinks
+            ? new CompositeDiagnostics(consoleDiagnostics, telemetry.Diagnostics)
+            : consoleDiagnostics;
 
         var mcp = mcpUrl is not null && telemetry.TelemetryStream is not null
             ? StartMcpServer(mcpUrl, telemetry.TelemetryStream)

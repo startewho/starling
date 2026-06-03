@@ -75,6 +75,7 @@ public sealed class ConsoleDiagnostics : IDiagnostics
 
     public IDisposable Span(string area, string operation)
     {
+        if (DiagLevel.Trace < MinLevel) return DiagnosticScope.Noop;
         Log(DiagLevel.Trace, area, $"+ {operation}");
         return new TraceSpan(this, area, operation);
     }

@@ -73,6 +73,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // full layer-tree present per overlay change. Without it a single relayout tick
     // fired ~4 redundant full presents (one per Clear*/RenderCaret) of the same frame.
     private bool _suppressPresent;
+
+    // Counts the overlay-driven presents RefreshOverlays decides to fire (i.e. those
+    // not coalesced away by _suppressPresent). It increments even on the readback
+    // path, where the present itself is a no-op, so a headless test can assert that a
+    // drag-select move coalesces its clear + rebuild into ONE present, not two.
+    private int _overlayPresentRequests;
     private readonly TextBlock _placeholder;
     private readonly Border _placeholderHost;
 
@@ -152,20 +158,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Func<LaidOutPage, bool>? _hasActiveAnimations;
     private long _animClockMs;
     private bool _animating;
-
-    // Frame-rate tracking. Every presented frame bumps the monotonic
-    // "gui.frames.presented" counter (its rate in the Aspire dashboard is the
-    // live FPS), and once a second we log the computed FPS so it can be queried
-    // from structured logs. The clock is independent of _liveStopwatch, which
-    // restarts whenever a new JS context binds. After an idle gap (the live
-    // timer stops when nothing animates) the window resets so the first frame
-    // back does not report a misleadingly low average.
-    private readonly Stopwatch _frameClock = Stopwatch.StartNew();
-    private long _fpsWindowStartMs;
-    private long _fpsLastFrameMs;
-    private int _fpsFrames;
-    private const long FpsWindowMs = 1000;
-    private const long FpsIdleResetMs = 250;
 
     public WebviewPanel(
         ThemeManager tm,
@@ -464,8 +456,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 _scroll.Offset = new Vector(0, 0);
             }
 
-            using (_diag.Span("gui", "show_page.hit_index"))
-                _fragments = BoxHitTester.CollectFragments(page.Root);
+            _fragments = BoxHitTester.CollectFragments(page.Root);
             RebuildFindIndex();
 
             // Re-establish (or drop) the text caret against the new box tree. The
@@ -633,7 +624,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // Resize call is required. The scroll lookup threads per-container
             // (overflow:scroll) offsets into the layer tree so inner-scrolled pages
             // present on the zero-copy surface instead of dropping to readback.
-            using (_diag.Span("gui", "render"))
             using (var frame = _renderSession.Render(new PageFrameRequest
                    {
                        Root = _currentPage.Root,
@@ -655,11 +645,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             throw;
         }
 
-        if (ok)
-        {
-            RecordPresentedFrame();
-        }
-        else
+        if (!ok)
         {
             throw new InvalidOperationException("GPU surface did not present the frame.");
         }
@@ -708,7 +694,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// </summary>
     private void RefreshOverlays()
     {
-        if (_useSurface && _currentPage is not null && !_suppressPresent)
+        // Suppressed (a ShowPage / UpdateSelection batch is coalescing) or no page:
+        // do nothing, and do NOT count it — the single end-of-batch present is what
+        // reaches the screen. Otherwise this overlay change wants its own present;
+        // count it (surface or readback) so tests can verify the coalescing, then
+        // present on the surface path. The readback present is a no-op (the Avalonia
+        // overlay controls composite themselves over the bitmap).
+        if (_currentPage is null || _suppressPresent) return;
+        _overlayPresentRequests++;
+        if (_useSurface)
             RenderViewportRegion();
     }
 
@@ -1505,21 +1499,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         page.Document.DecayRecentMutations();
 
         using var detachedActivity = GuiActivityScope.Detached();
-        // One span per frame, with sub-spans for each phase (pump / relayout /
-        // prepare_anim / render) so a trace shows where a laggy animation frame
-        // spends its time. The inner "gui.render" span lives in RenderPageBitmap.
-        using var _tick = _diag.Span("gui", "live.tick");
-        // End-to-end frame time for the daemon's frame report (overrun rate, p99,
-        // fps). Emitted on the normal completion path below.
-        var frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
         var scripting = page.Scripting;
         if (scripting is not null)
         {
             try
             {
-                using (_diag.Span("gui", "live.pump"))
-                    scripting.PumpFrame(_liveStopwatch.ElapsedMilliseconds);
+                scripting.PumpFrame(_liveStopwatch.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
@@ -1566,8 +1552,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (animating)
         {
             _animClockMs = _liveStopwatch.ElapsedMilliseconds;
-            using (_diag.Span("gui", "live.prepare_anim"))
-                _prepareAnimationFrame!(page, _animClockMs);
+            _prepareAnimationFrame!(page, _animClockMs);
             _animating = true;
             // Re-sample the hovered scope at the advanced clock so a hover
             // transition (e.g. a tile easing on :hover) progresses. Elements that
@@ -1596,21 +1581,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _liveTimer.Stop();
             _boundScripting = null;
         }
-
-        EmitFrameTime(frameStart);
-    }
-
-    // Records this frame's end-to-end time as gui.frame.time_ms and bumps the
-    // budget-overrun counter when it blew the 60fps budget. The telemetry daemon
-    // turns these into the frame-time distribution + overrun rate and correlates
-    // the spikes with the sampled CPU/RAM.
-    private const double FrameBudgetMs = 1000.0 / 60; // 16.667ms — the actual 60fps budget
-
-    private void EmitFrameTime(long startTimestamp)
-    {
-        var ms = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
-        _diag.Gauge(RenderMetrics.FrameTimeMs, ms);
-        if (ms > FrameBudgetMs) _diag.Counter(RenderMetrics.FrameBudgetOverrun, 1);
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,
@@ -1618,9 +1588,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private void RefreshLiveLayout(bool deferRender = false)
     {
         if (_currentPage is null || _relayout is null) return;
-        LaidOutPage? relaid;
-        using (_diag.Span("gui", "live.relayout"))
-            relaid = _relayout(_currentPage, CurrentViewportSize());
+        var relaid = _relayout(_currentPage, CurrentViewportSize());
         if (relaid is not null) ShowPage(relaid, preserveScroll: true, deferRender: deferRender);
     }
 
@@ -2743,6 +2711,35 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// <summary>Test hook: number of elements in the current hover override set.</summary>
     internal int HoverOverrideCountForTest => _hoverOverrides?.Count ?? 0;
 
+    /// <summary>Test hook: running count of overlay presents RefreshOverlays has
+    /// decided to fire. A drag-select move must bump this by exactly one — its clear
+    /// and rebuild coalesce into a single present. Two would be the flash regression.</summary>
+    internal int OverlayPresentRequestsForTest => _overlayPresentRequests;
+
+    /// <summary>Test hook: number of selection-highlight rects currently drawn.</summary>
+    internal int SelectionOverlayCountForTest => _selectionOverlays.Count;
+
+    /// <summary>Test hook: run a drag-select from <paramref name="anchor"/> to
+    /// <paramref name="cursor"/> (document space), exactly as a pointer drag would,
+    /// so a test can assert the present count and the resulting highlight.</summary>
+    internal void DragSelectForTest((double X, double Y) anchor, (double X, double Y) cursor)
+        => UpdateSelection(anchor, cursor);
+
+    /// <summary>Test hook: document-space anchor/cursor that span the first through
+    /// last placed text fragment, so a test can drive a full-text drag-select without
+    /// re-deriving glyph geometry. Null when the page has no text fragments.</summary>
+    internal ((double X, double Y) Anchor, (double X, double Y) Cursor)? FullTextSelectionSpanForTest
+    {
+        get
+        {
+            if (_fragments.Count == 0) return null;
+            var first = _fragments[0];
+            var last = _fragments[^1];
+            return ((first.X + 0.5, first.Y + (first.Height / 2)),
+                    (last.X + last.Width - 0.5, last.Y + (last.Height / 2)));
+        }
+    }
+
     /// <summary>Test hook: drive the CSS <c>:hover</c> re-cascade for
     /// <paramref name="el"/> directly (no hit-test), exactly as a real pointer move
     /// onto it would — so a test can assert which elements the hover overrides.</summary>
@@ -2915,38 +2912,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     //     RecordPresentedFrame();
     // }
 
-    /// <summary>Counts a frame that just reached the screen and, once per second,
-    /// emits the live frame rate as a metric and a structured log line. The log
-    /// line is what surfaces in the Aspire structured-logs query; the
-    /// "gui.frames.presented" counter graphs as a rate in the dashboard.</summary>
-    private void RecordPresentedFrame()
-    {
-        var now = _frameClock.ElapsedMilliseconds;
-        _diag.Counter("gui.frames.presented", 1);
-
-        // A gap larger than a couple of frames means the loop went idle (no
-        // animation / no script). Restart the averaging window so the resumed
-        // frame is not divided by the idle seconds.
-        if (now - _fpsLastFrameMs > FpsIdleResetMs)
-        {
-            _fpsWindowStartMs = now;
-            _fpsFrames = 0;
-        }
-
-        _fpsLastFrameMs = now;
-        _fpsFrames++;
-
-        var elapsed = now - _fpsWindowStartMs;
-        if (elapsed >= FpsWindowMs)
-        {
-            var fps = _fpsFrames * 1000.0 / elapsed;
-            _diag.Gauge("gui.fps", fps);
-            _diag.Log(DiagLevel.Info, "gui", $"fps {fps:F1} ({_fpsFrames} frames / {elapsed} ms)");
-            _fpsWindowStartMs = now;
-            _fpsFrames = 0;
-        }
-    }
-
     /// <summary>
     /// Maps a paint-time box back to its hover override. Boxes with their own
     /// <see cref="LayoutBox.Element"/> match directly; anonymous text boxes
@@ -3025,29 +2990,47 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     private void UpdateSelection((double X, double Y) anchor, (double X, double Y) cursor)
     {
-        ClearSelectionOverlays();
-        if (_fragments.Count == 0) return;
-
-        var anchorCaret = SelectionModel.CaretFromPoint(_fragments, anchor.X, anchor.Y);
-        var cursorCaret = SelectionModel.CaretFromPoint(_fragments, cursor.X, cursor.Y);
-        var range = SelectionModel.Order(anchorCaret, cursorCaret);
-        if (range.IsEmpty)
+        // Coalesce the clear + rebuild into ONE surface present. On the GPU surface
+        // path every RefreshOverlays is an immediate, synchronous swapchain present.
+        // ClearSelectionOverlays empties the highlight list and presents, so without
+        // suppression each pointer-move of a drag would publish a selection-ABSENT
+        // frame (the cleared state) immediately followed by the rebuilt selection
+        // frame — a visible flash on every move. Suppress the inner presents (the same
+        // mechanism ShowPage uses) and present exactly once in the finally, so every
+        // exit path — including the early returns that leave the selection cleared —
+        // shows the final state in a single frame.
+        var prevSuppressPresent = _suppressPresent;
+        _suppressPresent = true;
+        try
         {
-            _selectionText = string.Empty;
-            return;
-        }
+            ClearSelectionOverlays();
+            if (_fragments.Count == 0) return;
 
-        var brush = new SolidColorBrush(AvColor.FromArgb(96, 80, 140, 255));
-        foreach (var r in SelectionModel.RectsFor(_fragments, range))
+            var anchorCaret = SelectionModel.CaretFromPoint(_fragments, anchor.X, anchor.Y);
+            var cursorCaret = SelectionModel.CaretFromPoint(_fragments, cursor.X, cursor.Y);
+            var range = SelectionModel.Order(anchorCaret, cursorCaret);
+            if (range.IsEmpty)
+            {
+                _selectionText = string.Empty;
+                return;
+            }
+
+            var brush = new SolidColorBrush(AvColor.FromArgb(96, 80, 140, 255));
+            foreach (var r in SelectionModel.RectsFor(_fragments, range))
+            {
+                var overlay = MakeOverlay(brush, r.X, r.Y, r.Width, r.Height);
+                _pageCanvas.Children.Add(overlay);
+                _selectionOverlays.Add(overlay);
+            }
+
+            _selectionText = SelectionModel.TextFor(_fragments, range);
+            _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
+        }
+        finally
         {
-            var overlay = MakeOverlay(brush, r.X, r.Y, r.Width, r.Height);
-            _pageCanvas.Children.Add(overlay);
-            _selectionOverlays.Add(overlay);
+            _suppressPresent = prevSuppressPresent;
+            RefreshOverlays();
         }
-
-        _selectionText = SelectionModel.TextFor(_fragments, range);
-        _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
-        RefreshOverlays();
     }
 
     private void ClearSelection()

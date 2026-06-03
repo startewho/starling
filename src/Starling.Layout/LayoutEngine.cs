@@ -127,15 +127,6 @@ public sealed class LayoutEngine
             positioning.LayoutPositioned(root);
         }
 
-        Activity.Current?.SetTag("layout.boxes", CountBoxes(root));
         return root;
-    }
-
-    private static int CountBoxes(Box.Box box)
-    {
-        var n = 1;
-        foreach (var child in box.Children)
-            n += CountBoxes(child);
-        return n;
     }
 }
