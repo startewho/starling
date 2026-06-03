@@ -1262,13 +1262,49 @@ public sealed class JsVm
                     case Opcode.StoreProperty:
                         {
                             var idx = ReadU16();
-                            _ = ReadU16(); // cache id — reserved for the write IC (Step 3)
+                            var cacheId = ReadU16();
                             var name = (string)constants[idx]!;
                             var value = Pop();
                             var obj = Pop();
                             if (obj.IsObject)
                             {
-                                var ok = AbstractOperations.Set(this, obj.AsObject, name, value);
+                                var o = obj.AsObject;
+                                var sh = o.Shape;
+                                if (cacheId != 0xFFFF && sh is not null && o.SupportsInlineCache)
+                                {
+                                    var ic = chunk.Caches[cacheId];
+                                    // Hit: write to an existing own writable data slot.
+                                    // Safe regardless of the prototype chain — an own
+                                    // writable data property shadows any inherited
+                                    // setter/data, so OrdinarySet writes it directly.
+                                    // (Adds that create a new own property are deferred
+                                    // to Step 4, where prototype-shape validation guards
+                                    // against an inherited setter on a same-shape object.)
+                                    if (ReferenceEquals(sh, ic.Shape))
+                                    {
+                                        o.WriteSlot(ic.Slot, value);
+                                        Push(value);
+                                        break;
+                                    }
+                                    // Miss: run the spec [[Set]], then cache only when it
+                                    // wrote an EXISTING own writable data slot (no shape
+                                    // transition).
+                                    var okIc = AbstractOperations.Set(this, o, name, value);
+                                    if (!okIc)
+                                    {
+                                        if (frameStrict)
+                                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                                "Cannot assign to read-only property '" + name + "'"));
+                                    }
+                                    else if (ReferenceEquals(o.Shape, sh)
+                                        && sh.TryGet(name, out var p) && p.Writable)
+                                    {
+                                        chunk.Caches[cacheId] = new InlineCache { Shape = sh, Slot = p.Slot, NextShape = null };
+                                    }
+                                    Push(value);
+                                    break;
+                                }
+                                var ok = AbstractOperations.Set(this, o, name, value);
                                 // §10.1.9 / §13.15.2 — a strict assignment the [[Set]]
                                 // rejects (non-writable data prop, accessor without a
                                 // setter, or add to a non-extensible object) throws.
