@@ -26,5 +26,5 @@ public static class HtmlParser
     /// </param>
     public static Document Parse(string html, IDiagnostics? diagnostics = null,
         bool scriptingEnabled = false)
-        => HtmlTreeBuilder.Parse(html, diagnostics, scriptingEnabled);
+        => HtmlParsing.Backend.Parse(html, diagnostics, scriptingEnabled);
 }
