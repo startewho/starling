@@ -5,33 +5,66 @@ namespace Starling.Js.Runtime;
 /// chain. Subclasses override behavior for arrays, functions, proxies, etc.
 /// </summary>
 /// <remarks>
-/// String and Symbol property keys live in separate namespaces per ECMA-262
-/// §6.1.7. Indexed-integer fast paths land with <c>JsArray</c>'s dense storage
-/// subclass.
+/// <para>String and Symbol property keys live in separate namespaces per
+/// ECMA-262 §6.1.7. Indexed-integer fast paths land with <c>JsArray</c>'s dense
+/// storage subclass.</para>
+/// <para><b>Storage modes.</b> String-keyed properties use one of two backings.
+/// In <em>fast mode</em> (the default for a fresh object) the object carries a
+/// shared <see cref="Shape"/> describing its data properties plus a flat
+/// <c>_slots</c> array holding their values — this is what inline caches read.
+/// The object falls to <em>dictionary mode</em> (<c>_shape == null</c>, using
+/// the legacy <c>_properties</c> dictionary) the moment it does something a
+/// shape cannot model exactly: defining an accessor, deleting a property,
+/// redefining attributes, or becoming non-extensible. Dictionary mode runs the
+/// original validator/ordering code unchanged, so every observable matches the
+/// pre-shape engine. Symbol-keyed properties always use a dictionary.</para>
 /// </remarks>
 public class JsObject
 {
-    private readonly Dictionary<string, PropertyDescriptor> _properties =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<JsSymbol, PropertyDescriptor> _symbolProperties =
-        new();
+    // ----- String-keyed storage -----
+    // Fast mode: _shape != null, values in _slots. Dictionary mode: _shape ==
+    // null, descriptors in _properties (+ _stringKeyOrder for creation order).
+    private Shape? _shape = Shape.Root;
+    private JsValue[] _slots = System.Array.Empty<JsValue>();
 
-    /// <summary>String own-key creation order. The <see cref="Dictionary{TKey,TValue}"/>
-    /// backing does NOT preserve chronological order across delete+reinsert (a
-    /// removed slot is recycled by the next add), but §10.1.11.1 requires
-    /// "ascending chronological order of property creation". We keep this
-    /// authoritative ordered list in lockstep with <see cref="_properties"/> via
-    /// <see cref="PutString"/> / <see cref="RemoveString"/> so a re-added key
-    /// lands at the end. Used for the non-array-index string bucket.</summary>
-    private readonly List<string> _stringKeyOrder = new();
+    private Dictionary<string, PropertyDescriptor>? _properties;
 
-    /// <summary>Insert or update a string-keyed descriptor, maintaining
-    /// <see cref="_stringKeyOrder"/>. A brand-new key is appended (correct
-    /// creation order even after a prior delete); an existing key keeps its
-    /// position.</summary>
+    /// <summary>String own-key creation order for dictionary mode. The
+    /// <see cref="Dictionary{TKey,TValue}"/> backing does NOT preserve
+    /// chronological order across delete+reinsert (a removed slot is recycled by
+    /// the next add), but §10.1.11.1 requires "ascending chronological order of
+    /// property creation". We keep this authoritative ordered list in lockstep
+    /// with <see cref="_properties"/> via <see cref="PutString"/> /
+    /// <see cref="RemoveString"/> so a re-added key lands at the end. In fast
+    /// mode the <see cref="Shape"/>'s transition chain supplies creation order
+    /// instead.</summary>
+    private List<string>? _stringKeyOrder;
+
+    // ----- Symbol-keyed storage (always a dictionary; lazily allocated) -----
+    private Dictionary<JsSymbol, PropertyDescriptor>? _symbolProperties;
+
+    /// <summary>The object's fast-mode hidden class, or <c>null</c> in
+    /// dictionary mode. Read by the inline cache to validate a cached slot.</summary>
+    internal Shape? Shape => _shape;
+
+    /// <summary>Read a fast-mode data slot by index. The caller (inline cache)
+    /// must have validated <see cref="Shape"/> identity first.</summary>
+    internal JsValue ReadSlot(int slot) => _slots[slot];
+
+    /// <summary>True iff this exact type stores its string data properties in
+    /// the shape/slots backing, so the inline cache may read a slot directly.
+    /// Exotic subclasses that override property access (arrays, proxies, string
+    /// objects, mapped arguments, typed arrays, module namespaces) set this
+    /// false so the cache always takes their slow path.</summary>
+    internal virtual bool SupportsInlineCache => true;
+
+    /// <summary>Insert or update a string-keyed descriptor in dictionary mode,
+    /// maintaining <see cref="_stringKeyOrder"/>. A brand-new key is appended
+    /// (correct creation order even after a prior delete); an existing key keeps
+    /// its position.</summary>
     private void PutString(string name, PropertyDescriptor desc)
     {
-        if (!_properties.ContainsKey(name)) _stringKeyOrder.Add(name);
+        if (!_properties!.ContainsKey(name)) _stringKeyOrder!.Add(name);
         _properties[name] = desc;
     }
 
@@ -39,9 +72,57 @@ public class JsObject
     /// <see cref="_stringKeyOrder"/> in sync.</summary>
     private bool RemoveString(string name)
     {
-        if (!_properties.Remove(name)) return false;
-        _stringKeyOrder.Remove(name);
+        if (!_properties!.Remove(name)) return false;
+        _stringKeyOrder!.Remove(name);
         return true;
+    }
+
+    /// <summary>Attribute flags (Shape.Writable/Enumerable/Configurable) for a
+    /// data descriptor.</summary>
+    private static byte DataFlags(in PropertyDescriptor desc)
+    {
+        byte f = 0;
+        if (desc.Writable) f |= Shape.Writable;
+        if (desc.Enumerable) f |= Shape.Enumerable;
+        if (desc.Configurable) f |= Shape.Configurable;
+        return f;
+    }
+
+    /// <summary>Append a new string data property in fast mode: transition to
+    /// the child shape and store the value in its slot.</summary>
+    private void AddFastProperty(string name, JsValue value, byte flags)
+    {
+        var next = _shape!.Transition(name, flags);
+        if (_slots.Length < next.SlotCount)
+        {
+            var cap = _slots.Length == 0 ? 4 : _slots.Length * 2;
+            if (cap < next.SlotCount) cap = next.SlotCount;
+            System.Array.Resize(ref _slots, cap);
+        }
+        _slots[next.AddedSlot] = value;
+        _shape = next;
+    }
+
+    /// <summary>Collapse fast-mode shape/slots into the dictionary backing. Used
+    /// before any operation a shape cannot model (accessor, delete, attribute
+    /// redefinition, non-extensible churn). Idempotent.</summary>
+    private void MigrateToDictionary()
+    {
+        if (_shape is null) return;
+        var shape = _shape;
+        var keys = shape.OrderedKeys();
+        var props = new Dictionary<string, PropertyDescriptor>(keys.Count, StringComparer.Ordinal);
+        var order = new List<string>(keys.Count);
+        foreach (var key in keys) // creation (slot) order
+        {
+            shape.TryGet(key, out var p);
+            props[key] = PropertyDescriptor.Data(_slots[p.Slot], p.Writable, p.Enumerable, p.Configurable);
+            order.Add(key);
+        }
+        _properties = props;
+        _stringKeyOrder = order;
+        _shape = null;
+        _slots = System.Array.Empty<JsValue>();
     }
 
     /// <summary>The [[Prototype]] internal slot. Mutate via
@@ -115,6 +196,26 @@ public class JsObject
     /// can route through the <c>preventExtensions</c> trap.</summary>
     public virtual bool PreventExtensions() { _extensible = false; return true; }
 
+    /// <summary>Own string-keyed lookup over both storage modes. Returns true if
+    /// the property exists (mirroring the legacy chain-walk's "stop here"
+    /// semantics for accessors, which read back as Undefined).</summary>
+    private bool TryGetOwnRaw(string name, out JsValue value)
+    {
+        if (_shape is not null)
+        {
+            if (_shape.TryGet(name, out var p)) { value = _slots[p.Slot]; return true; }
+            value = default;
+            return false;
+        }
+        if (_properties is not null && _properties.TryGetValue(name, out var d))
+        {
+            value = d.IsAccessor ? JsValue.Undefined : d.Value;
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
     /// <summary>Spec [[Get]] simplified to data-only resolution: walks the
     /// prototype chain and returns the data slot's value, or Undefined.
     /// Accessor invocation lives in <c>AbstractOperations.Get</c> which has the
@@ -122,10 +223,7 @@ public class JsObject
     public virtual JsValue Get(string name)
     {
         for (var o = this; o is not null; o = o.Prototype)
-        {
-            if (o._properties.TryGetValue(name, out var desc))
-                return desc.IsAccessor ? JsValue.Undefined : desc.Value;
-        }
+            if (o.TryGetOwnRaw(name, out var v)) return v;
         return JsValue.Undefined;
     }
 
@@ -133,7 +231,7 @@ public class JsObject
     {
         for (var o = this; o is not null; o = o.Prototype)
         {
-            if (o._symbolProperties.TryGetValue(symbol, out var desc))
+            if (o._symbolProperties is not null && o._symbolProperties.TryGetValue(symbol, out var desc))
                 return desc.IsAccessor ? JsValue.Undefined : desc.Value;
         }
         return JsValue.Undefined;
@@ -146,7 +244,19 @@ public class JsObject
     /// <c>AbstractOperations.Set</c> (VM-aware).</summary>
     public virtual void Set(string name, JsValue value)
     {
-        if (_properties.TryGetValue(name, out var desc))
+        if (_shape is not null)
+        {
+            if (_shape.TryGet(name, out var p))
+            {
+                if (!p.Writable) return;
+                _slots[p.Slot] = value;
+                return;
+            }
+            if (!Extensible) return;
+            AddFastProperty(name, value, Shape.DefaultData);
+            return;
+        }
+        if (_properties!.TryGetValue(name, out var desc))
         {
             if (desc.IsAccessor) return; // accessor path — caller should use AbstractOperations.Set
             if (!desc.Writable) return;
@@ -159,7 +269,7 @@ public class JsObject
 
     public virtual void Set(JsSymbol symbol, JsValue value)
     {
-        if (_symbolProperties.TryGetValue(symbol, out var desc))
+        if (_symbolProperties is not null && _symbolProperties.TryGetValue(symbol, out var desc))
         {
             if (desc.IsAccessor) return;
             if (!desc.Writable) return;
@@ -167,7 +277,7 @@ public class JsObject
             return;
         }
         if (!Extensible) return;
-        _symbolProperties[symbol] = PropertyDescriptor.Data(value);
+        (_symbolProperties ??= new Dictionary<JsSymbol, PropertyDescriptor>())[symbol] = PropertyDescriptor.Data(value);
     }
 
     public void Set(JsPropertyKey key, JsValue value)
@@ -197,15 +307,23 @@ public class JsObject
     public bool Has(JsPropertyKey key) => key.IsSymbol ? Has(key.AsSymbol) : Has(key.AsString);
 
     /// <summary>§10.1.5 [[GetOwnProperty]] — own slot only, no chain walk.</summary>
-    public virtual bool HasOwn(string name) => _properties.ContainsKey(name);
-    public virtual bool HasOwn(JsSymbol symbol) => _symbolProperties.ContainsKey(symbol);
+    public virtual bool HasOwn(string name)
+        => _shape is not null ? _shape.Contains(name) : _properties!.ContainsKey(name);
+    public virtual bool HasOwn(JsSymbol symbol)
+        => _symbolProperties is not null && _symbolProperties.ContainsKey(symbol);
     public bool HasOwn(JsPropertyKey key) => key.IsSymbol ? HasOwn(key.AsSymbol) : HasOwn(key.AsString);
 
     /// <summary>Returns the own descriptor, or <c>null</c> if no own property.</summary>
     public virtual PropertyDescriptor? GetOwnPropertyDescriptor(string name)
-        => _properties.TryGetValue(name, out var d) ? d : null;
+    {
+        if (_shape is not null)
+            return _shape.TryGet(name, out var p)
+                ? PropertyDescriptor.Data(_slots[p.Slot], p.Writable, p.Enumerable, p.Configurable)
+                : null;
+        return _properties!.TryGetValue(name, out var d) ? d : null;
+    }
     public virtual PropertyDescriptor? GetOwnPropertyDescriptor(JsSymbol symbol)
-        => _symbolProperties.TryGetValue(symbol, out var d) ? d : null;
+        => _symbolProperties is not null && _symbolProperties.TryGetValue(symbol, out var d) ? d : null;
     public PropertyDescriptor? GetOwnPropertyDescriptor(JsPropertyKey key)
         => key.IsSymbol ? GetOwnPropertyDescriptor(key.AsSymbol) : GetOwnPropertyDescriptor(key.AsString);
 
@@ -214,9 +332,33 @@ public class JsObject
     /// or non-extensible object).</summary>
     public virtual bool DefineOwnProperty(string name, PropertyDescriptor desc)
     {
-        if (_properties.TryGetValue(name, out var existing))
+        // Fast path: defining a plain data property on a shape-mode object.
+        if (_shape is not null && !desc.IsAccessor)
         {
-            if (!ValidateRedefine(existing, desc)) return false;
+            if (_shape.TryGet(name, out var p))
+            {
+                var existing = PropertyDescriptor.Data(_slots[p.Slot], p.Writable, p.Enumerable, p.Configurable);
+                if (!ValidateRedefine(existing, desc)) return false;
+                if (DataFlags(desc) == p.Flags)
+                {
+                    _slots[p.Slot] = desc.Value; // attributes unchanged — just replace value
+                    return true;
+                }
+                // Attribute change: fall to dictionary and apply there.
+                MigrateToDictionary();
+                PutString(name, desc);
+                return true;
+            }
+            if (!Extensible) return false;
+            AddFastProperty(name, desc.Value, DataFlags(desc));
+            return true;
+        }
+
+        // Accessor, or already in dictionary mode: use the dictionary path.
+        if (_shape is not null) MigrateToDictionary();
+        if (_properties!.TryGetValue(name, out var ex))
+        {
+            if (!ValidateRedefine(ex, desc)) return false;
         }
         else if (!Extensible) return false;
         PutString(name, desc);
@@ -224,7 +366,7 @@ public class JsObject
     }
 
     public virtual bool DefineOwnProperty(JsSymbol symbol, PropertyDescriptor desc)
-        => DefineOwnPropertyCore(_symbolProperties, symbol, desc);
+        => DefineOwnPropertyCore(_symbolProperties ??= new Dictionary<JsSymbol, PropertyDescriptor>(), symbol, desc);
 
     public bool DefineOwnProperty(JsPropertyKey key, PropertyDescriptor desc)
         => key.IsSymbol ? DefineOwnProperty(key.AsSymbol, desc) : DefineOwnProperty(key.AsString, desc);
@@ -236,14 +378,17 @@ public class JsObject
     /// validator (which rejects a non-configurable data property's legal
     /// writable:true→false transition).</summary>
     internal void ForceDefineOwnProperty(string name, PropertyDescriptor desc)
-        => PutString(name, desc);
+    {
+        if (_shape is not null) MigrateToDictionary();
+        PutString(name, desc);
+    }
 
     /// <summary>Symbol-keyed counterpart of <see cref="ForceDefineOwnProperty(string, PropertyDescriptor)"/>
     /// — bypasses §10.1.6.3 validation. Used by the partial-merge path so a
     /// non-configurable data property's legal writable:true→false transition
     /// can be applied to a symbol-keyed slot too.</summary>
     internal void ForceDefineOwnProperty(JsSymbol symbol, PropertyDescriptor desc)
-        => _symbolProperties[symbol] = desc;
+        => (_symbolProperties ??= new Dictionary<JsSymbol, PropertyDescriptor>())[symbol] = desc;
 
     /// <summary>§10.1.6.3 ValidateAndApplyPropertyDescriptor restricted to what a
     /// partial <c>Object.defineProperty</c> / <c>Reflect.defineProperty</c>
@@ -255,6 +400,12 @@ public class JsObject
     /// string-keyed slots share one implementation.</summary>
     internal virtual bool DefineOwnPropertyPartial(JsPropertyKey key, PropertyDescriptor desc, DescriptorFields present)
     {
+        // The partial-merge logic operates through GetOwnPropertyDescriptor /
+        // ForceDefineOwnProperty; for string keys, move to dictionary mode first
+        // so its intricate non-configurable validation runs against the legacy
+        // backing exactly as before.
+        if (key.IsString && _shape is not null) MigrateToDictionary();
+
         var existing = GetOwnPropertyDescriptor(key);
         if (existing is null)
         {
@@ -353,14 +504,19 @@ public class JsObject
     /// property exists and is non-configurable.</summary>
     public virtual bool Delete(string name)
     {
-        if (!_properties.TryGetValue(name, out var desc)) return true;
+        if (_shape is not null)
+        {
+            if (!_shape.Contains(name)) return true; // absent — nothing to delete
+            MigrateToDictionary();
+        }
+        if (!_properties!.TryGetValue(name, out var desc)) return true;
         if (!desc.Configurable) return false;
         return RemoveString(name);
     }
 
     public virtual bool Delete(JsSymbol symbol)
     {
-        if (!_symbolProperties.TryGetValue(symbol, out var desc)) return true;
+        if (_symbolProperties is null || !_symbolProperties.TryGetValue(symbol, out var desc)) return true;
         if (!desc.Configurable) return false;
         return _symbolProperties.Remove(symbol);
     }
@@ -372,39 +528,44 @@ public class JsObject
     /// (canonical numeric string in [0, 2^32-1) — the
     /// <see cref="JsArray.IsArrayIndex"/> test) first, in ascending numeric
     /// order, then every remaining String key in property-creation order.
-    /// The <see cref="Dictionary{TKey,TValue}"/> backing preserves insertion
-    /// order for the non-index bucket (.NET 6+). Non-index numeric-looking
-    /// keys ("1e+55", "-1", "4294967295") stay in the string bucket per spec.</summary>
+    /// Creation order comes from the <see cref="Shape"/> transition chain in
+    /// fast mode, or <see cref="_stringKeyOrder"/> in dictionary mode. Non-index
+    /// numeric-looking keys ("1e+55", "-1", "4294967295") stay in the string
+    /// bucket per spec.</summary>
     private IEnumerable<string> OrderedStringKeys()
     {
+        IReadOnlyList<string> creation = _shape is not null ? _shape.OrderedKeys() : _stringKeyOrder!;
+
         // Fast path: no array-index keys → emit in chronological creation order.
         List<uint>? indices = null;
-        foreach (var key in _stringKeyOrder)
+        foreach (var key in creation)
         {
             if (JsArray.IsArrayIndex(key, out var idx))
                 (indices ??= new List<uint>()).Add(idx);
         }
         if (indices is null)
         {
-            foreach (var key in _stringKeyOrder) yield return key;
+            foreach (var key in creation) yield return key;
             yield break;
         }
         indices.Sort();
         foreach (var idx in indices) yield return JsArray.IndexToString(idx);
-        foreach (var key in _stringKeyOrder)
+        foreach (var key in creation)
             if (!JsArray.IsArrayIndex(key, out _)) yield return key;
     }
 
     /// <summary>All own string keys in §10.1.11.1 order (integer indices
     /// ascending, then other strings in creation order).</summary>
     public virtual IEnumerable<string> Keys => OrderedStringKeys();
-    public IEnumerable<JsSymbol> SymbolKeys => _symbolProperties.Keys;
+    public IEnumerable<JsSymbol> SymbolKeys
+        => _symbolProperties is not null ? _symbolProperties.Keys : System.Linq.Enumerable.Empty<JsSymbol>();
     public virtual IEnumerable<JsPropertyKey> OwnPropertyKeys
     {
         get
         {
             foreach (var key in OrderedStringKeys()) yield return JsPropertyKey.String(key);
-            foreach (var key in _symbolProperties.Keys) yield return JsPropertyKey.Symbol(key);
+            if (_symbolProperties is not null)
+                foreach (var key in _symbolProperties.Keys) yield return JsPropertyKey.Symbol(key);
         }
     }
 
@@ -413,11 +574,17 @@ public class JsObject
     public virtual IEnumerable<string> EnumerableKeys()
     {
         foreach (var key in OrderedStringKeys())
-            if (_properties[key].Enumerable) yield return key;
+            if (IsEnumerableOwnString(key)) yield return key;
     }
+
+    private bool IsEnumerableOwnString(string key)
+        => _shape is not null
+            ? (_shape.TryGet(key, out var p) && p.Enumerable)
+            : (_properties!.TryGetValue(key, out var d) && d.Enumerable);
 
     public IEnumerable<JsSymbol> EnumerableSymbolKeys()
     {
+        if (_symbolProperties is null) yield break;
         foreach (var pair in _symbolProperties)
             if (pair.Value.Enumerable) yield return pair.Key;
     }
