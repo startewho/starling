@@ -35,6 +35,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     internal WgpuExt? Poll { get; }
     internal Device* Device { get; }
     internal Queue* Queue { get; }
+    internal nint DeviceHandle => (nint)Device;
 
     private Sampler* _sampler;
     private BindGroupLayout* _bindLayout;
@@ -69,6 +70,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     private WgpuBuffer* _vertexBuffer;
     private nuint _vertexCapacity;
+    private bool _disposed;
 
     // 5 floats per vertex (ndc.x, ndc.y, u, v, opacity), 6 vertices per layer quad.
     private const int FloatsPerVertex = 5;
@@ -873,6 +875,12 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         foreach (var c in _textures.Values) ReleaseCached(c);
         _textures.Clear();
         _textureBytes = 0;
@@ -887,7 +895,12 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }
         if (_pipelineLayout != null) { Api.PipelineLayoutRelease(_pipelineLayout); _pipelineLayout = null; }
         if (_bindLayout != null) { Api.BindGroupLayoutRelease(_bindLayout); _bindLayout = null; }
-        if (_imageSharpContext is not null) { _imageSharpContext.Dispose(); _imageSharpContext = null; }
+        if (_imageSharpContext is not null)
+        {
+            _imageSharpContext.Dispose();
+            _imageSharpContext = null;
+            ImageSharpWebGpuDeviceStateCache.TryDispose((nint)Device);
+        }
         if (Queue != null) Api.QueueRelease(Queue);
         if (Device != null) Api.DeviceRelease(Device);
     }

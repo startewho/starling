@@ -228,6 +228,7 @@ quality monotonically improves at every step.
 | [wp:M12-12-webgpu-scene-cache](M12/wp-M12-12-webgpu-scene-cache.md) | ⚫ closed (not viable — RenderScene bakes transform) | — | Starling.Paint |
 | [wp:M12-13-gpu-composite-blend](M12/wp-M12-13-gpu-composite-blend.md) | 🟢 complete | agent-claude-opus | Starling.Paint |
 | [wp:M12-14-compositor-path-gate](M12/wp-M12-14-compositor-path-gate.md) | ⚫ blocked | — | Starling.Gui |
+| [wp:M12-15-webgpu-shutdown-lifetime](M12/wp-M12-15-webgpu-shutdown-lifetime.md) | 🟢 complete | agent-codex-cody | Starling.Paint |
 
 ## M13 — Engine module code review
 

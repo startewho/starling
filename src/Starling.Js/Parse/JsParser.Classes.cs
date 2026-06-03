@@ -220,7 +220,7 @@ public sealed partial class JsParser
         // method named "static"; `static {` is a static block; `static name`
         // is a static member.
         bool isStatic = false;
-        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "static")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.TextEquals("static"))
         {
             var peek = _lex.Peek();
             // `static` followed by `(` or `=` or `;` is a regular member named "static".
@@ -270,7 +270,7 @@ public sealed partial class JsParser
         // `async` is contextual: a method modifier only when followed (same
         // line) by a method-name start; otherwise it is a member named "async".
         bool isGenerator = false, isAsync = false;
-        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "async")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.TextEquals("async"))
         {
             var peek = _lex.Peek();
             if (!peek.PrecededByLineTerminator && IsMethodNameStartAfterModifier(peek.Kind))
@@ -286,7 +286,7 @@ public sealed partial class JsParser
         MethodKind methodKind = MethodKind.Method;
         if (!isAsync && !isGenerator
             && _current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape
-            && (_current.Lexeme == "get" || _current.Lexeme == "set"))
+            && (_current.TextEquals("get") || _current.TextEquals("set")))
         {
             var peek = _lex.Peek();
             // `get name(...)` is an accessor; `get(...)` is a method named "get".
@@ -296,7 +296,7 @@ public sealed partial class JsParser
                 && peek.Kind != JsTokenKind.RBrace
                 && peek.Kind != JsTokenKind.Comma)
             {
-                methodKind = _current.Lexeme == "get" ? MethodKind.Get : MethodKind.Set;
+                methodKind = _current.TextEquals("get") ? MethodKind.Get : MethodKind.Set;
                 Advance();
             }
         }
