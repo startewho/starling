@@ -295,7 +295,7 @@ public static class CoreWebApiBinding
             {
                 var bytes = Encoding.UTF8.GetBytes(rune.ToString());
                 if (written + bytes.Length > dest.ByteLength) break;
-                Buffer.BlockCopy(bytes, 0, dest.Buffer.Bytes, dest.ByteOffset + written, bytes.Length);
+                bytes.CopyTo(dest.Buffer.GetSpan(dest.ByteOffset + written, bytes.Length));
                 written += bytes.Length;
                 read += rune.Utf16SequenceLength;
             }
@@ -397,13 +397,9 @@ public static class CoreWebApiBinding
         var obj = value.AsObject;
         if (seen.TryGetValue(obj, out var existing)) return JsValue.Object(existing);
         if (obj is JsArrayBuffer buffer)
-            return JsValue.Object(NewArrayBuffer(realm, buffer.Bytes));
+            return JsValue.Object(NewArrayBuffer(realm, buffer.GetSpan().ToArray()));
         if (obj is JsTypedArray ta)
-        {
-            var copy = new byte[ta.ByteLength];
-            Buffer.BlockCopy(ta.Buffer.Bytes, ta.ByteOffset, copy, 0, ta.ByteLength);
-            return JsValue.Object(NewUint8Array(realm, copy));
-        }
+            return JsValue.Object(NewUint8Array(realm, ta.Buffer.GetSpan(ta.ByteOffset, ta.ByteLength).ToArray()));
         if (obj is BlobObject blob)
             return JsValue.Object(blob.CloneForRealm(realm));
         if (AbstractOperations.IsCallable(value))
@@ -498,20 +494,16 @@ public static class CoreWebApiBinding
     {
         if (!value.IsObject)
             throw new JsThrow(realm.NewTypeError("Expected BufferSource"));
-        if (value.AsObject is JsArrayBuffer ab) return ab.Bytes.ToArray();
+        if (value.AsObject is JsArrayBuffer ab) return ab.GetSpan().ToArray();
         if (value.AsObject is JsTypedArray ta)
-        {
-            var copy = new byte[ta.ByteLength];
-            Buffer.BlockCopy(ta.Buffer.Bytes, ta.ByteOffset, copy, 0, ta.ByteLength);
-            return copy;
-        }
+            return ta.Buffer.GetSpan(ta.ByteOffset, ta.ByteLength).ToArray();
         throw new JsThrow(realm.NewTypeError("Expected BufferSource"));
     }
 
     internal static JsArrayBuffer NewArrayBuffer(JsRealm realm, byte[] bytes)
     {
         var buffer = new JsArrayBuffer(realm.ArrayBufferPrototype, bytes.Length);
-        Buffer.BlockCopy(bytes, 0, buffer.Bytes, 0, bytes.Length);
+        bytes.CopyTo(buffer.GetSpan());
         return buffer;
     }
 

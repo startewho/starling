@@ -564,7 +564,7 @@ public sealed partial class JsCompiler
         var chunk = sub._b.Build(fd.Name.Name);
         EmitFunctionConstructor(fd.Name.Name, chunk,
             CountSimpleParams(fd.Params), sub._upvalues,
-            ResolveFunctionKind(fd.Async, fd.Generator));
+            ResolveFunctionKind(fd.Async, fd.Generator), fd.SourceText);
     }
 
     /// <summary>Emit a write of the top-of-stack value into a module top-level

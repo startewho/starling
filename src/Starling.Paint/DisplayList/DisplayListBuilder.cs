@@ -1,3 +1,4 @@
+using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Values;
@@ -308,6 +309,54 @@ public sealed class DisplayListBuilder
         var paintsBox = selfVisible
             && (box.Kind is BoxKind.BlockContainer
                 || (box.Kind == BoxKind.Inline && hasFrame));
+
+        // CSS Masking 1 §5 — when the box carries a paintable mask-image the
+        // entire element (background + border + content + descendants) is
+        // composited into an offscreen surface and then masked. Per the spec,
+        // box-shadows paint OUTSIDE the masked group (they are not affected by
+        // the element's own mask), so they are emitted first on the main list
+        // and the PushMask bracket only wraps the box-interior paint.
+        //
+        // To wire this up: detect the mask here; emit outer shadows on the main
+        // list; collect box-interior + children into `innerList`; wrap with
+        // PushMask / PopMask and flush to the main list at the end.
+        MaskGeometry? maskGeometry = null;
+        if (paintsBox && EffectiveStyle(box, styleOverride) is { } maskCheckStyle)
+        {
+            maskGeometry = TryResolveMaskGeometry(box, frameX, frameY, maskCheckStyle, images);
+        }
+
+        // CSS Masking 1 §7 — clip-path clips the ENTIRE element rendering
+        // (background + border + content + descendants), unlike overflow which
+        // clips only descendants. Detect a non-none, non-url clip-path here and,
+        // when present, wrap all interior paint in PushClipPath/PopClipPath.
+        // box-shadows are NOT clipped by clip-path (they are outside the element).
+        CssClipPath? clipPathValue = null;
+        if (paintsBox && EffectiveStyle(box, styleOverride) is { } clipCheckStyle)
+        {
+            clipPathValue = TryResolveClipPath(clipCheckStyle);
+        }
+
+        // When there is a mask, innerList is a scratch list that collects all
+        // box-interior paint (background + border + content + descendants).
+        // When there is no mask, innerList == list — no extra allocation.
+        var innerList = maskGeometry is not null ? new DisplayList() : list;
+
+        // When clip-path applies, we need yet another scratch layer to collect
+        // the items that go inside the clip bracket. The layering from outermost
+        // to innermost is: list → [PushMask → innerList → [PushClipPath → clipList]].
+        // When there is no mask, innerList == list, so the bracket collapses cleanly.
+        DisplayList? clipList = null;
+        if (clipPathValue is not null)
+        {
+            clipList = new DisplayList();
+        }
+
+        // activeList is the target for all box-interior paint (backgrounds, borders,
+        // content, children). When clip-path is active it is the clipList scratch;
+        // otherwise it is innerList (which may itself be a mask scratch or == list).
+        var activeList = clipList ?? innerList;
+
         if (paintsBox && EffectiveStyle(box, styleOverride) is { } style)
         {
             var bounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
@@ -320,6 +369,9 @@ public sealed class DisplayListBuilder
             // box (before background + border), in reverse list order so the
             // first listed layer ends up on top. Inset shadows are parsed but
             // painted best-effort (the outer drop shadow is the supported path).
+            // When the box is masked, shadows still paint on the MAIN list (they
+            // are not part of the masked group per CSS Masking 1 §5).
+            // Per CSS Masking 1 §7.2 box-shadow also paints OUTSIDE clip-path.
             EmitBoxShadows(box, bounds, radii, list, current, cull, style);
 
             // CSS Backgrounds 3 §3.8 — `background-clip: text`. The background
@@ -327,11 +379,11 @@ public sealed class DisplayListBuilder
             // element's text glyphs instead of filling the box. Detect it here
             // and, when present, emit a single glyph-clipped fill in place of
             // the normal background fill + background-image gradient.
-            if (IsTextClip(style) && TryEmitBackgroundTextClip(box, frameX, frameY, list, current, cull, style, styleOverride))
+            if (IsTextClip(style) && TryEmitBackgroundTextClip(box, frameX, frameY, activeList, current, cull, style, styleOverride))
             {
-                // Borders still paint normally below; only the background was
+                // Borders still paint normally; only the background was
                 // diverted to the glyph-clipped item.
-                EmitBorders(box, frameX, frameY, list, current, cull, style, radii);
+                EmitBorders(box, frameX, frameY, activeList, current, cull, style, radii);
             }
             else
             {
@@ -339,19 +391,19 @@ public sealed class DisplayListBuilder
                 if (bg is { A: > 0 })
                 {
                     if (radii.IsZero)
-                        Emit(list, new FillRect(bounds, bg, FillRectPixelAlignment.Preserve), bounds, current, cull);
+                        Emit(activeList, new FillRect(bounds, bg, FillRectPixelAlignment.Preserve), bounds, current, cull);
                     else
-                        Emit(list, new FillRoundedRect(bounds, radii, bg), bounds, current, cull);
+                        Emit(activeList, new FillRoundedRect(bounds, radii, bg), bounds, current, cull);
                 }
 
                 // CSS Backgrounds 3 §3 — background-image paints inside the
                 // box's padding box (border-box is the default origin per spec,
                 // but at this layout fidelity the padding+border distinction
                 // is unobservable and using the frame is correct).
-                EmitBackgroundImage(box, frameX, frameY, list, current, cull, style, images);
+                EmitBackgroundImage(box, frameX, frameY, activeList, current, cull, style, images, radii);
 
                 // Borders. Painter renders one stroke per side that has a non-zero width.
-                EmitBorders(box, frameX, frameY, list, current, cull, style, radii);
+                EmitBorders(box, frameX, frameY, activeList, current, cull, style, radii);
             }
         }
 
@@ -360,7 +412,10 @@ public sealed class DisplayListBuilder
         if (box is TextBox textBox)
         {
             if (selfVisible)
-                EmitTextFragments(textBox, frameX, frameY, list, current, cull, styleOverride);
+                EmitTextFragments(textBox, frameX, frameY, activeList, current, cull, styleOverride);
+            FlushClipPathBracket(innerList, activeList, clipPathValue, new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height));
+            if (maskGeometry is not null)
+                FlushMaskBracket(list, innerList, maskGeometry);
             return; // Text boxes have no children.
         }
 
@@ -373,8 +428,11 @@ public sealed class DisplayListBuilder
             if (selfVisible)
             {
                 var bounds = new Rect(frameX, frameY, imageBox.Frame.Width, imageBox.Frame.Height);
-                Emit(list, new DrawImage(bounds, imageBox.Source), bounds, current, cull);
+                Emit(activeList, new DrawImage(bounds, imageBox.Source), bounds, current, cull);
             }
+            FlushClipPathBracket(innerList, activeList, clipPathValue, new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height));
+            if (maskGeometry is not null)
+                FlushMaskBracket(list, innerList, maskGeometry);
             return; // ImageBox has no children.
         }
 
@@ -384,20 +442,30 @@ public sealed class DisplayListBuilder
         var contentOriginY = frameY + box.Border.Top + box.Padding.Top;
 
         // A scroll container (`overflow: hidden | clip | scroll | auto` on
-        // either axis) clips its descendants to its border box. We approximate
-        // that here by tightening the cull rect to the intersection with the
-        // box's frame before recursing, so anything wholly outside the box is
-        // dropped from the display list. Items straddling the edge still paint
-        // fully (cull is binary, not a scissor), but for the dominant case —
-        // tall sidebar nav lists, overflow:auto code blocks — the overflowing
-        // entries simply don't reach the rasterizer.
+        // either axis) clips its descendants to its border box. We tighten
+        // the cull rect (a binary optimisation that drops wholly off-screen
+        // items before they reach the rasterizer) AND emit a real PushClip /
+        // PopClip pair that the backend converts to a proper scissor/path
+        // clip so items straddling the box edge are cropped, not painted past
+        // the border. When the box also has rounded corners the clip path is
+        // the rounded rectangle, implementing CSS Overflow 3 §2.4.
         var childCull = cull;
         ComputedStyle? overflowStyle = box.Kind != BoxKind.AnonymousBlock ? EffectiveStyle(box, styleOverride) : null;
         var clipsOverflow = overflowStyle is not null && ClipsOverflow(overflowStyle);
+
+        // Per CSS Overflow 3 §2.4 a box with a rounded border also clips its
+        // children to the rounded shape when overflow != visible — read the
+        // radii unconditionally for the clipsOverflow path.
+        CornerRadii clipRadii = CornerRadii.None;
         if (clipsOverflow)
         {
             var clipRect = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
             childCull = cull is { } c ? IntersectRect(c, clipRect) : clipRect;
+
+            // Include border-radius in the clip so rounded overflow boxes
+            // crop their children to the rounded inner edge.
+            if (overflowStyle is not null && box.Frame.Width > 0 && box.Frame.Height > 0)
+                clipRadii = ReadCornerRadii(overflowStyle, box.Frame.Width, box.Frame.Height);
         }
 
         // `overflow: scroll | auto` containers carry a per-element scroll
@@ -416,6 +484,8 @@ public sealed class DisplayListBuilder
             scrollOffset = offsets(scrollElement);
         }
 
+        var refBox = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+
         if (scrollOffset.X != 0 || scrollOffset.Y != 0)
         {
             var scrollMatrix = Matrix2D.Translate(-scrollOffset.X, -scrollOffset.Y);
@@ -425,16 +495,84 @@ public sealed class DisplayListBuilder
                 Visit(child, scratch, contentOriginX, contentOriginY, composed, childCull, styleOverride, images, slice);
             if (scratch.Items.Count > 0)
             {
-                list.Add(new PushTransform(scrollMatrix));
+                // Emit the clip bracket around the scrolled children so they
+                // are cropped to the scroll container's border box.
+                if (clipsOverflow && box.Frame.Width > 0 && box.Frame.Height > 0)
+                {
+                    var clipBounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+                    activeList.Add(new PushClip(clipBounds, clipRadii));
+                }
+                activeList.Add(new PushTransform(scrollMatrix));
                 foreach (var item in scratch.Items)
-                    list.Add(item);
-                list.Add(PopTransform.Instance);
+                    activeList.Add(item);
+                activeList.Add(PopTransform.Instance);
+                if (clipsOverflow && box.Frame.Width > 0 && box.Frame.Height > 0)
+                    activeList.Add(PopClip.Instance);
             }
+            FlushClipPathBracket(innerList, activeList, clipPathValue, refBox);
+            if (maskGeometry is not null)
+                FlushMaskBracket(list, innerList, maskGeometry);
+            return;
+        }
+
+        // Emit PushClip / children / PopClip for non-scrolling overflow clips
+        // so descendants are rasterizer-cropped to this box, not just cull-dropped.
+        if (clipsOverflow && box.Frame.Width > 0 && box.Frame.Height > 0)
+        {
+            var clipBounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+            activeList.Add(new PushClip(clipBounds, clipRadii));
+            foreach (var child in box.Children)
+                Visit(child, activeList, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
+            activeList.Add(PopClip.Instance);
+            FlushClipPathBracket(innerList, activeList, clipPathValue, refBox);
+            if (maskGeometry is not null)
+                FlushMaskBracket(list, innerList, maskGeometry);
             return;
         }
 
         foreach (var child in box.Children)
-            Visit(child, list, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
+            Visit(child, activeList, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
+
+        FlushClipPathBracket(innerList, activeList, clipPathValue, refBox);
+        if (maskGeometry is not null)
+            FlushMaskBracket(list, innerList, maskGeometry);
+    }
+
+    // ---- CSS Masking 1 §7 — clip-path helpers --------------------------------
+
+    /// <summary>
+    /// Returns the <see cref="CssClipPath"/> for the box when it is a non-none,
+    /// non-url basic shape (or geometry-box-only) value. Returns null when
+    /// clip-path is none, unset, or a url() reference (which is deferred).
+    /// </summary>
+    private static CssClipPath? TryResolveClipPath(ComputedStyle style)
+    {
+        var v = style.Get(PropertyId.ClipPath);
+        if (v is not CssClipPath clip) return null;
+        if (clip.IsNone) return null;
+        if (clip.IsUrl) return null; // url(#id) requires SVG DOM resolution — deferred
+        return clip;
+    }
+
+    /// <summary>
+    /// When <paramref name="clipPath"/> is non-null, wraps the items accumulated
+    /// in <paramref name="activeList"/> (the interior paint) with a
+    /// <see cref="PushClipPath"/> / <see cref="PopClipPath"/> bracket and appends
+    /// to <paramref name="target"/>. When <paramref name="clipPath"/> is null,
+    /// this is a no-op (interior paint was already written directly to target).
+    /// </summary>
+    private static void FlushClipPathBracket(
+        DisplayList target,
+        DisplayList activeList,
+        CssClipPath? clipPath,
+        Rect referenceBox)
+    {
+        if (clipPath is null || ReferenceEquals(target, activeList)) return;
+        if (activeList.Items.Count == 0) return; // nothing to clip
+        target.Add(new PushClipPath(referenceBox, clipPath));
+        foreach (var item in activeList.Items)
+            target.Add(item);
+        target.Add(PopClipPath.Instance);
     }
 
     private static bool ScrollsOverflow(ComputedStyle style)
@@ -578,22 +716,25 @@ public sealed class DisplayListBuilder
     /// visible window, the sprite PNG is the source, and bg-position picks
     /// which slice maps to the window.
     /// </summary>
-    private static void EmitBackgroundImage(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style, IImageResolver? images)
+    private static void EmitBackgroundImage(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style, IImageResolver? images, CornerRadii radii = default)
     {
         var bgImage = style.Get(PropertyId.BackgroundImage);
 
         // CSS Images 3 §3 — `background-image: <gradient>`. Gradients paint
         // directly from the typed value and don't need an image resolver; map
-        // the recognised gradient functions to a FillGradient over the box.
-        // Anything that doesn't parse (e.g. conic, malformed syntax) fails
-        // soft, matching the unresolved-image path below.
+        // the recognised gradient functions (linear, radial, conic, and their
+        // repeating- variants) to a FillGradient over the box. Anything that
+        // doesn't parse (malformed syntax) fails soft, matching the
+        // unresolved-image path below. Pass the box's corner radii so the
+        // backend clips the gradient fill to the rounded rectangle (CSS
+        // Backgrounds 3 §5 border-radius).
         if (bgImage is CssFunctionValue gradientFn
             && CssGradientParser.TryParseFunction(gradientFn, out var gradient)
             && gradient.IsPaintable
             && box.Frame.Width > 0 && box.Frame.Height > 0)
         {
             var gbounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
-            Emit(list, new FillGradient(gbounds, gradient), gbounds, current, cull);
+            Emit(list, new FillGradient(gbounds, gradient, radii), gbounds, current, cull);
             return;
         }
 
@@ -721,6 +862,141 @@ public sealed class DisplayListBuilder
             // typically pass a single horizontal offset.
             _ => 0,
         };
+
+    /// <summary>
+    /// Holds the resolved mask source and geometry for a whole-element mask group.
+    /// Created by <see cref="TryResolveMaskGeometry"/> and consumed by
+    /// <see cref="FlushMaskBracket"/>.
+    /// </summary>
+    private sealed record MaskGeometry(
+        Rect Bounds,
+        CornerRadii Radii,
+        DecodedImage? Mask,
+        CssGradient? MaskGradient,
+        double RenderW,
+        double RenderH,
+        double OffsetX,
+        double OffsetY,
+        MaskRepeatMode Repeat,
+        MaskModeKind Mode);
+
+    /// <summary>
+    /// Resolves the mask source and geometry for a box that has a paintable
+    /// <c>mask-image</c>. Returns null when the box has no resolvable mask so
+    /// the caller can bail out cheaply. The returned <see cref="MaskGeometry"/>
+    /// is passed to <see cref="FlushMaskBracket"/> after the inner content is
+    /// collected.
+    /// </summary>
+    private static MaskGeometry? TryResolveMaskGeometry(Box box, double frameX, double frameY, ComputedStyle style, IImageResolver? images)
+    {
+        if (box.Frame.Width <= 0 || box.Frame.Height <= 0) return null;
+
+        var maskValue = style.Get(PropertyId.MaskImage);
+
+        DecodedImage? maskImage = null;
+        CssGradient? maskGradient = null;
+
+        if (maskValue is CssUrl maskUrl)
+        {
+            if (images is null) return null;
+            if (!images.TryResolveUrl(maskUrl.Value, out maskImage) || maskImage is null) return null;
+            if (maskImage.Width <= 0 || maskImage.Height <= 0) return null;
+        }
+        else if (maskValue is CssFunctionValue maskGradientFn
+                 && CssGradientParser.TryParseFunction(maskGradientFn, out var mg)
+                 && mg.IsPaintable)
+        {
+            maskGradient = mg;
+        }
+        else
+        {
+            return null; // No mask source we can handle.
+        }
+
+        var boxW = box.Frame.Width;
+        var boxH = box.Frame.Height;
+        var nativeMaskW = maskImage?.Width ?? boxW;
+        var nativeMaskH = maskImage?.Height ?? boxH;
+        var (renderW, renderH) = ResolveBackgroundSize(style.Get(PropertyId.MaskSize), boxW, boxH, nativeMaskW, nativeMaskH);
+        if (renderW <= 0 || renderH <= 0) return null;
+
+        var (offsetX, offsetY) = ResolveBackgroundPosition(style.Get(PropertyId.MaskPosition), boxW, boxH, renderW, renderH);
+        var repeat = ResolveMaskRepeat(style.Get(PropertyId.MaskRepeat));
+        var mode = ResolveMaskMode(style.Get(PropertyId.MaskMode));
+        var radii = ReadCornerRadii(style, boxW, boxH);
+        var bounds = new Rect(frameX, frameY, boxW, boxH);
+
+        return new MaskGeometry(bounds, radii, maskImage, maskGradient, renderW, renderH, offsetX, offsetY, repeat, mode);
+    }
+
+    /// <summary>
+    /// Wraps the accumulated <paramref name="innerList"/> items in a
+    /// <see cref="PushMask"/> / <see cref="PopMask"/> bracket and appends them
+    /// to <paramref name="list"/>. Called after all box-interior and child items
+    /// have been collected.
+    /// </summary>
+    private static void FlushMaskBracket(DisplayList list, DisplayList innerList, MaskGeometry? geo)
+    {
+        if (geo is null) return;
+        list.Add(new PushMask(
+            geo.Bounds, geo.Radii,
+            geo.Mask, geo.MaskGradient,
+            geo.RenderW, geo.RenderH,
+            geo.OffsetX, geo.OffsetY,
+            geo.Repeat, geo.Mode));
+        foreach (var item in innerList.Items)
+            list.Add(item);
+        list.Add(PopMask.Instance);
+    }
+
+    /// <summary>
+    /// Resolves <c>mask-mode</c> (CSS Masking 1 §6.1). Defaults to
+    /// <see cref="MaskModeKind.MatchSource"/> when unset or unrecognised.
+    /// </summary>
+    private static MaskModeKind ResolveMaskMode(CssValue? value)
+        => value switch
+        {
+            CssKeyword { Name: "luminance" } => MaskModeKind.Luminance,
+            CssKeyword { Name: "alpha" } => MaskModeKind.Alpha,
+            _ => MaskModeKind.MatchSource,
+        };
+
+    /// <summary>
+    /// Resolves <c>mask-repeat</c> (CSS Masking 1 §6.5). Handles the single-keyword
+    /// and two-keyword forms; the two-keyword form uses the X-axis keyword to set
+    /// the dominant mode (space/round on X side wins).
+    /// </summary>
+    private static MaskRepeatMode ResolveMaskRepeat(CssValue? value)
+    {
+        // Extract the first (x-axis) keyword from a two-value list.
+        CssKeyword? xKey = value switch
+        {
+            CssValueList { Values: var vs } => vs.Count > 0 ? vs[0] as CssKeyword : null,
+            CssKeyword k => k,
+            _ => null,
+        };
+        // Also check if the single keyword or x-keyword is "no-repeat" – but a
+        // list value can have a no-repeat on the y-axis only; honour x-axis first.
+        CssKeyword? yKey = value switch
+        {
+            CssValueList { Values: var vs } => vs.Count > 1 ? vs[1] as CssKeyword : null,
+            _ => null,
+        };
+        var xName = xKey?.Name ?? "";
+        var yName = yKey?.Name ?? "";
+
+        return xName switch
+        {
+            "no-repeat" => MaskRepeatMode.NoRepeat,
+            "space" => MaskRepeatMode.Space,
+            "round" => MaskRepeatMode.Round,
+            "repeat-x" => MaskRepeatMode.RepeatX,
+            "repeat-y" => MaskRepeatMode.RepeatY,
+            "repeat" when yName is "no-repeat" => MaskRepeatMode.RepeatX,
+            _ when yName is "no-repeat" => MaskRepeatMode.RepeatY,
+            _ => MaskRepeatMode.Repeat,
+        };
+    }
 
     /// <summary>
     /// Reads <c>PropertyId.Transform</c> off the box's effective style and

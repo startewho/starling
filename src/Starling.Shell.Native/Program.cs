@@ -27,12 +27,7 @@ internal static class Program
             if (wi >= 0 && wi + 1 < args.Length)
                 wasmIslandUrl = args[wi + 1];
 
-            string? blazorIslandUrl = null;
-            var bi = Array.IndexOf(args, "--blazor-island-url");
-            if (bi >= 0 && bi + 1 < args.Length)
-                blazorIslandUrl = args[bi + 1];
-
-            using var browser = new NativeBrowserWindow(maxFrames, startUrl, wasmIslandUrl, blazorIslandUrl);
+            using var browser = new NativeBrowserWindow(maxFrames, startUrl, wasmIslandUrl);
             return browser.Run();
         }
 

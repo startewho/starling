@@ -78,9 +78,7 @@
          runtime via STARLING_JS_ENGINE=jint; removable by deleting the backend
          project + this line. -->
     <PackageVersion Include="Jint" Version="4.9.2" />
-    <PackageVersion Include="DotWasm" Version="0.1.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.5" />
+    <PackageVersion Include="Wasmtime" Version="44.0.0" />
 
     <!-- Legacy single-byte / CJK encodings (pure-managed; Rule-0 clean).
          Consumed by Starling.Engine for WHATWG-table charset support. -->
@@ -89,7 +87,7 @@
     <!-- Aspire orchestration + observability (Starling.AppHost + Starling.ServiceDefaults). -->
     <!-- YARP hosting integration: serves the repo-root sites/ directory at stable
          localhost paths for engine smoke-testing (Starling.AppHost "sites" resource). -->
-    <PackageVersion Include="Aspire.Hosting.Yarp" Version="13.4.0" />
+    <PackageVersion Include="Aspire.Hosting.Yarp" Version="13.4.2" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.5.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />

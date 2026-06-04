@@ -584,6 +584,12 @@ internal sealed class BlockLayout
             CssPercentage when !containerHeight.HasValue => allowAuto ? null : 0,
             CssPercentage pct => containerHeight!.Value * pct.Value / 100d,
             CssNumber n => n.Value,
+            // A calc() that mixes a percentage with a length (e.g.
+            // `calc(100% - 2rem)`) survives parsing as a symbolic CssCalc; resolve
+            // it against the containing block's height. With no explicit height
+            // basis a contained percentage stays symbolic and ResolveCalcPx
+            // returns null, which behaves as auto (CSS 2.1 §10.5).
+            CssCalc calc => ResolveCalcPx(calc, containerHeight, viewport) ?? (allowAuto ? null : 0),
             CssKeyword k when k.Name == "auto" => allowAuto ? null : 0,
             CssKeyword k when k.Name == "none" => 0,
             _ => null,
@@ -602,8 +608,47 @@ internal sealed class BlockLayout
             CssLength len => ToPx(len, viewport),
             CssPercentage pct => percentageBasis * pct.Value / 100d,
             CssNumber n => n.Value,
+            // A calc() that mixes a percentage with a length (e.g.
+            // `calc(100% - 7rem)`) cannot fold at parse time, so it reaches layout
+            // as a symbolic CssCalc. Resolve it here against the containing block.
+            CssCalc calc => ResolveCalcPx(calc, percentageBasis, viewport),
             CssKeyword k when k.Name == "auto" => allowAuto ? null : 0,
             CssKeyword k when k.Name == "none" => 0,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Resolve a symbolic <see cref="CssCalc"/> length to pixels against a
+    /// containing-block <paramref name="percentageBasis"/>. Returns null when the
+    /// result can't be reduced to a length (e.g. a contained percentage with no
+    /// basis), letting callers fall back to auto. The resolution context mirrors
+    /// <see cref="ToPx(CssLength, Size?)"/>: font-relative units use a 16px base
+    /// and viewport units use <paramref name="viewport"/> (100px when unknown).
+    /// </summary>
+    private static double? ResolveCalcPx(CssCalc calc, double? percentageBasis, Size? viewport)
+    {
+        var vw = viewport?.Width ?? 100d;
+        var vh = viewport?.Height ?? 100d;
+        var ctx = CssResolutionContext.Default with
+        {
+            ViewportWidthPx = vw,
+            ViewportHeightPx = vh,
+            SmallViewportWidthPx = vw,
+            SmallViewportHeightPx = vh,
+            LargeViewportWidthPx = vw,
+            LargeViewportHeightPx = vh,
+            DynamicViewportWidthPx = vw,
+            DynamicViewportHeightPx = vh,
+            ContainerWidthPx = vw,
+            ContainerHeightPx = vh,
+            PercentageBasisPx = percentageBasis ?? double.NaN,
+        };
+
+        return CssCalcResolver.Resolve(calc, ctx) switch
+        {
+            CssLength len => ToPx(len, viewport),
+            CssPercentage pct when percentageBasis is { } basis => basis * pct.Value / 100d,
             _ => null,
         };
     }

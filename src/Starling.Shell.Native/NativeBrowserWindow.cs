@@ -50,7 +50,6 @@ internal sealed class NativeBrowserWindow : IDisposable
     private const double SidebarRowGapCss = 1;
     private const double SidebarRowXCss = 10;
     private const double SidebarRowWCss = SidebarWidthCss - SidebarRowXCss * 2;
-    private const string DefaultBlazorIslandHttpUrl = "http://localhost:8088/blazor-status/";
     private const string SansFont = "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
     private const string MonoFont = "\"Geist Mono\", \"SFMono-Regular\", Menlo, Consolas, monospace";
 
@@ -158,7 +157,7 @@ internal sealed class NativeBrowserWindow : IDisposable
               0x0a,0x09,0x01,0x07,0x00,0x20,0x00,0x20,0x01,0x6a,0x0b
             ]);
             WebAssembly.instantiate(bytes).then(function (result) {
-              state.textContent = 'DotWasm add(19, 23) = ' + result.instance.exports.add(19, 23);
+              state.textContent = 'Wasmtime add(19, 23) = ' + result.instance.exports.add(19, 23);
             }, function (err) {
               state.textContent = 'WASM failed: ' + (err && err.message ? err.message : String(err));
             });
@@ -173,18 +172,15 @@ internal sealed class NativeBrowserWindow : IDisposable
     private readonly int _maxFrames;
     private readonly string? _startUrl;
     private readonly string? _wasmIslandUrl;
-    private readonly string? _blazorIslandUrl;
 
     public NativeBrowserWindow(
         int maxFrames = 0,
         string? startUrl = null,
-        string? wasmIslandUrl = null,
-        string? blazorIslandUrl = null)
+        string? wasmIslandUrl = null)
     {
         _maxFrames = maxFrames;
         _startUrl = startUrl;
         _wasmIslandUrl = wasmIslandUrl;
-        _blazorIslandUrl = blazorIslandUrl;
     }
 
     public void Dispose() { }
@@ -215,13 +211,10 @@ internal sealed class NativeBrowserWindow : IDisposable
         var wasmIslandUrl = _wasmIslandUrl is { Length: > 0 }
             ? UrlBarInputNormalizer.Normalize(_wasmIslandUrl) ?? _wasmIslandUrl
             : statusUrl;
-        var blazorIslandUrl = _blazorIslandUrl is { Length: > 0 }
-            ? UrlBarInputNormalizer.Normalize(_blazorIslandUrl) ?? _blazorIslandUrl
-            : DefaultBlazorIslandUrl();
 
         try
         {
-            return RunWindow(startUrl, wasmIslandUrl, blazorIslandUrl);
+            return RunWindow(startUrl, wasmIslandUrl);
         }
         finally
         {
@@ -235,33 +228,6 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     private static string EscapeHtml(string s) => s
         .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
-
-    private static string DefaultBlazorIslandUrl()
-    {
-        var root = LocateRepoRoot();
-        if (root is not null)
-        {
-            var index = Path.Combine(root, "testdata", "sites", "blazor-status", "index.html");
-            if (File.Exists(index))
-                return "file://" + Path.GetFullPath(index).Replace('\\', '/');
-        }
-
-        return DefaultBlazorIslandHttpUrl;
-    }
-
-    private static string? LocateRepoRoot()
-    {
-        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
-        {
-            for (var dir = start; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
-            {
-                if (File.Exists(Path.Combine(dir, "Starling.slnx")))
-                    return dir;
-            }
-        }
-
-        return null;
-    }
 
     private static float PageViewportWidth(float logicalW) =>
         Math.Max(1, logicalW - (float)SidebarWidthCss);
@@ -327,8 +293,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             ? backend
             : "imagesharp-gpu";
 
-    // The sidebar footer (commit / js / render) is a Blazor render — expensive to
-    // build, but it only changes with the theme. Cache the HTML per theme so the
+    // The sidebar footer only changes with the theme. Cache the HTML per theme so the
     // sidebar can rebuild on every hover without re-running the renderer.
     private static readonly Dictionary<NativeThemeMode, string> FooterHtmlCache = new();
 
@@ -572,7 +537,7 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     // ── Window loop ──────────────────────────────────────────────────────────
 
-    private int RunWindow(string startUrl, string wasmIslandUrl, string blazorIslandUrl)
+    private int RunWindow(string startUrl, string wasmIslandUrl)
     {
         Silk.NET.Windowing.Glfw.GlfwWindowing.Use();
         Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
@@ -669,14 +634,6 @@ internal sealed class NativeBrowserWindow : IDisposable
         bool wasmIslandLoadError = false;
         BlockBox? wasmIslandFallbackBox = null;
         string wasmIslandFallbackSig = "";
-        BrowserSession? blazorIslandSession = null;
-        Task<Result<LaidOutPage, RenderError>>? pendingBlazorIslandNav = null;
-        LaidOutPage? blazorIslandPage = null;
-        int blazorIslandLastLayoutVersion = -1;
-        string blazorIslandStatusHint = "Loading Blazor WASM island";
-        bool blazorIslandLoadError = false;
-        BlockBox? blazorIslandFallbackBox = null;
-        string blazorIslandFallbackSig = "";
 
         // Which sidebar bookmark row the pointer is over (-1 = none), for hover.
         int sidebarHover = -1;
@@ -737,7 +694,6 @@ internal sealed class NativeBrowserWindow : IDisposable
         // loop presents every frame so the macOS surface stays flushed (gating it
         // left the window gray). It is kept up to date for a future damage-based
         // present that skips the re-raster while still flushing the surface.
-        bool needsPresent = true;
 
         // ── Start the initial load (non-blocking) ──────────────────────────────
         // The first tab opens with no page yet; the window loop starts immediately
@@ -756,10 +712,6 @@ internal sealed class NativeBrowserWindow : IDisposable
         wasmIslandSession = new BrowserSession();
         pendingWasmIslandNav = wasmIslandSession.NavigateInteractiveAsync(wasmIslandUrl, IslandOpts());
         Console.WriteLine($"browser: loading WASM island {wasmIslandUrl} …");
-
-        blazorIslandSession = new BrowserSession();
-        pendingBlazorIslandNav = blazorIslandSession.NavigateInteractiveAsync(blazorIslandUrl, IslandOpts());
-        Console.WriteLine($"browser: loading Blazor WASM island {blazorIslandUrl} …");
 
         // Push the accessibility tree to the OS after a (re)layout or navigation.
         void PushA11y()
@@ -783,7 +735,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (page is null) return;
                 var maxScroll = Math.Max(0, page.DocumentHeight - PageViewportHeight(logicalH));
                 var newScroll = Math.Clamp(scrollY - wheel.Y * 40, 0, maxScroll);
-                if (newScroll != scrollY) { scrollY = newScroll; needsPresent = true; }
+                if (newScroll != scrollY) { scrollY = newScroll; }
             };
 
             mouse.MouseMove += (m, pos) =>
@@ -795,7 +747,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (newSidebarHover != sidebarHover)
                 {
                     sidebarHover = newSidebarHover;
-                    needsPresent = true;
                 }
 
                 if (page is null) return;
@@ -893,7 +844,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                     {
                         themeMode = NativeTheme.Next(themeMode);
                         chromeSig = "";   // force a chrome rebuild under the new theme
-                        needsPresent = true;
                         return;
                     }
 
@@ -902,7 +852,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                     {
                         devtoolsActive = !devtoolsActive;
                         devtoolsOverlay = null;
-                        needsPresent = true;
                         return;
                     }
 
@@ -925,7 +874,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                         }
                         urlBarFocused = true;
                         urlBarText = page?.Url ?? loadingUrl;
-                        needsPresent = true;
                     }
                     return;
                 }
@@ -933,7 +881,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (page is null) return;
 
                 // Click landed in the page — drop URL-bar focus.
-                if (urlBarFocused) { urlBarFocused = false; needsPresent = true; }
+                if (urlBarFocused) { urlBarFocused = false; }
 
                 var pageX = pos.X - SidebarWidthCss;
                 var pageY = (pos.Y - ChromeHeightCss) + scrollY;
@@ -1021,7 +969,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 if (urlBarFocused)
                 {
                     urlBarText += c;
-                    needsPresent = true;
                     return;
                 }
 
@@ -1056,7 +1003,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 {
                     devtoolsActive = !devtoolsActive;
                     devtoolsOverlay = null;
-                    needsPresent = true;
                     return;
                 }
 
@@ -1088,7 +1034,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 // Find-in-page editing owns the keyboard while it is open.
                 if (findActive)
                 {
-                    needsPresent = true;
                     if (CmdOrCtrl() && key == Key.V)
                     {
                         var clip = NativeClipboard.Get(glfwHandle);
@@ -1125,14 +1070,12 @@ internal sealed class NativeBrowserWindow : IDisposable
                     }
                     urlBarFocused = true;
                     urlBarText = page.Url ?? "";
-                    needsPresent = true;
                     return;
                 }
 
                 // URL-bar editing owns the keyboard while it has focus.
                 if (urlBarFocused)
                 {
-                    needsPresent = true;
                     if (CmdOrCtrl())
                     {
                         if (key == Key.V)
@@ -1235,8 +1178,8 @@ internal sealed class NativeBrowserWindow : IDisposable
         // commit-style path already works; this adds the inline composing display.
         if (Environment.GetEnvironmentVariable("STARLING_IME_PREEDIT") == "1")
             MacImeBridge.Install(
-                s => { preedit = s; needsPresent = true; },
-                () => { preedit = ""; needsPresent = true; });
+                s => { preedit = s; },
+                () => { preedit = ""; });
 
         // ── Window events ─────────────────────────────────────────────────────
         window.FramebufferResize += sz =>
@@ -1259,10 +1202,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             PollNav();
             PollIslandNav(wasmIslandSession, ref pendingWasmIslandNav, ref wasmIslandPage, ref wasmIslandLastLayoutVersion,
                 ref wasmIslandStatusHint, ref wasmIslandLoadError, "WASM island");
-            PollIslandNav(blazorIslandSession, ref pendingBlazorIslandNav, ref blazorIslandPage, ref blazorIslandLastLayoutVersion,
-                ref blazorIslandStatusHint, ref blazorIslandLoadError, "Blazor WASM island");
             PumpIsland(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion);
-            PumpIsland(blazorIslandSession, ref blazorIslandPage, ref blazorIslandLastLayoutVersion);
 
             if (page is null) return;
 
@@ -1291,7 +1231,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 animClockMs = clockMs;
                 if (hoverElement is not null)
                     hoverOverrides = BuildHoverOverrides(hoverElement, clockMs);
-                needsPresent = true;
             }
         };
 
@@ -1310,7 +1249,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 lastFb = fb;
                 RefreshLayout();
                 RefreshIslandLayout(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion);
-                RefreshIslandLayout(blazorIslandSession, ref blazorIslandPage, ref blazorIslandLastLayoutVersion);
             }
 
             // Present every frame. The present is what keeps the on-screen surface
@@ -1392,29 +1330,19 @@ internal sealed class NativeBrowserWindow : IDisposable
                 statusBox = BuildStatusBar(contentW, theme, statusState, statusHint, statusView, statusDoc, statusHist);
                 statusSig = statusSigNew;
             }
-            var islandW = BottomIslandWidth(logicalW);
             BlockBox? bottomChrome = statusBox;
             BlockBox? bottomChromeRight = null;
             double bottomChromeLeftW = 0;
-            if (wasmIslandPage is not null || blazorIslandPage is not null)
+            if (wasmIslandPage is not null || pendingWasmIslandNav is not null || wasmIslandLoadError)
             {
                 bottomChrome = wasmIslandPage?.Root ?? IslandFallback(
                     ref wasmIslandFallbackBox,
                     ref wasmIslandFallbackSig,
-                    islandW,
+                    contentW,
                     theme,
                     "WASM island",
                     wasmIslandStatusHint,
                     wasmIslandLoadError);
-                bottomChromeRight = blazorIslandPage?.Root ?? IslandFallback(
-                    ref blazorIslandFallbackBox,
-                    ref blazorIslandFallbackSig,
-                    islandW,
-                    theme,
-                    "Blazor WASM island",
-                    blazorIslandStatusHint,
-                    blazorIslandLoadError);
-                bottomChromeLeftW = islandW;
             }
 
             // While the first page loads, present the chrome over a "Loading…" page
@@ -1472,7 +1400,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 }, target);
                 var ok = frame.Presented;
 
-                if (ok) { presented++; needsPresent = false; } else failures++;
+                if (ok) { presented++; } else failures++;
             }
 
             if (_maxFrames > 0 && presented >= _maxFrames)
@@ -1496,8 +1424,6 @@ internal sealed class NativeBrowserWindow : IDisposable
         SaveActive();
         wasmIslandPage?.Dispose();
         wasmIslandSession?.Dispose();
-        blazorIslandPage?.Dispose();
-        blazorIslandSession?.Dispose();
         foreach (var t in tabs) t.Dispose();
         Console.WriteLine(
             $"BROWSER OK: {presented} frames presented zero-copy ({failures} surface-reconfig frames)");
@@ -1517,7 +1443,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             findFragments = null;
             findOverlay = null;
             devtoolsOverlay = null;
-            needsPresent = true;
             PushA11y();
         }
 
@@ -1530,7 +1455,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             new(new Size((int)PageViewportWidth(logicalW), (int)PageViewportHeight(logicalH)), FontSize: 16f);
 
         double BottomIslandWidth(double currentLogicalW) =>
-            Math.Max(1, PageViewportWidth((float)currentLogicalW) / 2);
+            Math.Max(1, PageViewportWidth((float)currentLogicalW));
 
         RenderOptions IslandOpts() =>
             new(new Size((int)BottomIslandWidth(logicalW), (int)StatusBarHeightCss));
@@ -1572,7 +1497,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             islandPage.Dispose();
             islandPage = successor;
             islandLastLayoutVersion = islandPage.Document.LayoutInvalidationVersion;
-            needsPresent = true;
         }
 
         void ApplyIslandNav(
@@ -1589,7 +1513,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 islandStatusHint = result.Error.Message;
                 islandLoadError = true;
                 Console.Error.WriteLine($"browser: {label} failed: {result.Error.Message}");
-                needsPresent = true;
                 return;
             }
 
@@ -1600,7 +1523,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             islandLoadError = false;
             if (islandPage.Viewport.Width != IslandOpts().Viewport.Width)
                 RefreshIslandLayout(islandSession, ref islandPage, ref islandLastLayoutVersion);
-            needsPresent = true;
             Console.WriteLine($"browser: loaded {label}");
         }
 
@@ -1625,7 +1547,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             {
                 islandStatusHint = ex.Message;
                 islandLoadError = true;
-                needsPresent = true;
                 Console.Error.WriteLine($"browser: {label} failed: {ex.Message}");
             }
         }
@@ -1644,15 +1565,7 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         void DispatchIslandClick(double x, double y)
         {
-            var islandW = BottomIslandWidth(logicalW);
-            if (x < islandW)
-            {
-                DispatchIslandPageClick(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion, x, y);
-                return;
-            }
-
-            DispatchIslandPageClick(blazorIslandSession, ref blazorIslandPage, ref blazorIslandLastLayoutVersion,
-                x - islandW, y);
+            DispatchIslandPageClick(wasmIslandSession, ref wasmIslandPage, ref wasmIslandLastLayoutVersion, x, y);
         }
 
         void DispatchIslandPageClick(
@@ -1716,7 +1629,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             page = navResult.Value;
             oldPage?.Dispose();
             lastLayoutVersion = page.Document.LayoutInvalidationVersion;
-            needsPresent = true;
             Console.WriteLine($"browser: loaded {page.Url}  height={page.DocumentHeight:F0}px");
             PushA11y();
         }
@@ -1758,7 +1670,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             loadingUrl = url;
             pendingNav = session.NavigateInteractiveAsync(url, NavOpts());
             pendingNavTab = activeIndex;
-            needsPresent = true;
         }
 
         void GoBack()
@@ -1766,7 +1677,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (!session.History.CanGoBack) return;
             pendingNav = session.BackInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
-            needsPresent = true;
         }
 
         void GoForward()
@@ -1774,7 +1684,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (!session.History.CanGoForward) return;
             pendingNav = session.ForwardInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
-            needsPresent = true;
         }
 
         void Reload()
@@ -1782,7 +1691,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             if (session.History.Current is null) return;
             pendingNav = session.ReloadInteractiveAsync(NavOpts());
             pendingNavTab = activeIndex;
-            needsPresent = true;
         }
 
         // ── Tabs ───────────────────────────────────────────────────────────────
@@ -1824,7 +1732,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             menuActive = false;
             menuOverlay = null;
             renderer.ResetForNavigation();
-            needsPresent = true;
             PushA11y();
         }
 
@@ -1885,7 +1792,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             findOverlay = null;
             findFragments = BoxHitTester.CollectFragments(page.Root);
             urlBarFocused = false;
-            needsPresent = true;
         }
 
         void CloseFind()
@@ -1893,7 +1799,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             findActive = false;
             findOverlay = null;
             findFragments = null;
-            needsPresent = true;
         }
 
         // A semi-transparent highlight box at the matched fragment, in document
@@ -1913,7 +1818,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         void RunFind(int dir)
         {
             findOverlay = null;
-            if (page is null || findQuery.Length == 0) { findMatchTotal = 0; needsPresent = true; return; }
+            if (page is null || findQuery.Length == 0) { findMatchTotal = 0; return; }
             findFragments ??= BoxHitTester.CollectFragments(page.Root);
             var frags = findFragments;
             var n = frags.Count;
@@ -1922,7 +1827,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             foreach (var fr in frags)
                 if (fr.Text.Contains(findQuery, StringComparison.OrdinalIgnoreCase)) findMatchTotal++;
 
-            if (n == 0 || findMatchTotal == 0) { findCursor = -1; needsPresent = true; return; }
+            if (n == 0 || findMatchTotal == 0) { findCursor = -1; return; }
 
             var start = findCursor + dir;
             for (var step = 0; step < n; step++)
@@ -1938,7 +1843,6 @@ internal sealed class NativeBrowserWindow : IDisposable
                 findOverlay = BuildFindOverlay(f, PageViewportWidth(logicalW), page.DocumentHeight);
                 break;
             }
-            needsPresent = true;
         }
 
         // Underlined preedit drawn at the focused field's position, in document
@@ -1966,7 +1870,6 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             menuActive = false;
             menuOverlay = null;
-            needsPresent = true;
         }
 
         BlockBox BuildMenuOverlay()
@@ -2017,7 +1920,6 @@ internal sealed class NativeBrowserWindow : IDisposable
             menuY = Math.Clamp(y, 0, Math.Max(0, logicalH - n * MenuItemH));
             menuOverlay = BuildMenuOverlay();
             menuActive = true;
-            needsPresent = true;
         }
 
         // The page-area placeholder shown while the first page loads.
@@ -2173,7 +2075,6 @@ internal sealed class NativeBrowserWindow : IDisposable
 
             hoverScope = newScope ?? new HashSet<Element>();
             hoverOverrides = newOverrides;
-            needsPresent = true;
         }
 
         // Per-box style the painter overlays: the :hover override if any, else the

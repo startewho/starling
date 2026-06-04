@@ -484,7 +484,7 @@ public static class FetchBinding
             if (owner.BodyUsed) return RejectedPromise(realm, realm.NewTypeError("Body already consumed"));
             owner.BodyUsed = true;
             var buf = new JsArrayBuffer(realm.ArrayBufferPrototype, owner.BodyBytes.Length);
-            Buffer.BlockCopy(owner.BodyBytes, 0, buf.Bytes, 0, owner.BodyBytes.Length);
+            owner.BodyBytes.CopyTo(buf.GetSpan());
             return ResolvedPromise(realm, JsValue.Object(buf));
         }, length: 0);
 
@@ -842,17 +842,9 @@ public static class FetchBinding
                     contentType = "application/x-www-form-urlencoded;charset=UTF-8";
                     return Encoding.UTF8.GetBytes(searchParams.Serialize());
                 case JsArrayBuffer buf:
-                    {
-                        var copy = new byte[buf.ByteLength];
-                        Buffer.BlockCopy(buf.Bytes, 0, copy, 0, buf.ByteLength);
-                        return copy;
-                    }
+                    return buf.GetSpan().ToArray();
                 case JsTypedArray ta:
-                    {
-                        var copy = new byte[ta.ByteLength];
-                        Buffer.BlockCopy(ta.Buffer.Bytes, ta.ByteOffset, copy, 0, ta.ByteLength);
-                        return copy;
-                    }
+                    return ta.Buffer.GetSpan(ta.ByteOffset, ta.ByteLength).ToArray();
             }
         }
         // Fallback: stringify.

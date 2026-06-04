@@ -626,7 +626,7 @@ public sealed partial class JsCompiler
             // the reserved local slot).
             EmitFunctionConstructor(fd.Name.Name, chunk,
                 CountSimpleParams(fd.Params), sub._upvalues,
-                ResolveFunctionKind(fd.Async, fd.Generator));
+                ResolveFunctionKind(fd.Async, fd.Generator), fd.SourceText);
             if (isScriptTop && _evalInjectVars)
             {
                 // wp:M3-73 — §19.2.1.3 (non-global branch). The function object is
@@ -719,9 +719,13 @@ public sealed partial class JsCompiler
 
     private void EmitFunctionConstructor(
         string name, Chunk body, int arity, IReadOnlyList<UpvalueRef> upvalues,
-        Runtime.JsFunctionKind kind)
+        Runtime.JsFunctionKind kind, string? sourceText = null)
     {
-        var fn = new Runtime.JsFunction(name, body, arity) { Kind = kind };
+        var fn = new Runtime.JsFunction(name, body, arity)
+        {
+            Kind = kind,
+            SourceText = sourceText,
+        };
         var fnIdx = _b.AddConstant(fn);
 
         if (upvalues.Count == 0)
@@ -2822,15 +2826,17 @@ public sealed partial class JsCompiler
             _ => throw new InvalidOperationException("arrow body must be block or expression"),
         };
         var fe = BuildFunctionExpressionShim(null, arrow.Params, body, arrow.Start, arrow.End,
-            isAsync: arrow.Async, isGenerator: arrow.Generator, strict: arrow.Strict);
+            isAsync: arrow.Async, isGenerator: arrow.Generator, strict: arrow.Strict,
+            sourceText: arrow.SourceText);
         EmitFunctionExpression(fe, isArrow: true);
     }
 
     private static FunctionExpression BuildFunctionExpressionShim(
         Identifier? name, IReadOnlyList<Expression> @params, BlockStatement body,
         Starling.Js.Lex.JsPosition start, Starling.Js.Lex.JsPosition end,
-        bool isAsync = false, bool isGenerator = false, bool strict = false)
-        => new(name, @params, body, Generator: isGenerator, start, end, Async: isAsync, Strict: strict);
+        bool isAsync = false, bool isGenerator = false, bool strict = false, string? sourceText = null)
+        => new(name, @params, body, Generator: isGenerator, start, end,
+            Async: isAsync, Strict: strict, SourceText: sourceText);
 
     /// <summary>§14.11 — emit a with-aware opcode that on a runtime hit (an
     /// enclosing object Environment Record has the binding) jumps PAST the
@@ -4106,7 +4112,7 @@ public sealed partial class JsCompiler
         var name = fe.Name?.Name ?? "";
         var chunk = sub._b.Build(name);
         var kind = ResolveFunctionKind(fe.Async, fe.Generator);
-        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind);
+        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind, fe.SourceText);
     }
 
     /// <summary>B1b-2c — emit <c>yield expr</c> / <c>yield</c> / <c>yield* iter</c>.
