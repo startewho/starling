@@ -1195,6 +1195,37 @@ public static class NodeBindings
             return JsValue.Object(clObj);
         });
 
+        // Per-interface reflected DOMTokenList attributes (HTML): relList (a,
+        // area, link — and SVGAElement), iframe.sandbox, link.sizes,
+        // output.htmlFor (reflects "for"). Gated by local name so unrelated
+        // elements report undefined; the wrapper is cached for stable identity.
+        void DefineTokenListAttr(string jsName, string attr, string ck, Func<Element, bool> applies)
+        {
+            EventTargetBinding.DefineAccessor(realm, elProto, jsName, (thisV, _) =>
+            {
+                if (DomWrappers.UnwrapElement(thisV) is not { } e || !applies(e)
+                    || thisV.AsObject is not { } w)
+                    return JsValue.Undefined;
+                var hit = w.Get(ck);
+                if (!hit.IsUndefined) return hit;
+                var o = JsValue.Object(BuildDomTokenList(realm, e, e.TokenListFor(attr), attr));
+                w.Set(ck, o);
+                return o;
+            });
+        }
+        const string svgNs = "http://www.w3.org/2000/svg";
+        // relList: HTML a/area/link, plus SVGAElement (svg <a>). Other namespaces
+        // (MathML, custom, null) report undefined per the IDL.
+        DefineTokenListAttr("relList", "rel", "__relList__", e =>
+            (e.Namespace == Element.HtmlNamespace && e.LocalName is "a" or "area" or "link")
+            || (e.Namespace == svgNs && e.LocalName == "a"));
+        DefineTokenListAttr("sandbox", "sandbox", "__sandbox__",
+            e => e.Namespace == Element.HtmlNamespace && e.LocalName == "iframe");
+        DefineTokenListAttr("sizes", "sizes", "__sizes__",
+            e => e.Namespace == Element.HtmlNamespace && e.LocalName == "link");
+        DefineTokenListAttr("htmlFor", "for", "__htmlForList__",
+            e => e.Namespace == Element.HtmlNamespace && e.LocalName == "output");
+
         // ---- style ----------------------------------------------------------
         // Returns a per-element inline-style CSSStyleDeclaration-shaped object.
         // The element stores inline styles as a flat string in the `style`
@@ -2900,9 +2931,11 @@ public static class NodeBindings
     /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
     /// forEach, keys, values, entries. Properties: length, value.</summary>
     private static JsObject BuildDomTokenList(JsRealm realm, Element element)
+        => BuildDomTokenList(realm, element, element.ClassList, "class");
+
+    private static JsObject BuildDomTokenList(JsRealm realm, Element element, DomTokenList cl, string attrName)
     {
         var obj = new JsObject(realm.ObjectPrototype);
-        var cl = element.ClassList;
 
         // Object.prototype.toString.call(classList) === "[object DOMTokenList]".
         obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
@@ -2911,10 +2944,10 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, obj, "length",
             (_, _) => JsValue.Number(cl.Count));
         EventTargetBinding.DefineAccessor(realm, obj, "value",
-            (_, _) => JsValue.String(element.GetAttribute("class") ?? ""),
+            (_, _) => JsValue.String(element.GetAttribute(attrName) ?? ""),
             (_, args) =>
             {
-                element.SetAttribute("class", args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
+                element.SetAttribute(attrName, args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
                 return JsValue.Undefined;
             });
 
@@ -3021,7 +3054,7 @@ public static class NodeBindings
         obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
             PropertyDescriptor.Data(obj.Get("values"), writable: true, enumerable: false, configurable: true));
         EventTargetBinding.DefineMethod(realm, obj, "toString",
-            (_, _) => JsValue.String(element.GetAttribute("class") ?? ""), length: 0);
+            (_, _) => JsValue.String(element.GetAttribute(attrName) ?? ""), length: 0);
 
         return obj;
     }
