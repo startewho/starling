@@ -1458,9 +1458,49 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "doctype", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.DocType is { } dt
                 ? JsValue.Object(DomWrappers.Wrap(realm, dt)) : JsValue.Null);
+        // HTML §3.1.5 document.body: the first child of the html element that is
+        // a body or frameset element in the HTML namespace — where the html
+        // element is the document element only when it is itself an HTML-namespace
+        // <html>. A body/frameset that is the root, under a non-HTML <html>, or in
+        // another namespace does not count.
         EventTargetBinding.DefineAccessor(realm, docProto, "body", (thisV, _) =>
-            DomWrappers.UnwrapDocument(thisV)?.Body is { } b
-                ? JsValue.Object(DomWrappers.Wrap(realm, b)) : JsValue.Null);
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d
+                || d.DocumentElement is not { LocalName: "html", Namespace: Element.HtmlNamespace } htmlEl)
+                return JsValue.Null;
+            for (var c = htmlEl.FirstChild; c is not null; c = c.NextSibling)
+                if (c is Element { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" } b)
+                    return JsValue.Object(DomWrappers.Wrap(realm, b));
+            return JsValue.Null;
+        },
+        (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Undefined;
+            var val = args.Length > 0 ? args[0] : JsValue.Undefined;
+            // The IDL type is HTMLElement?: a non-element (string, plain object)
+            // is a TypeError; an element that is not a body/frameset is a
+            // HierarchyRequestError.
+            if (!val.IsObject || DomWrappers.UnwrapElement(val) is not { } newEl)
+                throw new JsThrow(realm.NewTypeError("document.body must be an HTMLElement"));
+            if (newEl is not { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" })
+                throw DomExceptionBinding.Throw(realm, "HierarchyRequestError",
+                    "document.body must be a body or frameset element");
+            // Replace the current body/frameset if present; otherwise append to the
+            // document element (HierarchyRequestError when there is none).
+            Element? current = null;
+            if (d.DocumentElement is { LocalName: "html", Namespace: Element.HtmlNamespace } htmlEl2)
+                for (var c = htmlEl2.FirstChild; c is not null; c = c.NextSibling)
+                    if (c is Element { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" } b)
+                    { current = b; break; }
+            if (current is not null)
+                current.ParentNode!.ReplaceChild(newEl, current);
+            else if (d.DocumentElement is { } root)
+                root.AppendChild(newEl);
+            else
+                throw DomExceptionBinding.Throw(realm, "HierarchyRequestError",
+                    "document.body cannot be set without a document element");
+            return JsValue.Undefined;
+        });
         EventTargetBinding.DefineAccessor(realm, docProto, "head", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.Head is { } h
                 ? JsValue.Object(DomWrappers.Wrap(realm, h)) : JsValue.Null);
