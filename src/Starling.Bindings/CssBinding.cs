@@ -1,4 +1,5 @@
 using Starling.Css.TypedOm;
+using Starling.Js.Intrinsics;
 using Starling.Js.Runtime;
 
 namespace Starling.Bindings;
@@ -66,6 +67,11 @@ internal static class CssBinding
             // Descriptor is valid (validity rules mirror the @property at-rule model).
             return JsValue.Undefined;
         }, length: 1);
+
+        // WebIDL §3.10 namespace object — @@toStringTag is the namespace name so
+        // Object.prototype.toString.call(CSS) yields "[object CSS]".
+        css.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("CSS"), writable: false, enumerable: false, configurable: true));
 
         global.DefineOwnProperty("CSS",
             PropertyDescriptor.Data(JsValue.Object(css), writable: true, enumerable: false, configurable: true));
