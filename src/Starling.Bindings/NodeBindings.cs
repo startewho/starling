@@ -1616,7 +1616,8 @@ public static class NodeBindings
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length < 2)
                 throw new JsThrow(realm.NewTypeError("createElementNS requires (namespace, qualifiedName)"));
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var qname = args[1].IsNullish ? "" : JsValue.ToStringValue(args[1]);
+            // qualifiedName is a non-nullable DOMString: null -> "null".
+            var qname = JsValue.ToStringValue(args[1]);
             ValidateQualifiedName(realm, ns, qname); // throws InvalidCharacterError / NamespaceError
             return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElementNS(ns, qname)));
         }, length: 2);
@@ -2701,7 +2702,8 @@ public static class NodeBindings
 
     private static string NormalizeNodeName(Node n) => n switch
     {
-        Element e => e.TagName.ToUpperInvariant(),
+        // Like tagName: HTML-namespace elements are ASCII-uppercased, others keep case.
+        Element e => e.Namespace == Element.HtmlNamespace ? e.TagName.ToUpperInvariant() : e.TagName,
         Document => "#document",
         Text => "#text",
         Comment => "#comment",
