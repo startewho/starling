@@ -96,6 +96,18 @@ public static class IFrameBinding
     public static BrowsingContext? TryGetContext(Element frame)
         => Contexts.TryGetValue(frame, out var c) ? c : null;
 
+    /// <summary>The window (browsing-context global) that a document belongs to,
+    /// or null if the document is not the content document of any iframe. Used by
+    /// <c>document.defaultView</c> so an iframe's contentDocument resolves to its
+    /// contentWindow (the few live iframes make the scan cheap).</summary>
+    public static JsObject? WindowForDocument(JsRealm parentRealm, Document doc)
+    {
+        foreach (var kv in Contexts)
+            if (ReferenceEquals(kv.Value.Document, doc))
+                return EnsureContentWindow(parentRealm, kv.Value);
+        return null;
+    }
+
     /// <summary>Replace the iframe's document (used by the loader when a
     /// new src lands). Disposes the previous nested runtime, if any.</summary>
     private static void AssignDocument(BrowsingContext ctx, Document doc, string url)
