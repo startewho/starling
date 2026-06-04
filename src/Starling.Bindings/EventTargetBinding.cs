@@ -63,6 +63,9 @@ public static class EventTargetBinding
         DefineAccessor(realm, evProto, "type", (thisV, _) => HostEventOr(thisV, e => JsValue.String(e.Type), JsValue.String("")));
         DefineAccessor(realm, evProto, "target", (thisV, _) => HostEventOr(thisV, e =>
             e.Target is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, e.Target)), JsValue.Null));
+        // DOM §2.2 — srcElement: legacy alias for target (returns null when unset).
+        DefineAccessor(realm, evProto, "srcElement", (thisV, _) => HostEventOr(thisV, e =>
+            e.Target is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, e.Target)), JsValue.Null));
         DefineAccessor(realm, evProto, "currentTarget", (thisV, _) => HostEventOr(thisV, e =>
             e.CurrentTarget is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, e.CurrentTarget)), JsValue.Null));
         DefineAccessor(realm, evProto, "bubbles", (thisV, _) => HostEventOr(thisV, e => JsValue.Boolean(e.Bubbles), JsValue.False));
@@ -219,7 +222,7 @@ public static class EventTargetBinding
         var uiEvProto = new JsObject(evProto);
         realm.UiEventPrototype = uiEvProto;
         DefineAccessor(realm, uiEvProto, "detail", (t, _) => TryGetHostEvent(t, out var e) && e is UiEvent u ? JsValue.Number(u.Detail) : JsValue.Number(0));
-        DefineAccessor(realm, uiEvProto, "view", (_, _) => JsValue.Null);
+        DefineAccessor(realm, uiEvProto, "view", (t, _) => InitMember(t, "view", JsValue.Null));
         DefineSubtypeCtor(realm, uiEvProto, "UIEvent", (type, init) =>
             new UiEvent(type, ReadInit(init)) { Detail = (int)NumOf(init, "detail") });
 
@@ -234,7 +237,7 @@ public static class EventTargetBinding
         DefineAccessor(realm, mouseEvProto, "pageX", (t, _) => MouseNum(t, m => m.ClientX));
         DefineAccessor(realm, mouseEvProto, "pageY", (t, _) => MouseNum(t, m => m.ClientY));
         DefineAccessor(realm, mouseEvProto, "button", (t, _) => MouseNum(t, m => m.Button));
-        DefineAccessor(realm, mouseEvProto, "buttons", (t, _) => JsValue.Number(0));
+        DefineAccessor(realm, mouseEvProto, "buttons", (t, _) => InitNum(t, "buttons"));
         DefineAccessor(realm, mouseEvProto, "ctrlKey", (t, _) => MouseBool(t, m => m.CtrlKey));
         DefineAccessor(realm, mouseEvProto, "shiftKey", (t, _) => MouseBool(t, m => m.ShiftKey));
         DefineAccessor(realm, mouseEvProto, "altKey", (t, _) => MouseBool(t, m => m.AltKey));
@@ -261,7 +264,11 @@ public static class EventTargetBinding
         DefineAccessor(realm, kbdEvProto, "key", (t, _) => KbdStr(t, k => k.Key));
         DefineAccessor(realm, kbdEvProto, "code", (t, _) => KbdStr(t, k => k.Code));
         DefineAccessor(realm, kbdEvProto, "repeat", (t, _) => TryGetHostEvent(t, out var e) && e is KeyboardEvent k ? JsValue.Boolean(k.Repeat) : JsValue.False);
-        DefineAccessor(realm, kbdEvProto, "location", (_, _) => JsValue.Number(0));
+        DefineAccessor(realm, kbdEvProto, "location", (t, _) => InitNum(t, "location"));
+        DefineAccessor(realm, kbdEvProto, "isComposing", (t, _) => InitBool(t, "isComposing"));
+        DefineAccessor(realm, kbdEvProto, "charCode", (t, _) => InitNum(t, "charCode"));
+        DefineAccessor(realm, kbdEvProto, "keyCode", (t, _) => InitNum(t, "keyCode"));
+        DefineAccessor(realm, kbdEvProto, "which", (t, _) => InitNum(t, "which"));
         DefineAccessor(realm, kbdEvProto, "ctrlKey", (t, _) => KbdBool(t, k => k.CtrlKey));
         DefineAccessor(realm, kbdEvProto, "shiftKey", (t, _) => KbdBool(t, k => k.ShiftKey));
         DefineAccessor(realm, kbdEvProto, "altKey", (t, _) => KbdBool(t, k => k.AltKey));
@@ -292,17 +299,17 @@ public static class EventTargetBinding
         // from UIEvent. No extra properties for now; these just need to be
         // constructable so `new WheelEvent('wheel')` doesn't throw.
         var wheelEvProto = new JsObject(mouseEvProto);
-        DefineAccessor(realm, wheelEvProto, "deltaX", (_, _) => JsValue.Number(0));
-        DefineAccessor(realm, wheelEvProto, "deltaY", (_, _) => JsValue.Number(0));
-        DefineAccessor(realm, wheelEvProto, "deltaZ", (_, _) => JsValue.Number(0));
-        DefineAccessor(realm, wheelEvProto, "deltaMode", (_, _) => JsValue.Number(0));
+        DefineAccessor(realm, wheelEvProto, "deltaX", (t, _) => InitNum(t, "deltaX"));
+        DefineAccessor(realm, wheelEvProto, "deltaY", (t, _) => InitNum(t, "deltaY"));
+        DefineAccessor(realm, wheelEvProto, "deltaZ", (t, _) => InitNum(t, "deltaZ"));
+        DefineAccessor(realm, wheelEvProto, "deltaMode", (t, _) => InitNum(t, "deltaMode"));
         DefineSubtypeCtor(realm, wheelEvProto, "WheelEvent", (type, init) => new MouseEvent(type, ReadInit(init)));
 
         var inputEvProto = new JsObject(uiEvProto);
         DefineSubtypeCtor(realm, inputEvProto, "InputEvent", (type, init) => new UiEvent(type, ReadInit(init)));
 
         var compositionEvProto = new JsObject(uiEvProto);
-        DefineAccessor(realm, compositionEvProto, "data", (_, _) => JsValue.String(""));
+        DefineAccessor(realm, compositionEvProto, "data", (t, _) => JsValue.String(JsValue.ToStringValue(InitMember(t, "data", JsValue.String("")))));
         DefineSubtypeCtor(realm, compositionEvProto, "CompositionEvent", (type, init) => new UiEvent(type, ReadInit(init)));
 
         // HashChangeEvent / PopStateEvent / StorageEvent / MessageEvent — stubs
@@ -350,6 +357,21 @@ public static class EventTargetBinding
     private static double NumOf(JsValue v, string k) => v.IsObject && !v.AsObject.Get(k).IsUndefined ? JsValue.ToNumber(v.AsObject.Get(k)) : 0;
     private static bool BoolOf(JsValue v, string k) => v.IsObject && JsValue.ToBoolean(v.AsObject.Get(k));
     private static string StrOf(JsValue v, string k) => v.IsObject && v.AsObject.Get(k).IsString ? v.AsObject.Get(k).AsString : "";
+    /// <summary>Read a member of the init dictionary the event was constructed
+    /// with. Returns <paramref name="fallback"/> when the wrapper carries no init
+    /// dict or the member is undefined.</summary>
+    private static JsValue InitMember(JsValue thisV, string key, JsValue fallback)
+    {
+        if (thisV.IsObject && thisV.AsObject is JsEventWrapper w && w.InitDict.IsObject)
+        {
+            var v = w.InitDict.AsObject.Get(key);
+            if (!v.IsUndefined) return v;
+        }
+        return fallback;
+    }
+    private static JsValue InitNum(JsValue thisV, string key) => JsValue.Number(JsValue.ToNumber(InitMember(thisV, key, JsValue.Number(0))));
+    private static JsValue InitBool(JsValue thisV, string key) => JsValue.Boolean(JsValue.ToBoolean(InitMember(thisV, key, JsValue.False)));
+
     private static JsValue MouseNum(JsValue t, Func<MouseEvent, double> f) => TryGetHostEvent(t, out var e) && e is MouseEvent m ? JsValue.Number(f(m)) : JsValue.Number(0);
     private static JsValue MouseBool(JsValue t, Func<MouseEvent, bool> f) => TryGetHostEvent(t, out var e) && e is MouseEvent m ? JsValue.Boolean(f(m)) : JsValue.False;
     private static JsValue KbdStr(JsValue t, Func<KeyboardEvent, string> f) => TryGetHostEvent(t, out var e) && e is KeyboardEvent k ? JsValue.String(f(k)) : JsValue.String("");
@@ -361,7 +383,16 @@ public static class EventTargetBinding
         {
             if (args.Length == 0 || args[0].IsUndefined)
                 throw new JsThrow(realm.NewTypeError($"{name} constructor requires a type"));
-            return JsValue.Object(new JsEventWrapper(proto, build(JsValue.ToStringValue(args[0]), args.Length > 1 ? args[1] : JsValue.Undefined)));
+            var init = args.Length > 1 ? args[1] : JsValue.Undefined;
+            // UIEvents §3.5 — `view` must be a Window (a Window wrapper) or null.
+            // A primitive like a Number is a TypeError per WebIDL interface coercion.
+            if (init.IsObject)
+            {
+                var view = init.AsObject.Get("view");
+                if (!view.IsUndefined && !view.IsNull && !view.IsObject)
+                    throw new JsThrow(realm.NewTypeError($"{name}: 'view' member is not a Window"));
+            }
+            return JsValue.Object(new JsEventWrapper(proto, build(JsValue.ToStringValue(args[0]), init), init));
         }, isConstructor: true);
         ctor.DefineOwnProperty("prototype", PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
         proto.DefineOwnProperty("constructor", PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -643,7 +674,21 @@ public static class EventTargetBinding
 internal class JsEventWrapper : JsObject
 {
     public Event HostEvent { get; }
-    public JsEventWrapper(JsObject proto, Event hostEvent) : base(proto) { HostEvent = hostEvent; }
+    /// <summary>The raw JS init dictionary the event was constructed with, kept so
+    /// subtype accessors (view/buttons/deltaX/isComposing/location/data, …) that
+    /// have no host-class slot can read their value back. Undefined when none was
+    /// supplied (e.g. legacy createEvent or host-synthesized events).</summary>
+    public JsValue InitDict { get; }
+    public JsEventWrapper(JsObject proto, Event hostEvent) : base(proto)
+    {
+        HostEvent = hostEvent;
+        InitDict = JsValue.Undefined;
+    }
+    public JsEventWrapper(JsObject proto, Event hostEvent, JsValue initDict) : base(proto)
+    {
+        HostEvent = hostEvent;
+        InitDict = initDict;
+    }
 }
 
 /// <summary>Wrapper for <c>CustomEvent</c> that carries a JS-value
