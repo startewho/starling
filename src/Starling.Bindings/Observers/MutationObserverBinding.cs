@@ -70,6 +70,12 @@ public static class MutationObserverBinding
             foreach (var s in states) s.MaybeQueueChildList(target, added, removed, prev, next);
     }
 
+    private static void OnCharacterDataChanged(Document doc, Node target, string oldValue)
+    {
+        if (DocStates.TryGetValue(doc, out var states))
+            foreach (var s in states) s.MaybeQueueCharacterData(target, oldValue);
+    }
+
     public static void Install(JsRuntime runtime, Document document)
     {
         ArgumentNullException.ThrowIfNull(runtime);
@@ -79,6 +85,7 @@ public static class MutationObserverBinding
         // an equivalent closure when re-installed on the same document).
         document.AttributeMutated = (el, attr, old) => OnAttributeChanged(document, el, attr, old);
         document.ChildListMutated = (t, a, r, p, n) => OnChildListChanged(document, t, a, r, p, n);
+        document.CharacterDataMutated = (t, old) => OnCharacterDataChanged(document, t, old);
         if (realm.MutationObserverConstructor is not null) return; // idempotent
 
         var proto = new JsObject(realm.ObjectPrototype);
@@ -274,6 +281,32 @@ internal sealed class MutationObserverState
         P("attributeNamespace", JsValue.Null);
         P("oldValue", JsValue.Null);
         return r;
+    }
+
+    /// <summary>DOM §4.3.4 — queue a characterData MutationRecord when an
+    /// observation with characterData matches the mutated node.</summary>
+    public void MaybeQueueCharacterData(Node target, string oldValue)
+    {
+        foreach (var (obsTarget, opts) in _observations)
+        {
+            if (!opts.CharacterData) continue;
+            if (!Matches(obsTarget, target, opts.Subtree)) continue;
+            var realm = _runtime.Realm;
+            var r = new JsObject(realm.MutationRecordPrototype ?? realm.ObjectPrototype);
+            void P(string k, JsValue v) => r.DefineOwnProperty(k,
+                PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: true));
+            P("type", JsValue.String("characterData"));
+            P("target", JsValue.Object(DomWrappers.Wrap(realm, target)));
+            P("oldValue", opts.CharacterDataOldValue ? JsValue.String(oldValue) : JsValue.Null);
+            P("addedNodes", JsValue.Object(new JsArray(realm)));
+            P("removedNodes", JsValue.Object(new JsArray(realm)));
+            P("previousSibling", JsValue.Null);
+            P("nextSibling", JsValue.Null);
+            P("attributeName", JsValue.Null);
+            P("attributeNamespace", JsValue.Null);
+            EnqueueRecord(r);
+            return;
+        }
     }
 
     private static bool Matches(Node target, Node el, bool subtree)

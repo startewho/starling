@@ -244,6 +244,11 @@ public sealed class Document : Node
     /// Subscribed by MutationObserverBinding to queue childList MutationRecords.</summary>
     public Action<Node, Node?, Node?, Node?, Node?>? ChildListMutated { get; set; }
 
+    /// <summary>Fired after a CharacterData (Text/Comment/CDATA) data change:
+    /// (target, oldData). Subscribed by MutationObserverBinding for characterData
+    /// MutationRecords.</summary>
+    public Action<Node, string>? CharacterDataMutated { get; set; }
+
     /// <summary>Raise <see cref="NodeConnected"/> for <paramref name="node"/>
     /// if a host has subscribed. Called from the tree-mutation path.</summary>
     internal void NotifyNodeConnected(Node node) => NodeConnected?.Invoke(node);
