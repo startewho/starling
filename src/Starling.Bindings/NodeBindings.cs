@@ -1604,7 +1604,7 @@ public static class NodeBindings
                 throw new JsThrow(realm.NewTypeError("createAttributeNS requires (namespace, qualifiedName)"));
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
             var qname = args[1].IsNullish ? "" : JsValue.ToStringValue(args[1]);
-            ValidateQualifiedName(realm, ns, qname); // throws InvalidCharacterError / NamespaceError
+            ValidateQualifiedName(ThrowRealmFor(realm, d), ns, qname); // cross-realm-aware throw
             var attr = d.CreateAttributeNS(ns, qname);
             return JsValue.Object(DomWrappers.WrapAttr(realm, attr));
         }, length: 2);
@@ -1616,7 +1616,7 @@ public static class NodeBindings
             var name = JsValue.ToStringValue(args[0]);
             // DOM §4.5: an invalid Name throws InvalidCharacterError.
             if (!IsValidName(name))
-                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{name}' is not a valid element name");
+                throw DomExceptionBinding.Throw(ThrowRealmFor(realm, d), "InvalidCharacterError", $"'{name}' is not a valid element name");
             // An HTML document lowercases the name; an XML document preserves its
             // case (and uses the null namespace).
             var el = d.IsHtml ? d.CreateElement(name) : d.CreateElementNS(null, name);
@@ -1629,7 +1629,10 @@ public static class NodeBindings
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
             // qualifiedName is a non-nullable DOMString: null -> "null".
             var qname = JsValue.ToStringValue(args[1]);
-            ValidateQualifiedName(realm, ns, qname); // throws InvalidCharacterError / NamespaceError
+            // Validation errors must come from the target document's realm (its
+            // DOMException), which differs from the caller's realm when `d` is a
+            // cross-realm iframe contentDocument.
+            ValidateQualifiedName(ThrowRealmFor(realm, d), ns, qname);
             return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElementNS(ns, qname)));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "createEvent", (thisV, args) =>
@@ -2557,6 +2560,13 @@ public static class NodeBindings
             or System.Globalization.UnicodeCategory.SpacingCombiningMark
             or System.Globalization.UnicodeCategory.EnclosingMark
             or System.Globalization.UnicodeCategory.DecimalDigitNumber;
+
+    /// <summary>The realm whose DOMException a DOM method should throw when it
+    /// operates on <paramref name="doc"/>: the document's own (iframe) realm when
+    /// it has a nested browsing context, else the caller's realm. WebIDL requires
+    /// the error to be an instance of the target document's <c>DOMException</c>.</summary>
+    private static JsRealm ThrowRealmFor(JsRealm realm, Document doc)
+        => IFrameBinding.RealmForDocument(realm, doc) ?? realm;
 
     private static bool IsValidName(string name)
     {

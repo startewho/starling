@@ -108,6 +108,23 @@ public static class IFrameBinding
         return null;
     }
 
+    /// <summary>The JS realm associated with <paramref name="doc"/> when it is the
+    /// content document of some iframe, or null when it has no nested browsing
+    /// context. Used so a DOM method invoked on a cross-realm document (e.g.
+    /// <c>iframeDoc.createElementNS(bad)</c>) throws its DOMException from that
+    /// document's realm — WebIDL's "relevant realm" — so the error is an instance
+    /// of the iframe's <c>DOMException</c>, not the caller's.</summary>
+    public static JsRealm? RealmForDocument(JsRealm parentRealm, Document doc)
+    {
+        foreach (var kv in Contexts)
+            if (ReferenceEquals(kv.Value.Document, doc))
+            {
+                EnsureContentWindow(parentRealm, kv.Value); // lazily stands up the nested realm
+                return kv.Value.Runtime?.Realm;
+            }
+        return null;
+    }
+
     /// <summary>Replace the iframe's document (used by the loader when a
     /// new src lands). Disposes the previous nested runtime, if any.</summary>
     private static void AssignDocument(BrowsingContext ctx, Document doc, string url)
