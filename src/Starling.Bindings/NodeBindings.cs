@@ -2020,7 +2020,7 @@ public static class NodeBindings
     }
 
     /// <summary>A live HTMLCollection over the elements yielded by <paramref name="source"/>.</summary>
-    private static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
+    internal static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
         => JsValue.Object(new HtmlCollectionObject(realm, HtmlCollectionProto(realm), source));
 
     private static void InstallFormControlAccessors(JsRealm realm, JsObject proto)
