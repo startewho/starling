@@ -3,7 +3,7 @@ using Starling.Js.Lex;
 
 namespace Starling.Js.Parse;
 
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     private Expression ParseBindingTarget()
     {
@@ -180,7 +180,7 @@ public sealed partial class JsParser
         {
             ArrayExpression array => ReinterpretArrayPattern(array),
             ObjectExpression obj => ReinterpretObjectPattern(obj),
-            AssignmentExpression { Op: "=" } assignment => new AssignmentPattern(
+            AssignmentExpression { Op: JsTokenKind.Eq } assignment => new AssignmentPattern(
                 ReinterpretAssignmentTarget(assignment.Target), assignment.Value, assignment.Start, assignment.End),
             AssignmentPattern assignment => new AssignmentPattern(
                 ReinterpretAssignmentTarget(assignment.Target), assignment.Default, assignment.Start, assignment.End),
@@ -214,7 +214,7 @@ public sealed partial class JsParser
     private Expression ReinterpretBindingParameter(Expression expr)
         => expr switch
         {
-            AssignmentExpression { Op: "=" } assignment => new AssignmentPattern(
+            AssignmentExpression { Op: JsTokenKind.Eq } assignment => new AssignmentPattern(
                 ReinterpretBindingParameter(assignment.Target), assignment.Value, assignment.Start, assignment.End),
             AssignmentPattern assignment => new AssignmentPattern(
                 ReinterpretBindingParameter(assignment.Target), assignment.Default, assignment.Start, assignment.End),
@@ -252,12 +252,12 @@ public sealed partial class JsParser
                 // §13.15.5.1 — a rest element's AssignmentRestElement is a bare
                 // DestructuringAssignmentTarget; it may NOT carry an Initializer
                 // (`[...x = 1] = …` is a SyntaxError).
-                if (spread.Argument is AssignmentExpression { Op: "=" } or AssignmentPattern)
+                if (spread.Argument is AssignmentExpression { Op: JsTokenKind.Eq } or AssignmentPattern)
                     throw new JsParseException("rest element may not have a default value", spread.Start);
                 elements.Add(new ArrayPatternRestElement(ReinterpretAssignmentTarget(spread.Argument), spread.Start, spread.End));
                 continue;
             }
-            if (element is AssignmentExpression { Op: "=" } assignment)
+            if (element is AssignmentExpression { Op: JsTokenKind.Eq } assignment)
             {
                 var target = ReinterpretAssignmentTarget(assignment.Target);
                 elements.Add(new ArrayPatternBindingElement(target, assignment.Value, assignment.Start, assignment.End));
@@ -289,7 +289,7 @@ public sealed partial class JsParser
 
             var value = prop.Value;
             Expression? fallback = null;
-            if (value is AssignmentExpression { Op: "=" } assignment)
+            if (value is AssignmentExpression { Op: JsTokenKind.Eq } assignment)
             {
                 value = assignment.Target;
                 fallback = assignment.Value;

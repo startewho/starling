@@ -7,8 +7,8 @@ namespace Starling.Js.Lex;
 /// </summary>
 public readonly struct JsToken
 {
-    private readonly string? _source;
-    private readonly string? _lexeme;
+    private readonly ReadOnlyMemory<char> _source;
+    private readonly ReadOnlyMemory<char> _lexeme;
     private readonly object? _value;
     private readonly JsTokenValueKind _valueKind;
     private readonly int _valueOffset;
@@ -18,19 +18,29 @@ public readonly struct JsToken
 
     public JsToken(
         JsTokenKind kind,
+        ReadOnlyMemory<char> lexeme,
+        JsPosition start,
+        JsPosition end,
+        object? value = null)
+        : this(kind, source: default, lexeme, offset: 0, length: lexeme.Length, start, end,
+            value, JsTokenValueKind.Direct, 0, 0, 0, 0, false, false, false, false)
+    {
+    }
+
+    public JsToken(
+        JsTokenKind kind,
         string lexeme,
         JsPosition start,
         JsPosition end,
         object? value = null)
-        : this(kind, source: null, lexeme, offset: 0, lexeme.Length, start, end,
-            value, JsTokenValueKind.Direct, 0, 0, 0, 0, false, false, false, false)
+        : this(kind, lexeme.AsMemory(), start, end, value)
     {
     }
 
     private JsToken(
         JsTokenKind kind,
-        string? source,
-        string? lexeme,
+        ReadOnlyMemory<char> source,
+        ReadOnlyMemory<char> lexeme,
         int offset,
         int length,
         JsPosition start,
@@ -68,11 +78,11 @@ public readonly struct JsToken
     public JsTokenKind Kind { get; }
 
     /// <summary>The raw token text, or the decoded identifier text for escaped identifiers.</summary>
-    public string Lexeme => _lexeme ?? SourceSlice(Offset, Length);
+    public string Lexeme => !_lexeme.IsEmpty ? _lexeme.ToString() : SourceSlice(Offset, Length);
 
     /// <summary>The same text as <see cref="Lexeme"/>, exposed as a span to avoid allocation.</summary>
     public ReadOnlySpan<char> LexemeSpan
-        => _lexeme is not null ? _lexeme.AsSpan() : SourceSpan(Offset, Length);
+        => !_lexeme.IsEmpty ? _lexeme.Span : SourceSpan(Offset, Length);
 
     public int Offset { get; }
 
@@ -126,7 +136,7 @@ public readonly struct JsToken
 
     internal static JsToken FromSource(
         JsTokenKind kind,
-        string source,
+        ReadOnlyMemory<char> source,
         int offset,
         int length,
         JsPosition start,
@@ -136,7 +146,21 @@ public readonly struct JsToken
         bool legacyOctal = false,
         bool containsEscape = false,
         bool invalidEscape = false)
-        => new(kind, source, lexeme: null, offset, length, start, end,
+        => new(kind, source, lexeme: default, offset, length, start, end,
+            value, JsTokenValueKind.Direct, 0, 0, 0, 0,
+            precededByLineTerminator, legacyOctal, containsEscape, invalidEscape);
+
+    internal static JsToken FromDecodedText(
+        JsTokenKind kind,
+        ReadOnlyMemory<char> text,
+        JsPosition start,
+        JsPosition end,
+        bool precededByLineTerminator,
+        object? value = null,
+        bool legacyOctal = false,
+        bool containsEscape = false,
+        bool invalidEscape = false)
+        => new(kind, source: default, text, offset: 0, length: text.Length, start, end,
             value, JsTokenValueKind.Direct, 0, 0, 0, 0,
             precededByLineTerminator, legacyOctal, containsEscape, invalidEscape);
 
@@ -150,12 +174,11 @@ public readonly struct JsToken
         bool legacyOctal = false,
         bool containsEscape = false,
         bool invalidEscape = false)
-        => new(kind, source: null, text, offset: 0, text.Length, start, end,
-            value, JsTokenValueKind.Direct, 0, 0, 0, 0,
-            precededByLineTerminator, legacyOctal, containsEscape, invalidEscape);
+        => FromDecodedText(kind, text.AsMemory(), start, end, precededByLineTerminator,
+            value, legacyOctal, containsEscape, invalidEscape);
 
     internal static JsToken StringLiteralNoEscapes(
-        string source,
+        ReadOnlyMemory<char> source,
         int offset,
         int length,
         int valueOffset,
@@ -163,12 +186,12 @@ public readonly struct JsToken
         JsPosition start,
         JsPosition end,
         bool precededByLineTerminator)
-        => new(JsTokenKind.StringLiteral, source, lexeme: null, offset, length, start, end,
+        => new(JsTokenKind.StringLiteral, source, lexeme: default, offset, length, start, end,
             value: null, JsTokenValueKind.StringLiteralNoEscapes, valueOffset, valueLength, 0, 0,
             precededByLineTerminator, legacyOctal: false, containsEscape: false, invalidEscape: false);
 
     internal static JsToken BigIntLiteral(
-        string source,
+        ReadOnlyMemory<char> source,
         int offset,
         int length,
         int digitsOffset,
@@ -176,12 +199,12 @@ public readonly struct JsToken
         JsPosition start,
         JsPosition end,
         bool precededByLineTerminator)
-        => new(JsTokenKind.BigIntLiteral, source, lexeme: null, offset, length, start, end,
+        => new(JsTokenKind.BigIntLiteral, source, lexeme: default, offset, length, start, end,
             value: null, JsTokenValueKind.BigIntDigits, digitsOffset, digitsLength, 0, 0,
             precededByLineTerminator, legacyOctal: false, containsEscape: false, invalidEscape: false);
 
     internal static JsToken RegExpLiteral(
-        string source,
+        ReadOnlyMemory<char> source,
         int offset,
         int length,
         int patternOffset,
@@ -191,16 +214,16 @@ public readonly struct JsToken
         JsPosition start,
         JsPosition end,
         bool precededByLineTerminator)
-        => new(JsTokenKind.RegExpLiteral, source, lexeme: null, offset, length, start, end,
+        => new(JsTokenKind.RegExpLiteral, source, lexeme: default, offset, length, start, end,
             value: null, JsTokenValueKind.RegExpLiteral,
             patternOffset, patternLength, flagsOffset, flagsLength,
             precededByLineTerminator, legacyOctal: false, containsEscape: false, invalidEscape: false);
 
     private ReadOnlySpan<char> SourceSpan(int offset, int length)
-        => _source is null ? ReadOnlySpan<char>.Empty : _source.AsSpan(offset, length);
+        => _source.IsEmpty ? ReadOnlySpan<char>.Empty : _source.Span.Slice(offset, length);
 
     private string SourceSlice(int offset, int length)
-        => _source is null ? string.Empty : _source.Substring(offset, length);
+        => _source.IsEmpty ? string.Empty : _source.Span.Slice(offset, length).ToString();
 
     private static string RemoveSeparators(ReadOnlySpan<char> source)
     {
