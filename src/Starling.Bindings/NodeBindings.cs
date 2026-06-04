@@ -1485,7 +1485,13 @@ public static class NodeBindings
         // DOM §4.5 — document.contentType: "text/html" for an HTML document,
         // "application/xml" for one made by createDocument / XML parsing.
         EventTargetBinding.DefineAccessor(realm, docProto, "contentType", (thisV, _) =>
-            JsValue.String(DomWrappers.UnwrapDocument(thisV) is { IsHtml: false } ? "application/xml" : "text/html"));
+        {
+            var d = DomWrappers.UnwrapDocument(thisV);
+            // An explicit ContentType (set by createDocument from the root
+            // namespace) wins; otherwise fall back to the HTML/XML default.
+            var ct = d?.ContentType ?? (d is { IsHtml: false } ? "application/xml" : "text/html");
+            return JsValue.String(ct);
+        });
         // DOM §4.4 — a Document node's textContent is null (overrides Node's
         // descendant-text concatenation); setting it is a no-op.
         EventTargetBinding.DefineAccessor(realm, docProto, "textContent",
@@ -1799,7 +1805,16 @@ public static class NodeBindings
             // NamespaceError) before building anything.
             if (qname.Length != 0)
                 ValidateQualifiedName(realm, ns, qname);
-            var doc = new Document { IsHtml = false }; // XML document — preserve name case
+            // DOM §4.5.1 step 7 — the content type is derived from the namespace:
+            // the HTML namespace → application/xhtml+xml, SVG → image/svg+xml,
+            // anything else (or none) → application/xml.
+            var contentType = ns switch
+            {
+                "http://www.w3.org/1999/xhtml" => "application/xhtml+xml",
+                "http://www.w3.org/2000/svg" => "image/svg+xml",
+                _ => "application/xml",
+            };
+            var doc = new Document { IsHtml = false, ContentType = contentType }; // XML document — preserve name case
             if (args.Length > 2 && DomWrappers.UnwrapAs<DocumentType>(args[2]) is { } dt)
                 doc.AppendChild(dt);
             if (!string.IsNullOrEmpty(qname))
