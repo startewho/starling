@@ -514,11 +514,14 @@ public static class EventTargetBinding
     private static JsValue AddListener(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var host = ResolveHost(thisV);
-        // DOM §2.7: the listener may be a callable (a function) OR any object with
-        // a callable `handleEvent` method. A non-object (e.g. null) is ignored.
-        if (host is null || args.Length < 2 || !args[1].IsObject) return JsValue.Undefined;
+        if (host is null || args.Length < 2) return JsValue.Undefined;
         var type = JsValue.ToStringValue(args[0]);
+        // DOM §addEventListener: flatten the options first (so a `capture` getter
+        // runs) even if the callback is null. The listener may be a callable
+        // (a function) OR any object with a callable `handleEvent` method; a null
+        // or non-object callback adds nothing.
         var (capture, once, passiveOpt) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        if (!args[1].IsObject) return JsValue.Undefined;
         var passive = passiveOpt ?? DefaultPassiveValue(host, type);
         var listenerObj = args[1].AsObject;
 
@@ -545,9 +548,12 @@ public static class EventTargetBinding
     private static JsValue RemoveListener(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var host = ResolveHost(thisV);
-        if (host is null || args.Length < 2 || !args[1].IsObject) return JsValue.Undefined;
+        if (host is null || args.Length < 2) return JsValue.Undefined;
         var type = JsValue.ToStringValue(args[0]);
+        // Flatten options (running any `capture` getter) before bailing on a
+        // null/non-object callback, matching addEventListener.
         var (capture, _, _) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        if (!args[1].IsObject) return JsValue.Undefined;
         var listenerObj = args[1].AsObject;
 
         if (!Registries.TryGetValue(host, out var registry)) return JsValue.Undefined;
@@ -708,8 +714,9 @@ public static class EventTargetBinding
     // caller can substitute the DOM default-passive value.
     private static (bool capture, bool once, bool? passive) ParseListenerOptions(JsValue opt)
     {
-        if (opt.IsUndefined || opt.IsNull) return (false, false, null);
-        if (opt.IsBoolean) return (opt.AsBool, false, null);
+        // DOM §flatten options: an object form reads capture/once/passive; any
+        // other value (boolean, number, string, …) is coerced to the capture
+        // boolean (e.g. 2.3 → true, "" → false).
         if (opt.IsObject)
         {
             var o = opt.AsObject;
@@ -719,7 +726,8 @@ public static class EventTargetBinding
                 JsValue.ToBoolean(o.Get("once")),
                 passiveVal.IsUndefined ? null : JsValue.ToBoolean(passiveVal));
         }
-        return (false, false, null);
+        if (opt.IsUndefined || opt.IsNull) return (false, false, null);
+        return (JsValue.ToBoolean(opt), false, null);
     }
 
     /// <summary>DOM "default passive value": touch/wheel listeners on the Window,
