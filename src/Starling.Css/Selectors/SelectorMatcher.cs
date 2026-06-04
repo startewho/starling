@@ -518,15 +518,98 @@ public static class SelectorMatcher
     }
 
     private static bool MatchesDirection(Element element, string direction)
+        => ResolveDirectionality(element).Equals(direction, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The directionality of an element ("ltr" or "rtl") per the HTML standard
+    /// (https://html.spec.whatwg.org/multipage/dom.html#the-directionality). Drives <c>:dir()</c>.
+    /// An invalid <c>dir</c> value is ignored (inherit); <c>dir=auto</c> (and a bare <c>bdi</c>)
+    /// uses the first strong bidi character of the relevant text, defaulting to ltr.</summary>
+    private static string ResolveDirectionality(Element element)
     {
         for (Element? current = element; current is not null; current = ParentElement(current))
         {
             var attr = current.GetAttribute("dir");
-            if (attr is null) continue;
-            return attr.Equals(direction, StringComparison.OrdinalIgnoreCase);
+
+            if (attr is not null)
+            {
+                if (attr.Equals("ltr", StringComparison.OrdinalIgnoreCase))
+                    return "ltr";
+                if (attr.Equals("rtl", StringComparison.OrdinalIgnoreCase))
+                    return "rtl";
+                if (attr.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                    return AutoDirectionality(current);
+            }
+
+            // No dir attribute, or an invalid value (e.g. "foo"): a <bdi> with no valid dir
+            // defaults to auto (HTML directionality); any other element inherits — keep walking up.
+            if (current.LocalName.Equals("bdi", StringComparison.OrdinalIgnoreCase))
+                return AutoDirectionality(current);
         }
-        // Default for HTML is ltr.
-        return direction.Equals("ltr", StringComparison.OrdinalIgnoreCase);
+
+        // The default directionality of the document is ltr.
+        return "ltr";
+    }
+
+    /// <summary>Directionality for <c>dir=auto</c>: the first strong directional character of the
+    /// element's contributing text, defaulting to ltr when there is none.</summary>
+    private static string AutoDirectionality(Element element)
+    {
+        var text = AutoDirectionalityText(element);
+        foreach (var ch in text)
+        {
+            var strong = StrongDirection(ch);
+            if (strong == 'L') return "ltr";
+            if (strong == 'R') return "rtl";
+        }
+        return "ltr";
+    }
+
+    /// <summary>The text that feeds <c>dir=auto</c>. For auto-directionality form-associated inputs
+    /// and textarea this is the control's value; for any other element it is its text content.</summary>
+    private static string AutoDirectionalityText(Element element)
+    {
+        if (element.LocalName.Equals("input", StringComparison.OrdinalIgnoreCase))
+        {
+            // Only "auto-directionality form-associated" input types use the value for dir=auto.
+            // Other types (date, number, checkbox, radio, …) do not, so they contribute no text.
+            return UsesValueForAutoDir(element)
+                ? element.InputValue ?? element.GetAttribute("value") ?? string.Empty
+                : string.Empty;
+        }
+        if (element.LocalName.Equals("textarea", StringComparison.OrdinalIgnoreCase))
+            return element.InputValue ?? element.TextContent;
+
+        return element.TextContent;
+    }
+
+    private static bool UsesValueForAutoDir(Element input)
+    {
+        var type = (input.GetAttribute("type") ?? "text").Trim();
+        // HTML "auto-directionality form-associated" input states (the default/missing state is Text).
+        return type.Length == 0 || type.ToLowerInvariant() switch
+        {
+            "hidden" or "text" or "search" or "tel" or "url" or "email" or "password" or
+            "submit" or "reset" or "button" => true,
+            _ => false,
+        };
+    }
+
+    /// <summary>The strong bidi class of a character: 'L' (left-to-right), 'R' (right-to-left
+    /// or arabic), or '\0' for weak/neutral. Covers the ranges needed for first-strong detection.</summary>
+    private static char StrongDirection(char c)
+    {
+        // Basic Latin and common LTR letters.
+        if (c is >= 'A' and <= 'Z' or >= 'a' and <= 'z')
+            return 'L';
+        // Hebrew + Hebrew presentation forms (U+0590-U+05FF, U+FB1D-U+FB4F).
+        if (c is >= '֐' and <= '׿' or >= 'יִ' and <= 'ﭏ')
+            return 'R';
+        // Arabic / Syriac / Thaana / NKo / Samaritan / Mandaic (U+0600-U+08FF) and
+        // Arabic presentation forms A & B (U+FB50-U+FDFF, U+FE70-U+FEFF).
+        if (c is >= '؀' and <= 'ࣿ' or >= 'ﭐ' and <= '﷿'
+            or >= 'ﹰ' and <= '﻿')
+            return 'R';
+        return '\0';
     }
 
     private static bool IsFormElement(Element element)
