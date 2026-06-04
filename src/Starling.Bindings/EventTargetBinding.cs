@@ -81,6 +81,17 @@ public static class EventTargetBinding
                 ? jv
                 : JsValue.Undefined);
 
+        DefineMethod(realm, evProto, "composedPath", (thisV, _) =>
+        {
+            if (!TryGetHostEvent(thisV, out var e) || e.ComposedPath.Count == 0)
+                return JsValue.Object(new JsArray(realm));
+
+            var items = new JsValue[e.ComposedPath.Count];
+            for (var i = 0; i < e.ComposedPath.Count; i++)
+                items[i] = JsValue.Object(DomWrappers.Wrap(realm, e.ComposedPath[i]));
+            return JsValue.Object(new JsArray(realm, items));
+        }, length: 0);
+
         DefineMethod(realm, evProto, "preventDefault", (thisV, _) =>
         {
             if (TryGetHostEvent(thisV, out var e)) e.PreventDefault();
@@ -398,7 +409,11 @@ public static class EventTargetBinding
             case "focusevent":
                 return WrapUninitEvent(realm, new FocusEvent(""));
             default:
-                throw new JsThrow(realm.NewTypeError($"createEvent: unsupported interface '{interfaceName}'"));
+                // DOM §4.5.1 — createEvent throws "NotSupportedError" (not a
+                // TypeError) for an interface outside the legacy event table, so
+                // assert_throws_dom("NOT_SUPPORTED_ERR") matches (code 9).
+                throw DomExceptionBinding.Throw(realm, "NotSupportedError",
+                    $"createEvent: unsupported interface '{interfaceName}'");
         }
     }
 
@@ -567,7 +582,7 @@ public static class EventTargetBinding
             var detail = CustomEventDetailCache.TryGetValue(ce, out var box) ? box.Value : JsValue.Null;
             return new JsCustomEventWrapper(ceProto ?? realm.EventPrototype ?? realm.ObjectPrototype, ce, detail);
         }
-        return new JsEventWrapper(realm.EventPrototype ?? realm.ObjectPrototype, ev);
+        return new JsEventWrapper(GetEventPrototypeForHost(realm, ev), ev);
     }
 
     // Cache: CustomEvent → JsValue detail. Populated when JS constructs new CustomEvent(...).
@@ -592,6 +607,16 @@ public static class EventTargetBinding
         }
         return null;
     }
+
+    private static JsObject GetEventPrototypeForHost(JsRealm realm, Event ev) =>
+        ev switch
+        {
+            MouseEvent => realm.MouseEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            KeyboardEvent => realm.KeyboardEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            FocusEvent => realm.FocusEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            UiEvent => realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            _ => realm.EventPrototype ?? realm.ObjectPrototype,
+        };
 
     internal static bool TryGetHostEvent(JsValue v, out Event ev)
     {
