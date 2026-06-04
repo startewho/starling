@@ -234,6 +234,11 @@ public sealed class Document : Node
     /// </summary>
     internal Action<Node>? NodeConnected { get; set; }
 
+    /// <summary>Fired after an attribute mutation on an element in this document:
+    /// (element, qualifiedName, oldValue). Subscribed by MutationObserverBinding
+    /// to queue attribute MutationRecords. Null when no observer is installed.</summary>
+    public Action<Element, string, string?>? AttributeMutated { get; set; }
+
     /// <summary>Raise <see cref="NodeConnected"/> for <paramref name="node"/>
     /// if a host has subscribed. Called from the tree-mutation path.</summary>
     internal void NotifyNodeConnected(Node node) => NodeConnected?.Invoke(node);
