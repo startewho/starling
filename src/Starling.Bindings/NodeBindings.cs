@@ -1182,6 +1182,11 @@ public static class NodeBindings
             return JsValue.Object(styleObj);
         });
 
+        // CSSOM §6.5 — HTMLStyleElement.sheet / HTMLLinkElement.sheet returns the
+        // associated CSSStyleSheet (or null for non-stylesheet elements).
+        EventTargetBinding.DefineAccessor(realm, elProto, "sheet",
+            (thisV, _) => CssomBinding.StyleElementSheetAccessor(realm, thisV));
+
         // ---- CSS Typed OM 1 §6: attributeStyleMap / computedStyleMap -------
         // A StylePropertyMap over the inline `style` attribute (mutable) and a
         // read-only StylePropertyMapReadOnly over the computed style (consults
