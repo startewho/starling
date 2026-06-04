@@ -66,19 +66,20 @@ internal sealed class HtmlCollectionObject : JsObject
     // of HTML-namespace elements, in tree order with no duplicates.
     private List<string> SupportedNames()
     {
+        // HTML §2.7.2.1 "supported property names": process each element in tree
+        // order, appending its id then (for HTML elements) its name — so the two
+        // keys of one element stay adjacent — skipping duplicates.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var names = new List<string>();
-        var items = Items;
-        foreach (var e in items)
+        foreach (var e in Items)
         {
             var id = e.GetAttribute("id");
             if (!string.IsNullOrEmpty(id) && seen.Add(id)) names.Add(id);
-        }
-        foreach (var e in items)
-        {
-            if (e.Namespace != Element.HtmlNamespace) continue;
-            var n = e.GetAttribute("name");
-            if (!string.IsNullOrEmpty(n) && seen.Add(n)) names.Add(n);
+            if (e.Namespace == Element.HtmlNamespace)
+            {
+                var n = e.GetAttribute("name");
+                if (!string.IsNullOrEmpty(n) && seen.Add(n)) names.Add(n);
+            }
         }
         return names;
     }
@@ -126,15 +127,31 @@ internal sealed class HtmlCollectionObject : JsObject
         return null;
     }
 
-    public override IEnumerable<JsPropertyKey> OwnPropertyKeys
+    // The own string keys in spec order: array indices, then supported property
+    // names, then any expando (ordinary) string keys. `Keys` drives
+    // Object.getOwnPropertyNames; OwnPropertyKeys adds the expando symbols.
+    public override IEnumerable<string> Keys
     {
         get
         {
             var count = Items.Count;
             for (var i = 0; i < count; i++)
-                yield return JsPropertyKey.String(i.ToString(CultureInfo.InvariantCulture));
+                yield return i.ToString(CultureInfo.InvariantCulture);
             foreach (var n in SupportedNames())
-                yield return JsPropertyKey.String(n);
+                yield return n;
+            foreach (var k in base.Keys)
+                yield return k; // expando properties set directly on the collection
+        }
+    }
+
+    public override IEnumerable<JsPropertyKey> OwnPropertyKeys
+    {
+        get
+        {
+            foreach (var k in Keys)
+                yield return JsPropertyKey.String(k);
+            foreach (var s in SymbolKeys)
+                yield return JsPropertyKey.Symbol(s);
         }
     }
 }

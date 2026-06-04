@@ -1921,9 +1921,13 @@ public static class NodeBindings
                     realm, MakeArray(realm, c.Values().ToList()), Starling.Js.Intrinsics.ArrayIteratorKind.Value);
             return JsValue.Undefined;
         }
-        EventTargetBinding.DefineMethod(realm, proto, "values", Iterate, length: 0);
+        // HTMLCollection is iterable but, unlike NodeList, its WebIDL has no
+        // value-iterator declaration — so it exposes @@iterator only, with no
+        // named values/keys/entries/forEach methods (the WPT iterator test
+        // checks `"values" in collection` is false).
+        var iterFn = new JsNativeFunction(realm, "values", 0, Iterate, isConstructor: false);
         proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
-            PropertyDescriptor.Data(proto.Get("values"), writable: true, enumerable: false, configurable: true));
+            PropertyDescriptor.Data(JsValue.Object(iterFn), writable: true, enumerable: false, configurable: true));
         HtmlCollectionProtos.Add(realm, proto);
         return proto;
     }
