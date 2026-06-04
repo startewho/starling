@@ -212,7 +212,7 @@ public static class WindowBinding
         //     seeded from the document's @font-face rules.
         FontFaceBinding.Install(realm, document);
 
-        // 15) Small WebAssembly JS API spike backed by DotWasm.
+        // 15) Small WebAssembly JS API spike backed by Wasmtime.NET.
         WebAssemblyBinding.Install(runtime);
     }
 
@@ -412,9 +412,24 @@ public static class WindowBinding
     /// <c>history.pushState</c> is reflected in <c>location.href</c>.</summary>
     internal static string UrlFor(JsRealm realm, Document doc)
     {
-        if (HistoryBinding.HistoryForRealm(realm) is { } hist) return hist.CurrentUrl;
-        return DocMeta.TryGetValue(doc, out var m) ? m.Url : "about:blank";
+        if (DocumentHasBrowsingContext(realm, doc))
+        {
+            if (RealmToDocument.TryGetValue(realm, out var main) && ReferenceEquals(main, doc)
+                && HistoryBinding.HistoryForRealm(realm) is { } hist)
+                return hist.CurrentUrl;
+            if (DocMeta.TryGetValue(doc, out var m)) return m.Url;
+        }
+        // createDocument / createHTMLDocument produce documents with no browsing
+        // context — their URL is "about:blank".
+        return "about:blank";
     }
+
+    /// <summary>True when the document is the realm's own document or an iframe's
+    /// content document — i.e. associated with a browsing context. A document
+    /// made by createDocument/createHTMLDocument is not.</summary>
+    internal static bool DocumentHasBrowsingContext(JsRealm realm, Document doc)
+        => (RealmToDocument.TryGetValue(realm, out var main) && ReferenceEquals(main, doc))
+            || IFrameBinding.WindowForDocument(realm, doc) is not null;
 
     private static bool NavigateLocation(JsRealm realm, Document doc, string target, bool replace)
     {
