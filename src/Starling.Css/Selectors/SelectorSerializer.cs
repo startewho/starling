@@ -39,8 +39,18 @@ public static class SelectorSerializer
     {
         ArgumentNullException.ThrowIfNull(compound);
         var sb = new StringBuilder();
+        // CSSOM §6.7.2 "serialize a compound selector": a universal selector with
+        // no namespace prefix is omitted when the compound has other simple
+        // selectors (e.g. `*.c` serializes as `.c`, `*:hover` as `:hover`). A
+        // namespaced universal (`ns|*`) is always kept, and a lone `*` stays `*`.
+        var omitUniversal = compound.SimpleSelectors.Count > 1
+            && compound.SimpleSelectors.Any(s => s is UniversalSelector { Namespace: null });
         foreach (var simple in compound.SimpleSelectors)
+        {
+            if (omitUniversal && simple is UniversalSelector { Namespace: null })
+                continue;
             sb.Append(Serialize(simple));
+        }
         return sb.ToString();
     }
 
