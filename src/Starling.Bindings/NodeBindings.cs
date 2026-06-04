@@ -1667,6 +1667,24 @@ public static class NodeBindings
             return BuildHtmlCollection(realm,
                 () => d.DescendantElements().Where(e => e.GetAttribute("name") == name).ToList());
         }, length: 1);
+        // HTML §3.1.5 document named collections — each a live HTMLCollection of
+        // HTML-namespace elements of a given kind (so namedItem / [name] work).
+        void DefineDocCollection(string prop, Func<Element, bool> match)
+            => EventTargetBinding.DefineAccessor(realm, docProto, prop, (thisV, _) =>
+                DomWrappers.UnwrapDocument(thisV) is { } dc
+                    ? BuildHtmlCollection(realm,
+                        () => dc.DescendantElements()
+                            .Where(e => e.Namespace == Element.HtmlNamespace && match(e)).ToList())
+                    : MakeArray(realm, Array.Empty<JsValue>()));
+        DefineDocCollection("images", e => e.LocalName == "img");
+        DefineDocCollection("forms", e => e.LocalName == "form");
+        DefineDocCollection("scripts", e => e.LocalName == "script");
+        DefineDocCollection("embeds", e => e.LocalName == "embed");
+        DefineDocCollection("plugins", e => e.LocalName == "embed");
+        // links: a/area elements that have an href attribute.
+        DefineDocCollection("links", e => e.LocalName is "a" or "area" && e.HasAttribute("href"));
+        // anchors: a elements that have a name attribute.
+        DefineDocCollection("anchors", e => e.LocalName == "a" && e.HasAttribute("name"));
         EventTargetBinding.DefineMethod(realm, docProto, "querySelector", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return JsValue.Null;
