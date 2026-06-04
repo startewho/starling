@@ -1794,12 +1794,13 @@ public static class NodeBindings
             var qname = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
             var publicId = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "";
             var systemId = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
-            // DOM §4.5.1: createDocumentType runs only "validate" (the QName
-            // production), not "validate and extract" — so a malformed name is an
-            // InvalidCharacterError, but a prefixed name like "foo:bar" with no
-            // namespace is fine (no NamespaceError here).
-            if (!IsValidQName(qname, out string? _qnamePrefix) || _qnamePrefix is "")
-                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{qname}' is not a valid qualified name");
+            // createDocumentType validation is legacy-loose (see the WPT cases):
+            // leading digits, lone punctuation ({, @, '), and an empty prefix or
+            // local part (":foo", "foo:", "prefix::local") are all accepted. A
+            // name is rejected only when it contains a '>' or ASCII whitespace,
+            // which would break the "<!DOCTYPE name>" serialization.
+            if (qname.Any(c => c is '>' or ' ' or '\t' or '\n' or '\r' or '\f'))
+                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{qname}' is not a valid doctype name");
             // The new doctype's node document is the implementation's document, so
             // its ownerDocument is non-null even before it is inserted into a tree.
             var dt = ownerDoc is { } d
