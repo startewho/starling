@@ -25,6 +25,13 @@ public static class EventTargetBinding
     private static readonly ConditionalWeakTable<JsObject, EventTarget> WrapperToTarget = new();
     // Per host-EventTarget map of (type, capture) → (JS-listener → delegate).
     private static readonly ConditionalWeakTable<EventTarget, ListenerRegistry> Registries = new();
+    // Per-realm legacy `window.event` slot: the event currently being dispatched.
+    private static readonly ConditionalWeakTable<JsRealm, MutableJsValueSlot> CurrentEvent = new();
+
+    /// <summary>The legacy <c>window.event</c> value for this realm — the event
+    /// being dispatched right now, or undefined when no dispatch is active.</summary>
+    public static JsValue GetCurrentEvent(JsRealm realm)
+        => CurrentEvent.TryGetValue(realm, out var slot) ? slot.Value : JsValue.Undefined;
 
     /// <summary>Install the EventTarget + Event constructors and prototypes onto the realm.</summary>
     public static void Install(JsRealm realm)
@@ -564,10 +571,15 @@ public static class EventTargetBinding
     /// host-driven dispatches still work.</summary>
     private static void InvokeJsListener(JsRealm realm, JsObject listener, Event ev)
     {
+        var slot = CurrentEvent.GetValue(realm, _ => new MutableJsValueSlot());
+        var prevEvent = slot.Value;
         try
         {
             var vm = realm.ActiveVm ?? new JsVm(GetRuntimeForRealm(realm));
             var jsEvent = JsValue.Object(WrapHostEvent(realm, ev));
+            // Legacy `window.event` (HTML §window.event): the event being
+            // dispatched is exposed on the global for the duration of the call.
+            slot.Value = jsEvent;
 
             // DOM §2.7 invoke: if the listener is callable, call it with `this`
             // set to the current target. Otherwise it must be an object with a
@@ -594,6 +606,10 @@ public static class EventTargetBinding
         catch (Exception ex)
         {
             realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {ex.Message}");
+        }
+        finally
+        {
+            slot.Value = prevEvent;
         }
     }
 
@@ -755,4 +771,11 @@ internal sealed class JsValueBox
 {
     public JsValue Value { get; }
     public JsValueBox(JsValue v) { Value = v; }
+}
+
+/// <summary>A mutable single-value slot for a <see cref="JsValue"/>, used as the
+/// per-realm legacy <c>window.event</c> holder.</summary>
+internal sealed class MutableJsValueSlot
+{
+    public JsValue Value { get; set; } = JsValue.Undefined;
 }
