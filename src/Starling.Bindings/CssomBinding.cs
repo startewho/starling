@@ -129,7 +129,7 @@ internal static class CssomBinding
         {
             var ruleObj = rules[i] is { } styleRule
                 ? JsValue.Object(BuildStyleRule(realm, styleRule))
-                : JsValue.Object(BuildAtRulePlaceholder(realm));
+                : JsValue.Object(BuildAtRulePlaceholder(realm, sheet.AtRuleNameAt(i)));
             obj.DefineOwnProperty(i.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 PropertyDescriptor.Data(ruleObj, writable: false, enumerable: true, configurable: true));
         }
@@ -142,7 +142,7 @@ internal static class CssomBinding
             if (idx < 0 || idx >= rules.Count) return JsValue.Null;
             return rules[idx] is { } r
                 ? JsValue.Object(BuildStyleRule(realm, r))
-                : JsValue.Object(BuildAtRulePlaceholder(realm));
+                : JsValue.Object(BuildAtRulePlaceholder(realm, sheet.AtRuleNameAt(idx)));
         }, length: 1);
         return obj;
     }
@@ -151,17 +151,36 @@ internal static class CssomBinding
     /// CSSOM model keeps as an opaque placeholder. Exposes a read-only
     /// <c>style</c> (an empty declaration) so @font-face rules can accept
     /// <c>setProperty("unicode-range", …)</c> calls from tests.</summary>
-    private static JsObject BuildAtRulePlaceholder(JsRealm realm)
+    private static JsObject BuildAtRulePlaceholder(JsRealm realm, string? atRuleName)
     {
         var obj = new JsObject(realm.ObjectPrototype);
         var emptyBlock = new Starling.Css.Cssom.CssomDeclarationBlock();
-        // type = 5 = CSSFontFaceRule (most common at-rule placeholder).
-        EventTargetBinding.DefineAccessor(realm, obj, "type", (_, _) => JsValue.Number(5));
+        // Map the at-rule keyword to the legacy CSSRule.type constant
+        // (CSSOM §6.4). Unknown / missing → 5 (CSSFontFaceRule) as before.
+        var type = AtRuleTypeConstant(atRuleName);
+        EventTargetBinding.DefineAccessor(realm, obj, "type", (_, _) => JsValue.Number(type));
         EventTargetBinding.DefineAccessor(realm, obj, "cssText", (_, _) => JsValue.String(""));
         EventTargetBinding.DefineAccessor(realm, obj, "style",
             (_, _) => JsValue.Object(BuildDeclaration(realm, emptyBlock)));
         return obj;
     }
+
+    /// <summary>Map a lowercased at-rule keyword to its legacy <c>CSSRule.type</c>
+    /// constant (CSSOM §6.4 "the CSSRule interface").</summary>
+    private static int AtRuleTypeConstant(string? name) => name switch
+    {
+        "charset" => 2,
+        "import" => 3,
+        "media" => 4,
+        "font-face" => 5,
+        "page" => 6,
+        "keyframes" or "-webkit-keyframes" => 7,
+        "namespace" => 10,
+        "counter-style" => 11,
+        "supports" => 12,
+        "font-feature-values" => 14,
+        _ => 5,
+    };
 
     private static JsObject BuildStyleRule(JsRealm realm, CssomStyleRule rule)
     {
