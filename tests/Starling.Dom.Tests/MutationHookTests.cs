@@ -31,7 +31,7 @@ public sealed class MutationHookTests
         var records = new List<(Node Added, Node? Prev, Node? Next)>();
         doc.ChildListMutated = (_, added, _, prev, next) =>
         {
-            if (added is not null) records.Add((added, prev, next));
+            if (added is { Count: > 0 }) records.Add((added[0], prev, next));
         };
 
         // Simulate the engine's NodeConnected hook running an injected <script>
@@ -52,6 +52,35 @@ public sealed class MutationHookTests
         var bRecord = records.Single(r => ReferenceEquals(r.Added, b));
         bRecord.Prev.Should().BeSameAs(a);
         bRecord.Next.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Fragment_insertion_reports_single_record_with_all_added_nodes()
+    {
+        var doc = new Document();
+        var body = doc.CreateElement("body");
+        doc.AppendChild(body);
+
+        // Build the fragment BEFORE subscribing, so only the body insertion is
+        // recorded (appending into the fragment fires its own childList events).
+        var frag = doc.CreateDocumentFragment();
+        var a = doc.CreateElement("a");
+        var b = doc.CreateElement("b");
+        frag.AppendChild(a);
+        frag.AppendChild(b);
+
+        var records = new List<(IReadOnlyList<Node>? Added, IReadOnlyList<Node>? Removed)>();
+        doc.ChildListMutated = (_, added, removed, _, _) => records.Add((added, removed));
+
+        body.AppendChild(frag); // moves <a> and <b> in one logical insertion
+
+        // DOM §4.3: a single childList record whose addedNodes is the whole set.
+        records.Should().HaveCount(1);
+        records[0].Added.Should().NotBeNull();
+        records[0].Added!.Should().HaveCount(2);
+        records[0].Added![0].Should().BeSameAs(a);
+        records[0].Added![1].Should().BeSameAs(b);
+        records[0].Removed.Should().BeNull();
     }
 
     // --- attribute oldValue on every mutation path ----------------------------

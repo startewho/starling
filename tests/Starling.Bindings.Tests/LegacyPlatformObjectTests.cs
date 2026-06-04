@@ -68,6 +68,71 @@ public sealed class LegacyPlatformObjectTests
         """).AsNumber.Should().Be(1);
     }
 
+    [TestMethod]
+    public void HtmlCollection_named_property_does_not_shadow_prototype_builtin()
+    {
+        var (runtime, _) = BuildEnv();
+        // An element with id="item" must NOT shadow the built-in item() method:
+        // HTMLCollection has no [LegacyOverrideBuiltins], so a supported name that
+        // collides with a prototype property is suppressed.
+        Eval(runtime, """
+            var s = document.createElement('span');
+            s.id = 'item';
+            document.body.appendChild(s);
+            var coll = document.getElementsByTagName('span');
+            result = (typeof coll.item) + ',' + coll.hasOwnProperty('item')
+                + ',' + (coll.item(0) === s)
+                + ',' + (Object.getOwnPropertyNames(coll).indexOf('item') === -1);
+        """).AsString.Should().Be("function,false,true,true");
+    }
+
+    [TestMethod]
+    public void HtmlCollection_length_is_a_prototype_accessor_not_own()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            var a = document.createElement('span');
+            var b = document.createElement('span');
+            document.body.appendChild(a);
+            document.body.appendChild(b);
+            var coll = document.getElementsByTagName('span');
+            result = coll.length + ',' + coll.hasOwnProperty('length')
+                + ',' + (Object.getOwnPropertyNames(coll).indexOf('length') === -1);
+        """).AsString.Should().Be("2,false,true");
+    }
+
+    [TestMethod]
+    public void HtmlCollection_keys_dedupe_index_collision_with_id()
+    {
+        var (runtime, _) = BuildEnv();
+        // An element with id="0" collides with the array index "0"; the own-key
+        // list must contain "0" exactly once (the index), not also as a name.
+        Eval(runtime, """
+            var s = document.createElement('span');
+            s.id = '0';
+            document.body.appendChild(s);
+            var coll = document.getElementsByTagName('span');
+            var names = Object.getOwnPropertyNames(coll);
+            result = names.filter(function (n) { return n === '0'; }).length;
+        """).AsNumber.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void HtmlCollection_prototype_shadowed_name_behaves_as_expando()
+    {
+        var (runtime, _) = BuildEnv();
+        // "item" is shadowed by the prototype, so it is NOT a visible named
+        // property — assigning to it creates an ordinary own expando.
+        Eval(runtime, """
+            var s = document.createElement('span');
+            s.id = 'item';
+            document.body.appendChild(s);
+            var coll = document.getElementsByTagName('span');
+            coll.item = 5;
+            result = coll.hasOwnProperty('item') + ',' + coll.item;
+        """).AsString.Should().Be("true,5");
+    }
+
     // ---- Document named-property wrapper own-key dedup -----------------------
 
     [TestMethod]
