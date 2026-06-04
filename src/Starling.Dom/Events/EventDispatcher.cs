@@ -43,9 +43,13 @@ internal static class EventDispatcher
         }
         finally
         {
+            // DOM §2.9 dispatch: reset eventPhase/currentTarget, clear the dispatch
+            // flag, and unset the stop-propagation flags so the same event instance
+            // can be dispatched again (canceled flag is preserved).
             @event.EventPhase = EventPhase.None;
             @event.CurrentTarget = null;
             @event.DispatchFlag = false;
+            @event.ClearPropagationFlags();
         }
 
         return !@event.DefaultPrevented;

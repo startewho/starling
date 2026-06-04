@@ -76,6 +76,15 @@ public class Event
             DefaultPrevented = true;
     }
 
+    /// <summary>DOM §2.9 dispatch step: after dispatch, unset the stop-propagation
+    /// and stop-immediate-propagation flags so the same instance can be dispatched
+    /// again. The canceled flag (defaultPrevented) is intentionally preserved.</summary>
+    internal void ClearPropagationFlags()
+    {
+        PropagationStopped = false;
+        ImmediatePropagationStopped = false;
+    }
+
     /// <summary>Reset transient flags so the same instance can be re-dispatched (test-only path).</summary>
     internal void ResetForDispatch()
     {
