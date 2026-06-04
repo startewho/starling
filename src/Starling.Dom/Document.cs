@@ -239,10 +239,12 @@ public sealed class Document : Node
     /// to queue attribute MutationRecords. Null when no observer is installed.</summary>
     internal Action<Element, string, string?>? AttributeMutated { get; set; }
 
-    /// <summary>Fired after a childList mutation: (target parent, addedNode,
-    /// removedNode, previousSibling, nextSibling) — one of added/removed is set.
-    /// Subscribed by MutationObserverBinding to queue childList MutationRecords.</summary>
-    internal Action<Node, Node?, Node?, Node?, Node?>? ChildListMutated { get; set; }
+    /// <summary>Fired after a childList mutation: (target parent, addedNodes,
+    /// removedNodes, previousSibling, nextSibling) — one of added/removed is
+    /// non-empty. A DocumentFragment insertion reports all moved children in a
+    /// single call (one MutationRecord per DOM §4.3). Subscribed by
+    /// MutationObserverBinding to queue childList MutationRecords.</summary>
+    internal Action<Node, IReadOnlyList<Node>?, IReadOnlyList<Node>?, Node?, Node?>? ChildListMutated { get; set; }
 
     /// <summary>Fired after a CharacterData (Text/Comment/CDATA) data change:
     /// (target, oldData). Subscribed by MutationObserverBinding for characterData

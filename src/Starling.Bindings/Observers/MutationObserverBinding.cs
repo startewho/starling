@@ -96,7 +96,7 @@ public static class MutationObserverBinding
             foreach (var s in states) s.MaybeQueueAttribute(el, attrName, oldValue);
     }
 
-    private static void OnChildListChanged(Document doc, Node target, Node? added, Node? removed, Node? prev, Node? next)
+    private static void OnChildListChanged(Document doc, Node target, IReadOnlyList<Node>? added, IReadOnlyList<Node>? removed, Node? prev, Node? next)
     {
         if (LiveStates(doc) is { } states)
             foreach (var s in states) s.MaybeQueueChildList(target, added, removed, prev, next);
@@ -283,7 +283,7 @@ internal sealed class MutationObserverState
     /// <summary>DOM §4.3.4 — queue a childList MutationRecord when an observation
     /// with childList matches the mutated parent (target, or an ancestor with
     /// subtree).</summary>
-    public void MaybeQueueChildList(Node target, Node? added, Node? removed, Node? prev, Node? next)
+    public void MaybeQueueChildList(Node target, IReadOnlyList<Node>? added, IReadOnlyList<Node>? removed, Node? prev, Node? next)
     {
         foreach (var (obsTarget, opts) in _observations)
         {
@@ -294,11 +294,16 @@ internal sealed class MutationObserverState
         }
     }
 
-    private static JsObject BuildChildListRecord(JsRealm realm, Node target, Node? added, Node? removed, Node? prev, Node? next)
+    private static JsObject BuildChildListRecord(JsRealm realm, Node target, IReadOnlyList<Node>? added, IReadOnlyList<Node>? removed, Node? prev, Node? next)
     {
-        JsValue NodeList(Node? n) => JsValue.Object(n is null
-            ? new JsArray(realm)
-            : new JsArray(realm, new[] { JsValue.Object(DomWrappers.Wrap(realm, n)) }));
+        JsValue NodeList(IReadOnlyList<Node>? ns)
+        {
+            if (ns is null || ns.Count == 0) return JsValue.Object(new JsArray(realm));
+            var items = new JsValue[ns.Count];
+            for (var i = 0; i < ns.Count; i++)
+                items[i] = JsValue.Object(DomWrappers.Wrap(realm, ns[i]));
+            return JsValue.Object(new JsArray(realm, items));
+        }
         JsValue OrNull(Node? n) => n is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, n));
         var r = new JsObject(realm.MutationRecordPrototype ?? realm.ObjectPrototype);
         void P(string k, JsValue v) => r.DefineOwnProperty(k,

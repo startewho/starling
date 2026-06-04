@@ -1995,6 +1995,13 @@ public static class NodeBindings
         proto = new JsObject(realm.ObjectPrototype);
         proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
             PropertyDescriptor.Data(JsValue.String("HTMLCollection"), writable: false, enumerable: false, configurable: true));
+        // length is a read-only accessor on the prototype (per WebIDL it is an
+        // interface attribute, NOT an own property of the instance), so
+        // collection.hasOwnProperty("length") is false and it never appears in the
+        // instance's own-key list.
+        EventTargetBinding.DefineAccessor(realm, proto, "length",
+            (thisV, _) => thisV.IsObject && thisV.AsObject is HtmlCollectionObject c
+                ? JsValue.Number(c.Count) : JsValue.Number(0));
         EventTargetBinding.DefineMethod(realm, proto, "item", (thisV, args) =>
             thisV.IsObject && thisV.AsObject is HtmlCollectionObject c && args.Length > 0
                 ? c.Item((int)JsValue.ToNumber(args[0])) : JsValue.Null, length: 1);

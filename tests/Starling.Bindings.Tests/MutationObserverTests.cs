@@ -166,6 +166,27 @@ public sealed class MutationObserverTests
     }
 
     [TestMethod]
+    public void ChildList_fragment_insert_produces_one_record_with_all_added_nodes()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            globalThis.recs = [];
+            var o = new MutationObserver(function (records) {
+                for (var i = 0; i < records.length; i++)
+                    recs.push(records[i].type + ':+' + records[i].addedNodes.length);
+            });
+            o.observe(document.body, { childList: true });
+            var frag = document.createDocumentFragment();
+            frag.appendChild(document.createElement('a'));
+            frag.appendChild(document.createElement('b'));
+            document.body.appendChild(frag);
+        """);
+        runtime.DrainMicrotasks();
+        // One record covering both moved nodes — not two single-node records.
+        Eval(runtime, "result = recs.join('|');").AsString.Should().Be("childList:+2");
+    }
+
+    [TestMethod]
     public void CharacterData_record_carries_old_value()
     {
         var (runtime, _) = BuildEnv();
