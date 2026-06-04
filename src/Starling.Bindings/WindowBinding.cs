@@ -517,6 +517,19 @@ public static class WindowBinding
         // bundle loaders very commonly register on window, not document.
         var windowTarget = EventTargetBinding.ResolveHost(JsValue.Object(runtime.Realm.GlobalObject));
         windowTarget?.DispatchEvent(new Event("DOMContentLoaded", new EventInit(Bubbles: false, Cancelable: false)));
+
+        // HTML §iframe "process the iframe attributes": iframes that carry a src
+        // straight from the parser never ran the attribute setter, so kick off
+        // their subframe loads now. The fetch is asynchronous and settles through
+        // the parent's microtask queue during the post-DOMContentLoaded pump, so
+        // contentDocument is populated before the window 'load' event that tests
+        // wait on. (Setting src from script still loads via OnSrcSet directly.)
+        if (doc.DocumentElement is { } root)
+        {
+            foreach (var el in root.DescendantElements().ToList())
+                if (IFrameBinding.IsFrameElement(el) && !string.IsNullOrEmpty(el.GetAttribute("src")))
+                    IFrameBinding.LoadSubframeNow(runtime.Realm, el);
+        }
     }
 
     /// <summary>Dispatches <c>load</c> on the window target after host-driven
