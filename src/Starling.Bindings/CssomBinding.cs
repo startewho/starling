@@ -23,6 +23,35 @@ internal static class CssomBinding
     // <style>/<link rel=stylesheet> elements in tree order.
     private static readonly ConditionalWeakTable<Document, List<CssomStyleSheet>> SheetsPerDocument = new();
 
+    // Per-<style>-element CSSOM sheet, re-parsed when the element's text changes.
+    // HTMLStyleElement.sheet (CSSOM §6.5) returns the associated CSSStyleSheet.
+    private sealed class StyleElementSheet { public string Source = ""; public CssomStyleSheet? Sheet; }
+    private static readonly ConditionalWeakTable<Element, StyleElementSheet> SheetPerStyleElement = new();
+
+    /// <summary>HTMLStyleElement.sheet / HTMLLinkElement.sheet accessor body
+    /// (CSSOM §6.5). Builds a live CSSStyleSheet from the element's current text
+    /// content. The CSSOM sheet is cached and only re-parsed when the source text
+    /// changes, so CSSOM mutations (selectorText / setProperty) round-trip while a
+    /// test holds the same sheet, yet edits to the element's text are picked up.</summary>
+    public static JsValue StyleElementSheetAccessor(JsRealm realm, JsValue thisV)
+    {
+        var el = DomWrappers.UnwrapElement(thisV);
+        if (el is null) return JsValue.Null;
+        // Only <style> elements carry inline CSS text. <link> external sheets have
+        // no source available in this binding context.
+        if (!el.LocalName.Equals("style", StringComparison.OrdinalIgnoreCase))
+            return JsValue.Null;
+        var source = el.TextContent ?? string.Empty;
+        var entry = SheetPerStyleElement.GetValue(el, static _ => new StyleElementSheet());
+        if (entry.Sheet is null || !string.Equals(entry.Source, source, StringComparison.Ordinal))
+        {
+            var parsed = CssParser.ParseStyleSheet(source, StyleOrigin.Author);
+            entry.Sheet = new CssomStyleSheet(parsed);
+            entry.Source = source;
+        }
+        return JsValue.Object(BuildStyleSheet(realm, entry.Sheet));
+    }
+
     /// <summary>document.styleSheets accessor body.</summary>
     public static JsValue StyleSheetsAccessor(JsRealm realm, JsValue thisV)
     {
