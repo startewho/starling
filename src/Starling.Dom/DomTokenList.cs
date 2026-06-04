@@ -49,8 +49,13 @@ public sealed class DomTokenList : IReadOnlyList<string>
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
+    // DOM §7.1 — a DOMTokenList exposes its attribute as an *ordered set*: the
+    // whitespace-split tokens with duplicates removed (first occurrence wins),
+    // so classList of class="a a b" has length 2. `value` still returns the raw
+    // attribute; only the indexed/iterated token set is deduplicated.
     private List<string> Tokens => _getValue()
         .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Distinct(StringComparer.Ordinal)
         .ToList();
 
     private static void ValidateToken(string token)

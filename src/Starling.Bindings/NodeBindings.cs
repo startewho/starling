@@ -2997,28 +2997,29 @@ public static class NodeBindings
             }
             return JsValue.Undefined;
         }, length: 1);
-        EventTargetBinding.DefineMethod(realm, obj, "keys", (_, _) =>
+        // keys/values/entries are spec'd as iterators (not Arrays — the WPT
+        // "must not be Array" assertions check this), so build a snapshot array
+        // of the current tokens and hand back a real array iterator over it.
+        JsValue TokenArray()
         {
-            var items = new List<JsValue>();
-            for (var i = 0; i < cl.Count; i++) items.Add(JsValue.Number(i));
-            return MakeArray(realm, items);
-        }, length: 0);
-        EventTargetBinding.DefineMethod(realm, obj, "values", (_, _) =>
-        {
-            var items = new List<JsValue>();
+            var items = new List<JsValue>(cl.Count);
             for (var i = 0; i < cl.Count; i++) items.Add(JsValue.String(cl[i]));
             return MakeArray(realm, items);
-        }, length: 0);
+        }
+        EventTargetBinding.DefineMethod(realm, obj, "keys", (_, _) =>
+            Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                realm, TokenArray(), Starling.Js.Intrinsics.ArrayIteratorKind.Key), length: 0);
+        JsValue ValuesIterator(JsValue _t, JsValue[] _a) =>
+            Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                realm, TokenArray(), Starling.Js.Intrinsics.ArrayIteratorKind.Value);
+        EventTargetBinding.DefineMethod(realm, obj, "values", ValuesIterator, length: 0);
         EventTargetBinding.DefineMethod(realm, obj, "entries", (_, _) =>
-        {
-            var items = new List<JsValue>();
-            for (var i = 0; i < cl.Count; i++)
-            {
-                var pair = new JsArray(realm, new[] { JsValue.Number(i), JsValue.String(cl[i]) });
-                items.Add(JsValue.Object(pair));
-            }
-            return MakeArray(realm, items);
-        }, length: 0);
+            Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                realm, TokenArray(), Starling.Js.Intrinsics.ArrayIteratorKind.KeyAndValue), length: 0);
+        // DOMTokenList is iterable: @@iterator is the same function object as
+        // values() (spec'd as an alias for a setlike/indexed iterable).
+        obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
+            PropertyDescriptor.Data(obj.Get("values"), writable: true, enumerable: false, configurable: true));
         EventTargetBinding.DefineMethod(realm, obj, "toString",
             (_, _) => JsValue.String(element.GetAttribute("class") ?? ""), length: 0);
 
