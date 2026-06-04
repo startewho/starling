@@ -380,13 +380,17 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, nodeProto, "replaceData", (thisV, args) =>
         {
             if (DomWrappers.UnwrapNode(thisV) is not CharacterData cd) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
-            var s = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
-            offset = Math.Max(0, Math.Min(offset, cd.Data.Length));
-            count = Math.Max(0, Math.Min(count, cd.Data.Length - offset));
-            cd.Data = cd.Data[..offset] + s + cd.Data[(offset + count)..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, count, s.Length);
+            if (args.Length < 3) throw new JsThrow(realm.NewTypeError("replaceData requires 3 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
+            var s = JsValue.ToStringValue(args[2]);
+            var len = cd.Data.Length;
+            if (offset > len)
+                throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            cd.Data = cd.Data[..o] + s + cd.Data[(o + realCount)..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, realCount, s.Length);
             return JsValue.Undefined;
         }, length: 3);
         // Text.splitText(offset) — splits text node at offset. Live-Range
@@ -2042,6 +2046,16 @@ public static class NodeBindings
     // =====================================================================
     //                          CharacterData
     // =====================================================================
+    /// <summary>WebIDL <c>unsigned long</c> conversion for CharacterData offsets
+    /// (ToUint32): NaN/Infinity become 0, negatives wrap modulo 2^32. So
+    /// -0x100000000 + 2 becomes 2 (in bounds), -1 becomes 4294967295 (clamped).</summary>
+    private static long CdataOffset(JsValue v)
+    {
+        var d = JsValue.ToNumber(v);
+        if (double.IsNaN(d) || double.IsInfinity(d)) return 0;
+        return unchecked((uint)(long)Math.Truncate(d));
+    }
+
     private static void InstallCharacterData(JsRealm realm)
     {
         // CharacterData prototype inherits from Node.prototype.
@@ -2097,13 +2111,15 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.String("");
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("substringData requires 2 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            var end = Math.Min(offset + Math.Max(0, count), len);
-            return JsValue.String(cd.Data[offset..end]);
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            return JsValue.String(cd.Data.Substring(o, realCount));
         }, length: 2);
 
         // DOM §4.8 CharacterData.appendData(data). Routed through the
@@ -2112,7 +2128,8 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapAs<CharacterData>(thisV) is { } cd)
             {
-                var data = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                if (args.Length < 1) throw new JsThrow(realm.NewTypeError("appendData requires 1 argument"));
+                var data = JsValue.ToStringValue(args[0]);
                 var pos = cd.Data.Length;
                 cd.Data += data;
                 Starling.Dom.DomRange.OnReplaceData(cd, pos, 0, data.Length);
@@ -2125,13 +2142,15 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var data = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "";
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("insertData requires 2 arguments"));
+            var offset = CdataOffset(args[0]);
+            var data = JsValue.ToStringValue(args[1]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            cd.Data = cd.Data[..offset] + data + cd.Data[offset..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, 0, data.Length);
+            var o = (int)offset;
+            cd.Data = cd.Data[..o] + data + cd.Data[o..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, 0, data.Length);
             return JsValue.Undefined;
         }, length: 2);
 
@@ -2140,15 +2159,16 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("deleteData requires 2 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            var end = Math.Min(offset + Math.Max(0, count), len);
-            var actualCount = end - offset;
-            cd.Data = cd.Data[..offset] + cd.Data[end..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, actualCount, 0);
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            cd.Data = cd.Data[..o] + cd.Data[(o + realCount)..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, realCount, 0);
             return JsValue.Undefined;
         }, length: 2);
 
@@ -2157,16 +2177,17 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
-            var data = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
+            if (args.Length < 3) throw new JsThrow(realm.NewTypeError("replaceData requires 3 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
+            var data = JsValue.ToStringValue(args[2]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            var end = Math.Min(offset + Math.Max(0, count), len);
-            var actualCount = end - offset;
-            cd.Data = cd.Data[..offset] + data + cd.Data[end..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, actualCount, data.Length);
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            cd.Data = cd.Data[..o] + data + cd.Data[(o + realCount)..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, realCount, data.Length);
             return JsValue.Undefined;
         }, length: 3);
 
