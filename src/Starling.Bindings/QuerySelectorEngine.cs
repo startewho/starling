@@ -58,8 +58,11 @@ internal static class QuerySelectorEngine
 
     private static SelectorList Parse(string raw, JsRealm realm)
     {
-        if (string.IsNullOrWhiteSpace(raw))
-            throw new JsThrow(realm.NewSyntaxError("The selector is empty."));
+        // DOM §4.2.6 — querySelector*/matches/closest throw a "SyntaxError"
+        // DOMException (name SyntaxError, code 12) for an invalid selector, not
+        // an ECMAScript SyntaxError, so assert_throws_dom("SyntaxError") matches.
+        if (string.IsNullOrEmpty(raw))
+            throw DomExceptionBinding.Throw(realm, "SyntaxError", "The selector is empty.");
 
         SelectorList list;
         try
@@ -68,11 +71,11 @@ internal static class QuerySelectorEngine
         }
         catch (FormatException ex)
         {
-            throw new JsThrow(realm.NewSyntaxError($"'{raw}' is not a valid selector: {ex.Message}"));
+            throw DomExceptionBinding.Throw(realm, "SyntaxError", $"'{raw}' is not a valid selector: {ex.Message}");
         }
 
         if (list.Selectors.Count == 0)
-            throw new JsThrow(realm.NewSyntaxError($"'{raw}' is not a valid selector."));
+            throw DomExceptionBinding.Throw(realm, "SyntaxError", $"'{raw}' is not a valid selector.");
         return list;
     }
 }
