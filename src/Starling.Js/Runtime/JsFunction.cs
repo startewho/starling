@@ -50,6 +50,11 @@ public sealed class JsFunction : JsObject
     /// and writes. Empty for plain (non-capturing) functions.</summary>
     public IReadOnlyList<JsValue> Upvalues { get; }
 
+    /// <summary>Original source text for functions parsed from source. Used by
+    /// Function.prototype.toString so feature probes that inspect function text
+    /// can see the same markers that were present in the bundle.</summary>
+    public string? SourceText { get; set; }
+
     /// <summary>B1b-2a: the prototype object on which this function lives
     /// when it is a class method (or the constructor for static methods).
     /// <c>super.x</c> resolves to <c>HomeObject.[[Prototype]][x]</c>.
@@ -157,6 +162,7 @@ public sealed class JsFunction : JsObject
             // via DefineClass the template carries the slot.
             HomeObject = template.HomeObject,
             Kind = template.Kind,
+            SourceText = template.SourceText,
             // wp:M3-83 — record the creating realm so the VM can run this
             // function's body with its own realm active (cross-realm execution).
             Realm = realm,
@@ -187,7 +193,7 @@ public sealed class JsFunction : JsObject
     }
 
     public override string ToString()
-        => $"function {Name}({ArityDeclared}) {{ [bytecode] }}";
+        => SourceText ?? $"function {Name}({ArityDeclared}) {{ [bytecode] }}";
 }
 
 /// <summary>One instance-field initializer attached to a class constructor.

@@ -53,6 +53,7 @@ public static class DomWrappers
         // prototype so `instanceof Text` / `instanceof Comment` work.
         var proto = node switch
         {
+            Document { IsHtml: false } => realm.XmlDocumentPrototype ?? realm.DocumentPrototype ?? realm.ObjectPrototype,
             Document => realm.DocumentPrototype ?? realm.ObjectPrototype,
             Element => realm.ElementPrototype ?? realm.ObjectPrototype,
             AttrNode => realm.AttrPrototype ?? realm.NodePrototype ?? realm.ObjectPrototype,

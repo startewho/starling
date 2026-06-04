@@ -804,7 +804,7 @@ public sealed partial class JsParser
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);
             return new FunctionExpression(fnName, parameters, body, generator, start, body.End,
-                Async: isAsync, Strict: strict);
+                Async: isAsync, Strict: strict, SourceText: SourceSlice(start, body.End));
         }
         finally { _strict = savedStrict; (_inAsync, _inGenerator) = (savedAsync, savedGen); _moduleTopAwait = savedModuleAwait; _superPropertyDepth = savedSuper; }
     }
@@ -846,7 +846,7 @@ public sealed partial class JsParser
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);
             return new FunctionDeclaration(name, parameters, body, generator, start, body.End,
-                Async: isAsync, Strict: strict);
+                Async: isAsync, Strict: strict, SourceText: SourceSlice(start, body.End));
         }
         finally { _strict = savedStrict; (_inAsync, _inGenerator) = (savedAsync, savedGen); _moduleTopAwait = savedModuleAwait; _superPropertyDepth = savedSuper; }
     }

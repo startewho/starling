@@ -303,29 +303,6 @@ public sealed partial class JsCompiler
         return false;
     }
 
-    private bool IsConstUpvalue(string name)
-    {
-        if (_moduleImmutableBindings is not null && _moduleImmutableBindings.Contains(name))
-            return true;
-        if (_parent is null) return false;
-        if (_parent.IsConstLocalForChild(name, out var found)) return found;
-        return _parent.IsConstUpvalue(name);
-    }
-
-    private bool IsConstLocalForChild(string name, out bool isConst)
-    {
-        for (var i = _scopes.Count - 1; i >= 0; i--)
-        {
-            if (_scopes[i].ContainsKey(name))
-            {
-                isConst = _constScopes[i].Contains(name);
-                return true;
-            }
-        }
-        isConst = false;
-        return false;
-    }
-
     /// <summary>TDZ — mark <paramref name="name"/> as a lexical binding in the
     /// innermost scope frame (must already be reserved as a local there).</summary>
     private void MarkLexical(string name) => _lexicalScopes[^1].Add(name);
@@ -366,48 +343,57 @@ public sealed partial class JsCompiler
         _constScopes.RemoveAt(_constScopes.Count - 1);
     }
 
-    /// <summary>TDZ — is <paramref name="name"/> a lexical binding in one of
-    /// the enclosing functions (i.e. captured as an upvalue)? Walks the parent
-    /// compiler chain the same way <see cref="TryResolveUpvalue"/> does.</summary>
-    private bool IsLexicalUpvalue(string name)
-    {
-        // Module top-level lexical bindings (let/const/class/import) are reserved
-        // directly in this compiler's upvalue table (not via a parent scope), so
-        // consult the module lexical set first for the TDZ-checked opcodes.
-        if (_moduleLexicalBindings is not null && _moduleLexicalBindings.Contains(name))
-            return true;
-        if (_parent is null) return false;
-        if (_parent.IsLexicalLocalForChild(name, out var found)) return found;
-        return _parent.IsLexicalUpvalue(name);
-    }
-
-    /// <summary>§16.2.1.6.2 — is <paramref name="name"/> an immutable module
-    /// binding (an imported binding)? Consulted before emitting a store so an
-    /// assignment to an import becomes a runtime TypeError. Walks the parent
-    /// compiler chain so a write from a function nested in the module (the common
-    /// <c>assert.throws(() =&gt; { B = 1; })</c> shape) is still caught.</summary>
-    private bool IsImmutableUpvalue(string name)
-    {
-        if (_moduleImmutableBindings is not null && _moduleImmutableBindings.Contains(name))
-            return true;
-        return _parent is not null && _parent.IsImmutableUpvalue(name);
-    }
-
-    /// <summary>TDZ helper for <see cref="IsLexicalUpvalue"/>: report whether
-    /// the parent resolves <paramref name="name"/> as one of ITS locals, and
-    /// if so whether that local is lexical.</summary>
-    private bool IsLexicalLocalForChild(string name, out bool isLexical)
+    private bool IsConstLocalSlot(int slot)
     {
         for (var i = _scopes.Count - 1; i >= 0; i--)
-        {
-            if (_scopes[i].ContainsKey(name))
-            {
-                isLexical = _lexicalScopes[i].Contains(name);
-                return true;
-            }
-        }
-        isLexical = false;
+            foreach (var binding in _scopes[i])
+                if (binding.Value == slot) return _constScopes[i].Contains(binding.Key);
         return false;
+    }
+
+    private bool IsLexicalLocalSlot(int slot)
+    {
+        for (var i = _scopes.Count - 1; i >= 0; i--)
+            foreach (var binding in _scopes[i])
+                if (binding.Value == slot) return _lexicalScopes[i].Contains(binding.Key);
+        return false;
+    }
+
+    private string? ModuleBindingNameForUpvalue(int upIdx)
+    {
+        if (_moduleBindingUpvalues is null) return null;
+        foreach (var binding in _moduleBindingUpvalues)
+            if (binding.Value == upIdx) return binding.Key;
+        return null;
+    }
+
+    /// <summary>TDZ — is this resolved upvalue a lexical binding? This follows
+    /// the upvalue descriptor chain rather than the source name, so a function
+    /// local can shadow a same-named module lexical binding.</summary>
+    private bool IsLexicalUpvalue(int upIdx)
+    {
+        if (ModuleBindingNameForUpvalue(upIdx) is { } moduleName)
+            return _moduleLexicalBindings is not null && _moduleLexicalBindings.Contains(moduleName);
+        if (upIdx < 0 || upIdx >= _upvalues.Count || _parent is null) return false;
+        var upvalue = _upvalues[upIdx];
+        return upvalue.IsLocalCapture
+            ? _parent.IsLexicalLocalSlot(upvalue.Index)
+            : _parent.IsLexicalUpvalue(upvalue.Index);
+    }
+
+    /// <summary>§13.15.2 / §16.2.1.6.2 — is this resolved upvalue immutable
+    /// (<c>const</c> or import)? This follows the upvalue descriptor chain rather
+    /// than the source name, so a function-local <c>let o</c> is not mistaken for
+    /// a shadowed module <c>const o</c>.</summary>
+    private bool IsImmutableUpvalue(int upIdx)
+    {
+        if (ModuleBindingNameForUpvalue(upIdx) is { } moduleName)
+            return _moduleImmutableBindings is not null && _moduleImmutableBindings.Contains(moduleName);
+        if (upIdx < 0 || upIdx >= _upvalues.Count || _parent is null) return false;
+        var upvalue = _upvalues[upIdx];
+        return upvalue.IsLocalCapture
+            ? _parent.IsConstLocalSlot(upvalue.Index)
+            : _parent.IsImmutableUpvalue(upvalue.Index);
     }
 
     /// <summary>gap:script-top-var-not-global — true when this compiler is
@@ -640,7 +626,7 @@ public sealed partial class JsCompiler
             // the reserved local slot).
             EmitFunctionConstructor(fd.Name.Name, chunk,
                 CountSimpleParams(fd.Params), sub._upvalues,
-                ResolveFunctionKind(fd.Async, fd.Generator));
+                ResolveFunctionKind(fd.Async, fd.Generator), fd.SourceText);
             if (isScriptTop && _evalInjectVars)
             {
                 // wp:M3-73 — §19.2.1.3 (non-global branch). The function object is
@@ -733,9 +719,13 @@ public sealed partial class JsCompiler
 
     private void EmitFunctionConstructor(
         string name, Chunk body, int arity, IReadOnlyList<UpvalueRef> upvalues,
-        Runtime.JsFunctionKind kind)
+        Runtime.JsFunctionKind kind, string? sourceText = null)
     {
-        var fn = new Runtime.JsFunction(name, body, arity) { Kind = kind };
+        var fn = new Runtime.JsFunction(name, body, arity)
+        {
+            Kind = kind,
+            SourceText = sourceText,
+        };
         var fnIdx = _b.AddConstant(fn);
 
         if (upvalues.Count == 0)
@@ -824,15 +814,15 @@ public sealed partial class JsCompiler
         // InitCellLocal so the slot already holds a Cell when an inner closure is
         // constructed.
         PreallocateCapturedVarBindings(fd.Body.Body);
-        // Function declarations inside a function body are hoisted to the top
-        // of the function per §13.2.1 and §14.1.18. Without this, an inner
-        // `function inner() {...}` would be silently dropped, breaking closure
-        // tests like `function outer(){ var x=0; function inner(){x=5} inner(); return x }`.
-        HoistFunctionDeclarations(fd.Body.Body);
+        HoistVarDeclarations(fd.Body.Body);
         // Temporal Dead Zone — instantiate top-level let/const before we decide
         // whether to synthesize `arguments`, so a real lexical binding named
         // `arguments` wins over the implicit object.
         HoistLexicalDeclarations(fd.Body.Body);
+        // Function declarations inside a function body are hoisted to the top
+        // of the function per §13.2.1 and §14.1.18. Register lexical names first
+        // so hoisted function bodies capture same-scope class/let/const names.
+        HoistFunctionDeclarations(fd.Body.Body);
         // wp:M3-20 — synthesize the `arguments` object if the body reads it.
         MaybeBindArguments(fd.Params, fd.Body.Body);
         // §10.2.1.1 — box `this` if a nested arrow reads it.
@@ -874,6 +864,116 @@ public sealed partial class JsCompiler
     private void PreallocateCapturedVarBindings(IReadOnlyList<Statement> body)
     {
         foreach (var s in body) PreallocateCapturedInStatement(s);
+    }
+
+    private void HoistVarDeclarations(IReadOnlyList<Statement> body)
+    {
+        foreach (var s in body) HoistVarDeclarationsInStatement(s);
+    }
+
+    private void HoistVarDeclarationsInStatement(Statement? s)
+    {
+        if (s is null) return;
+        switch (s)
+        {
+            case VariableDeclaration vd:
+                if (vd.Kind == "var")
+                    foreach (var d in vd.Declarations) HoistVarPattern(d.Id);
+                return;
+            case BlockStatement b:
+                foreach (var inner in b.Body) HoistVarDeclarationsInStatement(inner);
+                return;
+            case IfStatement i:
+                HoistVarDeclarationsInStatement(i.Consequent);
+                HoistVarDeclarationsInStatement(i.Alternate);
+                return;
+            case WhileStatement w: HoistVarDeclarationsInStatement(w.Body); return;
+            case DoWhileStatement dw: HoistVarDeclarationsInStatement(dw.Body); return;
+            case ForStatement f:
+                if (f.Init is VariableDeclaration fvd && fvd.Kind == "var")
+                    foreach (var d in fvd.Declarations) HoistVarPattern(d.Id);
+                HoistVarDeclarationsInStatement(f.Body);
+                return;
+            case ForInStatement fi:
+                if (fi.Left is VariableDeclaration fivd && fivd.Kind == "var")
+                    foreach (var d in fivd.Declarations) HoistVarPattern(d.Id);
+                HoistVarDeclarationsInStatement(fi.Body);
+                return;
+            case ForOfStatement fo:
+                if (fo.Left is VariableDeclaration fovd && fovd.Kind == "var")
+                    foreach (var d in fovd.Declarations) HoistVarPattern(d.Id);
+                HoistVarDeclarationsInStatement(fo.Body);
+                return;
+            case SwitchStatement sw:
+                foreach (var c in sw.Cases)
+                    foreach (var inner in c.Consequent) HoistVarDeclarationsInStatement(inner);
+                return;
+            case TryStatement tr:
+                HoistVarDeclarationsInStatement(tr.Block);
+                if (tr.Handler is not null)
+                    foreach (var inner in tr.Handler.Body.Body) HoistVarDeclarationsInStatement(inner);
+                if (tr.Finalizer is not null) HoistVarDeclarationsInStatement(tr.Finalizer);
+                return;
+            case LabeledStatement ls: HoistVarDeclarationsInStatement(ls.Body); return;
+            case WithStatement ws: HoistVarDeclarationsInStatement(ws.Body); return;
+            case FunctionDeclaration:
+            case ClassDeclaration:
+                return;
+        }
+    }
+
+    private void HoistVarPattern(Expression? pattern)
+    {
+        if (pattern is null) return;
+        switch (pattern)
+        {
+            case Identifier id:
+                if (_scopes[0].ContainsKey(id.Name)) return;
+                var slot = _b.ReserveLocal();
+                _scopes[0][id.Name] = slot;
+                if (IsNameCaptured(id.Name))
+                {
+                    _b.MarkCaptured(slot);
+                    _b.EmitSlot(Opcode.InitCellLocal, slot);
+                }
+                else
+                {
+                    _b.EmitSlot(Opcode.DeclareLocal, slot);
+                }
+                return;
+            case AssignmentExpression { Op: "=" } a: HoistVarPattern(a.Target); return;
+            case AssignmentPattern a: HoistVarPattern(a.Target); return;
+            case ArrayPattern arr:
+                foreach (var el in arr.Elements)
+                {
+                    switch (el)
+                    {
+                        case ArrayPatternBindingElement binding: HoistVarPattern(binding.Target); break;
+                        case ArrayPatternRestElement rest: HoistVarPattern(rest.Target); break;
+                    }
+                }
+                return;
+            case ObjectPattern obj:
+                foreach (var prop in obj.Properties) HoistVarPattern(prop.Target);
+                if (obj.Rest is not null) HoistVarPattern(obj.Rest.Argument);
+                return;
+            case ArrayExpression arr:
+                foreach (var el in arr.Elements)
+                {
+                    if (el is null) continue;
+                    HoistVarPattern(el is SpreadElement sp ? sp.Argument : el);
+                }
+                return;
+            case ObjectExpression obj:
+                foreach (var prop in obj.Properties)
+                {
+                    if (prop.Value is SpreadElement sp) HoistVarPattern(sp.Argument);
+                    else HoistVarPattern(prop.Value);
+                }
+                return;
+            case SpreadElement spread: HoistVarPattern(spread.Argument); return;
+            case RestElement rest: HoistVarPattern(rest.Argument); return;
+        }
     }
 
     private void PreallocateCapturedInStatement(Statement? s, bool inBlock = false)
@@ -1025,12 +1125,11 @@ public sealed partial class JsCompiler
                 case VariableDeclaration vd when vd.Kind is "let" or "const":
                     foreach (var d in vd.Declarations) HoistLexicalPattern(d.Id);
                     break;
-                    // ClassDeclaration also introduces a lexical binding, but its
-                    // block-scoped TDZ is deferred together with global-lexical TDZ
-                    // (the class-decl lowering still binds the name on the global
-                    // object — see EmitClassDeclaration). Not hoisted here so reads
-                    // resolve through that existing path without regressing the
-                    // passing class suite.
+                case ClassDeclaration cd when !IsGlobalLexicalScope:
+                    HoistLexicalName(cd.Name.Name);
+                    break;
+                    // Script-top ClassDeclaration still uses the existing global
+                    // binding path in EmitClassDeclaration.
                     //
                     // A labeled declaration is only ever a (var-hoisted) function
                     // declaration per Annex B; lexical declarations cannot be
@@ -1536,14 +1635,14 @@ public sealed partial class JsCompiler
         // undefined. Reset before the comparison chain (which doesn't touch V).
         EmitCompletionReset();
 
-        // Hoist any function declarations visible at the top of the switch body.
         var allConsequent = sw.Cases.SelectMany(c => c.Consequent).ToList();
-        HoistFunctionDeclarations(allConsequent);
         // TDZ — §14.12.2: let/const declared in ANY clause are instantiated in
         // the uninitialized state across the whole switch's shared lexical
         // scope, so a read in an earlier clause (before the textual declaration
         // in a later clause) throws ReferenceError.
         HoistLexicalDeclarations(allConsequent);
+        // Hoist any function declarations visible at the top of the switch body.
+        HoistFunctionDeclarations(allConsequent);
 
         // Locate the default clause index (if any).
         int defaultIdx = -1;
@@ -2727,15 +2826,17 @@ public sealed partial class JsCompiler
             _ => throw new InvalidOperationException("arrow body must be block or expression"),
         };
         var fe = BuildFunctionExpressionShim(null, arrow.Params, body, arrow.Start, arrow.End,
-            isAsync: arrow.Async, isGenerator: arrow.Generator, strict: arrow.Strict);
+            isAsync: arrow.Async, isGenerator: arrow.Generator, strict: arrow.Strict,
+            sourceText: arrow.SourceText);
         EmitFunctionExpression(fe, isArrow: true);
     }
 
     private static FunctionExpression BuildFunctionExpressionShim(
         Identifier? name, IReadOnlyList<Expression> @params, BlockStatement body,
         Starling.Js.Lex.JsPosition start, Starling.Js.Lex.JsPosition end,
-        bool isAsync = false, bool isGenerator = false, bool strict = false)
-        => new(name, @params, body, Generator: isGenerator, start, end, Async: isAsync, Strict: strict);
+        bool isAsync = false, bool isGenerator = false, bool strict = false, string? sourceText = null)
+        => new(name, @params, body, Generator: isGenerator, start, end,
+            Async: isAsync, Strict: strict, SourceText: sourceText);
 
     /// <summary>§14.11 — emit a with-aware opcode that on a runtime hit (an
     /// enclosing object Environment Record has the binding) jumps PAST the
@@ -2804,7 +2905,7 @@ public sealed partial class JsCompiler
     {
         if (ShouldRouteWith(name)) return true;
         if (TryResolveLocal(name, out _)) return IsLexicalLocal(name);
-        if (TryResolveUpvalue(name, out _)) return IsLexicalUpvalue(name);
+        if (TryResolveUpvalue(name, out var upIdx)) return IsLexicalUpvalue(upIdx);
         if (_callerScopeNames is { } cs && cs.Contains(name)) return true;
         return checkedGlobal;
     }
@@ -2858,12 +2959,12 @@ public sealed partial class JsCompiler
         {
             // §16.2.1.6.2 — assignment to an immutable binding (import / const)
             // throws, except the binding's own initializer (_inLexicalDeclInit).
-            if (IsImmutableUpvalue(name) && !_inLexicalDeclInit)
+            if (IsImmutableUpvalue(upIdx) && !_inLexicalDeclInit)
             {
                 _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(name));
                 return;
             }
-            _b.EmitUpvalue(needsTdzCheck && IsLexicalUpvalue(name)
+            _b.EmitUpvalue(needsTdzCheck && IsLexicalUpvalue(upIdx)
                 ? Opcode.StoreUpvalueChecked : Opcode.StoreUpvalue, upIdx);
         }
         else if (_callerScopeNames is { } cs && cs.Contains(name))
@@ -2895,7 +2996,7 @@ public sealed partial class JsCompiler
             // Every upvalue is a Cell, so
             // LoadUpvalue dereferences it transparently. TDZ — a captured
             // lexical binding from an enclosing scope checks the sentinel.
-            _b.EmitUpvalue(IsLexicalUpvalue(name)
+            _b.EmitUpvalue(IsLexicalUpvalue(upIdx)
                 ? Opcode.LoadUpvalueChecked : Opcode.LoadUpvalue, upIdx);
             return;
         }
@@ -3044,14 +3145,14 @@ public sealed partial class JsCompiler
             }
             if (TryResolveUpvalue(id.Name, out var upIdx))
             {
-                _b.EmitUpvalue(IsLexicalUpvalue(id.Name)
+                _b.EmitUpvalue(IsLexicalUpvalue(upIdx)
                     ? Opcode.LoadUpvalueChecked : Opcode.LoadUpvalue, upIdx);
                 if (!up.Prefix) _b.Emit(Opcode.Dup);
                 _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));
                 _b.Emit(up.Op == "++" ? Opcode.Add : Opcode.Sub);
                 if (up.Prefix) _b.Emit(Opcode.Dup);
                 // §16.2.1.6.2 — `import++`/`--` writes to an immutable binding.
-                if (IsImmutableUpvalue(id.Name))
+                if (IsImmutableUpvalue(upIdx))
                     _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(id.Name));
                 else
                     _b.EmitUpvalue(Opcode.StoreUpvalue, upIdx);
@@ -3493,7 +3594,7 @@ public sealed partial class JsCompiler
             }
             if (TryResolveUpvalue(id.Name, out var upIdx))
             {
-                _b.EmitUpvalue(IsLexicalUpvalue(id.Name)
+                _b.EmitUpvalue(IsLexicalUpvalue(upIdx)
                     ? Opcode.LoadUpvalueChecked : Opcode.LoadUpvalue, upIdx); // [cur]
                 _b.Emit(Opcode.Dup);
                 var j = _b.EmitJump(jmp);
@@ -3502,7 +3603,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.Dup);
                 // §16.2.1.6.2 — `import ||= …` etc. writes to an immutable binding
                 // (only on the assign path; the short-circuit path skips it).
-                if (IsImmutableUpvalue(id.Name))
+                if (IsImmutableUpvalue(upIdx))
                     _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(id.Name));
                 else
                     _b.EmitUpvalue(Opcode.StoreUpvalue, upIdx); // [rhs]
@@ -3904,7 +4005,7 @@ public sealed partial class JsCompiler
             if (!seen.Add(kv.Key)) continue;
             bindings.Add(new EvalScopeDescriptor.Binding(
                 kv.Key, EvalScopeDescriptor.Kind.Upvalue, kv.Value,
-                IsLexicalUpvalue(kv.Key), IsConstUpvalue(kv.Key)));
+                IsLexicalUpvalue(kv.Value), IsImmutableUpvalue(kv.Value)));
         }
         return new EvalScopeDescriptor(bindings);
     }
@@ -3974,6 +4075,11 @@ public sealed partial class JsCompiler
         // resolves it to the parent's cell slot rather than LoadGlobal/Store-
         // Global. Mirrors EmitProgram and the class-method body paths.
         sub.PreallocateCapturedVarBindings(fe.Body.Body);
+        sub.HoistVarDeclarations(fe.Body.Body);
+        // TDZ — instantiate top-level let/const of the body before compiling
+        // hoisted function bodies, so those bodies capture same-scope class and
+        // let/const names instead of resolving outer/global bindings.
+        sub.HoistLexicalDeclarations(fe.Body.Body);
         // Function declarations nested in a function *expression* / arrow body
         // are function-scoped and hoisted to the top of the body (§14.1.18),
         // exactly as in EmitFunctionBody for function declarations. Without this
@@ -3994,9 +4100,6 @@ public sealed partial class JsCompiler
         // §10.2.1.1 — arrows have no own `this` binding; only an ordinary
         // function expression boxes `this` for a nested arrow that reads it.
         if (!isArrow) sub.MaybeBindLexicalThis();
-        // TDZ — instantiate top-level let/const of the body in the
-        // uninitialized state so reads before their declaration throw.
-        sub.HoistLexicalDeclarations(fe.Body.Body);
         // §10.2.1.3 — synchronous parameter-binding prologue boundary for
         // generator / async (incl. async-arrow) bodies; see EmitFunctionBody.
         sub.EmitPrologueEndIfSuspendable(fe.Async, fe.Generator);
@@ -4009,7 +4112,7 @@ public sealed partial class JsCompiler
         var name = fe.Name?.Name ?? "";
         var chunk = sub._b.Build(name);
         var kind = ResolveFunctionKind(fe.Async, fe.Generator);
-        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind);
+        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind, fe.SourceText);
     }
 
     /// <summary>B1b-2c — emit <c>yield expr</c> / <c>yield</c> / <c>yield* iter</c>.
@@ -4652,13 +4755,13 @@ public sealed partial class JsCompiler
             // module `const`) is a runtime TypeError. The binding's own
             // initializer is exempt (a `const`/destructuring init runs with
             // _inLexicalDeclInit set); any other store is a user assignment.
-            if (IsImmutableUpvalue(name) && !_inLexicalDeclInit)
+            if (IsImmutableUpvalue(upIdx) && !_inLexicalDeclInit)
             {
                 _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(name));
                 return;
             }
             _b.EmitUpvalue(
-                IsLexicalUpvalue(name) && !_inLexicalDeclInit
+                IsLexicalUpvalue(upIdx) && !_inLexicalDeclInit
                     ? Opcode.StoreUpvalueChecked : Opcode.StoreUpvalue, upIdx);
         }
         else

@@ -111,7 +111,7 @@ public static class DataViewCtor
     {
         if (offset > view.ByteLength - size)
             throw new JsThrow(realm.NewRangeError("DataView byteOffset out of range"));
-        return view.Buffer.Bytes.AsSpan(view.ByteOffset + offset, size);
+        return view.Buffer.GetSpan(view.ByteOffset + offset, size);
     }
 
     private static JsValue ReadBigInt64(JsRealm realm, ReadOnlySpan<byte> s, bool le)

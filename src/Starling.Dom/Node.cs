@@ -111,6 +111,10 @@ public abstract class Node : EventTarget
                 previous.NextSibling = child;
         }
 
+        // DOM §5.3.4 "insert": update live Range boundary points now that the
+        // child is linked into the tree.
+        DomRange.OnNodeInserted(this, DomRange.IndexOf(child), 1);
+
         var childAffectsLayout = !IsLayoutInvariantElement(child);
         OnTreeMutated(affectsLayout: childAffectsLayout);
         if (childAffectsLayout)
@@ -168,6 +172,10 @@ public abstract class Node : EventTarget
             var doc = OwnerDocument ?? (this is Document d ? d : null);
             if (doc is not null) hook(doc, this);
         }
+
+        // DOM §5.3.4 "remove": update live Range boundary points before the
+        // node is unlinked (needs the old parent and old index).
+        DomRange.OnNodeRemoved(this, parent, DomRange.IndexOf(this));
 
         if (PreviousSibling is not null) PreviousSibling.NextSibling = NextSibling;
         else parent.FirstChild = NextSibling;

@@ -8,10 +8,26 @@ namespace Starling.Css.Values;
 /// it carries enough information for the paint backend to build an ImageSharp
 /// gradient brush.
 /// <para>
-/// Scope: <c>linear-gradient</c> and <c>radial-gradient</c> plus their
-/// <c>repeating-</c> variants. <c>conic-gradient</c> is recognised as a
-/// <see cref="CssGradientKind.Conic"/> kind but is not paintable — ImageSharp.Drawing
-/// has no conic/sweep brush — so callers fail soft (box left unpainted).
+/// Scope: <c>linear-gradient</c>, <c>radial-gradient</c>, and
+/// <c>conic-gradient</c> plus their <c>repeating-</c> variants. ImageSharp.Drawing
+/// has no conic/sweep brush, so the paint backend rasterizes conic gradients
+/// per-pixel into an offscreen layer; linear and radial map to ImageSharp brushes.
+/// </para>
+/// <para>
+/// For a conic gradient, <see cref="Line"/> carries the <c>from &lt;angle&gt;</c>
+/// (its <see cref="CssGradientLine.AngleDegrees"/>, clockwise from straight up,
+/// default 0deg) and <see cref="Position"/> carries the <c>at &lt;position&gt;</c>
+/// center (default center). Color-stop positions are angles around the turn:
+/// a percentage is a fraction of one full turn and an angle stop is normalized
+/// to <c>deg / 360</c>.
+/// </para>
+/// <para>
+/// CSS Color 4 <c>in &lt;colorspace&gt;</c> interpolation is stored in
+/// <see cref="Interpolation"/>. The paint backend honors it for the conic
+/// per-pixel path; the linear/radial ImageSharp brush path pre-bakes stops into
+/// sRGB and documents the fallback. A null <see cref="Interpolation"/> means the
+/// default (premultiplied sRGB for legacy gradients; Oklab per CSS Color 4 spec
+/// default, but we default to sRGB for compatibility).
 /// </para>
 /// </summary>
 public sealed record CssGradient(
@@ -21,12 +37,104 @@ public sealed record CssGradient(
     CssGradientLine? Line = null,
     CssRadialShape Shape = CssRadialShape.Ellipse,
     CssRadialSize Size = CssRadialSize.FarthestCorner,
-    CssGradientPosition? Position = null) : CssValue
+    CssGradientPosition? Position = null,
+    GradientInterpolationMethod? Interpolation = null) : CssValue
 {
-    /// <summary>True when this gradient is one the paint backend can rasterize
-    /// (linear or radial). Conic gradients have no ImageSharp brush.</summary>
-    public bool IsPaintable => Kind is CssGradientKind.Linear or CssGradientKind.Radial && Stops.Count >= 1;
+    /// <summary>True when this gradient is one the paint backend can rasterize.
+    /// All three kinds (linear, radial, conic) are paintable once they have at
+    /// least one color stop.</summary>
+    public bool IsPaintable => Stops.Count >= 1;
 }
+
+/// <summary>
+/// CSS Color 4 §12.3 — the <c>in &lt;colorspace&gt;</c> prelude of a gradient.
+/// Carries the color space to interpolate in and, for polar spaces (oklch, hsl,
+/// hwb, lch), the optional hue interpolation strategy.
+/// </summary>
+public sealed record GradientInterpolationMethod(
+    GradientColorSpace ColorSpace,
+    HueInterpolationMethod HueMethod = HueInterpolationMethod.Shorter);
+
+/// <summary>
+/// CSS Color 4 §12.3 — color spaces supported in gradient interpolation.
+/// The paint backend honors the conic per-pixel path for all of these.
+/// For the linear/radial ImageSharp brush path the stops are pre-baked to sRGB
+/// regardless of the requested space (documented sRGB fallback).
+/// </summary>
+public enum GradientColorSpace
+{
+    /// <summary>Premultiplied sRGB (default for CSS Images 3 gradients).</summary>
+    Srgb,
+    /// <summary>sRGB (straight alpha, linear interpolation in sRGB).</summary>
+    SrgbLinear,
+    /// <summary>Oklab (CSS Color 4 default for Level 4 gradients).</summary>
+    Oklab,
+    /// <summary>Oklch (polar Oklab).</summary>
+    Oklch,
+    /// <summary>HSL (hue-saturation-lightness).</summary>
+    Hsl,
+    /// <summary>HWB (hue-whiteness-blackness).</summary>
+    Hwb,
+    /// <summary>CIELAB (Lab).</summary>
+    Lab,
+    /// <summary>CIELCh (polar Lab).</summary>
+    Lch,
+    /// <summary>Display-P3.</summary>
+    DisplayP3,
+    /// <summary>A98-RGB (Adobe RGB).</summary>
+    A98Rgb,
+    /// <summary>ProPhoto RGB.</summary>
+    ProphotoRgb,
+    /// <summary>Rec 2020.</summary>
+    Rec2020,
+    /// <summary>XYZ with D50 white point.</summary>
+    XyzD50,
+    /// <summary>XYZ with D65 white point.</summary>
+    XyzD65,
+}
+
+/// <summary>
+/// CSS Color 4 §12.4 — hue interpolation strategy for polar color spaces
+/// (oklch, hsl, hwb, lch). Controls how the hue angle wraps around the circle.
+/// </summary>
+public enum HueInterpolationMethod
+{
+    /// <summary>Take the shortest arc (the default). If the difference is exactly 180deg, go counter-clockwise.</summary>
+    Shorter,
+    /// <summary>Take the longer arc.</summary>
+    Longer,
+    /// <summary>Always increase the hue angle.</summary>
+    Increasing,
+    /// <summary>Always decrease the hue angle.</summary>
+    Decreasing,
+}
+
+/// <summary>
+/// CSS Images 4 §3.4 — a color-stop transition hint: a bare
+/// <c>&lt;length-percentage&gt;</c> between two color stops that shifts the
+/// midpoint of the gradient transition. The color at the hint position is the
+/// midpoint of the interpolation between the surrounding stops, applying a
+/// power-curve skew so the transition accelerates or decelerates. The hint sits
+/// in the <see cref="CssColorStop"/> list interleaved with real color stops and
+/// has a null <see cref="CssColorStop.Color"/>.
+/// </summary>
+public static class CssTransitionHint
+{
+    /// <summary>
+    /// Creates a color-stop hint entry: a <see cref="CssColorStop"/> with the
+    /// sentinel color <see cref="CssColorStop.IsHint"/> = true (Color is
+    /// transparent black, Position carries the hint position).
+    /// </summary>
+    public static CssColorStop Create(CssGradientStopPosition position)
+        => new(IsHint: true, Color: new CssColor(0, 0, 0, 0), Position: position);
+}
+
+/// <summary>One color stop: a color and an optional position. When
+/// <see cref="Position"/> is null the stop is evenly distributed at paint time
+/// per CSS Images 3 §3.4.3. When <see cref="IsHint"/> is true this entry is a
+/// transition hint (a bare percentage/length between stops) as defined in CSS
+/// Images 4; the backend applies a power-curve skew at the hint position.</summary>
+public sealed record CssColorStop(CssColor Color, CssGradientStopPosition? Position = null, bool IsHint = false);
 
 public enum CssGradientKind
 {
@@ -122,11 +230,6 @@ public enum CssRadialSize
     FarthestSide,
     FarthestCorner,
 }
-
-/// <summary>One color stop: a color and an optional position. When
-/// <see cref="Position"/> is null the stop is evenly distributed at paint time
-/// per CSS Images 3 §3.4.3.</summary>
-public sealed record CssColorStop(CssColor Color, CssGradientStopPosition? Position = null);
 
 /// <summary>A color-stop position: an absolute length (px-resolved) or a
 /// percentage of the gradient line. Only one is set.</summary>

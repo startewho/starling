@@ -281,8 +281,48 @@ public sealed class SelectorParser
             "dir" => FirstValueText(values)?.ToLowerInvariant(),
             "nth-child" or "nth-last-child" => ParseNthArgument(values),
             "nth-of-type" or "nth-last-of-type" => ParseNthArgument(values).Pattern,
+            "heading" => ParseHeadingArgument(values),
             _ => ComponentValuesText(values),
         };
+
+    /// <summary>Parse the <c>:heading()</c> argument: a comma-separated list of plain integers
+    /// (Selectors 5 §heading). Any non-integer value, An+B form, calc, or empty list is invalid.</summary>
+    private static HeadingArgument ParseHeadingArgument(IReadOnlyList<CssComponentValue> values)
+    {
+        var levels = new List<int>();
+        var expectNumber = true;
+        var sawAny = false;
+
+        foreach (var value in values)
+        {
+            if (value is CssTokenValue { Token.Type: CssTokenType.Whitespace })
+                continue;
+
+            if (value is not CssTokenValue token)
+                return new HeadingArgument([], IsValid: false);
+
+            if (expectNumber)
+            {
+                if (token.Token.Type != CssTokenType.Number || !token.Token.IsInteger)
+                    return new HeadingArgument([], IsValid: false);
+                levels.Add((int)token.Token.Number);
+                expectNumber = false;
+                sawAny = true;
+            }
+            else
+            {
+                if (token.Token.Type != CssTokenType.Comma)
+                    return new HeadingArgument([], IsValid: false);
+                expectNumber = true;
+            }
+        }
+
+        // Reject an empty list and a trailing comma (expectNumber still true after a comma).
+        if (!sawAny || expectNumber)
+            return new HeadingArgument([], IsValid: false);
+
+        return new HeadingArgument(levels);
+    }
 
     /// <summary>Parses An+B with optional `of S` tail (Selectors 4 §15.3).</summary>
     private static NthArgument ParseNthArgument(IReadOnlyList<CssComponentValue> values)

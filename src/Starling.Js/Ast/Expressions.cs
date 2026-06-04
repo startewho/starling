@@ -161,7 +161,8 @@ public sealed record FunctionExpression(
     JsPosition Start, JsPosition End,
     bool Async = false,
     // ES strict mode: true when this function's body parses as strict.
-    bool Strict = false)
+    bool Strict = false,
+    string? SourceText = null)
     : Expression(Start, End);
 
 /// <summary>
@@ -198,7 +199,8 @@ public sealed record ArrowFunctionExpression(
     JsPosition Start, JsPosition End,
     bool Generator = false,
     // ES strict mode: true when this arrow's body parses as strict.
-    bool Strict = false)
+    bool Strict = false,
+    string? SourceText = null)
     : Expression(Start, End);
 
 /// <summary>
@@ -260,7 +262,8 @@ public sealed record MethodDefinition(
     bool Async = false,
     // ES strict mode: class bodies are always strict (§15.7), so this is
     // always true for class methods/constructors.
-    bool Strict = false)
+    bool Strict = false,
+    string? SourceText = null)
     : AstNode(Start, End);
 
 public enum MethodKind

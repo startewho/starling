@@ -6,6 +6,7 @@
   </Configurations>
   <Folder Name="/src/">
     <Project Path="src/Starling.Codecs/Starling.Codecs.csproj" />
+    <Project Path="src/Starling.Ipc/Starling.Ipc.csproj" />
     <Project Path="src/Starling.Gui.Core/Starling.Gui.Core.csproj" />
     <Project Path="src/Starling.Gui/Starling.Gui.csproj" />
     <Project Path="src/Starling.Shell.Native/Starling.Shell.Native.csproj" />
@@ -19,6 +20,7 @@
     <Project Path="bench/Starling.HtmlParserBench/Starling.HtmlParserBench.csproj" />
     <Project Path="tests/Starling.Bindings.Jint.Tests/Starling.Bindings.Jint.Tests.csproj" />
     <Project Path="tests/Starling.Bindings.Tests/Starling.Bindings.Tests.csproj" />
+    <Project Path="tests/Starling.Ipc.Tests/Starling.Ipc.Tests.csproj" />
     <Project Path="tests/Starling.Codecs.Tests/Starling.Codecs.Tests.csproj" />
     <Project Path="tests/Starling.Common.Tests/Starling.Common.Tests.csproj" />
     <Project Path="tests/Starling.Css.Spec.Tests/Starling.Css.Spec.Tests.csproj" />

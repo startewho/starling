@@ -266,12 +266,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         if (rule is Starling.Css.Parser.StyleRule sr)
         {
             foreach (var decl in sr.Declarations)
-            {
-                if (!decl.Name.Contains("background", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
-                    if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
-                        urls.Add(u.Value);
-            }
+                CollectFromDeclaration(decl, urls);
         }
         else if (rule is Starling.Css.Parser.AtRule at)
         {
@@ -280,14 +275,27 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
             foreach (var inner in at.Rules)
                 CollectFromRule(inner, urls);
             foreach (var decl in at.Declarations)
-            {
-                if (!decl.Name.Contains("background", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
-                    if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
-                        urls.Add(u.Value);
-            }
+                CollectFromDeclaration(decl, urls);
         }
     }
+
+    private static void CollectFromDeclaration(Starling.Css.Parser.CssDeclaration decl, HashSet<string> urls)
+    {
+        // Prefetch url() images referenced by background-image, mask-image (and
+        // the -webkit-mask-* aliases / mask shorthand), and custom properties.
+        // Custom properties are included because a mask-image: var(--x) reads its
+        // url() from the --x declaration, not from the mask-image declaration
+        // itself, so the raw url() only appears on the custom property.
+        if (!WantsImagePrefetch(decl.Name)) return;
+        foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
+            if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
+                urls.Add(u.Value);
+    }
+
+    private static bool WantsImagePrefetch(string name)
+        => name.Contains("background", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("mask", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("--", StringComparison.Ordinal);
 
     private async Task<DecodedImage?> FetchAndDecodeAsync(StarlingUrl url, CancellationToken ct)
     {

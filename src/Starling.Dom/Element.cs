@@ -47,7 +47,10 @@ public class Element : Node
         var i = qualifiedName.IndexOf(':', StringComparison.Ordinal);
         var prefix = i >= 0 ? qualifiedName[..i] : null;
         var local = i >= 0 ? qualifiedName[(i + 1)..] : qualifiedName;
-        return new Element(qualifiedName, local, prefix, string.IsNullOrEmpty(@namespace) ? HtmlNamespace : @namespace);
+        // A null/empty namespace stays the empty string (a null namespace per
+        // DOM), not the HTML namespace — createElementNS(null, …) must report
+        // namespaceURI === null.
+        return new Element(qualifiedName, local, prefix, @namespace ?? "");
     }
 
     public override NodeKind Kind => NodeKind.Element;

@@ -121,6 +121,12 @@ public interface IScriptSession : IDisposable
     /// terminate.</summary>
     bool PumpOnce();
 
+    /// <summary>True while host-side asynchronous work can still enqueue JS
+    /// jobs even though the in-realm queues are currently empty. The engine uses
+    /// this to avoid declaring the page settled between a background fetch and
+    /// the promise job that will resolve it.</summary>
+    bool HasPendingHostAsyncWork { get; }
+
     /// <summary>True when the only work still pending is one or more queued
     /// <c>requestAnimationFrame</c> callbacks — no microtasks/promise jobs, no
     /// due timers, no in-flight dynamic <c>&lt;script src&gt;</c> work. A
