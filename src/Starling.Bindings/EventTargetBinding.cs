@@ -657,7 +657,9 @@ public static class EventTargetBinding
             }
             else
             {
-                var handle = listener.Get("handleEvent");
+                // Use the abstract Get so a `handleEvent` accessor getter actually
+                // runs (and re-runs on every dispatch), per the DOM invoke step.
+                var handle = AbstractOperations.Get(vm, listener, "handleEvent");
                 if (AbstractOperations.IsCallable(handle))
                     AbstractOperations.Call(vm, handle, JsValue.Object(listener), new[] { jsEvent });
             }
