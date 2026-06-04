@@ -405,6 +405,40 @@ internal sealed class JsDocumentWrapper : JsObject
         if (base.HasOwn(name)) return true;
         return !ShadowedByPrototype(name) && NamedElements(name).Count > 0;
     }
+
+    // The supported property names (HTML §3.1.5): the name of each accessible
+    // embed/form/iframe/img/object and the id of each accessible object / named
+    // img, in tree order, de-duplicated and not shadowed by a prototype property.
+    private IEnumerable<string> SupportedNames()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in _doc.DescendantElements())
+        {
+            if (NameAccessible(e) && e.GetAttribute("name") is { Length: > 0 } n
+                && !ShadowedByPrototype(n) && seen.Add(n)) yield return n;
+            if (IdAccessible(e) && e.GetAttribute("id") is { Length: > 0 } id
+                && !ShadowedByPrototype(id) && seen.Add(id)) yield return id;
+        }
+    }
+
+    public override IEnumerable<string> Keys
+    {
+        get
+        {
+            foreach (var k in base.Keys) yield return k;
+            foreach (var n in SupportedNames()) yield return n;
+        }
+    }
+
+    public override IEnumerable<Starling.Js.Runtime.JsPropertyKey> OwnPropertyKeys
+    {
+        get
+        {
+            foreach (var k in base.OwnPropertyKeys) yield return k;
+            foreach (var n in SupportedNames())
+                yield return Starling.Js.Runtime.JsPropertyKey.String(n);
+        }
+    }
 }
 
 /// <summary>
