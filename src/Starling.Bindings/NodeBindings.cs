@@ -1516,9 +1516,28 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "title", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.String("");
-            foreach (var n in d.Descendants())
-                if (n is Element { LocalName: "title" } t) return JsValue.String(t.TextContent.Trim());
-            return JsValue.String("");
+            // The title element is the first title (in tree order) — an SVG title
+            // child of an SVG root, else any title element. Its value is the child
+            // text content with ASCII whitespace stripped and collapsed.
+            var title = FirstTitleElement(d);
+            return JsValue.String(title is null ? "" : StripAndCollapseAsciiWhitespace(title.TextContent));
+        },
+        (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Undefined;
+            var value = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+            var existing = FirstTitleElement(d);
+            if (existing is not null) { existing.TextContent = value; return JsValue.Undefined; }
+            // No title yet: for an HTML document create one in the head (do nothing
+            // if there is no head element). SVG roots are left to the SVG path.
+            if (d.DocumentElement is { LocalName: "html", Namespace: Element.HtmlNamespace }
+                && d.Head is { } head)
+            {
+                var t = d.CreateElement("title");
+                t.TextContent = value;
+                head.AppendChild(t);
+            }
+            return JsValue.Undefined;
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "URL", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV) is { } d ? JsValue.String(WindowBinding.UrlFor(realm, d)) : JsValue.String(""));
@@ -2668,6 +2687,43 @@ public static class NodeBindings
     /// the error to be an instance of the target document's <c>DOMException</c>.</summary>
     private static JsRealm ThrowRealmFor(JsRealm realm, Document doc)
         => IFrameBinding.RealmForDocument(realm, doc) ?? realm;
+
+    /// <summary>The document's title element (HTML §document.title): when the
+    /// document element is an SVG <c>svg</c>, the first SVG <c>title</c> child of
+    /// it; otherwise the first <c>title</c> element in tree order.</summary>
+    private static Element? FirstTitleElement(Document d)
+    {
+        const string svgNs = "http://www.w3.org/2000/svg";
+        if (d.DocumentElement is { LocalName: "svg", Namespace: svgNs } svgRoot)
+        {
+            for (var c = svgRoot.FirstChild; c is not null; c = c.NextSibling)
+                if (c is Element { LocalName: "title", Namespace: svgNs } st) return st;
+            return null;
+        }
+        foreach (var n in d.Descendants())
+            if (n is Element { LocalName: "title" } t) return t;
+        return null;
+    }
+
+    /// <summary>Infra "strip and collapse ASCII whitespace": remove leading and
+    /// trailing ASCII whitespace and replace any internal run of ASCII whitespace
+    /// (tab/LF/FF/CR/space only — U+000B and other Unicode spaces are kept) with a
+    /// single U+0020.</summary>
+    private static string StripAndCollapseAsciiWhitespace(string s)
+    {
+        static bool IsAsciiWs(char c) => c is '\t' or '\n' or '\f' or '\r' or ' ';
+        var sb = new System.Text.StringBuilder(s.Length);
+        var pendingSpace = false;
+        var started = false;
+        foreach (var c in s)
+        {
+            if (IsAsciiWs(c)) { pendingSpace = started; continue; }
+            if (pendingSpace) { sb.Append(' '); pendingSpace = false; }
+            sb.Append(c);
+            started = true;
+        }
+        return sb.ToString();
+    }
 
     private static bool IsValidName(string name)
     {
