@@ -411,13 +411,16 @@ internal sealed class JsDocumentWrapper : JsObject
     // img, in tree order, de-duplicated and not shadowed by a prototype property.
     private IEnumerable<string> SupportedNames()
     {
+        // Suppress names that already exist as an own (expando) property: those win
+        // (GetOwnPropertyDescriptor returns the own property first), so emitting the
+        // supported name too would put a duplicate in the own-key list.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var e in _doc.DescendantElements())
         {
             if (NameAccessible(e) && e.GetAttribute("name") is { Length: > 0 } n
-                && !ShadowedByPrototype(n) && seen.Add(n)) yield return n;
+                && !base.HasOwn(n) && !ShadowedByPrototype(n) && seen.Add(n)) yield return n;
             if (IdAccessible(e) && e.GetAttribute("id") is { Length: > 0 } id
-                && !ShadowedByPrototype(id) && seen.Add(id)) yield return id;
+                && !base.HasOwn(id) && !ShadowedByPrototype(id) && seen.Add(id)) yield return id;
         }
     }
 

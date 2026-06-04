@@ -145,9 +145,15 @@ internal sealed class HtmlCollectionObject : JsObject
             var count = Items.Count;
             for (var i = 0; i < count; i++)
                 yield return i.ToString(CultureInfo.InvariantCulture);
+            // Own (expando) string keys win over supported names: GetOwnPropertyDescriptor
+            // returns the own property first, so a supported name that collides with an
+            // own key must be suppressed here to keep the own-key list duplicate-free.
+            var expandos = new List<string>(base.Keys);
+            var expandoSet = new HashSet<string>(expandos, StringComparer.Ordinal);
             foreach (var n in SupportedNames())
-                yield return n;
-            foreach (var k in base.Keys)
+                if (!expandoSet.Contains(n))
+                    yield return n;
+            foreach (var k in expandos)
                 yield return k; // expando properties set directly on the collection
         }
     }

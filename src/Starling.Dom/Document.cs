@@ -237,17 +237,17 @@ public sealed class Document : Node
     /// <summary>Fired after an attribute mutation on an element in this document:
     /// (element, qualifiedName, oldValue). Subscribed by MutationObserverBinding
     /// to queue attribute MutationRecords. Null when no observer is installed.</summary>
-    public Action<Element, string, string?>? AttributeMutated { get; set; }
+    internal Action<Element, string, string?>? AttributeMutated { get; set; }
 
     /// <summary>Fired after a childList mutation: (target parent, addedNode,
     /// removedNode, previousSibling, nextSibling) — one of added/removed is set.
     /// Subscribed by MutationObserverBinding to queue childList MutationRecords.</summary>
-    public Action<Node, Node?, Node?, Node?, Node?>? ChildListMutated { get; set; }
+    internal Action<Node, Node?, Node?, Node?, Node?>? ChildListMutated { get; set; }
 
     /// <summary>Fired after a CharacterData (Text/Comment/CDATA) data change:
     /// (target, oldData). Subscribed by MutationObserverBinding for characterData
     /// MutationRecords.</summary>
-    public Action<Node, string>? CharacterDataMutated { get; set; }
+    internal Action<Node, string>? CharacterDataMutated { get; set; }
 
     /// <summary>Raise <see cref="NodeConnected"/> for <paramref name="node"/>
     /// if a host has subscribed. Called from the tree-mutation path.</summary>

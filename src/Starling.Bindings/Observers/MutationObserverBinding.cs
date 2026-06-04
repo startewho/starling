@@ -49,30 +49,62 @@ public static class MutationObserverBinding
 {
     // observer JS wrapper → host state (callback + list of (target, options) + pending records).
     internal static readonly ConditionalWeakTable<JsObject, MutationObserverState> States = new();
-    // document → live observer states, so the attribute hook can reach them.
-    internal static readonly ConditionalWeakTable<Document, List<MutationObserverState>> DocStates = new();
+    // document → live observer states. Held as WeakReferences so an observer that
+    // is disconnected and dropped by JS can be garbage-collected even while the
+    // Document lives; dead entries are pruned under lock before each dispatch.
+    internal static readonly ConditionalWeakTable<Document, List<WeakReference<MutationObserverState>>> DocStates = new();
 
     internal static void RegisterState(Document doc, MutationObserverState state)
     {
-        var list = DocStates.GetValue(doc, _ => new List<MutationObserverState>());
-        if (!list.Contains(state)) list.Add(state);
+        var list = DocStates.GetValue(doc, static _ => new List<WeakReference<MutationObserverState>>());
+        lock (list)
+        {
+            // Prune dead refs and bail if this state is already registered.
+            for (var i = list.Count - 1; i >= 0; i--)
+            {
+                if (!list[i].TryGetTarget(out var existing)) list.RemoveAt(i);
+                else if (ReferenceEquals(existing, state)) return;
+            }
+            list.Add(new WeakReference<MutationObserverState>(state));
+        }
+    }
+
+    /// <summary>Snapshot the live observer states for a document, compacting dead
+    /// WeakReferences out of the backing list under lock. Returns null when no
+    /// (live) observers are registered.</summary>
+    private static List<MutationObserverState>? LiveStates(Document doc)
+    {
+        if (!DocStates.TryGetValue(doc, out var list)) return null;
+        List<MutationObserverState>? live = null;
+        lock (list)
+        {
+            var write = 0;
+            for (var read = 0; read < list.Count; read++)
+            {
+                if (!list[read].TryGetTarget(out var s)) continue; // dead — drop
+                list[write++] = list[read];                        // compact, preserving order
+                (live ??= new List<MutationObserverState>()).Add(s);
+            }
+            if (write < list.Count) list.RemoveRange(write, list.Count - write);
+        }
+        return live;
     }
 
     private static void OnAttributeChanged(Document doc, Element el, string attrName, string? oldValue)
     {
-        if (DocStates.TryGetValue(doc, out var states))
+        if (LiveStates(doc) is { } states)
             foreach (var s in states) s.MaybeQueueAttribute(el, attrName, oldValue);
     }
 
     private static void OnChildListChanged(Document doc, Node target, Node? added, Node? removed, Node? prev, Node? next)
     {
-        if (DocStates.TryGetValue(doc, out var states))
+        if (LiveStates(doc) is { } states)
             foreach (var s in states) s.MaybeQueueChildList(target, added, removed, prev, next);
     }
 
     private static void OnCharacterDataChanged(Document doc, Node target, string oldValue)
     {
-        if (DocStates.TryGetValue(doc, out var states))
+        if (LiveStates(doc) is { } states)
             foreach (var s in states) s.MaybeQueueCharacterData(target, oldValue);
     }
 
