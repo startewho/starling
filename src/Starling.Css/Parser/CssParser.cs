@@ -125,9 +125,18 @@ public sealed class CssParser
                 continue;
             }
 
-            rules.Add(Current.Type == CssTokenType.AtKeyword
-                ? ConsumeAtRule(insideStyleRule: false)
-                : ConsumeQualifiedRule(allowNested: false));
+            if (Current.Type == CssTokenType.AtKeyword)
+            {
+                var atRule = ConsumeAtRule(insideStyleRule: false);
+                // CSS Syntax 3 §8.1: @charset is not a real at-rule. The decode
+                // layer may honor a leading @charset, but it never appears in the
+                // CSSOM rule list — drop it here so cssRules excludes it.
+                if (!atRule.Name.Equals("charset", StringComparison.OrdinalIgnoreCase))
+                    rules.Add(atRule);
+                continue;
+            }
+
+            rules.Add(ConsumeQualifiedRule(allowNested: false));
         }
 
         return rules;
