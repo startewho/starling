@@ -112,8 +112,10 @@ public sealed class DomRange
         if (doc is null || !LiveRanges.TryGetValue(doc, out var list)) return;
         List<WeakReference<DomRange>> snapshot;
         lock (list) snapshot = new List<WeakReference<DomRange>>(list);
+        // newText is already linked into the tree (the binding inserts it
+        // before calling here), so its index is original's index + 1.
         var parent = original.ParentNode;
-        var originalIndex = parent is null ? -1 : IndexOf(original);
+        var newTextIndex = parent is null ? -1 : IndexOf(newText);
         foreach (var wr in snapshot)
         {
             if (!wr.TryGetTarget(out var range)) continue;
@@ -128,15 +130,44 @@ public sealed class DomRange
                 range.EndContainer = newText;
                 range.EndOffset -= offset;
             }
-            // Boundary on parent past original's index → shift by 1 (newText inserted after).
+            // §5.3.4 splitText special substep — a boundary on the parent whose
+            // offset equals newText's index gains 1. (Boundaries strictly past
+            // newText's index were already shifted by OnNodeInserted when the
+            // binding linked newText into the tree.)
             if (parent is not null)
             {
-                if (ReferenceEquals(range.StartContainer, parent) && range.StartOffset > originalIndex)
+                if (ReferenceEquals(range.StartContainer, parent) && range.StartOffset == newTextIndex)
                     range.StartOffset++;
-                if (ReferenceEquals(range.EndContainer, parent) && range.EndOffset > originalIndex)
+                if (ReferenceEquals(range.EndContainer, parent) && range.EndOffset == newTextIndex)
                     range.EndOffset++;
             }
         }
+    }
+
+    /// <summary>DOM §5.3.4 "insert" — after a node has been
+    /// inserted into <paramref name="parent"/> at <paramref name="index"/>
+    /// (inserting <paramref name="count"/> child nodes), shift any live Range
+    /// boundary that points at <paramref name="parent"/> past the insertion
+    /// point. Called AFTER the node is linked into the tree.</summary>
+    public static void OnNodeInserted(Node parent, int index, int count)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        var doc = parent.OwnerDocument ?? parent as Document;
+        if (doc is null || !LiveRanges.TryGetValue(doc, out var list)) return;
+        List<WeakReference<DomRange>> snapshot;
+        lock (list) snapshot = new List<WeakReference<DomRange>>(list);
+        foreach (var wr in snapshot)
+        {
+            if (!wr.TryGetTarget(out var range)) continue;
+            // §5.3.4 insert: "For each live range whose start node is parent and
+            // start offset is greater than index, increase its start offset by
+            // count." Same for end.
+            if (ReferenceEquals(range.StartContainer, parent) && range.StartOffset > index)
+                range.StartOffset += count;
+            if (ReferenceEquals(range.EndContainer, parent) && range.EndOffset > index)
+                range.EndOffset += count;
+        }
+        lock (list) list.RemoveAll(w => !w.TryGetTarget(out _));
     }
 
     /// <summary>DOM §5.3.4 — when <paramref name="node"/> is being removed
@@ -822,6 +853,10 @@ public sealed class DomRange
         if (node.ParentNode is not null) node.RemoveFromParent();
 
         // §4.6.16 step 9–10 — insert + adjust the range end if it was collapsed.
+        // The collapsed flag must be read BEFORE the InsertBefore below, since
+        // that mutation now fires the live-range "insert" hook which can move
+        // the (still-collapsed) end off the start.
+        var wasCollapsed = Collapsed;
         var newOffsetBase = insertBefore is not null
             ? IndexOf(insertBefore)
             : ChildCount(parent);
@@ -839,7 +874,7 @@ public sealed class DomRange
             throw DomRangeException.Create("HierarchyRequestError", ex.Message);
         }
 
-        if (Collapsed)
+        if (wasCollapsed)
         {
             EndContainer = parent;
             EndOffset = newOffsetBase + inserted;
