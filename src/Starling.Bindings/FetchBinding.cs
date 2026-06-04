@@ -217,6 +217,75 @@ public static class FetchBinding
         realm.GlobalObject.DefineOwnProperty("AbortSignal",
             PropertyDescriptor.Data(JsValue.Object(signalCtor), true, false, true));
 
+        // Mint a fresh AbortSignal wired into the EventTarget machinery so
+        // addEventListener('abort', …) reaches the listener registry.
+        AbortSignalObject NewSignal()
+        {
+            var s = new AbortSignalObject(signalProto);
+            EventTargetBinding.BindWrapper(s, s.HostTarget);
+            return s;
+        }
+
+        void AddStatic(string name, int length, Func<JsValue[], JsValue> impl)
+            => signalCtor.DefineOwnProperty(name, PropertyDescriptor.Data(
+                JsValue.Object(new JsNativeFunction(realm, name, length, (_, a) => impl(a))),
+                writable: true, enumerable: false, configurable: true));
+
+        // AbortSignal.abort(reason?) — an already-aborted signal.
+        AddStatic("abort", 0, args =>
+        {
+            var s = NewSignal();
+            var reason = args.Length > 0 ? args[0] : JsValue.Undefined;
+            s.DoAbort(realm, MakeAbortError(realm, reason));
+            return JsValue.Object(s);
+        });
+
+        // AbortSignal.timeout(ms) — aborts with a TimeoutError after ms, scheduled
+        // on the realm's event loop (via setTimeout), so a detached frame's signal
+        // never fires.
+        AddStatic("timeout", 1, args =>
+        {
+            var s = NewSignal();
+            var ms = args.Length > 0 ? JsValue.ToNumber(args[0]) : 0;
+            if (double.IsNaN(ms) || ms < 0) ms = 0;
+            var setTimeout = realm.GlobalObject.Get("setTimeout");
+            if (setTimeout.IsObject)
+            {
+                var cb = new JsNativeFunction(realm, "", 0, (_, _) =>
+                {
+                    s.DoAbort(realm, DomExceptionBinding.Make(realm, "TimeoutError", "The operation timed out."));
+                    return JsValue.Undefined;
+                });
+                AbstractOperations.Call(realm.ActiveVm, setTimeout, JsValue.Undefined,
+                    new[] { JsValue.Object(cb), JsValue.Number(ms) });
+            }
+            return JsValue.Object(s);
+        });
+
+        // AbortSignal.any(iterable) — aborts when any source signal aborts.
+        AddStatic("any", 1, args =>
+        {
+            var result = NewSignal();
+            if (args.Length > 0 && args[0].IsObject)
+            {
+                foreach (var item in IterateSignals(realm, args[0]))
+                {
+                    if (item.Aborted) { result.DoAbort(realm, item.Reason); break; }
+                    var captured = item;
+                    captured.OnAbort(_ => result.DoAbort(realm, captured.Reason));
+                }
+            }
+            return JsValue.Object(result);
+        });
+
+        // throwIfAborted() — throw the abort reason if already aborted.
+        EventTargetBinding.DefineMethod(realm, signalProto, "throwIfAborted", (thisV, _) =>
+        {
+            var s = AbortSignalObject.Require(realm, thisV);
+            if (s.Aborted) throw new JsThrow(s.Reason);
+            return JsValue.Undefined;
+        }, length: 0);
+
         // AbortController.prototype
         var ctlProto = new JsObject(realm.ObjectPrototype);
         realm.AbortControllerPrototype = ctlProto;
@@ -820,15 +889,26 @@ public static class FetchBinding
         => MakePromise(realm, (_, reject) =>
             AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { reason }));
 
+    // Yield AbortSignal objects from an array-like value (AbortSignal.any).
+    private static IEnumerable<AbortSignalObject> IterateSignals(JsRealm realm, JsValue iterable)
+    {
+        if (!iterable.IsObject) yield break;
+        var obj = iterable.AsObject;
+        var lenVal = obj.Get("length");
+        if (!lenVal.IsNumber) yield break;
+        var len = (int)JsValue.ToNumber(lenVal);
+        for (var i = 0; i < len; i++)
+            if (obj.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)) is { IsObject: true } v
+                && v.AsObject is AbortSignalObject s)
+                yield return s;
+    }
+
     internal static JsValue MakeAbortError(JsRealm realm, JsValue reason)
     {
         if (!reason.IsUndefined) return reason;
-        var err = new JsObject(realm.ErrorPrototype);
-        err.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String("AbortError"), true, false, true));
-        err.DefineOwnProperty("message",
-            PropertyDescriptor.Data(JsValue.String("The operation was aborted."), true, false, true));
-        return JsValue.Object(err);
+        // The default abort reason is a real "AbortError" DOMException, so
+        // signal.reason.constructor resolves to the realm's DOMException.
+        return DomExceptionBinding.Make(realm, "AbortError", "The operation was aborted.");
     }
 
     private static PendingFetchScope TrackFetch(JsRuntime runtime)
