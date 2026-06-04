@@ -335,14 +335,30 @@ public static class EventTargetBinding
         DefineAccessor(realm, wheelEvProto, "deltaY", (t, _) => InitNum(t, "deltaY"));
         DefineAccessor(realm, wheelEvProto, "deltaZ", (t, _) => InitNum(t, "deltaZ"));
         DefineAccessor(realm, wheelEvProto, "deltaMode", (t, _) => InitNum(t, "deltaMode"));
-        DefineSubtypeCtor(realm, wheelEvProto, "WheelEvent", (type, init) => new MouseEvent(type, ReadInit(init)));
+        DefineSubtypeCtor(realm, wheelEvProto, "WheelEvent", (type, init) => new MouseEvent(type, ReadInit(init))
+        {
+            ClientX = NumOf(init, "clientX"),
+            ClientY = NumOf(init, "clientY"),
+            ScreenX = NumOf(init, "screenX"),
+            ScreenY = NumOf(init, "screenY"),
+            Button = (short)NumOf(init, "button"),
+            Detail = (int)NumOf(init, "detail"),
+            CtrlKey = BoolOf(init, "ctrlKey"),
+            ShiftKey = BoolOf(init, "shiftKey"),
+            AltKey = BoolOf(init, "altKey"),
+            MetaKey = BoolOf(init, "metaKey"),
+            RelatedTarget = init.IsObject ? ResolveHost(init.AsObject.Get("relatedTarget")) : null,
+        });
 
         var inputEvProto = new JsObject(uiEvProto);
         DefineSubtypeCtor(realm, inputEvProto, "InputEvent", (type, init) => new UiEvent(type, ReadInit(init)));
 
         var compositionEvProto = new JsObject(uiEvProto);
         DefineAccessor(realm, compositionEvProto, "data", (t, _) => JsValue.String(JsValue.ToStringValue(InitMember(t, "data", JsValue.String("")))));
-        DefineSubtypeCtor(realm, compositionEvProto, "CompositionEvent", (type, init) => new UiEvent(type, ReadInit(init)));
+        DefineSubtypeCtor(realm, compositionEvProto, "CompositionEvent", (type, init) => new UiEvent(type, ReadInit(init))
+        {
+            Detail = (int)NumOf(init, "detail"),
+        });
 
         // HashChangeEvent / PopStateEvent / StorageEvent / MessageEvent — stubs
         // for tests that reference these constructors.
