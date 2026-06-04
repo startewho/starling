@@ -1606,7 +1606,10 @@ public static class NodeBindings
             // DOM §4.5: an invalid Name throws InvalidCharacterError.
             if (!IsValidName(name))
                 throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{name}' is not a valid element name");
-            return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElement(name)));
+            // An HTML document lowercases the name; an XML document preserves its
+            // case (and uses the null namespace).
+            var el = d.IsHtml ? d.CreateElement(name) : d.CreateElementNS(null, name);
+            return JsValue.Object(DomWrappers.Wrap(realm, el));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "createElementNS", (thisV, args) =>
         {
@@ -1786,6 +1789,10 @@ public static class NodeBindings
         {
             var ns = args.Length > 0 && !args[0].IsNullish ? JsValue.ToStringValue(args[0]) : null;
             var qname = args.Length > 1 && !args[1].IsNullish ? JsValue.ToStringValue(args[1]) : "";
+            // DOM §4.5.1 — validate the qualified name (InvalidCharacterError /
+            // NamespaceError) before building anything.
+            if (qname.Length != 0)
+                ValidateQualifiedName(realm, ns, qname);
             var doc = new Document { IsHtml = false }; // XML document — preserve name case
             if (args.Length > 2 && DomWrappers.UnwrapAs<DocumentType>(args[2]) is { } dt)
                 doc.AppendChild(dt);
