@@ -14,10 +14,9 @@ namespace Starling.Js.Parse;
 /// operators (assignment, exponentiation, conditional) recurse on the
 /// right side, and left-associative ones loop.
 /// </remarks>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     private readonly JsLexer _lex;
-    private readonly string _source;
     private JsToken _current;
     private int _disallowInDepth;
 
@@ -110,6 +109,12 @@ public sealed partial class JsParser
     /// nested function is an early SyntaxError (§16.2.1.6.2), not the liberal
     /// "accept and defer to runtime" form used for classic scripts.</summary>
     private bool _module;
+    private readonly Stack<HashSet<string>> _classPrivateScopes = new();
+    private int _derivedConstructorDepth;
+    private readonly Stack<Dictionary<string, PrivateDecl>> _privateDeclStack = new();
+    private int _baseClassContextDepth;
+    private bool _prologueHadUseStrict;
+    private bool _lastBodyContainsUseStrict;
 
     /// <summary>True at the Module goal's <em>own</em> top level — i.e. the
     /// implicit <c>[+Await]</c> context of §16.2.1.6.2 where <c>await</c> is the
@@ -149,16 +154,15 @@ public sealed partial class JsParser
 
     public JsParser(JsLexer lex)
     {
-        _lex = lex ?? throw new ArgumentNullException(nameof(lex));
-        _source = _lex.Source;
+        _lex = lex;
         _current = _lex.Next();
     }
 
     private string SourceSlice(JsPosition start, JsPosition end)
     {
-        var startOffset = Math.Clamp(start.Offset, 0, _source.Length);
-        var endOffset = Math.Clamp(end.Offset, startOffset, _source.Length);
-        return _source[startOffset..endOffset];
+        var startOffset = Math.Clamp(start.Offset, 0, _lex.Source.Length);
+        var endOffset = Math.Clamp(end.Offset, startOffset, _lex.Source.Length);
+        return _lex.Source[startOffset..endOffset].ToString();
     }
 
     /// <summary>A lexer error is an early <c>SyntaxError</c> per §12 — surface
@@ -455,14 +459,14 @@ public sealed partial class JsParser
         }
         if (IsAssignmentOp(_current.Kind))
         {
-            var op = _current.Lexeme;
+            var op = _current.Kind;
             var opPos = _current.Start;
             Advance();
             var right = ParseAssignment(); // right-associative
             // Only `=` reinterprets the LHS as a destructuring pattern, where a
             // CoverInitializedName (`{ a = 1 } = …`) is legal — clear any pending
             // cover-init error for the reinterpreted tree.
-            var target = op == "=" ? ReinterpretAssignmentTarget(left) : left;
+            var target = op == JsTokenKind.Eq ? ReinterpretAssignmentTarget(left) : left;
             // §13.15.1 / §13.5.1 — assignment to `eval`/`arguments` is a strict
             // SyntaxError.
             CheckAssignmentTarget(target, opPos);
@@ -570,7 +574,7 @@ public sealed partial class JsParser
         // ambiguity scenarios.
         if (IsAssignmentOp(_current.Kind))
         {
-            var op = _current.Lexeme;
+            var op = _current.Kind;
             Advance();
             var right = ParseAssignment();
             return new AssignmentExpression(op, left, right, left.Start, right.End);
@@ -641,7 +645,7 @@ public sealed partial class JsParser
             CheckCoalesceOperand(left);
             while (Check(JsTokenKind.QuestionQuestion))
             {
-                var op = _current.Lexeme; Advance();
+                var op = _current.Kind; Advance();
                 var right = ParseLogicalOr();
                 // The right operand (a BitwiseOR per the grammar) likewise must
                 // not be an unparenthesized `&&`/`||`.
@@ -656,7 +660,7 @@ public sealed partial class JsParser
     /// <c>??</c> unless it was parenthesized.</summary>
     private void CheckCoalesceOperand(Expression operand)
     {
-        if (operand is LogicalExpression { Op: "&&" or "||" }
+        if (operand is LogicalExpression { Op: JsTokenKind.AmpAmp or JsTokenKind.PipePipe }
             && !_parenthesized.Contains(operand))
             throw new JsParseException(
                 "'??' cannot be mixed with '&&' or '||' without parentheses", operand.Start);
@@ -667,7 +671,7 @@ public sealed partial class JsParser
         var left = ParseLogicalAnd();
         while (Check(JsTokenKind.PipePipe))
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseLogicalAnd();
             left = new LogicalExpression(op, left, right, left.Start, right.End);
         }
@@ -679,16 +683,48 @@ public sealed partial class JsParser
         var left = ParseBitwiseOr();
         while (Check(JsTokenKind.AmpAmp))
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseBitwiseOr();
             left = new LogicalExpression(op, left, right, left.Start, right.End);
         }
         return left;
     }
 
-    private Expression ParseBitwiseOr() => ParseLeftAssoc(ParseBitwiseXor, JsTokenKind.Pipe);
-    private Expression ParseBitwiseXor() => ParseLeftAssoc(ParseBitwiseAnd, JsTokenKind.Caret);
-    private Expression ParseBitwiseAnd() => ParseLeftAssoc(ParseEquality, JsTokenKind.Amp);
+    private Expression ParseBitwiseOr()
+    {
+        var left = ParseBitwiseXor();
+        while (_current.Kind == JsTokenKind.Pipe)
+        {
+            var t = Advance();
+            var right = ParseBitwiseXor();
+            left = new BinaryExpression(t.Kind, left, right, left.Start, right.End);
+        }
+        return left;
+    }
+
+    private Expression ParseBitwiseXor()
+    {
+        var left = ParseBitwiseAnd();
+        while (_current.Kind == JsTokenKind.Caret)
+        {
+            var t = Advance();
+            var right = ParseBitwiseAnd();
+            left = new BinaryExpression(t.Kind, left, right, left.Start, right.End);
+        }
+        return left;
+    }
+
+    private Expression ParseBitwiseAnd()
+    {
+        var left = ParseEquality();
+        while (_current.Kind == JsTokenKind.Amp)
+        {
+            var t = Advance();
+            var right = ParseEquality();
+            left = new BinaryExpression(t.Kind, left, right, left.Start, right.End);
+        }
+        return left;
+    }
 
     private Expression ParseEquality()
     {
@@ -696,7 +732,7 @@ public sealed partial class JsParser
         while (_current.Kind is JsTokenKind.EqEq or JsTokenKind.BangEq
                                 or JsTokenKind.EqEqEq or JsTokenKind.BangEqEq)
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseRelational();
             left = new BinaryExpression(op, left, right, left.Start, right.End);
         }
@@ -727,7 +763,7 @@ public sealed partial class JsParser
                                 or JsTokenKind.Instanceof
                || (_current.Kind == JsTokenKind.In && _disallowInDepth == 0))
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseShift();
             left = new BinaryExpression(op, left, right, left.Start, right.End);
         }
@@ -739,7 +775,7 @@ public sealed partial class JsParser
         var left = ParseAdditive();
         while (_current.Kind is JsTokenKind.LtLt or JsTokenKind.GtGt or JsTokenKind.GtGtGt)
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseAdditive();
             left = new BinaryExpression(op, left, right, left.Start, right.End);
         }
@@ -751,7 +787,7 @@ public sealed partial class JsParser
         var left = ParseMultiplicative();
         while (_current.Kind is JsTokenKind.Plus or JsTokenKind.Minus)
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseMultiplicative();
             left = new BinaryExpression(op, left, right, left.Start, right.End);
         }
@@ -763,7 +799,7 @@ public sealed partial class JsParser
         var left = ParseExponentiation();
         while (_current.Kind is JsTokenKind.Star or JsTokenKind.Slash or JsTokenKind.Percent)
         {
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseExponentiation();
             left = new BinaryExpression(op, left, right, left.Start, right.End);
         }
@@ -784,7 +820,7 @@ public sealed partial class JsParser
             if (left is UnaryExpression or AwaitExpression && !_parenthesized.Contains(left))
                 throw new JsParseException(
                     "unary operator used immediately before '**' must be parenthesized", left.Start);
-            var op = _current.Lexeme; Advance();
+            var op = _current.Kind; Advance();
             var right = ParseExponentiation();
             return new BinaryExpression(op, left, right, left.Start, right.End);
         }
@@ -811,7 +847,7 @@ public sealed partial class JsParser
                     if (t.Kind == JsTokenKind.Delete && _strict && IsUnqualifiedReference(arg))
                         throw new JsParseException(
                             "'delete' of an unqualified identifier is not allowed in strict mode", t.Start);
-                    return new UnaryExpression(t.Lexeme, arg, Prefix: true, t.Start, arg.End);
+                    return new UnaryExpression(t.Kind, arg, Prefix: true, t.Start, arg.End);
                 }
             case JsTokenKind.PlusPlus:
             case JsTokenKind.MinusMinus:
@@ -825,7 +861,7 @@ public sealed partial class JsParser
                     if (IsOptionalChain(arg))
                         throw new JsParseException(
                             "optional chain is not a valid assignment target", arg.Start);
-                    return new UpdateExpression(t.Lexeme, arg, Prefix: true, t.Start, arg.End);
+                    return new UpdateExpression(t.Kind, arg, Prefix: true, t.Start, arg.End);
                 }
             case JsTokenKind.Identifier when _current.TextEquals("await") && !_current.ContainsEscape:
                 {
@@ -895,7 +931,7 @@ public sealed partial class JsParser
             if (IsOptionalChain(arg))
                 throw new JsParseException(
                     "optional chain is not a valid assignment target", arg.Start);
-            return new UpdateExpression(t.Lexeme, arg, Prefix: false, arg.Start, t.End);
+            return new UpdateExpression(t.Kind, arg, Prefix: false, arg.Start, t.End);
         }
         return arg;
     }
@@ -1476,7 +1512,7 @@ public sealed partial class JsParser
         // object is later reinterpreted as a destructuring pattern. Record it so
         // an unreinterpreted (value) use is rejected at the end of the parse.
         foreach (var p in props)
-            if (p.Shorthand && p.Value is AssignmentExpression { Op: "=" })
+            if (p.Shorthand && p.Value is AssignmentExpression { Op: JsTokenKind.Eq })
             {
                 _coverInitObjects.Add(objExpr);
                 break;
@@ -1583,7 +1619,7 @@ public sealed partial class JsParser
         {
             CheckShorthandIdentifier(keyToken);
             var fallback = ParseAssignment();
-            var target = new AssignmentExpression("=", id, fallback, id.Start, fallback.End);
+            var target = new AssignmentExpression(JsTokenKind.Eq, id, fallback, id.Start, fallback.End);
             return new ObjectProperty(key, target,
                 Shorthand: true, Computed: false, start, fallback.End);
         }
@@ -1881,7 +1917,7 @@ public sealed partial class JsParser
         {
             var t = Advance();
             var right = next();
-            left = new BinaryExpression(t.Lexeme, left, right, left.Start, right.End);
+            left = new BinaryExpression(t.Kind, left, right, left.Start, right.End);
         }
         return left;
     }

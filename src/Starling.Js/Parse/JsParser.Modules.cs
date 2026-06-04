@@ -8,7 +8,7 @@ namespace Starling.Js.Parse;
 /// <see cref="ParseProgram()"/> so static import/export declarations remain
 /// restricted to program scope.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     private Statement ParseProgramStatement()
     {
