@@ -31,6 +31,15 @@ public static class EventTargetBinding
     // Host EventTargets that are the realm's Window object — needed to compute the
     // DOM "default passive value" (touch/wheel listeners on window/document/root/body).
     private static readonly ConditionalWeakTable<EventTarget, object> WindowTargets = new();
+    // Host Event → its canonical JS wrapper, so a listener (and window.event) sees
+    // the same Event object identity that was passed to dispatchEvent.
+    private static readonly ConditionalWeakTable<Event, JsEventWrapper> EventWrappers = new();
+
+    private static JsEventWrapper Track(JsEventWrapper wrapper)
+    {
+        EventWrappers.AddOrUpdate(wrapper.HostEvent, wrapper);
+        return wrapper;
+    }
 
     /// <summary>Mark a host <see cref="EventTarget"/> as the realm's Window object,
     /// so the default-passive-value computation can recognize it.</summary>
@@ -164,7 +173,7 @@ public static class EventTargetBinding
                     Composed: JsValue.ToBoolean(initObj.Get("composed")));
             }
             var host = new Event(type, init);
-            return JsValue.Object(new JsEventWrapper(evProto, host));
+            return JsValue.Object(Track(new JsEventWrapper(evProto, host)));
         }, isConstructor: true);
         evCtor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(evProto), writable: false, enumerable: false, configurable: false));
@@ -229,7 +238,7 @@ public static class EventTargetBinding
             }
             var host = new CustomEvent(type, init);
             CacheCustomEventDetail(host, detail);
-            return JsValue.Object(new JsCustomEventWrapper(customEvProto, host, detail));
+            return JsValue.Object(Track(new JsCustomEventWrapper(customEvProto, host, detail)));
         }, isConstructor: true);
         customEvCtor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(customEvProto), writable: false, enumerable: false, configurable: false));
@@ -415,7 +424,7 @@ public static class EventTargetBinding
                 if (!view.IsUndefined && !view.IsNull && !view.IsObject)
                     throw new JsThrow(realm.NewTypeError($"{name}: 'view' member is not a Window"));
             }
-            return JsValue.Object(new JsEventWrapper(proto, build(JsValue.ToStringValue(args[0]), init), init));
+            return JsValue.Object(Track(new JsEventWrapper(proto, build(JsValue.ToStringValue(args[0]), init), init)));
         }, isConstructor: true);
         ctor.DefineOwnProperty("prototype", PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
         proto.DefineOwnProperty("constructor", PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -437,7 +446,7 @@ public static class EventTargetBinding
             {
                 var ce = new CustomEvent("");
                 ce.MarkAsUninitialized();
-                return JsValue.Object(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null));
+                return JsValue.Object(Track(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null)));
             }
             case "event":
             case "events":
@@ -492,7 +501,7 @@ public static class EventTargetBinding
             UiEvent => realm.UiEventPrototype,
             _ => realm.EventPrototype,
         } ?? realm.EventPrototype!;
-        return JsValue.Object(new JsEventWrapper(proto, host));
+        return JsValue.Object(Track(new JsEventWrapper(proto, host)));
     }
 
     /// <summary>Associate an existing host <see cref="EventTarget"/> with a JS
@@ -659,6 +668,11 @@ public static class EventTargetBinding
 
     private static JsEventWrapper WrapHostEvent(JsRealm realm, Event ev)
     {
+        // Return the canonical wrapper if this host event already has one (e.g.
+        // a JS-constructed event passed to dispatchEvent) so listeners and
+        // window.event observe the same object identity.
+        if (EventWrappers.TryGetValue(ev, out var existing)) return existing;
+
         // When the host event is a CustomEvent that originated from JS (and
         // was therefore a JsCustomEventWrapper), we need to preserve the JS
         // detail value. The listener wrapper for the JS-created custom event
@@ -672,9 +686,9 @@ public static class EventTargetBinding
             // Try to locate the JS detail value that was stored when the event
             // was constructed. We stash it in CustomEventDetailCache.
             var detail = CustomEventDetailCache.TryGetValue(ce, out var box) ? box.Value : JsValue.Null;
-            return new JsCustomEventWrapper(ceProto ?? realm.EventPrototype ?? realm.ObjectPrototype, ce, detail);
+            return Track(new JsCustomEventWrapper(ceProto ?? realm.EventPrototype ?? realm.ObjectPrototype, ce, detail));
         }
-        return new JsEventWrapper(realm.EventPrototype ?? realm.ObjectPrototype, ev);
+        return Track(new JsEventWrapper(realm.EventPrototype ?? realm.ObjectPrototype, ev));
     }
 
     // Cache: CustomEvent → JsValue detail. Populated when JS constructs new CustomEvent(...).
