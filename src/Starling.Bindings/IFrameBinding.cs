@@ -296,6 +296,36 @@ public static class IFrameBinding
         }
     }
 
+    /// <summary>HTML §iframe — synchronously load a parser-inserted iframe's
+    /// <c>src</c> during the parent's load lifecycle (DOMContentLoaded). Unlike
+    /// <see cref="OnSrcSet"/> (which fetches off-thread for a script-driven src
+    /// write), this fetches + parses inline so <c>contentDocument</c> is ready
+    /// before the parent's <c>load</c> event, which conformance tests wait on.
+    /// The subframe fetch is same-origin/localhost and small, matching the
+    /// already-synchronous external-script fetch in <see cref="ExecuteFrameScripts"/>.</summary>
+    public static void LoadSubframeNow(JsRealm parentRealm, Element frame)
+    {
+        ArgumentNullException.ThrowIfNull(parentRealm);
+        ArgumentNullException.ThrowIfNull(frame);
+        if (!IsFrameElement(frame)) return;
+        var src = frame.GetAttribute("src");
+        if (string.IsNullOrEmpty(src)) return;
+        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NoopDiagnostics.Instance);
+        if (parentEnv.Http is null) return; // no HTTP client → nothing to fetch through
+        var ctx = EnsureContext(frame);
+        var resolved = ResolveUrl(parentEnv.DocumentUrl, src);
+        try
+        {
+            var (body, contentType) = FetchAsync(parentEnv.Http, resolved).GetAwaiter().GetResult();
+            LoadIntoFrame(ctx, parentEnv, resolved, body, contentType);
+        }
+        catch (Exception ex)
+        {
+            parentEnv.Diag.LogException("iframe", ex, $"subframe sync load failed: {resolved}");
+        }
+        FireLoad(parentRealm, frame);
+    }
+
     private static void FireLoad(JsRealm parentRealm, Element frame)
     {
         // load events do not bubble; deliver to listeners attached on the
@@ -329,10 +359,15 @@ public static class IFrameBinding
 
     private static string ResolveUrl(string baseUrl, string href)
     {
-        if (Uri.TryCreate(href, UriKind.Absolute, out var abs)) return abs.ToString();
+        // Resolve against the base FIRST. A path-absolute href ("/common/x")
+        // must combine with the base's scheme+authority, but System.Uri treats
+        // a Unix rooted path as an absolute file:// URI — so an href-first
+        // short-circuit would wrongly yield "file:///common/x". Combining with
+        // an absolute base also correctly passes a truly absolute href through.
         if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var bu)
             && Uri.TryCreate(bu, href, out var combined))
             return combined.ToString();
+        if (Uri.TryCreate(href, UriKind.Absolute, out var abs)) return abs.ToString();
         return href;
     }
 
