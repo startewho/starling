@@ -276,6 +276,7 @@ public static class SelectorMatcher
             "has" => MatchesHas(selector.Argument, element, context),
             "lang" => selector.Argument is string lang && MatchesLanguage(element, lang),
             "dir" => selector.Argument is string dir && MatchesDirection(element, dir),
+            "heading" => MatchesHeading(selector.Argument, element),
             // An element is :hover when the pointer is over it OR any of its
             // descendants, so the hovered element and every ancestor match
             // (mirrors :focus-within). The host passes the innermost hovered
@@ -470,6 +471,37 @@ public static class SelectorMatcher
             CData cdata => cdata.Data.Length == 0,
             _ => true,
         });
+
+    /// <summary>:heading and :heading(&lt;list&gt;) (Selectors 5 §heading). Bare :heading matches any
+    /// h1–h6. The functional form matches only when the element's heading level appears in the list.</summary>
+    private static bool MatchesHeading(object? argument, Element element)
+    {
+        var level = HeadingLevel(element);
+        if (level == 0) return false;
+
+        // Bare :heading (no argument) matches any heading element.
+        if (argument is null) return true;
+
+        if (argument is HeadingArgument heading)
+        {
+            if (!heading.IsValid) return false;
+            return heading.Levels.Contains(level);
+        }
+
+        return false;
+    }
+
+    /// <summary>The heading level (1–6) for an h1–h6 element, or 0 for non-headings.</summary>
+    private static int HeadingLevel(Element element)
+    {
+        var name = element.LocalName;
+        if (name.Length != 2 || (name[0] != 'h' && name[0] != 'H'))
+            return 0;
+        var digit = name[1];
+        if (digit is >= '1' and <= '6')
+            return digit - '0';
+        return 0;
+    }
 
     private static bool MatchesLanguage(Element element, string language)
     {

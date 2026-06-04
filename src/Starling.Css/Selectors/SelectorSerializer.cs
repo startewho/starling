@@ -103,6 +103,8 @@ public static class SelectorSerializer
                 (nth.OfSelector is { Selectors.Count: > 0 } of ? " of " + Serialize(of) : "") + ")",
             NthPattern pat => ":" + name + "(" + SerializeAnb(pat) + ")",
             SelectorList sl => ":" + name + "(" + Serialize(sl) + ")",
+            HeadingArgument h => ":" + name + "(" +
+                string.Join(", ", h.Levels.Select(l => l.ToString(CultureInfo.InvariantCulture))) + ")",
             string s => ":" + name + "(" + s + ")",
             _ => ":" + name,
         };
