@@ -1451,6 +1451,9 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "location", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Null;
+            // A document with no browsing context (createDocument/createHTMLDocument)
+            // has a null location.
+            if (!WindowBinding.DocumentHasBrowsingContext(realm, d)) return JsValue.Null;
             return JsValue.Object(WindowBinding.LocationObjectFor(realm, d));
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "defaultView", (thisV, _) =>
