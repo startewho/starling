@@ -274,3 +274,36 @@ subsystem. Files are the conflict footprint.
 Note on double counting: `r2-xml-domparser` and `nodes-domimplementation` both
 cover `createDocument`. It is one body of work. The coverage roadmap counts it
 once.
+
+---
+
+## Session findings (2026-06-04) — what the remaining clusters are actually gated on
+
+A focused implementation pass landed 14 verified commits (≈+1,560 subtests,
+overall WPT 88.31% on dom,css,url, zero regressions). Every fix that was a
+wrong error type, a missing accessor, a validation gap, a missing interface,
+or a WebIDL coercion is done. Verified this session: `AbortSignal` statics,
+`Element.prefix`/`namespaceURI`, `createEvent` error type + legacy interfaces +
+uninitialized-dispatch, all CSS properties on `element.style`, `querySelector`
+`SyntaxError` DOMException, `CharacterData` `ToUint32`, DOMTokenList token
+validation + toStringTag (unhung a timing-out test, +976), the HTML element
+interface objects, `document` encoding/contentType/textContent, `CSS.supports`,
+`getElementById('')`, namespace-aware `tagName`, iframe `defaultView`.
+
+The remaining areas do **not** yield to small fixes. Each was probed and found
+gated on a real subsystem:
+
+| Cluster | Hard blocker (verified) |
+|---|---|
+| dom/collections, named-property access | A live HTMLCollection must be a JS exotic object. The VM reads properties via `AbstractOperations.Get` walking `GetOwnPropertyDescriptor`, so a `JsObject` subclass needs that path debugged (a first attempt resolved indices/length/iteration but not named access / `item` / `getOwnPropertyNames` — reverted). |
+| querySelector-All, charset (+654), createElementNS XML (+424), createEvent cross-global, abort | iframe content elements wrap in the **parent** realm, so their exceptions use the wrong realm's DOMException, and `windowFor(iframe.contentDocument)` identity mismatches. Needs per-realm wrapper management for iframe content. |
+| prepend/append-on-Document, charset, Node-properties (foreign/xml docs) | `document.implementation.createDocument` does not produce a recognized `Document`; many tests build their fixture through it. |
+| createElementNS XML rows, Node-cloneNode XML | No XML/XHTML tree parser (`ParseXmlIntoDocument` is a stub HTML reparse). |
+| css/selectors (33%) | Most failures are `getComputedStyle(null)` because `querySelector(':has(...)')` returns null. Needs the `:has`/invalidation engine. |
+| dom/events (38%) | Activation behavior, focus/blur/focusin/focusout, full event-subtype init dicts, event-loop `click()` completion. |
+| relList/sizes/htmlFor reflected token lists | Must be typed per HTML interface (`img.sizes` is a string, `link.sizes` a token list); a blanket addition regressed −52 and was reverted. |
+| css/cssom remaining | Constructable `CSSStyleSheet`, `insertRule`/`deleteRule`, layout-dependent `getComputedStyle` inset resolution. |
+
+**Highest-leverage next unlock:** the HTMLCollection exotic-object ↔
+`AbstractOperations.Get` integration, then the iframe cross-realm wrapper. Each
+is a dedicated build with interactive debugging, not a per-cluster commit.
