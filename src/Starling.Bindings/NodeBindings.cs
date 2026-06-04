@@ -1454,6 +1454,18 @@ public static class NodeBindings
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "readyState", (thisV, _) =>
             JsValue.String("complete"));
+        // DOM §4.5 — character encoding accessors. characterSet is canonical;
+        // charset and inputEncoding are historical aliases. The runner decodes
+        // every page as UTF-8.
+        EventTargetBinding.DefineAccessor(realm, docProto, "characterSet", (_, _) => JsValue.String("UTF-8"));
+        EventTargetBinding.DefineAccessor(realm, docProto, "charset", (_, _) => JsValue.String("UTF-8"));
+        EventTargetBinding.DefineAccessor(realm, docProto, "inputEncoding", (_, _) => JsValue.String("UTF-8"));
+        // DOM §4.5 — document.contentType ("text/html" for an HTML document).
+        EventTargetBinding.DefineAccessor(realm, docProto, "contentType", (_, _) => JsValue.String("text/html"));
+        // DOM §4.4 — a Document node's textContent is null (overrides Node's
+        // descendant-text concatenation); setting it is a no-op.
+        EventTargetBinding.DefineAccessor(realm, docProto, "textContent",
+            (_, _) => JsValue.Null, (_, _) => JsValue.Undefined);
         // DOM §4.5 — document.doctype: the DocumentType child of the document, or null.
         EventTargetBinding.DefineAccessor(realm, docProto, "doctype", (thisV, _) =>
         {
