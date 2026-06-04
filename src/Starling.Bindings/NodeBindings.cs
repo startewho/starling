@@ -2809,7 +2809,7 @@ public static class NodeBindings
         // Camel-case / kebab-case accessors for the most-used CSS properties.
         // The bundle uses: display, position, backgroundClip, filter, left, top,
         // right, cssText, zoom. We expose all CommonComputedStyleProps plus more.
-        foreach (var kebab in InlineStyleProperties)
+        foreach (var kebab in AllInlineStyleProperties)
         {
             var capturedKebab = kebab;
             var camel = KebabToCamel(kebab);
@@ -3246,6 +3246,14 @@ public static class NodeBindings
         "zoom",
         "content", "list-style", "list-style-type",
     ];
+
+    // The seed list above plus every property the CSS engine knows, so
+    // el.style.<anyProp> reflects per CSSOM §6.3 (camel-cased IDL attributes).
+    private static readonly string[] AllInlineStyleProperties =
+        InlineStyleProperties
+            .Concat(Starling.Css.Properties.PropertyRegistry.All.Select(Starling.Css.Properties.PropertyRegistry.Name))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     // =====================================================================
     //  CharacterData / Text / Comment / DocumentFragment interfaces
