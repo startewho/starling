@@ -39,6 +39,16 @@ public static class CssValueSerializer
                 // tell-tale of a malformed number such as "1." or "1.px".
                 case CssTokenType.Delim when t.Delimiter == '.':
                     return null;
+                case CssTokenType.Comma:
+                    // A comma in a CSS value serializes with no space before it and
+                    // exactly one space after (e.g. font-family: a, b). Drop any
+                    // pending whitespace before the comma, then mark a pending space
+                    // so the next token is separated by a single space (and any
+                    // literal whitespace right after the comma collapses into it).
+                    sb.Append(',');
+                    any = true;
+                    pendingWhitespace = true;
+                    break;
                 default:
                     if (pendingWhitespace)
                     {
