@@ -13,40 +13,43 @@ internal static class EventDispatcher
             @event.Target = target;
 
             // Build the event path: target up to root. For Node targets, walk ParentNode.
+            // path[0] is the target. DOM §2.9 invokes the target's capture-flagged
+            // listeners during the capture pass and its non-capture listeners during
+            // the bubble pass, both at the AT_TARGET phase — so capture listeners on
+            // the target fire before its bubble listeners regardless of registration
+            // order.
             var path = BuildPath(target);
             @event.SetComposedPath(path);
 
-            // 1) Capture phase: root → target (exclusive of target).
-            @event.EventPhase = EventPhase.CapturingPhase;
-            for (var i = path.Count - 1; i >= 1; i--)
+            // 1) Capture pass: root → target (inclusive). Ancestors run with the
+            //    CAPTURING_PHASE; the target runs at AT_TARGET (capture listeners).
+            for (var i = path.Count - 1; i >= 0; i--)
             {
                 if (@event.PropagationStopped) break;
+                @event.EventPhase = i == 0 ? EventPhase.AtTarget : EventPhase.CapturingPhase;
                 InvokeListeners(path[i], @event, capture: true);
             }
 
-            // 2) At target.
-            if (!@event.PropagationStopped)
+            // 2) Bubble pass: target → root. The target runs at AT_TARGET (its
+            //    non-capture listeners); ancestors run at BUBBLING_PHASE, but only
+            //    when the event bubbles.
+            for (var i = 0; i < path.Count; i++)
             {
-                @event.EventPhase = EventPhase.AtTarget;
-                InvokeListeners(target, @event, capture: null);
-            }
-
-            // 3) Bubble phase: target+1 → root (only if event bubbles).
-            if (@event.Bubbles && !@event.PropagationStopped)
-            {
-                @event.EventPhase = EventPhase.BubblingPhase;
-                for (var i = 1; i < path.Count; i++)
-                {
-                    if (@event.PropagationStopped) break;
-                    InvokeListeners(path[i], @event, capture: false);
-                }
+                if (@event.PropagationStopped) break;
+                if (i > 0 && !@event.Bubbles) break;
+                @event.EventPhase = i == 0 ? EventPhase.AtTarget : EventPhase.BubblingPhase;
+                InvokeListeners(path[i], @event, capture: false);
             }
         }
         finally
         {
+            // DOM §2.9 dispatch: reset eventPhase/currentTarget, clear the dispatch
+            // flag, and unset the stop-propagation flags so the same event instance
+            // can be dispatched again (canceled flag is preserved).
             @event.EventPhase = EventPhase.None;
             @event.CurrentTarget = null;
             @event.DispatchFlag = false;
+            @event.ClearPropagationFlags();
         }
 
         return !@event.DefaultPrevented;
@@ -86,6 +89,9 @@ internal static class EventDispatcher
                 needsCompact = true;
             }
 
+            // DOM §2.9 inner invoke: set the in-passive-listener flag while a
+            // passive listener runs so its preventDefault() is a no-op.
+            @event.InPassiveListener = entry.Passive;
             try
             {
                 entry.Listener(@event);
@@ -93,6 +99,10 @@ internal static class EventDispatcher
             catch
             {
                 // Swallow listener exceptions per spec (browsers report to console, we drop on the floor in v1).
+            }
+            finally
+            {
+                @event.InPassiveListener = false;
             }
 
             if (@event.ImmediatePropagationStopped) break;
