@@ -2537,19 +2537,19 @@ public static class NodeBindings
         return true;
     }
 
-    /// <summary>A qualified name is one or two valid Names joined by a single
-    /// internal colon.</summary>
+    /// <summary>DOM "validate and extract": the qualified name must match the
+    /// Name production (colons allowed); the prefix is everything before the
+    /// first colon. So "f:o:o" is a valid Name with prefix "f" (then the
+    /// namespace check decides), while ";foo"/"f}oo" are not Names at all.</summary>
     private static bool IsValidQName(string qname, out string? prefix)
     {
         prefix = null;
-        if (string.IsNullOrEmpty(qname)) return false;
+        if (!IsValidName(qname)) return false;
         var colon = qname.IndexOf(':', StringComparison.Ordinal);
-        if (colon < 0) return IsValidName(qname);
+        if (colon < 0) return true;       // unprefixed
+        // An empty prefix (":local") or empty local part ("prefix:") is invalid.
         if (colon == 0 || colon == qname.Length - 1) return false;
-        var p = qname[..colon];
-        var l = qname[(colon + 1)..];
-        if (l.Contains(':', StringComparison.Ordinal) || !IsValidName(p) || !IsValidName(l)) return false;
-        prefix = p;
+        prefix = qname[..colon];          // everything before the FIRST colon
         return true;
     }
 
