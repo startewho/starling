@@ -2,6 +2,7 @@ using AwesomeAssertions;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
+using Starling.Spec;
 namespace Starling.Js.Tests.Intrinsics;
 
 /// <summary>
@@ -182,16 +183,30 @@ public class FunctionTests
         r.AsString.Should().Contain("[native code]");
     }
 
-    [TestMethod]
-    public void Function_prototype_toString_user_function_yields_function_name_shape()
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-function.prototype.tostring", "20.2.3.5 Function.prototype.toString")]
+    public void Function_prototype_toString_user_function_preserves_source_text()
     {
         var r = Run(@"
-            function greet() {}
+            function greet(a, b) { return a + b; }
             greet.toString();
         ");
-        // Sniffers regex `function <name>(...) { ... }` — our placeholder
-        // matches that shape.
-        r.AsString.Should().StartWith("function greet(");
+        r.AsString.Should().Contain("function greet(a, b)");
+        r.AsString.Should().Contain("return a + b;");
+    }
+
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-function.prototype.tostring", "20.2.3.5 Function.prototype.toString")]
+    public void Function_prototype_toString_exposes_import_stub_metadata()
+    {
+        var r = Run(@"
+            function _schedule_background_exec() {
+                return {runtime_idx:6};//schedule_background_exec
+            }
+            var text = _schedule_background_exec.toString();
+            text.indexOf('runtime_idx') !== -1 && _schedule_background_exec().runtime_idx === 6;
+        ");
+        r.AsBool.Should().BeTrue();
     }
 
     [TestMethod]

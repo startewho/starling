@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Starling.Dom;
 using Starling.Js.Intrinsics;
@@ -40,6 +41,8 @@ namespace Starling.Bindings;
 /// </remarks>
 public static class FetchBinding
 {
+    private static readonly ConditionalWeakTable<JsRuntime, PendingFetchCounter> PendingFetches = new();
+
     /// <summary>Install fetch + Headers + Request + Response + AbortController.
     /// Idempotent per realm.</summary>
     public static void Install(JsRuntime runtime, StarlingHttpClient client, Document document)
@@ -56,6 +59,12 @@ public static class FetchBinding
         InstallRequest(realm);
         InstallResponse(realm);
         InstallFetch(runtime, client, document);
+    }
+
+    public static bool HasPendingFetches(JsRuntime runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        return PendingFetches.TryGetValue(runtime, out var counter) && counter.Count > 0;
     }
 
     // =====================================================================
@@ -207,6 +216,75 @@ public static class FetchBinding
         realm.AbortSignalConstructor = signalCtor;
         realm.GlobalObject.DefineOwnProperty("AbortSignal",
             PropertyDescriptor.Data(JsValue.Object(signalCtor), true, false, true));
+
+        // Mint a fresh AbortSignal wired into the EventTarget machinery so
+        // addEventListener('abort', …) reaches the listener registry.
+        AbortSignalObject NewSignal()
+        {
+            var s = new AbortSignalObject(signalProto);
+            EventTargetBinding.BindWrapper(s, s.HostTarget);
+            return s;
+        }
+
+        void AddStatic(string name, int length, Func<JsValue[], JsValue> impl)
+            => signalCtor.DefineOwnProperty(name, PropertyDescriptor.Data(
+                JsValue.Object(new JsNativeFunction(realm, name, length, (_, a) => impl(a))),
+                writable: true, enumerable: false, configurable: true));
+
+        // AbortSignal.abort(reason?) — an already-aborted signal.
+        AddStatic("abort", 0, args =>
+        {
+            var s = NewSignal();
+            var reason = args.Length > 0 ? args[0] : JsValue.Undefined;
+            s.DoAbort(realm, MakeAbortError(realm, reason));
+            return JsValue.Object(s);
+        });
+
+        // AbortSignal.timeout(ms) — aborts with a TimeoutError after ms, scheduled
+        // on the realm's event loop (via setTimeout), so a detached frame's signal
+        // never fires.
+        AddStatic("timeout", 1, args =>
+        {
+            var s = NewSignal();
+            var ms = args.Length > 0 ? JsValue.ToNumber(args[0]) : 0;
+            if (double.IsNaN(ms) || ms < 0) ms = 0;
+            var setTimeout = realm.GlobalObject.Get("setTimeout");
+            if (setTimeout.IsObject)
+            {
+                var cb = new JsNativeFunction(realm, "", 0, (_, _) =>
+                {
+                    s.DoAbort(realm, DomExceptionBinding.Make(realm, "TimeoutError", "The operation timed out."));
+                    return JsValue.Undefined;
+                });
+                AbstractOperations.Call(realm.ActiveVm, setTimeout, JsValue.Undefined,
+                    new[] { JsValue.Object(cb), JsValue.Number(ms) });
+            }
+            return JsValue.Object(s);
+        });
+
+        // AbortSignal.any(iterable) — aborts when any source signal aborts.
+        AddStatic("any", 1, args =>
+        {
+            var result = NewSignal();
+            if (args.Length > 0 && args[0].IsObject)
+            {
+                foreach (var item in IterateSignals(realm, args[0]))
+                {
+                    if (item.Aborted) { result.DoAbort(realm, item.Reason); break; }
+                    var captured = item;
+                    captured.OnAbort(_ => result.DoAbort(realm, captured.Reason));
+                }
+            }
+            return JsValue.Object(result);
+        });
+
+        // throwIfAborted() — throw the abort reason if already aborted.
+        EventTargetBinding.DefineMethod(realm, signalProto, "throwIfAborted", (thisV, _) =>
+        {
+            var s = AbortSignalObject.Require(realm, thisV);
+            if (s.Aborted) throw new JsThrow(s.Reason);
+            return JsValue.Undefined;
+        }, length: 0);
 
         // AbortController.prototype
         var ctlProto = new JsObject(realm.ObjectPrototype);
@@ -406,7 +484,7 @@ public static class FetchBinding
             if (owner.BodyUsed) return RejectedPromise(realm, realm.NewTypeError("Body already consumed"));
             owner.BodyUsed = true;
             var buf = new JsArrayBuffer(realm.ArrayBufferPrototype, owner.BodyBytes.Length);
-            Buffer.BlockCopy(owner.BodyBytes, 0, buf.Bytes, 0, owner.BodyBytes.Length);
+            owner.BodyBytes.CopyTo(buf.GetSpan());
             return ResolvedPromise(realm, JsValue.Object(buf));
         }, length: 0);
 
@@ -471,6 +549,9 @@ public static class FetchBinding
         {
             req.BodyUsed = true; // sending consumes the body
 
+            if (TryStartFileFetch(runtime, req, resolve, reject))
+                return;
+
             // Build wire request synchronously to surface URL errors as rejections.
             HttpRequest wire;
             try { wire = BuildWireRequest(realm, req); }
@@ -496,6 +577,7 @@ public static class FetchBinding
             }
 
             // Dispatch on the thread pool; settle via microtask queue.
+            var pending = TrackFetch(runtime);
             _ = Task.Run(async () =>
             {
                 try
@@ -543,9 +625,93 @@ public static class FetchBinding
                         AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
                     }));
                 }
+                finally
+                {
+                    pending.Dispose();
+                }
             });
         });
     }
+
+    private static bool TryStartFileFetch(JsRuntime runtime, RequestObject req, JsValue resolve, JsValue reject)
+    {
+        var realm = runtime.Realm;
+        if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) || uri.Scheme != "file")
+            return false;
+
+        if (!req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)
+            && !req.Method.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
+        {
+            realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+            {
+                var err = realm.NewTypeError($"Failed to fetch: file URL only supports GET or HEAD ({req.Method})");
+                AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
+            }));
+            return true;
+        }
+
+        var path = uri.LocalPath;
+        var pending = TrackFetch(runtime);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+                    {
+                        var err = realm.NewTypeError($"Failed to fetch: File not found: {path}");
+                        AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
+                    }));
+                    return;
+                }
+
+                var bytes = req.Method.Equals("HEAD", StringComparison.OrdinalIgnoreCase)
+                    ? Array.Empty<byte>()
+                    : await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+                realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+                {
+                    var headers = new HeadersObject(realm.HeadersPrototype);
+                    headers.Store.Set("content-type", GuessContentType(path));
+                    var response = new ResponseObject(
+                        realm.ResponsePrototype,
+                        200,
+                        "OK",
+                        headers,
+                        bytes,
+                        req.Url,
+                        redirected: false);
+                    AbstractOperations.Call(realm.ActiveVm, resolve, JsValue.Undefined,
+                        new[] { JsValue.Object(response) });
+                }));
+            }
+            catch (Exception ex)
+            {
+                realm.Microtasks.Enqueue(() => runtime.WithActiveVm(() =>
+                {
+                    var err = realm.NewTypeError($"Failed to fetch: {ex.Message}");
+                    AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { err });
+                }));
+            }
+            finally
+            {
+                pending.Dispose();
+            }
+        });
+        return true;
+    }
+
+    private static string GuessContentType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".css" => "text/css",
+        ".html" or ".htm" => "text/html",
+        ".js" or ".mjs" => "text/javascript",
+        ".json" => "application/json",
+        ".wasm" => "application/wasm",
+        ".br" => "application/octet-stream",
+        ".gz" => "application/octet-stream",
+        _ => "application/octet-stream",
+    };
 
     // =====================================================================
     // Building requests / responses
@@ -676,17 +842,9 @@ public static class FetchBinding
                     contentType = "application/x-www-form-urlencoded;charset=UTF-8";
                     return Encoding.UTF8.GetBytes(searchParams.Serialize());
                 case JsArrayBuffer buf:
-                    {
-                        var copy = new byte[buf.ByteLength];
-                        Buffer.BlockCopy(buf.Bytes, 0, copy, 0, buf.ByteLength);
-                        return copy;
-                    }
+                    return buf.GetSpan().ToArray();
                 case JsTypedArray ta:
-                    {
-                        var copy = new byte[ta.ByteLength];
-                        Buffer.BlockCopy(ta.Buffer.Bytes, ta.ByteOffset, copy, 0, ta.ByteLength);
-                        return copy;
-                    }
+                    return ta.Buffer.GetSpan(ta.ByteOffset, ta.ByteLength).ToArray();
             }
         }
         // Fallback: stringify.
@@ -723,15 +881,53 @@ public static class FetchBinding
         => MakePromise(realm, (_, reject) =>
             AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { reason }));
 
+    // Yield AbortSignal objects from an array-like value (AbortSignal.any).
+    private static IEnumerable<AbortSignalObject> IterateSignals(JsRealm realm, JsValue iterable)
+    {
+        if (!iterable.IsObject) yield break;
+        var obj = iterable.AsObject;
+        var lenVal = obj.Get("length");
+        if (!lenVal.IsNumber) yield break;
+        var len = (int)JsValue.ToNumber(lenVal);
+        for (var i = 0; i < len; i++)
+            if (obj.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)) is { IsObject: true } v
+                && v.AsObject is AbortSignalObject s)
+                yield return s;
+    }
+
     internal static JsValue MakeAbortError(JsRealm realm, JsValue reason)
     {
         if (!reason.IsUndefined) return reason;
-        var err = new JsObject(realm.ErrorPrototype);
-        err.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String("AbortError"), true, false, true));
-        err.DefineOwnProperty("message",
-            PropertyDescriptor.Data(JsValue.String("The operation was aborted."), true, false, true));
-        return JsValue.Object(err);
+        // The default abort reason is a real "AbortError" DOMException, so
+        // signal.reason.constructor resolves to the realm's DOMException.
+        return DomExceptionBinding.Make(realm, "AbortError", "The operation was aborted.");
+    }
+
+    private static PendingFetchScope TrackFetch(JsRuntime runtime)
+    {
+        var counter = PendingFetches.GetValue(runtime, static _ => new PendingFetchCounter());
+        counter.Increment();
+        return new PendingFetchScope(counter);
+    }
+
+    private sealed class PendingFetchCounter
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Increment() => Interlocked.Increment(ref _count);
+
+        public void Decrement() => Interlocked.Decrement(ref _count);
+    }
+
+    private readonly struct PendingFetchScope : IDisposable
+    {
+        private readonly PendingFetchCounter _counter;
+
+        public PendingFetchScope(PendingFetchCounter counter) => _counter = counter;
+
+        public void Dispose() => _counter.Decrement();
     }
 }
 

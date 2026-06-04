@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Starling.Dom;
 using Starling.Html;
 using Starling.Html.TreeBuilder;
+using Starling.Js.Intrinsics;
 using Starling.Js.Runtime;
 
 namespace Starling.Bindings;
@@ -61,7 +62,6 @@ public static class NodeBindings
         InstallCharacterData(realm);  // WPT-03: CharacterData / Text / Comment / PI prototype hierarchy
         InstallElement(realm);
         InstallDocument(realm);
-        InstallCharacterDataInterfaces(realm);
     }
 
     // =====================================================================
@@ -122,6 +122,12 @@ public static class NodeBindings
             var n = DomWrappers.UnwrapNode(thisV);
             if (n is Document) return JsValue.Null; // documents have no owner
             return n?.OwnerDocument is { } d ? JsValue.Object(DomWrappers.Wrap(realm, d)) : JsValue.Null;
+        });
+        EventTargetBinding.DefineAccessor(realm, nodeProto, "baseURI", (thisV, _) =>
+        {
+            var n = DomWrappers.UnwrapNode(thisV);
+            var d = n as Document ?? n?.OwnerDocument;
+            return d is { } ? JsValue.String(DocumentBaseUri(realm, d)) : JsValue.String("");
         });
 
         EventTargetBinding.DefineMethod(realm, nodeProto, "appendChild", (thisV, args) =>
@@ -374,13 +380,17 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, nodeProto, "replaceData", (thisV, args) =>
         {
             if (DomWrappers.UnwrapNode(thisV) is not CharacterData cd) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
-            var s = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
-            offset = Math.Max(0, Math.Min(offset, cd.Data.Length));
-            count = Math.Max(0, Math.Min(count, cd.Data.Length - offset));
-            cd.Data = cd.Data[..offset] + s + cd.Data[(offset + count)..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, count, s.Length);
+            if (args.Length < 3) throw new JsThrow(realm.NewTypeError("replaceData requires 3 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
+            var s = JsValue.ToStringValue(args[2]);
+            var len = cd.Data.Length;
+            if (offset > len)
+                throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            cd.Data = cd.Data[..o] + s + cd.Data[(o + realCount)..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, realCount, s.Length);
             return JsValue.Undefined;
         }, length: 3);
         // Text.splitText(offset) — splits text node at offset. Live-Range
@@ -502,9 +512,23 @@ public static class NodeBindings
         realm.ElementPrototype = elProto;
 
         EventTargetBinding.DefineAccessor(realm, elProto, "tagName",
-            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.TagName.ToUpperInvariant()) : JsValue.String(""));
+            (thisV, _) =>
+            {
+                if (DomWrappers.UnwrapElement(thisV) is not { } e) return JsValue.String("");
+                // DOM §4.9 — tagName is ASCII-uppercased only for HTML-namespace
+                // elements in an HTML document. SVG/MathML/other namespaces keep
+                // their original case.
+                return JsValue.String(e.Namespace == Element.HtmlNamespace ? e.TagName.ToUpperInvariant() : e.TagName);
+            });
         EventTargetBinding.DefineAccessor(realm, elProto, "localName",
             (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.LocalName) : JsValue.String(""));
+        // DOM §4.9 — Element.prefix is the namespace prefix or null; namespaceURI
+        // is the element's namespace or null. The data is on the Element model;
+        // these accessors expose it (mirrors the Attr accessors below).
+        EventTargetBinding.DefineAccessor(realm, elProto, "prefix",
+            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { Prefix: { } p } ? JsValue.String(p) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, elProto, "namespaceURI",
+            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e && !string.IsNullOrEmpty(e.Namespace) ? JsValue.String(e.Namespace) : JsValue.Null);
 
         // WPT-07: HTMLIFrameElement.contentDocument / contentWindow live on
         // ElementPrototype (same shape as HTMLInputElement.value, below) so
@@ -611,10 +635,13 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, elProto, "children", (thisV, _) =>
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e) return MakeArray(realm, Array.Empty<JsValue>());
-            var items = new List<JsValue>();
-            for (var n = e.FirstChild; n is not null; n = n.NextSibling)
-                if (n is Element child) items.Add(JsValue.Object(DomWrappers.Wrap(realm, child)));
-            return MakeArray(realm, items);
+            return BuildHtmlCollection(realm, () =>
+            {
+                var list = new List<Element>();
+                for (var n = e.FirstChild; n is not null; n = n.NextSibling)
+                    if (n is Element child) list.Add(child);
+                return list;
+            });
         });
         EventTargetBinding.DefineAccessor(realm, elProto, "firstElementChild", (thisV, _) =>
         {
@@ -836,10 +863,8 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length < 2) return MakeArray(realm, Array.Empty<JsValue>());
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var items = new List<JsValue>();
-            foreach (var d in e.GetElementsByTagNameNS(ns, JsValue.ToStringValue(args[1])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
-            return MakeArray(realm, items);
+            var local = JsValue.ToStringValue(args[1]);
+            return BuildHtmlCollection(realm, () => e.GetElementsByTagNameNS(ns, local).ToList());
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, elProto, "appendChild", (thisV, args) =>
         {
@@ -903,22 +928,28 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
             var name = JsValue.ToStringValue(args[0]);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
-            return MakeArray(realm, items);
+            return BuildHtmlCollection(realm, () =>
+            {
+                var list = new List<Element>();
+                foreach (var d in e.DescendantElements())
+                    if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                        list.Add(d);
+                return list;
+            });
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, elProto, "getElementsByClassName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
             var classes = JsValue.ToStringValue(args[0])
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (classes.Length > 0 && classes.All(d.ClassList.Contains))
-                    items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
-            return MakeArray(realm, items);
+            return BuildHtmlCollection(realm, () =>
+            {
+                var list = new List<Element>();
+                foreach (var d in e.DescendantElements())
+                    if (classes.Length > 0 && classes.All(d.ClassList.Contains))
+                        list.Add(d);
+                return list;
+            });
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, elProto, "remove", (thisV, _) =>
         {
@@ -1182,6 +1213,11 @@ public static class NodeBindings
             return JsValue.Object(styleObj);
         });
 
+        // CSSOM §6.5 — HTMLStyleElement.sheet / HTMLLinkElement.sheet returns the
+        // associated CSSStyleSheet (or null for non-stylesheet elements).
+        EventTargetBinding.DefineAccessor(realm, elProto, "sheet",
+            (thisV, _) => CssomBinding.StyleElementSheetAccessor(realm, thisV));
+
         // ---- CSS Typed OM 1 §6: attributeStyleMap / computedStyleMap -------
         // A StylePropertyMap over the inline `style` attribute (mutable) and a
         // read-only StylePropertyMapReadOnly over the computed style (consults
@@ -1269,8 +1305,111 @@ public static class NodeBindings
             PropertyDescriptor.Data(JsValue.Object(htmlElProto), writable: false, enumerable: false, configurable: false));
         htmlElProto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(htmlElCtor), writable: true, enumerable: false, configurable: true));
+        DefineHtmlElementHasInstance(realm, htmlElCtor);
         realm.GlobalObject.DefineOwnProperty("HTMLElement",
             PropertyDescriptor.Data(JsValue.Object(htmlElCtor), writable: true, enumerable: false, configurable: true));
+
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLButtonElement", "button");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLInputElement", "input");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOptionElement", "option");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSelectElement", "select");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTextAreaElement", "textarea");
+        // HTML §4 element interfaces — tag(s) per the WHATWG element-interface table.
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLAnchorElement", "a");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLAreaElement", "area");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLBaseElement", "base");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLQuoteElement", "blockquote", "q");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLBodyElement", "body");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLBRElement", "br");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLCanvasElement", "canvas");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableCaptionElement", "caption");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableColElement", "col", "colgroup");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDataElement", "data");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDataListElement", "datalist");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLModElement", "del", "ins");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDetailsElement", "details");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDialogElement", "dialog");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDivElement", "div");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDListElement", "dl");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLEmbedElement", "embed");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLFieldSetElement", "fieldset");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLFormElement", "form");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHeadingElement", "h1", "h2", "h3", "h4", "h5", "h6");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHeadElement", "head");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHRElement", "hr");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHtmlElement", "html");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLIFrameElement", "iframe");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLImageElement", "img");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLabelElement", "label");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLegendElement", "legend");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLIElement", "li");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLinkElement", "link");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMapElement", "map");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMenuElement", "menu");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMetaElement", "meta");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMeterElement", "meter");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLObjectElement", "object");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOListElement", "ol");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOptGroupElement", "optgroup");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOutputElement", "output");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLParagraphElement", "p");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLParamElement", "param");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLPictureElement", "picture");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLPreElement", "pre");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLProgressElement", "progress");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLScriptElement", "script");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSlotElement", "slot");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSourceElement", "source");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSpanElement", "span");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLStyleElement", "style");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableElement", "table");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableSectionElement", "tbody", "thead", "tfoot");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableCellElement", "td", "th");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTemplateElement", "template");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableRowElement", "tr");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTimeElement", "time");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTitleElement", "title");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTrackElement", "track");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLUListElement", "ul");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMediaElement", "audio", "video");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLAudioElement", "audio");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLVideoElement", "video");
+    }
+
+    private static void InstallHtmlElementConstructor(
+        JsRealm realm,
+        JsObject htmlElementPrototype,
+        string interfaceName,
+        params string[] localNames)
+    {
+        var proto = new JsObject(htmlElementPrototype);
+        var ctor = new JsNativeFunction(realm, interfaceName, 0, (_, _) =>
+            throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
+        ctor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
+        proto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
+        DefineHtmlElementHasInstance(realm, ctor, localNames);
+        realm.GlobalObject.DefineOwnProperty(interfaceName,
+            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
+    }
+
+    private static void DefineHtmlElementHasInstance(JsRealm realm, JsObject ctor, params string[] localNames)
+    {
+        var hasInstance = new JsNativeFunction(realm, "Symbol.hasInstance", 1, (_, args) =>
+        {
+            var element = args.Length > 0 ? DomWrappers.UnwrapElement(args[0]) : null;
+            if (element is null) return JsValue.False;
+            if (localNames.Length == 0) return JsValue.True;
+            foreach (var localName in localNames)
+            {
+                if (StringComparer.OrdinalIgnoreCase.Equals(element.LocalName, localName))
+                    return JsValue.True;
+            }
+            return JsValue.False;
+        }, isConstructor: false);
+        ctor.DefineOwnProperty(SymbolCtor.HasInstance,
+            PropertyDescriptor.Data(JsValue.Object(hasInstance), writable: false, enumerable: false, configurable: true));
     }
 
     // =====================================================================
@@ -1317,20 +1456,46 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "location", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Null;
+            // A document with no browsing context (createDocument/createHTMLDocument)
+            // has a null location.
+            if (!WindowBinding.DocumentHasBrowsingContext(realm, d)) return JsValue.Null;
             return JsValue.Object(WindowBinding.LocationObjectFor(realm, d));
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "defaultView", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Null;
-            // Spec: createHTMLDocument / createDocument produce Documents without
-            // a defaultView. Only the realm's own document is associated with
-            // the window (the realm's global object).
-            if (!ReferenceEquals(DomWrappers.UnwrapDocument(realm.GlobalObject.Get("document")), d))
-                return JsValue.Null;
-            return JsValue.Object(realm.GlobalObject);
+            // The realm's own document is associated with the realm's global.
+            if (ReferenceEquals(DomWrappers.UnwrapDocument(realm.GlobalObject.Get("document")), d))
+                return JsValue.Object(realm.GlobalObject);
+            // An iframe's content document resolves to its contentWindow.
+            if (IFrameBinding.WindowForDocument(realm, d) is { } w)
+                return JsValue.Object(w);
+            // createHTMLDocument / createDocument produce documents with no
+            // browsing context, so their defaultView is null.
+            return JsValue.Null;
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "readyState", (thisV, _) =>
             JsValue.String("complete"));
+        // DOM §4.5 — character encoding accessors. characterSet is canonical;
+        // charset and inputEncoding are historical aliases. The runner decodes
+        // every page as UTF-8.
+        EventTargetBinding.DefineAccessor(realm, docProto, "characterSet", (_, _) => JsValue.String("UTF-8"));
+        EventTargetBinding.DefineAccessor(realm, docProto, "charset", (_, _) => JsValue.String("UTF-8"));
+        EventTargetBinding.DefineAccessor(realm, docProto, "inputEncoding", (_, _) => JsValue.String("UTF-8"));
+        // DOM §4.5 — document.contentType: "text/html" for an HTML document,
+        // "application/xml" for one made by createDocument / XML parsing.
+        EventTargetBinding.DefineAccessor(realm, docProto, "contentType", (thisV, _) =>
+        {
+            var d = DomWrappers.UnwrapDocument(thisV);
+            // An explicit ContentType (set by createDocument from the root
+            // namespace) wins; otherwise fall back to the HTML/XML default.
+            var ct = d?.ContentType ?? (d is { IsHtml: false } ? "application/xml" : "text/html");
+            return JsValue.String(ct);
+        });
+        // DOM §4.4 — a Document node's textContent is null (overrides Node's
+        // descendant-text concatenation); setting it is a no-op.
+        EventTargetBinding.DefineAccessor(realm, docProto, "textContent",
+            (_, _) => JsValue.Null, (_, _) => JsValue.Undefined);
         // DOM §4.5 — document.doctype: the DocumentType child of the document, or null.
         EventTargetBinding.DefineAccessor(realm, docProto, "doctype", (thisV, _) =>
         {
@@ -1368,7 +1533,7 @@ public static class NodeBindings
             const string cacheKey = "__domImpl__";
             var cached = wrapper.Get(cacheKey);
             if (!cached.IsUndefined) return cached;
-            var impl = BuildDomImplementation(realm);
+            var impl = BuildDomImplementation(realm, DomWrappers.UnwrapDocument(thisV));
             wrapper.Set(cacheKey, JsValue.Object(impl));
             return JsValue.Object(impl);
         });
@@ -1376,33 +1541,31 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, docProto, "getElementById", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return JsValue.Null;
-            return d.GetElementById(JsValue.ToStringValue(args[0])) is { } e
+            var id = JsValue.ToStringValue(args[0]);
+            // The empty string never matches an id (elements with no id attribute
+            // would otherwise match spuriously).
+            if (id.Length == 0) return JsValue.Null;
+            return d.GetElementById(id) is { } e
                 ? JsValue.Object(DomWrappers.Wrap(realm, e)) : JsValue.Null;
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByTagName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByTagName(JsValue.ToStringValue(args[0])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
-            return MakeArray(realm, items);
+            var name = JsValue.ToStringValue(args[0]);
+            return BuildHtmlCollection(realm, () => d.GetElementsByTagName(name));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByTagNameNS", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length < 2) return MakeArray(realm, Array.Empty<JsValue>());
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByTagNameNS(ns, JsValue.ToStringValue(args[1])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
-            return MakeArray(realm, items);
+            var local = JsValue.ToStringValue(args[1]);
+            return BuildHtmlCollection(realm, () => d.GetElementsByTagNameNS(ns, local));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByClassName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByClassName(JsValue.ToStringValue(args[0])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
-            return MakeArray(realm, items);
+            var cls = JsValue.ToStringValue(args[0]);
+            return BuildHtmlCollection(realm, () => d.GetElementsByClassName(cls));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "querySelector", (thisV, args) =>
         {
@@ -1441,7 +1604,7 @@ public static class NodeBindings
                 throw new JsThrow(realm.NewTypeError("createAttributeNS requires (namespace, qualifiedName)"));
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
             var qname = args[1].IsNullish ? "" : JsValue.ToStringValue(args[1]);
-            ValidateQualifiedName(realm, ns, qname); // throws InvalidCharacterError / NamespaceError
+            ValidateQualifiedName(ThrowRealmFor(realm, d), ns, qname); // cross-realm-aware throw
             var attr = d.CreateAttributeNS(ns, qname);
             return JsValue.Object(DomWrappers.WrapAttr(realm, attr));
         }, length: 2);
@@ -1453,16 +1616,23 @@ public static class NodeBindings
             var name = JsValue.ToStringValue(args[0]);
             // DOM §4.5: an invalid Name throws InvalidCharacterError.
             if (!IsValidName(name))
-                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{name}' is not a valid element name");
-            return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElement(name)));
+                throw DomExceptionBinding.Throw(ThrowRealmFor(realm, d), "InvalidCharacterError", $"'{name}' is not a valid element name");
+            // An HTML document lowercases the name; an XML document preserves its
+            // case (and uses the null namespace).
+            var el = d.IsHtml ? d.CreateElement(name) : d.CreateElementNS(null, name);
+            return JsValue.Object(DomWrappers.Wrap(realm, el));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "createElementNS", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length < 2)
                 throw new JsThrow(realm.NewTypeError("createElementNS requires (namespace, qualifiedName)"));
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var qname = args[1].IsNullish ? "" : JsValue.ToStringValue(args[1]);
-            ValidateQualifiedName(realm, ns, qname); // throws InvalidCharacterError / NamespaceError
+            // qualifiedName is a non-nullable DOMString: null -> "null".
+            var qname = JsValue.ToStringValue(args[1]);
+            // Validation errors must come from the target document's realm (its
+            // DOMException), which differs from the caller's realm when `d` is a
+            // cross-realm iframe contentDocument.
+            ValidateQualifiedName(ThrowRealmFor(realm, d), ns, qname);
             return JsValue.Object(DomWrappers.Wrap(realm, d.CreateElementNS(ns, qname)));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "createEvent", (thisV, args) =>
@@ -1553,6 +1723,21 @@ public static class NodeBindings
         realm.DocumentConstructor = docCtor;
         realm.GlobalObject.DefineOwnProperty("Document",
             PropertyDescriptor.Data(JsValue.Object(docCtor), writable: true, enumerable: false, configurable: true));
+
+        // XMLDocument (DOM §4.5) — the interface of a document produced by
+        // createDocument / DOMParser XML parsing. Its prototype inherits from
+        // Document.prototype; a non-HTML Document wraps with it.
+        var xmlDocProto = new JsObject(docProto);
+        realm.XmlDocumentPrototype = xmlDocProto;
+        var xmlDocCtor = new JsNativeFunction(realm, "XMLDocument", 0, (_, _) =>
+            throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
+        xmlDocCtor.SetPrototypeOf(docCtor);
+        xmlDocCtor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(xmlDocProto), writable: false, enumerable: false, configurable: false));
+        xmlDocProto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(xmlDocCtor), writable: true, enumerable: false, configurable: true));
+        realm.GlobalObject.DefineOwnProperty("XMLDocument",
+            PropertyDescriptor.Data(JsValue.Object(xmlDocCtor), writable: true, enumerable: false, configurable: true));
         // HTMLDocument is an alias for Document (HTML §3.1).
         realm.GlobalObject.DefineOwnProperty("HTMLDocument",
             PropertyDescriptor.Data(JsValue.Object(docCtor), writable: true, enumerable: false, configurable: true));
@@ -1568,12 +1753,29 @@ public static class NodeBindings
 
     // ---- helpers ---------------------------------------------------------
 
+    private static string DocumentBaseUri(JsRealm realm, Document doc)
+    {
+        var documentUrl = WindowBinding.UrlFor(realm, doc);
+        foreach (var el in doc.GetElementsByTagName("base"))
+        {
+            var href = el.GetAttribute("href");
+            if (string.IsNullOrWhiteSpace(href)) continue;
+            if (Uri.TryCreate(href, UriKind.Absolute, out var absolute))
+                return absolute.ToString();
+            if (Uri.TryCreate(documentUrl, UriKind.Absolute, out var baseUri)
+                && Uri.TryCreate(baseUri, href, out var resolved))
+                return resolved.ToString();
+            break;
+        }
+        return documentUrl;
+    }
+
     /// <summary>Build a DOMImplementation JS object for the given realm.
     /// DOM §4.5 — exposes <c>createHTMLDocument([title])</c>,
     /// <c>createDocumentFragment()</c>, and <c>hasFeature()</c> (always true).
     /// The returned document is wrapped with the realm's full Document prototype
     /// so all Document methods work on it.</summary>
-    private static JsObject BuildDomImplementation(JsRealm realm)
+    private static JsObject BuildDomImplementation(JsRealm realm, Document? ownerDoc)
     {
         var impl = new JsObject(realm.ObjectPrototype);
 
@@ -1592,7 +1794,19 @@ public static class NodeBindings
             var qname = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
             var publicId = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "";
             var systemId = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
-            return JsValue.Object(DomWrappers.Wrap(realm, new DocumentType(qname, publicId, systemId)));
+            // createDocumentType validation is legacy-loose (see the WPT cases):
+            // leading digits, lone punctuation ({, @, '), and an empty prefix or
+            // local part (":foo", "foo:", "prefix::local") are all accepted. A
+            // name is rejected only when it contains a '>' or ASCII whitespace,
+            // which would break the "<!DOCTYPE name>" serialization.
+            if (qname.Any(c => c is '>' or ' ' or '\t' or '\n' or '\r' or '\f'))
+                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{qname}' is not a valid doctype name");
+            // The new doctype's node document is the implementation's document, so
+            // its ownerDocument is non-null even before it is inserted into a tree.
+            var dt = ownerDoc is { } d
+                ? d.CreateDocumentType(qname, publicId, systemId)
+                : new DocumentType(qname, publicId, systemId);
+            return JsValue.Object(DomWrappers.Wrap(realm, dt));
         }, length: 3);
 
         // createDocument(namespace, qualifiedName, doctype) — DOM §4.5.1. Builds
@@ -1601,8 +1815,25 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, impl, "createDocument", (_, args) =>
         {
             var ns = args.Length > 0 && !args[0].IsNullish ? JsValue.ToStringValue(args[0]) : null;
-            var qname = args.Length > 1 && !args[1].IsNullish ? JsValue.ToStringValue(args[1]) : "";
-            var doc = new Document { IsHtml = false }; // XML document — preserve name case
+            // qualifiedName is [LegacyNullToEmptyString] DOMString: only an actual
+            // null maps to "", while undefined (and an omitted argument) stringify
+            // to "undefined" and therefore produce a <undefined> root element.
+            var qnameVal = args.Length > 1 ? args[1] : JsValue.Undefined;
+            var qname = qnameVal.IsNull ? "" : JsValue.ToStringValue(qnameVal);
+            // DOM §4.5.1 — validate the qualified name (InvalidCharacterError /
+            // NamespaceError) before building anything.
+            if (qname.Length != 0)
+                ValidateQualifiedName(realm, ns, qname);
+            // DOM §4.5.1 step 7 — the content type is derived from the namespace:
+            // the HTML namespace → application/xhtml+xml, SVG → image/svg+xml,
+            // anything else (or none) → application/xml.
+            var contentType = ns switch
+            {
+                "http://www.w3.org/1999/xhtml" => "application/xhtml+xml",
+                "http://www.w3.org/2000/svg" => "image/svg+xml",
+                _ => "application/xml",
+            };
+            var doc = new Document { IsHtml = false, ContentType = contentType }; // XML document — preserve name case
             if (args.Length > 2 && DomWrappers.UnwrapAs<DocumentType>(args[2]) is { } dt)
                 doc.AppendChild(dt);
             if (!string.IsNullOrEmpty(qname))
@@ -1637,6 +1868,38 @@ public static class NodeBindings
         var arr = new JsArray(realm, items);
         return JsValue.Object(arr);
     }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JsRealm, JsObject> HtmlCollectionProtos = new();
+
+    private static JsObject HtmlCollectionProto(JsRealm realm)
+    {
+        if (HtmlCollectionProtos.TryGetValue(realm, out var proto)) return proto;
+        proto = new JsObject(realm.ObjectPrototype);
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("HTMLCollection"), writable: false, enumerable: false, configurable: true));
+        EventTargetBinding.DefineMethod(realm, proto, "item", (thisV, args) =>
+            thisV.IsObject && thisV.AsObject is HtmlCollectionObject c && args.Length > 0
+                ? c.Item((int)JsValue.ToNumber(args[0])) : JsValue.Null, length: 1);
+        EventTargetBinding.DefineMethod(realm, proto, "namedItem", (thisV, args) =>
+            thisV.IsObject && thisV.AsObject is HtmlCollectionObject c && args.Length > 0
+                ? c.NamedItemValue(JsValue.ToStringValue(args[0])) : JsValue.Null, length: 1);
+        JsValue Iterate(JsValue thisV, JsValue[] _)
+        {
+            if (thisV.IsObject && thisV.AsObject is HtmlCollectionObject c)
+                return Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                    realm, MakeArray(realm, c.Values().ToList()), Starling.Js.Intrinsics.ArrayIteratorKind.Value);
+            return JsValue.Undefined;
+        }
+        EventTargetBinding.DefineMethod(realm, proto, "values", Iterate, length: 0);
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
+            PropertyDescriptor.Data(proto.Get("values"), writable: true, enumerable: false, configurable: true));
+        HtmlCollectionProtos.Add(realm, proto);
+        return proto;
+    }
+
+    /// <summary>A live HTMLCollection over the elements yielded by <paramref name="source"/>.</summary>
+    private static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
+        => JsValue.Object(new HtmlCollectionObject(realm, HtmlCollectionProto(realm), source));
 
     private static void InstallFormControlAccessors(JsRealm realm, JsObject proto)
     {
@@ -1966,6 +2229,16 @@ public static class NodeBindings
     // =====================================================================
     //                          CharacterData
     // =====================================================================
+    /// <summary>WebIDL <c>unsigned long</c> conversion for CharacterData offsets
+    /// (ToUint32): NaN/Infinity become 0, negatives wrap modulo 2^32. So
+    /// -0x100000000 + 2 becomes 2 (in bounds), -1 becomes 4294967295 (clamped).</summary>
+    private static long CdataOffset(JsValue v)
+    {
+        var d = JsValue.ToNumber(v);
+        if (double.IsNaN(d) || double.IsInfinity(d)) return 0;
+        return unchecked((uint)(long)Math.Truncate(d));
+    }
+
     private static void InstallCharacterData(JsRealm realm)
     {
         // CharacterData prototype inherits from Node.prototype.
@@ -2021,13 +2294,15 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.String("");
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("substringData requires 2 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            var end = Math.Min(offset + Math.Max(0, count), len);
-            return JsValue.String(cd.Data[offset..end]);
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            return JsValue.String(cd.Data.Substring(o, realCount));
         }, length: 2);
 
         // DOM §4.8 CharacterData.appendData(data). Routed through the
@@ -2036,7 +2311,8 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapAs<CharacterData>(thisV) is { } cd)
             {
-                var data = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+                if (args.Length < 1) throw new JsThrow(realm.NewTypeError("appendData requires 1 argument"));
+                var data = JsValue.ToStringValue(args[0]);
                 var pos = cd.Data.Length;
                 cd.Data += data;
                 Starling.Dom.DomRange.OnReplaceData(cd, pos, 0, data.Length);
@@ -2049,13 +2325,15 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var data = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "";
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("insertData requires 2 arguments"));
+            var offset = CdataOffset(args[0]);
+            var data = JsValue.ToStringValue(args[1]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            cd.Data = cd.Data[..offset] + data + cd.Data[offset..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, 0, data.Length);
+            var o = (int)offset;
+            cd.Data = cd.Data[..o] + data + cd.Data[o..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, 0, data.Length);
             return JsValue.Undefined;
         }, length: 2);
 
@@ -2064,15 +2342,16 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("deleteData requires 2 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            var end = Math.Min(offset + Math.Max(0, count), len);
-            var actualCount = end - offset;
-            cd.Data = cd.Data[..offset] + cd.Data[end..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, actualCount, 0);
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            cd.Data = cd.Data[..o] + cd.Data[(o + realCount)..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, realCount, 0);
             return JsValue.Undefined;
         }, length: 2);
 
@@ -2081,16 +2360,17 @@ public static class NodeBindings
         {
             var cd = DomWrappers.UnwrapAs<CharacterData>(thisV);
             if (cd is null) return JsValue.Undefined;
-            var offset = args.Length > 0 ? (int)JsValue.ToNumber(args[0]) : 0;
-            var count = args.Length > 1 ? (int)JsValue.ToNumber(args[1]) : 0;
-            var data = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
+            if (args.Length < 3) throw new JsThrow(realm.NewTypeError("replaceData requires 3 arguments"));
+            var offset = CdataOffset(args[0]);
+            var count = CdataOffset(args[1]);
+            var data = JsValue.ToStringValue(args[2]);
             var len = cd.Data.Length;
-            if (offset < 0 || offset > len)
+            if (offset > len)
                 throw DomExceptionBinding.Throw(realm, "IndexSizeError", $"Offset {offset} is outside the data length {len}");
-            var end = Math.Min(offset + Math.Max(0, count), len);
-            var actualCount = end - offset;
-            cd.Data = cd.Data[..offset] + data + cd.Data[end..];
-            Starling.Dom.DomRange.OnReplaceData(cd, offset, actualCount, data.Length);
+            var o = (int)offset;
+            var realCount = (int)Math.Min(count, len - o);
+            cd.Data = cd.Data[..o] + data + cd.Data[(o + realCount)..];
+            Starling.Dom.DomRange.OnReplaceData(cd, o, realCount, data.Length);
             return JsValue.Undefined;
         }, length: 3);
 
@@ -2278,8 +2558,31 @@ public static class NodeBindings
         return DomExceptionBinding.Throw(realm, "HierarchyRequestError", msg);
     }
 
-    private static bool IsNameStart(char c) => char.IsLetter(c) || c == '_' || c == ':';
-    private static bool IsNameChar(char c) => IsNameStart(c) || char.IsAsciiDigit(c) || c == '-' || c == '.';
+    // Browsers (and the WPT name-validity tests) accept any non-ASCII code point
+    // anywhere in an element/attribute name — including code points outside the
+    // strict XML NameStartChar ranges (U+037E, U+FFFF, lone combining marks as a
+    // local-name start). Only ASCII is checked against the Name production; every
+    // code point >= U+0080 is permitted as both a start and a continuation char.
+    private static bool IsNameStart(char c) => c >= 0x80 || char.IsAsciiLetter(c) || c == '_' || c == ':';
+    private static bool IsNameChar(char c) =>
+        IsNameStart(c) || char.IsAsciiDigit(c) || c is '-' or '.' or '·'
+        // Browsers also accept these two ASCII punctuation marks mid-name
+        // (e.g. "f}oo", "f<oo" parse as valid element names), so the WPT
+        // name-validity cases expect them allowed as a continuation char.
+        || c is '}' or '<'
+        // XML NameChar also allows combining marks (e.g. U+0BC6) and non-ASCII
+        // digits, which browsers accept in element names.
+        || char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.NonSpacingMark
+            or System.Globalization.UnicodeCategory.SpacingCombiningMark
+            or System.Globalization.UnicodeCategory.EnclosingMark
+            or System.Globalization.UnicodeCategory.DecimalDigitNumber;
+
+    /// <summary>The realm whose DOMException a DOM method should throw when it
+    /// operates on <paramref name="doc"/>: the document's own (iframe) realm when
+    /// it has a nested browsing context, else the caller's realm. WebIDL requires
+    /// the error to be an instance of the target document's <c>DOMException</c>.</summary>
+    private static JsRealm ThrowRealmFor(JsRealm realm, Document doc)
+        => IFrameBinding.RealmForDocument(realm, doc) ?? realm;
 
     private static bool IsValidName(string name)
     {
@@ -2289,19 +2592,33 @@ public static class NodeBindings
         return true;
     }
 
-    /// <summary>A qualified name is one or two valid Names joined by a single
-    /// internal colon.</summary>
+    /// <summary>DOM "validate and extract": the qualified name must match the
+    /// Name production (colons allowed); the prefix is everything before the
+    /// first colon. So "f:o:o" is a valid Name with prefix "f" (then the
+    /// namespace check decides), while ";foo"/"f}oo" are not Names at all.</summary>
     private static bool IsValidQName(string qname, out string? prefix)
     {
         prefix = null;
         if (string.IsNullOrEmpty(qname)) return false;
         var colon = qname.IndexOf(':', StringComparison.Ordinal);
-        if (colon < 0) return IsValidName(qname);
+        if (colon < 0)
+            return IsValidName(qname);    // unprefixed — must be a full NCName (NameStart first)
+        // An empty prefix (":local") or empty local part ("prefix:") is invalid.
         if (colon == 0 || colon == qname.Length - 1) return false;
-        var p = qname[..colon];
-        var l = qname[(colon + 1)..];
-        if (l.Contains(':', StringComparison.Ordinal) || !IsValidName(p) || !IsValidName(l)) return false;
-        prefix = p;
+        // Match browser leniency exactly (see the WPT name-validity cases): the
+        // prefix is an Nmtoken — every char is a NameChar but a leading digit is
+        // tolerated ("0:a" is valid) — while the local part must be a real NCName
+        // whose first char is a NameStartChar ("a:0" is invalid). A colon inside
+        // the local part is left to the namespace check ("f:o:o" → NamespaceError),
+        // so the local is validated as NameStart followed by NameChars.
+        var prefixPart = qname[..colon];
+        var localPart = qname[(colon + 1)..];
+        foreach (var c in prefixPart)
+            if (!IsNameChar(c)) return false;
+        if (!IsNameStart(localPart[0])) return false;
+        for (var i = 1; i < localPart.Length; i++)
+            if (!IsNameChar(localPart[i])) return false;
+        prefix = prefixPart;              // everything before the FIRST colon
         return true;
     }
 
@@ -2454,7 +2771,8 @@ public static class NodeBindings
 
     private static string NormalizeNodeName(Node n) => n switch
     {
-        Element e => e.TagName.ToUpperInvariant(),
+        // Like tagName: HTML-namespace elements are ASCII-uppercased, others keep case.
+        Element e => e.Namespace == Element.HtmlNamespace ? e.TagName.ToUpperInvariant() : e.TagName,
         Document => "#document",
         Text => "#text",
         Comment => "#comment",
@@ -2565,6 +2883,19 @@ public static class NodeBindings
         }
     }
 
+    /// <summary>DOM §7.1 token validation for DOMTokenList add/remove/toggle/replace:
+    /// an empty token throws SyntaxError, a token with ASCII whitespace throws
+    /// InvalidCharacterError.</summary>
+    private static void ValidateDomToken(JsRealm realm, string token)
+    {
+        if (token.Length == 0)
+            throw DomExceptionBinding.Throw(realm, "SyntaxError", "The token provided must not be empty.");
+        foreach (var c in token)
+            if (c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' ')
+                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError",
+                    "The token provided contains HTML space characters, which are not valid in tokens.");
+    }
+
     /// <summary>Build a DOMTokenList JS object wrapping the element's classList.
     /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
     /// forEach, keys, values, entries. Properties: length, value.</summary>
@@ -2572,6 +2903,10 @@ public static class NodeBindings
     {
         var obj = new JsObject(realm.ObjectPrototype);
         var cl = element.ClassList;
+
+        // Object.prototype.toString.call(classList) === "[object DOMTokenList]".
+        obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("DOMTokenList"), writable: false, enumerable: false, configurable: true));
 
         EventTargetBinding.DefineAccessor(realm, obj, "length",
             (_, _) => JsValue.Number(cl.Count));
@@ -2591,54 +2926,58 @@ public static class NodeBindings
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, obj, "add", (_, args) =>
         {
-            foreach (var arg in args)
+            // DOM §7.1 — validate every token first (empty -> SyntaxError,
+            // whitespace -> InvalidCharacterError), then add them all.
+            var tokens = new string[args.Length];
+            for (var i = 0; i < args.Length; i++)
             {
-                try { cl.Add(JsValue.ToStringValue(arg)); }
-                catch { /* invalid token — skip per spec */ }
+                tokens[i] = JsValue.ToStringValue(args[i]);
+                ValidateDomToken(realm, tokens[i]);
             }
+            foreach (var t in tokens) cl.Add(t);
             return JsValue.Undefined;
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, obj, "remove", (_, args) =>
         {
-            foreach (var arg in args)
+            var tokens = new string[args.Length];
+            for (var i = 0; i < args.Length; i++)
             {
-                try { cl.Remove(JsValue.ToStringValue(arg)); }
-                catch { /* invalid token — skip per spec */ }
+                tokens[i] = JsValue.ToStringValue(args[i]);
+                ValidateDomToken(realm, tokens[i]);
             }
+            foreach (var t in tokens) cl.Remove(t);
             return JsValue.Undefined;
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, obj, "toggle", (_, args) =>
         {
             if (args.Length == 0) return JsValue.False;
             var token = JsValue.ToStringValue(args[0]);
-            // Optional force arg (args[1]).
+            ValidateDomToken(realm, token);
             bool result;
             if (args.Length > 1 && !args[1].IsUndefined)
             {
                 var force = JsValue.ToBoolean(args[1]);
-                if (force) { try { cl.Add(token); } catch { } result = true; }
-                else { try { cl.Remove(token); } catch { } result = false; }
+                if (force) { cl.Add(token); result = true; }
+                else { cl.Remove(token); result = false; }
             }
             else
             {
-                if (cl.Contains(token)) { try { cl.Remove(token); } catch { } result = false; }
-                else { try { cl.Add(token); } catch { } result = true; }
+                if (cl.Contains(token)) { cl.Remove(token); result = false; }
+                else { cl.Add(token); result = true; }
             }
             return JsValue.Boolean(result);
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, obj, "replace", (_, args) =>
         {
-            if (args.Length < 2) return JsValue.False;
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("replace requires 2 arguments"));
             var oldToken = JsValue.ToStringValue(args[0]);
             var newToken = JsValue.ToStringValue(args[1]);
-            try
-            {
-                if (!cl.Contains(oldToken)) return JsValue.False;
-                cl.Remove(oldToken);
-                cl.Add(newToken);
-                return JsValue.True;
-            }
-            catch { return JsValue.False; }
+            ValidateDomToken(realm, oldToken);
+            ValidateDomToken(realm, newToken);
+            if (!cl.Contains(oldToken)) return JsValue.False;
+            cl.Remove(oldToken);
+            cl.Add(newToken);
+            return JsValue.True;
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, obj, "item", (_, args) =>
         {
@@ -2736,7 +3075,7 @@ public static class NodeBindings
         // Camel-case / kebab-case accessors for the most-used CSS properties.
         // The bundle uses: display, position, backgroundClip, filter, left, top,
         // right, cssText, zoom. We expose all CommonComputedStyleProps plus more.
-        foreach (var kebab in InlineStyleProperties)
+        foreach (var kebab in AllInlineStyleProperties)
         {
             var capturedKebab = kebab;
             var camel = KebabToCamel(kebab);
@@ -3173,6 +3512,14 @@ public static class NodeBindings
         "zoom",
         "content", "list-style", "list-style-type",
     ];
+
+    // The seed list above plus every property the CSS engine knows, so
+    // el.style.<anyProp> reflects per CSSOM §6.3 (camel-cased IDL attributes).
+    private static readonly string[] AllInlineStyleProperties =
+        InlineStyleProperties
+            .Concat(Starling.Css.Properties.PropertyRegistry.All.Select(Starling.Css.Properties.PropertyRegistry.Name))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     // =====================================================================
     //  CharacterData / Text / Comment / DocumentFragment interfaces

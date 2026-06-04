@@ -51,6 +51,23 @@ public class VarBlockScopeTests
     }
 
     [TestMethod]
+    public void Var_declared_after_assignment_shadows_outer_const()
+    {
+        var r = Eval(@"
+            function outer(){
+              const s = 1;
+              return function inner(){
+                s = 2;
+                var s;
+                return s;
+              }();
+            }
+            outer();
+        ");
+        r.AsNumber.Should().Be(2);
+    }
+
+    [TestMethod]
     public void Captured_var_in_block_read_only_from_closure()
     {
         var r = Eval(@"

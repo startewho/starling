@@ -256,6 +256,12 @@ public sealed class Document : Node
     /// <c>createAttribute</c> (HTML lower-cases, XML preserves).</summary>
     public bool IsHtml { get; set; } = true;
 
+    /// <summary>DOM §4.5 — the document's content type. Null defers to the
+    /// <see cref="IsHtml"/> default ("text/html" vs "application/xml").
+    /// <c>createDocument</c> sets it from the root element's namespace
+    /// (HTML → application/xhtml+xml, SVG → image/svg+xml, else application/xml).</summary>
+    public string? ContentType { get; set; }
+
     // ---- DOM §4.9 — createAttribute / createAttributeNS --------------------
 
     /// <summary>DOM §4.9 createAttribute — creates a new detached Attr node

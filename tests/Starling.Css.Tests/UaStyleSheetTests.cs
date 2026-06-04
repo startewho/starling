@@ -90,6 +90,24 @@ public sealed class UaStyleSheetTests
     }
 
     [TestMethod]
+    public void Body_has_no_opaque_background()
+    {
+        // Per the HTML UA stylesheet, <body> is transparent — the white page
+        // comes from the canvas, not from body. A UA `body { background: white }`
+        // would paint over a dark theme set on the root element (e.g.
+        // angular.dev's `html { background: var(--page-background) }`), hiding it
+        // and leaving the page white. Keep body transparent so the root
+        // element's background shows through.
+        var doc = new Document();
+        var body = doc.CreateElement("body");
+        doc.AppendChild(body);
+
+        var style = new StyleEngine().Compute(body);
+
+        style.GetColor(PropertyId.BackgroundColor).A.Should().Be(0);
+    }
+
+    [TestMethod]
     [DataRow("tt")]
     [DataRow("code")]
     [DataRow("kbd")]

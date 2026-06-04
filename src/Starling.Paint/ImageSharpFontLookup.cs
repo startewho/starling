@@ -83,8 +83,11 @@ internal static class ImageSharpFontLookup
                 return family.CreateFont(size, ResolveStyle(family, style));
         }
 
-        // Last-resort fallback: the first registered family (the bundled
-        // OpenSans on every supported platform).
+        // Last-resort fallback: prefer the bundled Open Sans (the documented
+        // terminal fallback), then the first available family as a true last resort.
+        if (TryResolveFamily(collection, aliases, "Open Sans", style, out var openSans))
+            return openSans.CreateFont(size, ResolveStyle(openSans, style));
+
         foreach (var family in collection.Families)
             return family.CreateFont(size, ResolveStyle(family, style));
 

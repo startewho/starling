@@ -304,7 +304,7 @@ public static class XhrBinding
     private static JsValue MakeArrayBuffer(JsRealm realm, byte[] bytes)
     {
         var buf = new JsArrayBuffer(realm.ArrayBufferPrototype, bytes.Length);
-        Buffer.BlockCopy(bytes, 0, buf.Bytes, 0, bytes.Length);
+        bytes.CopyTo(buf.GetSpan());
         return JsValue.Object(buf);
     }
 

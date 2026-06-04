@@ -17,6 +17,7 @@ namespace Starling.Js.Parse;
 public sealed partial class JsParser
 {
     private readonly JsLexer _lex;
+    private readonly string _source;
     private JsToken _current;
     private int _disallowInDepth;
 
@@ -149,7 +150,15 @@ public sealed partial class JsParser
     public JsParser(JsLexer lex)
     {
         _lex = lex ?? throw new ArgumentNullException(nameof(lex));
+        _source = _lex.Source;
         _current = _lex.Next();
+    }
+
+    private string SourceSlice(JsPosition start, JsPosition end)
+    {
+        var startOffset = Math.Clamp(start.Offset, 0, _source.Length);
+        var endOffset = Math.Clamp(end.Offset, startOffset, _source.Length);
+        return _source[startOffset..endOffset];
     }
 
     /// <summary>A lexer error is an early <c>SyntaxError</c> per §12 — surface
@@ -487,7 +496,8 @@ public sealed partial class JsParser
                 ValidateParameters(@params, strict, forceDuplicateCheck: true);
                 CheckParamsVsLexicalBody(@params, block);
                 return new ArrowFunctionExpression(@params, block, IsExpression: false,
-                    Async: async, start, block.End, Strict: strict);
+                    Async: async, start, block.End, Strict: strict,
+                    SourceText: SourceSlice(start, block.End));
             }
             // The concise body is AssignmentExpression[+In]; a for-header [NoIn]
             // restriction never reaches an arrow body, so allow `in` again here.
@@ -505,7 +515,8 @@ public sealed partial class JsParser
             finally { _disallowInDepth = savedNoIn; _inFormalParameters = savedInParams; }
             ValidateParameters(@params, _strict, forceDuplicateCheck: true);
             return new ArrowFunctionExpression(@params, expr, IsExpression: true,
-                Async: async, start, expr.End, Strict: _strict);
+                Async: async, start, expr.End, Strict: _strict,
+                SourceText: SourceSlice(start, expr.End));
         }
         finally { _strict = savedStrict; (_inAsync, _inGenerator) = (savedAsync, savedGen); _moduleTopAwait = savedModuleAwait; }
     }

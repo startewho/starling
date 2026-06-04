@@ -64,6 +64,8 @@ public sealed class JsLexer
         _errors = errors ?? IJsLexErrorSink.Null;
     }
 
+    internal string Source => _src;
+
     /// <summary>Return the next token, advancing the stream. EOF is sticky.</summary>
     public JsToken Next()
     {
@@ -960,7 +962,7 @@ public sealed class JsLexer
 
     private static double ParseRadixDouble(ReadOnlySpan<char> digits, int radix)
     {
-        long value = 0;
+        double value = 0;
         foreach (var ch in digits)
         {
             var digit = ch switch
@@ -971,7 +973,7 @@ public sealed class JsLexer
                 _ => throw new FormatException(),
             };
             if (digit >= radix) throw new FormatException();
-            checked { value = value * radix + digit; }
+            value = value * radix + digit;
         }
         return value;
     }

@@ -84,6 +84,9 @@ public static class WindowBinding
         // is per-realm.
         var hostWindowTarget = new InMemoryEventTarget();
         EventTargetBinding.BindWrapper(global, hostWindowTarget);
+        // Mark this as the Window object so touch/wheel listeners on it pick up
+        // the DOM default-passive value.
+        EventTargetBinding.MarkWindowTarget(hostWindowTarget);
 
         // 3) Window-shaped own properties on the global.
         var docWrapper = DomWrappers.Wrap(realm, document);
@@ -117,6 +120,10 @@ public static class WindowBinding
         // workaround for the gap:opcode-fast-path-bypasses-accessors bug).
         // Cross-document navigation is outside this binding. Same-document
         // updates go through HistoryBinding and may dispatch hashchange.
+        // Legacy `window.event` (HTML §window.event): the event currently being
+        // dispatched, or undefined when no dispatch is active.
+        EventTargetBinding.DefineAccessor(realm, global, "event",
+            (_, _) => EventTargetBinding.GetCurrentEvent(realm));
         EventTargetBinding.DefineAccessor(realm, global, "location",
             (_, _) => JsValue.Object(LocationObjectFor(realm, document)),
             (_, args) =>
@@ -212,7 +219,7 @@ public static class WindowBinding
         //     seeded from the document's @font-face rules.
         FontFaceBinding.Install(realm, document);
 
-        // 15) Small WebAssembly JS API spike backed by DotWasm.
+        // 15) Small WebAssembly JS API spike backed by Wasmtime.NET.
         WebAssemblyBinding.Install(runtime);
     }
 
@@ -412,9 +419,24 @@ public static class WindowBinding
     /// <c>history.pushState</c> is reflected in <c>location.href</c>.</summary>
     internal static string UrlFor(JsRealm realm, Document doc)
     {
-        if (HistoryBinding.HistoryForRealm(realm) is { } hist) return hist.CurrentUrl;
-        return DocMeta.TryGetValue(doc, out var m) ? m.Url : "about:blank";
+        if (DocumentHasBrowsingContext(realm, doc))
+        {
+            if (RealmToDocument.TryGetValue(realm, out var main) && ReferenceEquals(main, doc)
+                && HistoryBinding.HistoryForRealm(realm) is { } hist)
+                return hist.CurrentUrl;
+            if (DocMeta.TryGetValue(doc, out var m)) return m.Url;
+        }
+        // createDocument / createHTMLDocument produce documents with no browsing
+        // context — their URL is "about:blank".
+        return "about:blank";
     }
+
+    /// <summary>True when the document is the realm's own document or an iframe's
+    /// content document — i.e. associated with a browsing context. A document
+    /// made by createDocument/createHTMLDocument is not.</summary>
+    internal static bool DocumentHasBrowsingContext(JsRealm realm, Document doc)
+        => (RealmToDocument.TryGetValue(realm, out var main) && ReferenceEquals(main, doc))
+            || IFrameBinding.WindowForDocument(realm, doc) is not null;
 
     private static bool NavigateLocation(JsRealm realm, Document doc, string target, bool replace)
     {
@@ -502,6 +524,19 @@ public static class WindowBinding
         // bundle loaders very commonly register on window, not document.
         var windowTarget = EventTargetBinding.ResolveHost(JsValue.Object(runtime.Realm.GlobalObject));
         windowTarget?.DispatchEvent(new Event("DOMContentLoaded", new EventInit(Bubbles: false, Cancelable: false)));
+
+        // HTML §iframe "process the iframe attributes": iframes that carry a src
+        // straight from the parser never ran the attribute setter, so kick off
+        // their subframe loads now. The fetch is asynchronous and settles through
+        // the parent's microtask queue during the post-DOMContentLoaded pump, so
+        // contentDocument is populated before the window 'load' event that tests
+        // wait on. (Setting src from script still loads via OnSrcSet directly.)
+        if (doc.DocumentElement is { } root)
+        {
+            foreach (var el in root.DescendantElements().ToList())
+                if (IFrameBinding.IsFrameElement(el) && !string.IsNullOrEmpty(el.GetAttribute("src")))
+                    IFrameBinding.LoadSubframeNow(runtime.Realm, el);
+        }
     }
 
     /// <summary>Dispatches <c>load</c> on the window target after host-driven

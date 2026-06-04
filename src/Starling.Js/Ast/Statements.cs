@@ -145,7 +145,8 @@ public sealed record FunctionDeclaration(
     bool Async = false,
     // ES strict mode: true when this function's body parses as strict (own
     // "use strict" directive prologue, or lexically nested in strict code).
-    bool Strict = false)
+    bool Strict = false,
+    string? SourceText = null)
     : Statement(Start, End);
 
 /// <summary>

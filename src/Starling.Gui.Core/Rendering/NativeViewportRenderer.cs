@@ -126,6 +126,8 @@ public sealed class NativeViewportRenderer : IDisposable
         BlockBox? overlayRoot = null,
         BlockBox? screenOverlayRoot = null,
         BlockBox? bottomChromeRoot = null,
+        BlockBox? bottomChromeRightRoot = null,
+        double bottomChromeLeftWidthCss = 0,
         double bottomChromeHeightCss = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -143,8 +145,9 @@ public sealed class NativeViewportRenderer : IDisposable
         }
 
         var chromeDevH = (int)Math.Ceiling(chromeHeightCss * scale);
-        var bottomChromeCss = bottomChromeRoot is null ? 0 : bottomChromeHeightCss;
-        var bottomDevH = bottomChromeRoot is null ? 0 : (int)Math.Ceiling(bottomChromeCss * scale);
+        var hasBottomChrome = bottomChromeRoot is not null || bottomChromeRightRoot is not null;
+        var bottomChromeCss = hasBottomChrome ? bottomChromeHeightCss : 0;
+        var bottomDevH = hasBottomChrome ? (int)Math.Ceiling(bottomChromeCss * scale) : 0;
         var leftChromeCss = leftChromeRoot is null ? 0 : leftChromeWidthCss;
         var leftDevW = leftChromeRoot is null ? 0 : (int)Math.Ceiling(leftChromeCss * scale);
         var logicalW = surfaceWidth / scale;
@@ -175,6 +178,9 @@ public sealed class NativeViewportRenderer : IDisposable
         var bottomChromeTree = bottomChromeRoot is null
             ? null
             : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRoot);
+        var bottomChromeRightTree = bottomChromeRightRoot is null
+            ? null
+            : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRightRoot);
 
         var compositor = new Compositor(_backend, _diag, _tiles);
         var ops = new List<LayerBlend>();
@@ -216,13 +222,39 @@ public sealed class NativeViewportRenderer : IDisposable
         // Bottom chrome (status bar): the strip below the page, same width as the
         // page region, fixed at the window bottom. Drawn after the page so it sits
         // over any page content that would otherwise bleed into the strip.
-        if (bottomChromeTree is not null)
+        if (bottomChromeTree is not null && bottomChromeRightTree is null)
             compositor.AppendSurfaceOps(
                 bottomChromeTree,
                 new LayoutRect(0, 0, pageLogicalW, bottomChromeCss),
                 scale, destOriginXDevice: leftDevW, destOriginYDevice: surfaceHeight - bottomDevH,
                 regionClipDevice: new LayoutRect(leftDevW, surfaceHeight - bottomDevH, contentDevW, bottomDevH),
                 ops, presenter);
+        else if (bottomChromeTree is not null || bottomChromeRightTree is not null)
+        {
+            var leftCss = bottomChromeLeftWidthCss <= 0
+                ? pageLogicalW / 2
+                : Math.Clamp(bottomChromeLeftWidthCss, 1, Math.Max(1, pageLogicalW - 1));
+            var rightCss = Math.Max(1, pageLogicalW - leftCss);
+            var leftDev = Math.Clamp((int)Math.Round(leftCss * scale), 1, Math.Max(1, contentDevW - 1));
+            var rightDev = Math.Max(1, contentDevW - leftDev);
+            var bottomDevY = surfaceHeight - bottomDevH;
+
+            if (bottomChromeTree is not null)
+                compositor.AppendSurfaceOps(
+                    bottomChromeTree,
+                    new LayoutRect(0, 0, leftCss, bottomChromeCss),
+                    scale, destOriginXDevice: leftDevW, destOriginYDevice: bottomDevY,
+                    regionClipDevice: new LayoutRect(leftDevW, bottomDevY, leftDev, bottomDevH),
+                    ops, presenter);
+
+            if (bottomChromeRightTree is not null)
+                compositor.AppendSurfaceOps(
+                    bottomChromeRightTree,
+                    new LayoutRect(0, 0, rightCss, bottomChromeCss),
+                    scale, destOriginXDevice: leftDevW + leftDev, destOriginYDevice: bottomDevY,
+                    regionClipDevice: new LayoutRect(leftDevW + leftDev, bottomDevY, rightDev, bottomDevH),
+                    ops, presenter);
+        }
 
         // Screen overlay: whole window, no scroll, on top of everything.
         if (screenOverlayTree is not null)

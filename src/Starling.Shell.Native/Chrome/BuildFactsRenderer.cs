@@ -1,44 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System.Reflection;
-using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Web;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Starling.Shell.Native;
 
 internal static class BuildFactsRenderer
 {
-    private static readonly Lazy<ServiceProvider> Services = new(CreateServices);
-
     public static string Render(string jsEngine, string renderBackend, string labelColor, string valueColor)
     {
-        using var renderer = new HtmlRenderer(
-            Services.Value,
-            Services.Value.GetRequiredService<ILoggerFactory>());
-
-        var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
-        {
-            ["Commit"] = BuildLabel(),
-            ["JsEngine"] = jsEngine,
-            ["RenderBackend"] = renderBackend,
-            ["LabelColor"] = labelColor,
-            ["ValueColor"] = valueColor,
-        });
-
-        return renderer.Dispatcher.InvokeAsync(async () =>
-        {
-            var root = await renderer.RenderComponentAsync<BuildFacts>(parameters);
-            return root.ToHtmlString();
-        }).GetAwaiter().GetResult();
-    }
-
-    private static ServiceProvider CreateServices()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        return services.BuildServiceProvider();
+        var commit = ValueOrFallback(BuildLabel());
+        var js = ValueOrFallback(jsEngine);
+        var render = ValueOrFallback(renderBackend);
+        return
+            "<div style=\"position:relative;width:196px;height:68px;" +
+            $"color:{EscapeHtml(labelColor)};font-size:11px;line-height:14px\">" +
+            $"<div style=\"position:absolute;left:0;top:0;width:196px;color:{EscapeHtml(valueColor)};" +
+            "font-family:'Geist Mono','SFMono-Regular',Menlo,Consolas,monospace\">native shell</div>" +
+            "<div style=\"position:absolute;left:0;top:20px;width:54px\">commit</div>" +
+            $"<div style=\"position:absolute;right:0;top:20px;width:130px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:{EscapeHtml(valueColor)};" +
+            $"font-family:'Geist Mono','SFMono-Regular',Menlo,Consolas,monospace\">{EscapeHtml(commit)}</div>" +
+            "<div style=\"position:absolute;left:0;top:36px;width:54px\">js</div>" +
+            $"<div style=\"position:absolute;right:0;top:36px;width:130px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:{EscapeHtml(valueColor)};" +
+            $"font-family:'Geist Mono','SFMono-Regular',Menlo,Consolas,monospace\">{EscapeHtml(js)}</div>" +
+            "<div style=\"position:absolute;left:0;top:52px;width:54px\">render</div>" +
+            $"<div style=\"position:absolute;right:0;top:52px;width:130px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:{EscapeHtml(valueColor)};" +
+            $"font-family:'Geist Mono','SFMono-Regular',Menlo,Consolas,monospace\">{EscapeHtml(render)}</div>" +
+            "</div>";
     }
 
     private static string BuildLabel()
@@ -51,4 +38,13 @@ internal static class BuildFactsRenderer
         if (plus >= 0) info = info[(plus + 1)..];
         return info.Length > 8 ? info[..8] : info;
     }
+
+    private static string ValueOrFallback(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value;
+
+    private static string EscapeHtml(string value) => value
+        .Replace("&", "&amp;", StringComparison.Ordinal)
+        .Replace("<", "&lt;", StringComparison.Ordinal)
+        .Replace(">", "&gt;", StringComparison.Ordinal)
+        .Replace("\"", "&quot;", StringComparison.Ordinal);
 }

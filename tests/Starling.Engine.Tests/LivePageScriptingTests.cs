@@ -76,7 +76,7 @@ public sealed class LivePageScriptingTests
                 ]);
                 WebAssembly.instantiate(bytes).then(function (result) {
                   document.getElementById('wasm-state').textContent =
-                    'DotWasm add(19, 23) = ' + result.instance.exports.add(19, 23);
+                    'Wasmtime add(19, 23) = ' + result.instance.exports.add(19, 23);
                 });
               </script>
             </body></html>
