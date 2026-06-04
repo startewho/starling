@@ -2554,6 +2554,10 @@ public static class NodeBindings
     private static bool IsNameStart(char c) => c >= 0x80 || char.IsAsciiLetter(c) || c == '_' || c == ':';
     private static bool IsNameChar(char c) =>
         IsNameStart(c) || char.IsAsciiDigit(c) || c is '-' or '.' or '·'
+        // Browsers also accept these two ASCII punctuation marks mid-name
+        // (e.g. "f}oo", "f<oo" parse as valid element names), so the WPT
+        // name-validity cases expect them allowed as a continuation char.
+        || c is '}' or '<'
         // XML NameChar also allows combining marks (e.g. U+0BC6) and non-ASCII
         // digits, which browsers accept in element names.
         || char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.NonSpacingMark
@@ -2583,12 +2587,26 @@ public static class NodeBindings
     private static bool IsValidQName(string qname, out string? prefix)
     {
         prefix = null;
-        if (!IsValidName(qname)) return false;
+        if (string.IsNullOrEmpty(qname)) return false;
         var colon = qname.IndexOf(':', StringComparison.Ordinal);
-        if (colon < 0) return true;       // unprefixed
+        if (colon < 0)
+            return IsValidName(qname);    // unprefixed — must be a full NCName (NameStart first)
         // An empty prefix (":local") or empty local part ("prefix:") is invalid.
         if (colon == 0 || colon == qname.Length - 1) return false;
-        prefix = qname[..colon];          // everything before the FIRST colon
+        // Match browser leniency exactly (see the WPT name-validity cases): the
+        // prefix is an Nmtoken — every char is a NameChar but a leading digit is
+        // tolerated ("0:a" is valid) — while the local part must be a real NCName
+        // whose first char is a NameStartChar ("a:0" is invalid). A colon inside
+        // the local part is left to the namespace check ("f:o:o" → NamespaceError),
+        // so the local is validated as NameStart followed by NameChars.
+        var prefixPart = qname[..colon];
+        var localPart = qname[(colon + 1)..];
+        foreach (var c in prefixPart)
+            if (!IsNameChar(c)) return false;
+        if (!IsNameStart(localPart[0])) return false;
+        for (var i = 1; i < localPart.Length; i++)
+            if (!IsNameChar(localPart[i])) return false;
+        prefix = prefixPart;              // everything before the FIRST colon
         return true;
     }
 
