@@ -48,7 +48,15 @@ internal sealed class HtmlCollectionObject : JsObject
         index = 0;
         if (name.Length == 0) return false;
         if (name.Length > 1 && name[0] == '0') return false;
-        return int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out index);
+        if (!ulong.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var v))
+            return false;
+        // WebIDL "array index": an integer in [0, 2^32-2]. 2^32-1 (4294967295)
+        // and above are NOT array indices — they fall through to named-property
+        // lookup. A value beyond int range is a valid index but always past the
+        // end of any real collection, so clamp it to int.MaxValue (=> undefined).
+        if (v > 4294967294UL) return false;
+        index = v > int.MaxValue ? int.MaxValue : (int)v;
+        return true;
     }
 
     private Element? NamedItem(string name)
@@ -153,5 +161,36 @@ internal sealed class HtmlCollectionObject : JsObject
             foreach (var s in SymbolKeys)
                 yield return JsPropertyKey.Symbol(s);
         }
+    }
+
+    // Legacy platform object: no indexed or named property setter, so a plain
+    // assignment to an array index or a supported named property is ignored
+    // (in loose mode; strict-mode throwing is handled by the VM's set path).
+    // Any other key is an ordinary expando.
+    public override void Set(string name, JsValue value)
+    {
+        if (TryIndex(name, out _)) return;
+        if (!base.HasOwn(name) && NamedItem(name) is not null) return;
+        base.Set(name, value);
+    }
+
+    // Legacy platform object [[Delete]] (WebIDL): an indexed property is never
+    // deletable, and HTMLCollection (no [LegacyOverrideBuiltins]) also refuses to
+    // delete a supported named property. Expando keys delete normally.
+    public override bool Delete(string name)
+    {
+        if (TryIndex(name, out _)) return false;
+        if (!base.HasOwn(name) && NamedItem(name) is not null) return false;
+        return base.Delete(name);
+    }
+
+    // Legacy platform object [[DefineOwnProperty]] (WebIDL): HTMLCollection has no
+    // indexed or named property setter, so defining over an array index, or over a
+    // supported named property, fails; any other key is an ordinary expando.
+    public override bool DefineOwnProperty(string name, PropertyDescriptor desc)
+    {
+        if (TryIndex(name, out _)) return false;
+        if (!base.HasOwn(name) && NamedItem(name) is not null) return false;
+        return base.DefineOwnProperty(name, desc);
     }
 }
