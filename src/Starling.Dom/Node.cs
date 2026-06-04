@@ -119,9 +119,15 @@ public abstract class Node : EventTarget
         OnTreeMutated(affectsLayout: childAffectsLayout);
         if (childAffectsLayout)
             (OwnerDocument ?? this as Document)?.RecordLayoutMutation(this, LayoutChangeKind.ChildInserted);
-        NotifyConnected(child);
+        // Capture sibling positions and queue the childList MutationRecord BEFORE
+        // NotifyConnected. NotifyConnected can run host hooks (e.g. execute an
+        // injected <script>) that re-enter and mutate the tree, which would leave
+        // child.PreviousSibling/NextSibling stale by the time the record is built.
+        var insertedPrev = child.PreviousSibling;
+        var insertedNext = child.NextSibling;
         (OwnerDocument ?? this as Document)?.ChildListMutated?.Invoke(
-            this, child, null, child.PreviousSibling, child.NextSibling);
+            this, child, null, insertedPrev, insertedNext);
+        NotifyConnected(child);
         return child;
     }
 

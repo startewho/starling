@@ -19,32 +19,37 @@ internal sealed class DomTokenListObject : JsObject
         _list = list;
     }
 
-    private static bool TryIndex(string name, out int index)
+    // WebIDL "array index": a canonical numeric string in the range
+    // [0, 2^32-2]. uint covers the full range (2^32-1 is reserved and not a
+    // valid array index), so parse as uint rather than int — otherwise valid
+    // large keys like "4294967294" would be mis-treated as ordinary properties.
+    private static bool TryIndex(string name, out uint index)
     {
         index = 0;
         if (name.Length == 0) return false;
         if (name.Length > 1 && name[0] == '0') return false;
-        return int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out index);
+        return uint.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out index)
+            && index != uint.MaxValue;
     }
 
     public override JsValue Get(string name)
     {
         if (TryIndex(name, out var i))
-            return i < _list.Count ? JsValue.String(_list[i]) : JsValue.Undefined;
+            return i < (uint)_list.Count ? JsValue.String(_list[(int)i]) : JsValue.Undefined;
         return base.Get(name);
     }
 
     public override bool HasOwn(string name)
     {
-        if (TryIndex(name, out var i)) return i < _list.Count;
+        if (TryIndex(name, out var i)) return i < (uint)_list.Count;
         return base.HasOwn(name);
     }
 
     public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
     {
         if (TryIndex(name, out var i))
-            return i < _list.Count
-                ? PropertyDescriptor.Data(JsValue.String(_list[i]), writable: false, enumerable: true, configurable: true)
+            return i < (uint)_list.Count
+                ? PropertyDescriptor.Data(JsValue.String(_list[(int)i]), writable: false, enumerable: true, configurable: true)
                 : null;
         return base.GetOwnPropertyDescriptor(name);
     }
