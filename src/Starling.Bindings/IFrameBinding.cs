@@ -388,10 +388,83 @@ public static class IFrameBinding
     /// We don't have an XML parser yet; fall back to the HTML parser, then
     /// flip the document's <see cref="Document.IsHtml"/> off so attribute
     /// case behaviour matches the WHATWG XML branch.</summary>
+    /// <summary>Parse an XML/XHTML document into a Starling DOM tree using the
+    /// .NET XML reader (namespace-aware, case-preserving). A well-formedness error
+    /// produces a &lt;parsererror&gt; document, matching browsers.</summary>
     private static Document ParseXmlIntoDocument(string body)
     {
-        var doc = HtmlParser.Parse(body, null, scriptingEnabled: false);
-        doc.IsHtml = false;
+        var doc = new Document { IsHtml = false };
+        try
+        {
+            var settings = new System.Xml.XmlReaderSettings
+            {
+                DtdProcessing = System.Xml.DtdProcessing.Parse,
+                ValidationType = System.Xml.ValidationType.None,
+                IgnoreWhitespace = false,
+                IgnoreComments = false,
+                IgnoreProcessingInstructions = false,
+                CheckCharacters = false,
+                XmlResolver = null, // never fetch external DTDs
+            };
+            using var sr = new System.IO.StringReader(body);
+            using var reader = System.Xml.XmlReader.Create(sr, settings);
+            Node current = doc;
+            var stack = new Stack<Node>();
+            while (reader.Read())
+            {
+                switch (reader.NodeType)
+                {
+                    case System.Xml.XmlNodeType.Element:
+                    {
+                        var qname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
+                        var ns = string.IsNullOrEmpty(reader.NamespaceURI) ? null : reader.NamespaceURI;
+                        var el = doc.CreateElementNS(ns, qname);
+                        var empty = reader.IsEmptyElement;
+                        if (reader.HasAttributes)
+                        {
+                            for (var i = 0; i < reader.AttributeCount; i++)
+                            {
+                                reader.MoveToAttribute(i);
+                                var aname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
+                                el.SetAttribute(aname, reader.Value);
+                            }
+                            reader.MoveToElement();
+                        }
+                        current.AppendChild(el);
+                        if (!empty) { stack.Push(current); current = el; }
+                        break;
+                    }
+                    case System.Xml.XmlNodeType.EndElement:
+                        if (stack.Count > 0) current = stack.Pop();
+                        break;
+                    case System.Xml.XmlNodeType.Text:
+                    case System.Xml.XmlNodeType.Whitespace:
+                    case System.Xml.XmlNodeType.SignificantWhitespace:
+                        current.AppendChild(doc.CreateTextNode(reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.CDATA:
+                        current.AppendChild(doc.CreateCDataSection(reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.Comment:
+                        current.AppendChild(doc.CreateComment(reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.ProcessingInstruction:
+                        current.AppendChild(doc.CreateProcessingInstruction(reader.Name, reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.DocumentType:
+                        doc.AppendChild(doc.CreateDocumentType(reader.Name,
+                            reader.GetAttribute("PUBLIC") ?? "", reader.GetAttribute("SYSTEM") ?? ""));
+                        break;
+                }
+            }
+        }
+        catch (System.Xml.XmlException)
+        {
+            // Not well-formed: browsers replace the document with a parsererror tree.
+            while (doc.FirstChild is { } c) c.RemoveFromParent();
+            doc.AppendChild(doc.CreateElementNS(
+                "http://www.mozilla.org/newlayout/xml/parsererror.xml", "parsererror"));
+        }
         return doc;
     }
 }
