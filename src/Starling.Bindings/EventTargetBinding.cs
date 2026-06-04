@@ -666,16 +666,47 @@ public static class EventTargetBinding
         }
         catch (JsThrow jt)
         {
-            realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {JsValue.ToStringValue(jt.Value)}");
+            ReportListenerError(realm, JsValue.ToStringValue(jt.Value), jt.Value);
         }
         catch (Exception ex)
         {
-            realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {ex.Message}");
+            ReportListenerError(realm, ex.Message, JsValue.Undefined);
         }
         finally
         {
             slot.Value = prevEvent;
         }
+    }
+
+    /// <summary>Report an uncaught error thrown by a JS event listener. HTML
+    /// "report the exception": invoke the legacy <c>window.onerror</c> handler
+    /// (message, source, lineno, colno, error) if one is installed, then always
+    /// echo to the console. The boolean result of onerror (which can cancel) is
+    /// ignored here since there is no default error UI to suppress.</summary>
+    private static void ReportListenerError(JsRealm realm, string message, JsValue error)
+    {
+        var legacyMessage = "Uncaught " + message;
+        try
+        {
+            var onerror = realm.GlobalObject.Get("onerror");
+            if (AbstractOperations.IsCallable(onerror))
+            {
+                var vm = realm.ActiveVm ?? new JsVm(GetRuntimeForRealm(realm));
+                AbstractOperations.Call(vm, onerror, JsValue.Object(realm.GlobalObject), new[]
+                {
+                    JsValue.String(legacyMessage),
+                    JsValue.String(""),       // source URL — not tracked here
+                    JsValue.Number(0),        // lineno
+                    JsValue.Number(0),        // colno
+                    error,                    // the thrown value (undefined for host errors)
+                });
+            }
+        }
+        catch
+        {
+            // An error inside onerror itself must not escape the dispatch loop.
+        }
+        realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {message}");
     }
 
     /// <summary>Resolve the runtime that owns the given realm. <see cref="JsRuntime"/>
