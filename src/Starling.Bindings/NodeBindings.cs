@@ -1800,7 +1800,11 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, impl, "createDocument", (_, args) =>
         {
             var ns = args.Length > 0 && !args[0].IsNullish ? JsValue.ToStringValue(args[0]) : null;
-            var qname = args.Length > 1 && !args[1].IsNullish ? JsValue.ToStringValue(args[1]) : "";
+            // qualifiedName is [LegacyNullToEmptyString] DOMString: only an actual
+            // null maps to "", while undefined (and an omitted argument) stringify
+            // to "undefined" and therefore produce a <undefined> root element.
+            var qnameVal = args.Length > 1 ? args[1] : JsValue.Undefined;
+            var qname = qnameVal.IsNull ? "" : JsValue.ToStringValue(qnameVal);
             // DOM §4.5.1 — validate the qualified name (InvalidCharacterError /
             // NamespaceError) before building anything.
             if (qname.Length != 0)
@@ -2539,7 +2543,12 @@ public static class NodeBindings
         return DomExceptionBinding.Throw(realm, "HierarchyRequestError", msg);
     }
 
-    private static bool IsNameStart(char c) => char.IsLetter(c) || c == '_' || c == ':';
+    // Browsers (and the WPT name-validity tests) accept any non-ASCII code point
+    // anywhere in an element/attribute name — including code points outside the
+    // strict XML NameStartChar ranges (U+037E, U+FFFF, lone combining marks as a
+    // local-name start). Only ASCII is checked against the Name production; every
+    // code point >= U+0080 is permitted as both a start and a continuation char.
+    private static bool IsNameStart(char c) => c >= 0x80 || char.IsAsciiLetter(c) || c == '_' || c == ':';
     private static bool IsNameChar(char c) =>
         IsNameStart(c) || char.IsAsciiDigit(c) || c is '-' or '.' or '·'
         // XML NameChar also allows combining marks (e.g. U+0BC6) and non-ASCII
