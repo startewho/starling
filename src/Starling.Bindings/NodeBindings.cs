@@ -512,7 +512,14 @@ public static class NodeBindings
         realm.ElementPrototype = elProto;
 
         EventTargetBinding.DefineAccessor(realm, elProto, "tagName",
-            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.TagName.ToUpperInvariant()) : JsValue.String(""));
+            (thisV, _) =>
+            {
+                if (DomWrappers.UnwrapElement(thisV) is not { } e) return JsValue.String("");
+                // DOM §4.9 — tagName is ASCII-uppercased only for HTML-namespace
+                // elements in an HTML document. SVG/MathML/other namespaces keep
+                // their original case.
+                return JsValue.String(e.Namespace == Element.HtmlNamespace ? e.TagName.ToUpperInvariant() : e.TagName);
+            });
         EventTargetBinding.DefineAccessor(realm, elProto, "localName",
             (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.LocalName) : JsValue.String(""));
         // DOM §4.9 — Element.prefix is the namespace prefix or null; namespaceURI
@@ -1511,7 +1518,11 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, docProto, "getElementById", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return JsValue.Null;
-            return d.GetElementById(JsValue.ToStringValue(args[0])) is { } e
+            var id = JsValue.ToStringValue(args[0]);
+            // The empty string never matches an id (elements with no id attribute
+            // would otherwise match spuriously).
+            if (id.Length == 0) return JsValue.Null;
+            return d.GetElementById(id) is { } e
                 ? JsValue.Object(DomWrappers.Wrap(realm, e)) : JsValue.Null;
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByTagName", (thisV, args) =>
