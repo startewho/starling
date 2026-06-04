@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Starling.Dom;
 using Starling.Html;
 using Starling.Html.TreeBuilder;
+using Starling.Js.Intrinsics;
 using Starling.Js.Runtime;
 
 namespace Starling.Bindings;
@@ -61,7 +62,6 @@ public static class NodeBindings
         InstallCharacterData(realm);  // WPT-03: CharacterData / Text / Comment / PI prototype hierarchy
         InstallElement(realm);
         InstallDocument(realm);
-        InstallCharacterDataInterfaces(realm);
     }
 
     // =====================================================================
@@ -511,6 +511,13 @@ public static class NodeBindings
             (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.TagName.ToUpperInvariant()) : JsValue.String(""));
         EventTargetBinding.DefineAccessor(realm, elProto, "localName",
             (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e ? JsValue.String(e.LocalName) : JsValue.String(""));
+        // DOM §4.9 — Element.prefix is the namespace prefix or null; namespaceURI
+        // is the element's namespace or null. The data is on the Element model;
+        // these accessors expose it (mirrors the Attr accessors below).
+        EventTargetBinding.DefineAccessor(realm, elProto, "prefix",
+            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { Prefix: { } p } ? JsValue.String(p) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, elProto, "namespaceURI",
+            (thisV, _) => DomWrappers.UnwrapElement(thisV) is { } e && !string.IsNullOrEmpty(e.Namespace) ? JsValue.String(e.Namespace) : JsValue.Null);
 
         // WPT-07: HTMLIFrameElement.contentDocument / contentWindow live on
         // ElementPrototype (same shape as HTMLInputElement.value, below) so
@@ -1275,8 +1282,51 @@ public static class NodeBindings
             PropertyDescriptor.Data(JsValue.Object(htmlElProto), writable: false, enumerable: false, configurable: false));
         htmlElProto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(htmlElCtor), writable: true, enumerable: false, configurable: true));
+        DefineHtmlElementHasInstance(realm, htmlElCtor);
         realm.GlobalObject.DefineOwnProperty("HTMLElement",
             PropertyDescriptor.Data(JsValue.Object(htmlElCtor), writable: true, enumerable: false, configurable: true));
+
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLButtonElement", "button");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLInputElement", "input");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOptionElement", "option");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSelectElement", "select");
+        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTextAreaElement", "textarea");
+    }
+
+    private static void InstallHtmlElementConstructor(
+        JsRealm realm,
+        JsObject htmlElementPrototype,
+        string interfaceName,
+        params string[] localNames)
+    {
+        var proto = new JsObject(htmlElementPrototype);
+        var ctor = new JsNativeFunction(realm, interfaceName, 0, (_, _) =>
+            throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
+        ctor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
+        proto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
+        DefineHtmlElementHasInstance(realm, ctor, localNames);
+        realm.GlobalObject.DefineOwnProperty(interfaceName,
+            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
+    }
+
+    private static void DefineHtmlElementHasInstance(JsRealm realm, JsObject ctor, params string[] localNames)
+    {
+        var hasInstance = new JsNativeFunction(realm, "Symbol.hasInstance", 1, (_, args) =>
+        {
+            var element = args.Length > 0 ? DomWrappers.UnwrapElement(args[0]) : null;
+            if (element is null) return JsValue.False;
+            if (localNames.Length == 0) return JsValue.True;
+            foreach (var localName in localNames)
+            {
+                if (StringComparer.OrdinalIgnoreCase.Equals(element.LocalName, localName))
+                    return JsValue.True;
+            }
+            return JsValue.False;
+        }, isConstructor: false);
+        ctor.DefineOwnProperty(SymbolCtor.HasInstance,
+            PropertyDescriptor.Data(JsValue.Object(hasInstance), writable: false, enumerable: false, configurable: true));
     }
 
     // =====================================================================
