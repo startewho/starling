@@ -45,6 +45,26 @@ public sealed class DomTokenList : IReadOnlyList<string>
         return true;
     }
 
+    /// <summary>DOM §7.1 replace: swap <paramref name="oldToken"/> for
+    /// <paramref name="newToken"/> in a single attribute write (one mutation),
+    /// returning false without writing when oldToken is absent.</summary>
+    public bool Replace(string oldToken, string newToken)
+    {
+        ValidateToken(oldToken);
+        ValidateToken(newToken);
+        var tokens = Tokens; // already an ordered set (deduplicated)
+        var idx = tokens.IndexOf(oldToken);
+        if (idx < 0) return false;
+        tokens[idx] = newToken;
+        // Re-dedupe in case newToken was already present elsewhere.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>(tokens.Count);
+        foreach (var t in tokens)
+            if (seen.Add(t)) result.Add(t);
+        _setValue(string.Join(' ', result));
+        return true;
+    }
+
     public IEnumerator<string> GetEnumerator() => Tokens.GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
