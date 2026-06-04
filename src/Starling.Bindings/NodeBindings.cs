@@ -1378,12 +1378,15 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "defaultView", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Null;
-            // Spec: createHTMLDocument / createDocument produce Documents without
-            // a defaultView. Only the realm's own document is associated with
-            // the window (the realm's global object).
-            if (!ReferenceEquals(DomWrappers.UnwrapDocument(realm.GlobalObject.Get("document")), d))
-                return JsValue.Null;
-            return JsValue.Object(realm.GlobalObject);
+            // The realm's own document is associated with the realm's global.
+            if (ReferenceEquals(DomWrappers.UnwrapDocument(realm.GlobalObject.Get("document")), d))
+                return JsValue.Object(realm.GlobalObject);
+            // An iframe's content document resolves to its contentWindow.
+            if (IFrameBinding.WindowForDocument(realm, d) is { } w)
+                return JsValue.Object(w);
+            // createHTMLDocument / createDocument produce documents with no
+            // browsing context, so their defaultView is null.
+            return JsValue.Null;
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "readyState", (thisV, _) =>
             JsValue.String("complete"));
