@@ -391,11 +391,31 @@ public static class EventTargetBinding
         switch ((interfaceName ?? "").ToLowerInvariant())
         {
             case "customevent":
-                return JsValue.Object(new JsCustomEventWrapper(realm.CustomEventPrototype!, new CustomEvent(""), JsValue.Null));
+            {
+                var ce = new CustomEvent("");
+                ce.MarkAsUninitialized();
+                return JsValue.Object(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null));
+            }
             case "event":
             case "events":
             case "htmlevents":
             case "svgevents":
+            // Interfaces in the legacy createEvent table that Starling has no
+            // dedicated subtype for yet map to a base Event. They are returned
+            // uninitialized, so dispatching one before initEvent() throws
+            // InvalidStateError per DOM §2.7.
+            case "beforeunloadevent":
+            case "compositionevent":
+            case "textevent":
+            case "hashchangeevent":
+            case "messageevent":
+            case "storageevent":
+            case "dragevent":
+            case "devicemotionevent":
+            case "deviceorientationevent":
+            case "touchevent":
+            case "wheelevent":
+            case "popstateevent":
                 return WrapUninitEvent(realm, new Event(""));
             case "uievent":
             case "uievents":
