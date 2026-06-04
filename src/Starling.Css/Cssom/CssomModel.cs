@@ -154,7 +154,27 @@ public sealed class CssomDeclarationBlock
     }
 
     private static string ComponentValuesToText(IReadOnlyList<CssComponentValue> values)
-        => string.Concat(values.Select(ComponentValueText));
+    {
+        // Top-level declaration values lose interior whitespace during parsing
+        // (the parser collapses whitespace for non-custom properties). Re-insert a
+        // single space between adjacent top-level component values so multi-token
+        // values such as `1px solid black` round-trip; Canonicalize then normalizes
+        // comma spacing. Whitespace inside functions/blocks is preserved verbatim.
+        var sb = new StringBuilder();
+        for (var i = 0; i < values.Count; i++)
+        {
+            var v = values[i];
+            if (v is CssTokenValue { Token.Type: Tokenizer.CssTokenType.Whitespace })
+            {
+                sb.Append(' ');
+                continue;
+            }
+            if (sb.Length > 0 && sb[^1] != ' ')
+                sb.Append(' ');
+            sb.Append(ComponentValueText(v));
+        }
+        return sb.ToString();
+    }
 
     private static string ComponentValueText(CssComponentValue value) => value switch
     {
