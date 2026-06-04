@@ -3135,10 +3135,8 @@ public static class NodeBindings
             var newToken = JsValue.ToStringValue(args[1]);
             ValidateDomToken(realm, oldToken);
             ValidateDomToken(realm, newToken);
-            if (!cl.Contains(oldToken)) return JsValue.False;
-            cl.Remove(oldToken);
-            cl.Add(newToken);
-            return JsValue.True;
+            // Single attribute write so replace() yields exactly one mutation.
+            return JsValue.Boolean(cl.Replace(oldToken, newToken));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, obj, "item", (_, args) =>
         {
