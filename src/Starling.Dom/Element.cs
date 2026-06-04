@@ -76,6 +76,18 @@ public class Element : Node
 
     public DomTokenList ClassList { get; }
 
+    /// <summary>A live <see cref="DomTokenList"/> over an arbitrary reflected
+    /// attribute (e.g. <c>rel</c> for <c>relList</c>, <c>sandbox</c>, <c>sizes</c>,
+    /// <c>for</c> for an output's <c>htmlFor</c>). Reads/writes the attribute, so
+    /// it stays in sync with direct attribute mutations.</summary>
+    public DomTokenList TokenListFor(string attributeName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(attributeName);
+        return new DomTokenList(
+            () => GetAttribute(attributeName) ?? string.Empty,
+            value => SetAttribute(attributeName, value));
+    }
+
     /// <summary>
     /// The live IDL value of a form control (<c>&lt;input&gt;</c> /
     /// <c>&lt;textarea&gt;</c>) — the text the user has typed or that a script
