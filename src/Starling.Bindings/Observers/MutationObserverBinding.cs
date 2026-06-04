@@ -64,6 +64,12 @@ public static class MutationObserverBinding
             foreach (var s in states) s.MaybeQueueAttribute(el, attrName, oldValue);
     }
 
+    private static void OnChildListChanged(Document doc, Node target, Node? added, Node? removed, Node? prev, Node? next)
+    {
+        if (DocStates.TryGetValue(doc, out var states))
+            foreach (var s in states) s.MaybeQueueChildList(target, added, removed, prev, next);
+    }
+
     public static void Install(JsRuntime runtime, Document document)
     {
         ArgumentNullException.ThrowIfNull(runtime);
@@ -72,6 +78,7 @@ public static class MutationObserverBinding
         // Subscribe the DOM attribute-mutation hook (idempotent — overwrites with
         // an equivalent closure when re-installed on the same document).
         document.AttributeMutated = (el, attr, old) => OnAttributeChanged(document, el, attr, old);
+        document.ChildListMutated = (t, a, r, p, n) => OnChildListChanged(document, t, a, r, p, n);
         if (realm.MutationObserverConstructor is not null) return; // idempotent
 
         var proto = new JsObject(realm.ObjectPrototype);
@@ -232,6 +239,41 @@ internal sealed class MutationObserverState
                 opts.AttributeOldValue ? oldValue : null));
             return; // at most one record per observer per mutation
         }
+    }
+
+    /// <summary>DOM §4.3.4 — queue a childList MutationRecord when an observation
+    /// with childList matches the mutated parent (target, or an ancestor with
+    /// subtree).</summary>
+    public void MaybeQueueChildList(Node target, Node? added, Node? removed, Node? prev, Node? next)
+    {
+        foreach (var (obsTarget, opts) in _observations)
+        {
+            if (!opts.ChildList) continue;
+            if (!Matches(obsTarget, target, opts.Subtree)) continue;
+            EnqueueRecord(BuildChildListRecord(_runtime.Realm, target, added, removed, prev, next));
+            return;
+        }
+    }
+
+    private static JsObject BuildChildListRecord(JsRealm realm, Node target, Node? added, Node? removed, Node? prev, Node? next)
+    {
+        JsValue NodeList(Node? n) => JsValue.Object(n is null
+            ? new JsArray(realm)
+            : new JsArray(realm, new[] { JsValue.Object(DomWrappers.Wrap(realm, n)) }));
+        JsValue OrNull(Node? n) => n is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, n));
+        var r = new JsObject(realm.MutationRecordPrototype ?? realm.ObjectPrototype);
+        void P(string k, JsValue v) => r.DefineOwnProperty(k,
+            PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: true));
+        P("type", JsValue.String("childList"));
+        P("target", JsValue.Object(DomWrappers.Wrap(realm, target)));
+        P("addedNodes", NodeList(added));
+        P("removedNodes", NodeList(removed));
+        P("previousSibling", OrNull(prev));
+        P("nextSibling", OrNull(next));
+        P("attributeName", JsValue.Null);
+        P("attributeNamespace", JsValue.Null);
+        P("oldValue", JsValue.Null);
+        return r;
     }
 
     private static bool Matches(Node target, Node el, bool subtree)

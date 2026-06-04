@@ -120,6 +120,8 @@ public abstract class Node : EventTarget
         if (childAffectsLayout)
             (OwnerDocument ?? this as Document)?.RecordLayoutMutation(this, LayoutChangeKind.ChildInserted);
         NotifyConnected(child);
+        (OwnerDocument ?? this as Document)?.ChildListMutated?.Invoke(
+            this, child, null, child.PreviousSibling, child.NextSibling);
         return child;
     }
 
@@ -177,6 +179,10 @@ public abstract class Node : EventTarget
         // node is unlinked (needs the old parent and old index).
         DomRange.OnNodeRemoved(this, parent, DomRange.IndexOf(this));
 
+        // Capture the old siblings for the childList MutationRecord before unlinking.
+        var oldPrev = PreviousSibling;
+        var oldNext = NextSibling;
+
         if (PreviousSibling is not null) PreviousSibling.NextSibling = NextSibling;
         else parent.FirstChild = NextSibling;
 
@@ -192,6 +198,8 @@ public abstract class Node : EventTarget
         parent.OnTreeMutated(affectsLayout: removedAffectsLayout);
         if (removedAffectsLayout)
             (parent.OwnerDocument ?? parent as Document)?.RecordLayoutMutation(parent, LayoutChangeKind.ChildRemoved);
+        (parent.OwnerDocument ?? parent as Document)?.ChildListMutated?.Invoke(
+            parent, null, this, oldPrev, oldNext);
     }
 
     public IEnumerable<Node> ChildNodes

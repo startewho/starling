@@ -239,6 +239,11 @@ public sealed class Document : Node
     /// to queue attribute MutationRecords. Null when no observer is installed.</summary>
     public Action<Element, string, string?>? AttributeMutated { get; set; }
 
+    /// <summary>Fired after a childList mutation: (target parent, addedNode,
+    /// removedNode, previousSibling, nextSibling) — one of added/removed is set.
+    /// Subscribed by MutationObserverBinding to queue childList MutationRecords.</summary>
+    public Action<Node, Node?, Node?, Node?, Node?>? ChildListMutated { get; set; }
+
     /// <summary>Raise <see cref="NodeConnected"/> for <paramref name="node"/>
     /// if a host has subscribed. Called from the tree-mutation path.</summary>
     internal void NotifyNodeConnected(Node node) => NodeConnected?.Invoke(node);
