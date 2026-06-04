@@ -119,11 +119,15 @@ public static class EventTargetBinding
                 return JsValue.Undefined;
             });
         // Legacy Event.initEvent (DOM §2.9) — used with document.createEvent.
+        // The `type` argument is mandatory per WebIDL: a missing first argument
+        // is a TypeError.
         DefineMethod(realm, evProto, "initEvent", (thisV, args) =>
         {
+            if (args.Length == 0)
+                throw new JsThrow(realm.NewTypeError("initEvent requires a type argument"));
             if (TryGetHostEvent(thisV, out var e))
                 e.InitEvent(
-                    args.Length > 0 ? JsValue.ToStringValue(args[0]) : "",
+                    JsValue.ToStringValue(args[0]),
                     args.Length > 1 && JsValue.ToBoolean(args[1]),
                     args.Length > 2 && JsValue.ToBoolean(args[2]));
             return JsValue.Undefined;
@@ -173,12 +177,15 @@ public static class EventTargetBinding
             return JsValue.Null;
         });
         // Legacy CustomEvent.initCustomEvent (DOM §2.3) — used with createEvent.
+        // The `type` argument is mandatory per WebIDL.
         DefineMethod(realm, customEvProto, "initCustomEvent", (thisV, args) =>
         {
+            if (args.Length == 0)
+                throw new JsThrow(realm.NewTypeError("initCustomEvent requires a type argument"));
             if (TryGetHostEvent(thisV, out var e))
             {
                 e.InitEvent(
-                    args.Length > 0 ? JsValue.ToStringValue(args[0]) : "",
+                    JsValue.ToStringValue(args[0]),
                     args.Length > 1 && JsValue.ToBoolean(args[1]),
                     args.Length > 2 && JsValue.ToBoolean(args[2]));
                 if (thisV.AsObject is JsCustomEventWrapper cw)
@@ -469,8 +476,9 @@ public static class EventTargetBinding
     private static JsValue AddListener(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var host = ResolveHost(thisV);
+        // DOM §2.7: the listener may be a callable (a function) OR any object with
+        // a callable `handleEvent` method. A non-object (e.g. null) is ignored.
         if (host is null || args.Length < 2 || !args[1].IsObject) return JsValue.Undefined;
-        if (!AbstractOperations.IsCallable(args[1])) return JsValue.Undefined;
         var type = JsValue.ToStringValue(args[0]);
         var (capture, once, passive) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
         var listenerObj = args[1].AsObject;
@@ -559,11 +567,25 @@ public static class EventTargetBinding
         try
         {
             var vm = realm.ActiveVm ?? new JsVm(GetRuntimeForRealm(realm));
-            JsValue thisVal = ev.CurrentTarget is null
-                ? JsValue.Undefined
-                : JsValue.Object(DomWrappers.Wrap(realm, ev.CurrentTarget));
             var jsEvent = JsValue.Object(WrapHostEvent(realm, ev));
-            AbstractOperations.Call(vm, JsValue.Object(listener), thisVal, new[] { jsEvent });
+
+            // DOM §2.7 invoke: if the listener is callable, call it with `this`
+            // set to the current target. Otherwise it must be an object with a
+            // `handleEvent` method, which is re-fetched on every dispatch and
+            // called with `this` set to the listener object itself.
+            if (AbstractOperations.IsCallable(JsValue.Object(listener)))
+            {
+                JsValue thisVal = ev.CurrentTarget is null
+                    ? JsValue.Undefined
+                    : JsValue.Object(DomWrappers.Wrap(realm, ev.CurrentTarget));
+                AbstractOperations.Call(vm, JsValue.Object(listener), thisVal, new[] { jsEvent });
+            }
+            else
+            {
+                var handle = listener.Get("handleEvent");
+                if (AbstractOperations.IsCallable(handle))
+                    AbstractOperations.Call(vm, handle, JsValue.Object(listener), new[] { jsEvent });
+            }
         }
         catch (JsThrow jt)
         {
