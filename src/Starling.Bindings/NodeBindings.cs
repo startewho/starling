@@ -635,10 +635,13 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, elProto, "children", (thisV, _) =>
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e) return MakeArray(realm, Array.Empty<JsValue>());
-            var items = new List<JsValue>();
-            for (var n = e.FirstChild; n is not null; n = n.NextSibling)
-                if (n is Element child) items.Add(JsValue.Object(DomWrappers.Wrap(realm, child)));
-            return MakeArray(realm, items);
+            return BuildHtmlCollection(realm, () =>
+            {
+                var list = new List<Element>();
+                for (var n = e.FirstChild; n is not null; n = n.NextSibling)
+                    if (n is Element child) list.Add(child);
+                return list;
+            });
         });
         EventTargetBinding.DefineAccessor(realm, elProto, "firstElementChild", (thisV, _) =>
         {
@@ -927,22 +930,28 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
             var name = JsValue.ToStringValue(args[0]);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
-            return MakeArray(realm, items);
+            return BuildHtmlCollection(realm, () =>
+            {
+                var list = new List<Element>();
+                foreach (var d in e.DescendantElements())
+                    if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                        list.Add(d);
+                return list;
+            });
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, elProto, "getElementsByClassName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
             var classes = JsValue.ToStringValue(args[0])
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (classes.Length > 0 && classes.All(d.ClassList.Contains))
-                    items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
-            return MakeArray(realm, items);
+            return BuildHtmlCollection(realm, () =>
+            {
+                var list = new List<Element>();
+                foreach (var d in e.DescendantElements())
+                    if (classes.Length > 0 && classes.All(d.ClassList.Contains))
+                        list.Add(d);
+                return list;
+            });
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, elProto, "remove", (thisV, _) =>
         {
@@ -1528,10 +1537,8 @@ public static class NodeBindings
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByTagName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByTagName(JsValue.ToStringValue(args[0])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
-            return MakeArray(realm, items);
+            var name = JsValue.ToStringValue(args[0]);
+            return BuildHtmlCollection(realm, () => d.GetElementsByTagName(name));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByTagNameNS", (thisV, args) =>
         {
@@ -1800,6 +1807,38 @@ public static class NodeBindings
         var arr = new JsArray(realm, items);
         return JsValue.Object(arr);
     }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JsRealm, JsObject> HtmlCollectionProtos = new();
+
+    private static JsObject HtmlCollectionProto(JsRealm realm)
+    {
+        if (HtmlCollectionProtos.TryGetValue(realm, out var proto)) return proto;
+        proto = new JsObject(realm.ObjectPrototype);
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("HTMLCollection"), writable: false, enumerable: false, configurable: true));
+        EventTargetBinding.DefineMethod(realm, proto, "item", (thisV, args) =>
+            thisV.IsObject && thisV.AsObject is HtmlCollectionObject c && args.Length > 0
+                ? c.Item((int)JsValue.ToNumber(args[0])) : JsValue.Null, length: 1);
+        EventTargetBinding.DefineMethod(realm, proto, "namedItem", (thisV, args) =>
+            thisV.IsObject && thisV.AsObject is HtmlCollectionObject c && args.Length > 0
+                ? c.NamedItemValue(JsValue.ToStringValue(args[0])) : JsValue.Null, length: 1);
+        JsValue Iterate(JsValue thisV, JsValue[] _)
+        {
+            if (thisV.IsObject && thisV.AsObject is HtmlCollectionObject c)
+                return Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                    realm, MakeArray(realm, c.Values().ToList()), Starling.Js.Intrinsics.ArrayIteratorKind.Value);
+            return JsValue.Undefined;
+        }
+        EventTargetBinding.DefineMethod(realm, proto, "values", Iterate, length: 0);
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
+            PropertyDescriptor.Data(proto.Get("values"), writable: true, enumerable: false, configurable: true));
+        HtmlCollectionProtos.Add(realm, proto);
+        return proto;
+    }
+
+    /// <summary>A live HTMLCollection over the elements yielded by <paramref name="source"/>.</summary>
+    private static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
+        => JsValue.Object(new HtmlCollectionObject(realm, HtmlCollectionProto(realm), source));
 
     private static void InstallFormControlAccessors(JsRealm realm, JsObject proto)
     {
