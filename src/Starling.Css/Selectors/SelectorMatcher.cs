@@ -578,6 +578,12 @@ public static class SelectorMatcher
 
     private static int ElementIndex(Element element, bool ofType, bool fromEnd)
     {
+        // A parent-less element is its own only child (Selectors 4 §child-index): it is the
+        // first/last/only child, so child-indexed pseudos count it at index 1. WPT
+        // child-indexed-pseudo-class.html asserts a detached div matches :nth-child(1)/:nth-child(n).
+        if (element.ParentNode is null)
+            return 1;
+
         var siblings = fromEnd ? ElementSiblingsFromEnd(element) : ElementSiblingsFromStart(element);
         var index = 0;
         foreach (var sibling in siblings)
