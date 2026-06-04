@@ -2519,7 +2519,14 @@ public static class NodeBindings
     }
 
     private static bool IsNameStart(char c) => char.IsLetter(c) || c == '_' || c == ':';
-    private static bool IsNameChar(char c) => IsNameStart(c) || char.IsAsciiDigit(c) || c == '-' || c == '.';
+    private static bool IsNameChar(char c) =>
+        IsNameStart(c) || char.IsAsciiDigit(c) || c is '-' or '.' or '·'
+        // XML NameChar also allows combining marks (e.g. U+0BC6) and non-ASCII
+        // digits, which browsers accept in element names.
+        || char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.NonSpacingMark
+            or System.Globalization.UnicodeCategory.SpacingCombiningMark
+            or System.Globalization.UnicodeCategory.EnclosingMark
+            or System.Globalization.UnicodeCategory.DecimalDigitNumber;
 
     private static bool IsValidName(string name)
     {
