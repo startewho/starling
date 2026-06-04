@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Js.Runtime;
 
@@ -27,6 +28,14 @@ public static class EventTargetBinding
     private static readonly ConditionalWeakTable<EventTarget, ListenerRegistry> Registries = new();
     // Per-realm legacy `window.event` slot: the event currently being dispatched.
     private static readonly ConditionalWeakTable<JsRealm, MutableJsValueSlot> CurrentEvent = new();
+    // Host EventTargets that are the realm's Window object — needed to compute the
+    // DOM "default passive value" (touch/wheel listeners on window/document/root/body).
+    private static readonly ConditionalWeakTable<EventTarget, object> WindowTargets = new();
+
+    /// <summary>Mark a host <see cref="EventTarget"/> as the realm's Window object,
+    /// so the default-passive-value computation can recognize it.</summary>
+    public static void MarkWindowTarget(EventTarget host) => WindowTargets.AddOrUpdate(host, BoxedTrue);
+    private static readonly object BoxedTrue = new();
 
     /// <summary>The legacy <c>window.event</c> value for this realm — the event
     /// being dispatched right now, or undefined when no dispatch is active.</summary>
@@ -487,7 +496,8 @@ public static class EventTargetBinding
         // a callable `handleEvent` method. A non-object (e.g. null) is ignored.
         if (host is null || args.Length < 2 || !args[1].IsObject) return JsValue.Undefined;
         var type = JsValue.ToStringValue(args[0]);
-        var (capture, once, passive) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        var (capture, once, passiveOpt) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        var passive = passiveOpt ?? DefaultPassiveValue(host, type);
         var listenerObj = args[1].AsObject;
 
         var registry = Registries.GetValue(host, _ => new ListenerRegistry());
@@ -672,19 +682,40 @@ public static class EventTargetBinding
     private static JsValue HostEventOr(JsValue thisV, Func<Event, JsValue> read, JsValue fallback)
         => TryGetHostEvent(thisV, out var e) ? read(e) : fallback;
 
-    private static (bool capture, bool once, bool passive) ParseListenerOptions(JsValue opt)
+    // passive is null when the `passive` member was omitted/undefined, so the
+    // caller can substitute the DOM default-passive value.
+    private static (bool capture, bool once, bool? passive) ParseListenerOptions(JsValue opt)
     {
-        if (opt.IsUndefined || opt.IsNull) return (false, false, false);
-        if (opt.IsBoolean) return (opt.AsBool, false, false);
+        if (opt.IsUndefined || opt.IsNull) return (false, false, null);
+        if (opt.IsBoolean) return (opt.AsBool, false, null);
         if (opt.IsObject)
         {
             var o = opt.AsObject;
+            var passiveVal = o.Get("passive");
             return (
                 JsValue.ToBoolean(o.Get("capture")),
                 JsValue.ToBoolean(o.Get("once")),
-                JsValue.ToBoolean(o.Get("passive")));
+                passiveVal.IsUndefined ? null : JsValue.ToBoolean(passiveVal));
         }
-        return (false, false, false);
+        return (false, false, null);
+    }
+
+    /// <summary>DOM "default passive value": touch/wheel listeners on the Window,
+    /// the Document, the document element, or the body element are passive by
+    /// default. Everything else defaults to non-passive.</summary>
+    private static bool DefaultPassiveValue(EventTarget host, string type)
+    {
+        if (type is not ("touchstart" or "touchmove" or "wheel" or "mousewheel"))
+            return false;
+        if (WindowTargets.TryGetValue(host, out _)) return true;
+        if (host is Document) return true;
+        if (host is Node node)
+        {
+            var doc = node.OwnerDocument;
+            if (doc is not null && (ReferenceEquals(doc.DocumentElement, node) || ReferenceEquals(doc.Body, node)))
+                return true;
+        }
+        return false;
     }
 
     internal static void DefineMethod(JsRealm realm, JsObject target, string name,

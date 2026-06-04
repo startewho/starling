@@ -88,6 +88,9 @@ internal static class EventDispatcher
                 needsCompact = true;
             }
 
+            // DOM §2.9 inner invoke: set the in-passive-listener flag while a
+            // passive listener runs so its preventDefault() is a no-op.
+            @event.InPassiveListener = entry.Passive;
             try
             {
                 entry.Listener(@event);
@@ -95,6 +98,10 @@ internal static class EventDispatcher
             catch
             {
                 // Swallow listener exceptions per spec (browsers report to console, we drop on the floor in v1).
+            }
+            finally
+            {
+                @event.InPassiveListener = false;
             }
 
             if (@event.ImmediatePropagationStopped) break;

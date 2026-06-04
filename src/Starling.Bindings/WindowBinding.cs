@@ -84,6 +84,9 @@ public static class WindowBinding
         // is per-realm.
         var hostWindowTarget = new InMemoryEventTarget();
         EventTargetBinding.BindWrapper(global, hostWindowTarget);
+        // Mark this as the Window object so touch/wheel listeners on it pick up
+        // the DOM default-passive value.
+        EventTargetBinding.MarkWindowTarget(hostWindowTarget);
 
         // 3) Window-shaped own properties on the global.
         var docWrapper = DomWrappers.Wrap(realm, document);
