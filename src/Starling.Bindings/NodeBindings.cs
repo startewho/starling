@@ -2662,6 +2662,19 @@ public static class NodeBindings
         }
     }
 
+    /// <summary>DOM §7.1 token validation for DOMTokenList add/remove/toggle/replace:
+    /// an empty token throws SyntaxError, a token with ASCII whitespace throws
+    /// InvalidCharacterError.</summary>
+    private static void ValidateDomToken(JsRealm realm, string token)
+    {
+        if (token.Length == 0)
+            throw DomExceptionBinding.Throw(realm, "SyntaxError", "The token provided must not be empty.");
+        foreach (var c in token)
+            if (c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' ')
+                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError",
+                    "The token provided contains HTML space characters, which are not valid in tokens.");
+    }
+
     /// <summary>Build a DOMTokenList JS object wrapping the element's classList.
     /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
     /// forEach, keys, values, entries. Properties: length, value.</summary>
@@ -2669,6 +2682,10 @@ public static class NodeBindings
     {
         var obj = new JsObject(realm.ObjectPrototype);
         var cl = element.ClassList;
+
+        // Object.prototype.toString.call(classList) === "[object DOMTokenList]".
+        obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("DOMTokenList"), writable: false, enumerable: false, configurable: true));
 
         EventTargetBinding.DefineAccessor(realm, obj, "length",
             (_, _) => JsValue.Number(cl.Count));
@@ -2688,54 +2705,58 @@ public static class NodeBindings
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, obj, "add", (_, args) =>
         {
-            foreach (var arg in args)
+            // DOM §7.1 — validate every token first (empty -> SyntaxError,
+            // whitespace -> InvalidCharacterError), then add them all.
+            var tokens = new string[args.Length];
+            for (var i = 0; i < args.Length; i++)
             {
-                try { cl.Add(JsValue.ToStringValue(arg)); }
-                catch { /* invalid token — skip per spec */ }
+                tokens[i] = JsValue.ToStringValue(args[i]);
+                ValidateDomToken(realm, tokens[i]);
             }
+            foreach (var t in tokens) cl.Add(t);
             return JsValue.Undefined;
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, obj, "remove", (_, args) =>
         {
-            foreach (var arg in args)
+            var tokens = new string[args.Length];
+            for (var i = 0; i < args.Length; i++)
             {
-                try { cl.Remove(JsValue.ToStringValue(arg)); }
-                catch { /* invalid token — skip per spec */ }
+                tokens[i] = JsValue.ToStringValue(args[i]);
+                ValidateDomToken(realm, tokens[i]);
             }
+            foreach (var t in tokens) cl.Remove(t);
             return JsValue.Undefined;
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, obj, "toggle", (_, args) =>
         {
             if (args.Length == 0) return JsValue.False;
             var token = JsValue.ToStringValue(args[0]);
-            // Optional force arg (args[1]).
+            ValidateDomToken(realm, token);
             bool result;
             if (args.Length > 1 && !args[1].IsUndefined)
             {
                 var force = JsValue.ToBoolean(args[1]);
-                if (force) { try { cl.Add(token); } catch { } result = true; }
-                else { try { cl.Remove(token); } catch { } result = false; }
+                if (force) { cl.Add(token); result = true; }
+                else { cl.Remove(token); result = false; }
             }
             else
             {
-                if (cl.Contains(token)) { try { cl.Remove(token); } catch { } result = false; }
-                else { try { cl.Add(token); } catch { } result = true; }
+                if (cl.Contains(token)) { cl.Remove(token); result = false; }
+                else { cl.Add(token); result = true; }
             }
             return JsValue.Boolean(result);
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, obj, "replace", (_, args) =>
         {
-            if (args.Length < 2) return JsValue.False;
+            if (args.Length < 2) throw new JsThrow(realm.NewTypeError("replace requires 2 arguments"));
             var oldToken = JsValue.ToStringValue(args[0]);
             var newToken = JsValue.ToStringValue(args[1]);
-            try
-            {
-                if (!cl.Contains(oldToken)) return JsValue.False;
-                cl.Remove(oldToken);
-                cl.Add(newToken);
-                return JsValue.True;
-            }
-            catch { return JsValue.False; }
+            ValidateDomToken(realm, oldToken);
+            ValidateDomToken(realm, newToken);
+            if (!cl.Contains(oldToken)) return JsValue.False;
+            cl.Remove(oldToken);
+            cl.Add(newToken);
+            return JsValue.True;
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, obj, "item", (_, args) =>
         {
