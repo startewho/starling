@@ -1477,8 +1477,10 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "characterSet", (_, _) => JsValue.String("UTF-8"));
         EventTargetBinding.DefineAccessor(realm, docProto, "charset", (_, _) => JsValue.String("UTF-8"));
         EventTargetBinding.DefineAccessor(realm, docProto, "inputEncoding", (_, _) => JsValue.String("UTF-8"));
-        // DOM §4.5 — document.contentType ("text/html" for an HTML document).
-        EventTargetBinding.DefineAccessor(realm, docProto, "contentType", (_, _) => JsValue.String("text/html"));
+        // DOM §4.5 — document.contentType: "text/html" for an HTML document,
+        // "application/xml" for one made by createDocument / XML parsing.
+        EventTargetBinding.DefineAccessor(realm, docProto, "contentType", (thisV, _) =>
+            JsValue.String(DomWrappers.UnwrapDocument(thisV) is { IsHtml: false } ? "application/xml" : "text/html"));
         // DOM §4.4 — a Document node's textContent is null (overrides Node's
         // descendant-text concatenation); setting it is a no-op.
         EventTargetBinding.DefineAccessor(realm, docProto, "textContent",
@@ -1703,6 +1705,21 @@ public static class NodeBindings
         realm.DocumentConstructor = docCtor;
         realm.GlobalObject.DefineOwnProperty("Document",
             PropertyDescriptor.Data(JsValue.Object(docCtor), writable: true, enumerable: false, configurable: true));
+
+        // XMLDocument (DOM §4.5) — the interface of a document produced by
+        // createDocument / DOMParser XML parsing. Its prototype inherits from
+        // Document.prototype; a non-HTML Document wraps with it.
+        var xmlDocProto = new JsObject(docProto);
+        realm.XmlDocumentPrototype = xmlDocProto;
+        var xmlDocCtor = new JsNativeFunction(realm, "XMLDocument", 0, (_, _) =>
+            throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
+        xmlDocCtor.SetPrototypeOf(docCtor);
+        xmlDocCtor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(xmlDocProto), writable: false, enumerable: false, configurable: false));
+        xmlDocProto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(xmlDocCtor), writable: true, enumerable: false, configurable: true));
+        realm.GlobalObject.DefineOwnProperty("XMLDocument",
+            PropertyDescriptor.Data(JsValue.Object(xmlDocCtor), writable: true, enumerable: false, configurable: true));
         // HTMLDocument is an alias for Document (HTML §3.1).
         realm.GlobalObject.DefineOwnProperty("HTMLDocument",
             PropertyDescriptor.Data(JsValue.Object(docCtor), writable: true, enumerable: false, configurable: true));
