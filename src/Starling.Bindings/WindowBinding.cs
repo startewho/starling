@@ -84,6 +84,9 @@ public static class WindowBinding
         // is per-realm.
         var hostWindowTarget = new InMemoryEventTarget();
         EventTargetBinding.BindWrapper(global, hostWindowTarget);
+        // Mark this as the Window object so touch/wheel listeners on it pick up
+        // the DOM default-passive value.
+        EventTargetBinding.MarkWindowTarget(hostWindowTarget);
 
         // 3) Window-shaped own properties on the global.
         var docWrapper = DomWrappers.Wrap(realm, document);
@@ -117,6 +120,10 @@ public static class WindowBinding
         // workaround for the gap:opcode-fast-path-bypasses-accessors bug).
         // Cross-document navigation is outside this binding. Same-document
         // updates go through HistoryBinding and may dispatch hashchange.
+        // Legacy `window.event` (HTML §window.event): the event currently being
+        // dispatched, or undefined when no dispatch is active.
+        EventTargetBinding.DefineAccessor(realm, global, "event",
+            (_, _) => EventTargetBinding.GetCurrentEvent(realm));
         EventTargetBinding.DefineAccessor(realm, global, "location",
             (_, _) => JsValue.Object(LocationObjectFor(realm, document)),
             (_, args) =>

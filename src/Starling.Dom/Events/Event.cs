@@ -59,6 +59,10 @@ public class Event
     internal bool ImmediatePropagationStopped { get; private set; }
     internal bool DispatchFlag { get; set; }
 
+    /// <summary>DOM §2.9 "in passive listener flag": set while a passive listener's
+    /// callback runs so that <see cref="PreventDefault"/> becomes a no-op.</summary>
+    internal bool InPassiveListener { get; set; }
+
     /// <summary>Public accessor for the dispatch flag — used by JS bindings
     /// to check whether this event is already being dispatched before calling
     /// <c>EventTarget.DispatchEvent</c> (which would throw internally).</summary>
@@ -79,8 +83,18 @@ public class Event
 
     public void PreventDefault()
     {
-        if (Cancelable)
+        // DOM §2.9: preventDefault is a no-op inside a passive listener.
+        if (Cancelable && !InPassiveListener)
             DefaultPrevented = true;
+    }
+
+    /// <summary>DOM §2.9 dispatch step: after dispatch, unset the stop-propagation
+    /// and stop-immediate-propagation flags so the same instance can be dispatched
+    /// again. The canceled flag (defaultPrevented) is intentionally preserved.</summary>
+    internal void ClearPropagationFlags()
+    {
+        PropagationStopped = false;
+        ImmediatePropagationStopped = false;
     }
 
     /// <summary>Reset transient flags so the same instance can be re-dispatched (test-only path).</summary>
