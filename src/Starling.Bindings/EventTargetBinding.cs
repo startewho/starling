@@ -434,7 +434,11 @@ public static class EventTargetBinding
         switch ((interfaceName ?? "").ToLowerInvariant())
         {
             case "customevent":
-                return JsValue.Object(new JsCustomEventWrapper(realm.CustomEventPrototype!, new CustomEvent(""), JsValue.Null));
+            {
+                var ce = new CustomEvent("");
+                ce.MarkAsUninitialized();
+                return JsValue.Object(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null));
+            }
             case "event":
             case "events":
             case "htmlevents":
@@ -451,8 +455,26 @@ public static class EventTargetBinding
                 return WrapUninitEvent(realm, new KeyboardEvent(""));
             case "focusevent":
                 return WrapUninitEvent(realm, new FocusEvent(""));
+            // Remaining legacy createEvent interfaces (DOM §createEvent). Starling
+            // has no dedicated host subtype for these, so they map to a plain
+            // uninitialized Event — enough for init + dispatch (the only observable
+            // legacy path). The event is uninitialized so dispatch before initEvent
+            // throws InvalidStateError, per spec.
+            case "beforeunloadevent":
+            case "compositionevent":
+            case "devicemotionevent":
+            case "deviceorientationevent":
+            case "dragevent":
+            case "hashchangeevent":
+            case "messageevent":
+            case "storageevent":
+            case "textevent":
+            case "wheelevent":
+            case "touchevent":
+                return WrapUninitEvent(realm, new Event(""));
             default:
-                throw new JsThrow(realm.NewTypeError($"createEvent: unsupported interface '{interfaceName}'"));
+                throw DomExceptionBinding.Throw(realm, "NotSupportedError",
+                    $"createEvent: unsupported interface '{interfaceName}'");
         }
     }
 
