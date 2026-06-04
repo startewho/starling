@@ -863,10 +863,8 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapElement(thisV) is not { } e || args.Length < 2) return MakeArray(realm, Array.Empty<JsValue>());
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var items = new List<JsValue>();
-            foreach (var d in e.GetElementsByTagNameNS(ns, JsValue.ToStringValue(args[1])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, d)));
-            return MakeArray(realm, items);
+            var local = JsValue.ToStringValue(args[1]);
+            return BuildHtmlCollection(realm, () => e.GetElementsByTagNameNS(ns, local).ToList());
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, elProto, "appendChild", (thisV, args) =>
         {
@@ -1544,18 +1542,14 @@ public static class NodeBindings
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length < 2) return MakeArray(realm, Array.Empty<JsValue>());
             var ns = args[0].IsNullish ? null : JsValue.ToStringValue(args[0]);
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByTagNameNS(ns, JsValue.ToStringValue(args[1])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
-            return MakeArray(realm, items);
+            var local = JsValue.ToStringValue(args[1]);
+            return BuildHtmlCollection(realm, () => d.GetElementsByTagNameNS(ns, local));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByClassName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByClassName(JsValue.ToStringValue(args[0])))
-                items.Add(JsValue.Object(DomWrappers.Wrap(realm, e)));
-            return MakeArray(realm, items);
+            var cls = JsValue.ToStringValue(args[0]);
+            return BuildHtmlCollection(realm, () => d.GetElementsByClassName(cls));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, docProto, "querySelector", (thisV, args) =>
         {
