@@ -1533,7 +1533,7 @@ public static class NodeBindings
             const string cacheKey = "__domImpl__";
             var cached = wrapper.Get(cacheKey);
             if (!cached.IsUndefined) return cached;
-            var impl = BuildDomImplementation(realm);
+            var impl = BuildDomImplementation(realm, DomWrappers.UnwrapDocument(thisV));
             wrapper.Set(cacheKey, JsValue.Object(impl));
             return JsValue.Object(impl);
         });
@@ -1775,7 +1775,7 @@ public static class NodeBindings
     /// <c>createDocumentFragment()</c>, and <c>hasFeature()</c> (always true).
     /// The returned document is wrapped with the realm's full Document prototype
     /// so all Document methods work on it.</summary>
-    private static JsObject BuildDomImplementation(JsRealm realm)
+    private static JsObject BuildDomImplementation(JsRealm realm, Document? ownerDoc)
     {
         var impl = new JsObject(realm.ObjectPrototype);
 
@@ -1794,7 +1794,18 @@ public static class NodeBindings
             var qname = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
             var publicId = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "";
             var systemId = args.Length > 2 ? JsValue.ToStringValue(args[2]) : "";
-            return JsValue.Object(DomWrappers.Wrap(realm, new DocumentType(qname, publicId, systemId)));
+            // DOM §4.5.1: createDocumentType runs only "validate" (the QName
+            // production), not "validate and extract" — so a malformed name is an
+            // InvalidCharacterError, but a prefixed name like "foo:bar" with no
+            // namespace is fine (no NamespaceError here).
+            if (!IsValidQName(qname, out string? _qnamePrefix) || _qnamePrefix is "")
+                throw DomExceptionBinding.Throw(realm, "InvalidCharacterError", $"'{qname}' is not a valid qualified name");
+            // The new doctype's node document is the implementation's document, so
+            // its ownerDocument is non-null even before it is inserted into a tree.
+            var dt = ownerDoc is { } d
+                ? d.CreateDocumentType(qname, publicId, systemId)
+                : new DocumentType(qname, publicId, systemId);
+            return JsValue.Object(DomWrappers.Wrap(realm, dt));
         }, length: 3);
 
         // createDocument(namespace, qualifiedName, doctype) — DOM §4.5.1. Builds
