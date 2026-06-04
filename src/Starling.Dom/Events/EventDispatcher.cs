@@ -14,6 +14,7 @@ internal static class EventDispatcher
 
             // Build the event path: target up to root. For Node targets, walk ParentNode.
             var path = BuildPath(target);
+            @event.SetComposedPath(path);
 
             // 1) Capture phase: root → target (exclusive of target).
             @event.EventPhase = EventPhase.CapturingPhase;

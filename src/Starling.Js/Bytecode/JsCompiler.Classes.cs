@@ -359,6 +359,7 @@ public sealed partial class JsCompiler
             // Suspend-based machinery as standalone functions; the runtime
             // wrapper is selected by JsFunction.Kind (copied in CreateInstance).
             Kind = ResolveFunctionKind(md.Async, md.Generator),
+            SourceText = md.SourceText,
         };
         var kind = md.Kind switch
         {
@@ -511,7 +512,9 @@ public sealed partial class JsCompiler
         foreach (var u in upvalues)
         {
             if (u.IsLocalCapture) _b.EmitSlot(Opcode.LoadLocal, u.Index);
-            else _b.EmitUpvalue(Opcode.LoadUpvalue, u.Index);
+            // Class elements can re-capture a binding that the enclosing chunk
+            // already sees as an upvalue. Pass the cell, not its current value.
+            else _b.EmitUpvalue(Opcode.LoadUpvalueCell, u.Index);
         }
     }
 

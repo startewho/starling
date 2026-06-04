@@ -64,6 +64,8 @@ public sealed class JsLexer
         _errors = errors ?? IJsLexErrorSink.Null;
     }
 
+    internal string Source => _src;
+
     /// <summary>Return the next token, advancing the stream. EOF is sticky.</summary>
     public JsToken Next()
     {

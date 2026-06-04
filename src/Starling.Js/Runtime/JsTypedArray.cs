@@ -89,11 +89,12 @@ public sealed class JsTypedArray : JsObject
     public JsValue GetElement(int index)
     {
         var offset = CheckedOffset(index);
-        var span = Buffer.Bytes.AsSpan(offset);
+        var bytes = Buffer.GetSpan();
+        var span = bytes[offset..];
         return Kind switch
         {
-            JsTypedArrayKind.Int8 => JsValue.Number(unchecked((sbyte)Buffer.Bytes[offset])),
-            JsTypedArrayKind.Uint8 or JsTypedArrayKind.Uint8Clamped => JsValue.Number(Buffer.Bytes[offset]),
+            JsTypedArrayKind.Int8 => JsValue.Number(unchecked((sbyte)bytes[offset])),
+            JsTypedArrayKind.Uint8 or JsTypedArrayKind.Uint8Clamped => JsValue.Number(bytes[offset]),
             JsTypedArrayKind.Int16 => JsValue.Number(BinaryPrimitives.ReadInt16LittleEndian(span)),
             JsTypedArrayKind.Uint16 => JsValue.Number(BinaryPrimitives.ReadUInt16LittleEndian(span)),
             JsTypedArrayKind.Int32 => JsValue.Number(BinaryPrimitives.ReadInt32LittleEndian(span)),
@@ -109,18 +110,19 @@ public sealed class JsTypedArray : JsObject
     public void SetElement(int index, JsValue value, JsRealm? realm = null)
     {
         var offset = CheckedOffset(index);
-        var span = Buffer.Bytes.AsSpan(offset);
+        var bytes = Buffer.GetSpan();
+        var span = bytes[offset..];
         var n = Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64 ? 0 : ToNumber(value, realm);
         switch (Kind)
         {
             case JsTypedArrayKind.Int8:
-                Buffer.Bytes[offset] = unchecked((byte)(sbyte)ToInt32(n));
+                bytes[offset] = unchecked((byte)(sbyte)ToInt32(n));
                 break;
             case JsTypedArrayKind.Uint8:
-                Buffer.Bytes[offset] = unchecked((byte)ToUint32(n));
+                bytes[offset] = unchecked((byte)ToUint32(n));
                 break;
             case JsTypedArrayKind.Uint8Clamped:
-                Buffer.Bytes[offset] = ToUint8Clamp(n);
+                bytes[offset] = ToUint8Clamp(n);
                 break;
             case JsTypedArrayKind.Int16:
                 BinaryPrimitives.WriteInt16LittleEndian(span, unchecked((short)ToInt32(n)));

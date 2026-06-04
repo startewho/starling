@@ -161,6 +161,62 @@ public sealed class WebAssemblyBindingTests
     }
 
     [TestMethod]
+    public async Task Imported_zero_arg_module_closure_runs_scheduler_guard()
+    {
+        var env = FetchTests.NewEnv("https://example.test/");
+        FetchTests.Eval(env.Runtime, $$"""
+            const bytes = new Uint8Array([{{ByteList(ImportedZeroArgModuleBytes())}}]);
+            let Jo;
+            let calls = 0;
+            const Ke = {
+                safeSetTimeout(callback, delay) {
+                    calls++;
+                    return 7;
+                }
+            };
+            function Ko() {}
+            function schedule() {
+                Jo || (Jo = Ke.safeSetTimeout(Ko, 0));
+            }
+            globalThis.answer = null;
+            WebAssembly.instantiate(bytes, { env: { schedule } }).then(function (result) {
+                result.instance.exports.call();
+                globalThis.answer = calls + ':' + Jo;
+            });
+        """);
+
+        await FetchTests.PumpUntil(env.Runtime, () => env.Runtime.GetGlobal("answer").IsString);
+
+        env.Runtime.GetGlobal("answer").AsString.Should().Be("1:7");
+    }
+
+    [TestMethod]
+    public async Task Imported_function_throw_surfaces_to_export_caller()
+    {
+        var env = FetchTests.NewEnv("https://example.test/");
+        FetchTests.Eval(env.Runtime, $$"""
+            const bytes = new Uint8Array([{{ByteList(ImportedZeroArgModuleBytes())}}]);
+            globalThis.answer = null;
+            WebAssembly.instantiate(bytes, {
+                env: {
+                    schedule() { throw new Error('boom'); }
+                }
+            }).then(function (result) {
+                try {
+                    result.instance.exports.call();
+                    globalThis.answer = 'unexpected';
+                } catch (error) {
+                    globalThis.answer = error && error.message ? error.message : String(error);
+                }
+            });
+        """);
+
+        await FetchTests.PumpUntil(env.Runtime, () => env.Runtime.GetGlobal("answer").IsString);
+
+        env.Runtime.GetGlobal("answer").AsString.Should().Contain("boom");
+    }
+
+    [TestMethod]
     public async Task Imported_memory_is_visible_through_live_buffer()
     {
         var env = FetchTests.NewEnv("https://example.test/");
@@ -257,6 +313,39 @@ public sealed class WebAssemblyBindingTests
         env.Runtime.GetGlobal("error").AsString.Should().Contain("env.hostAdd");
     }
 
+    [TestMethod]
+    public async Task WebAssembly_error_constructors_match_browser_shape()
+    {
+        var env = FetchTests.NewEnv("https://example.test/");
+        FetchTests.Eval(env.Runtime, """
+            const runtimeError = new WebAssembly.RuntimeError("boom", { cause: 7 });
+            globalThis.errorShape =
+                (runtimeError instanceof WebAssembly.RuntimeError) + ":" +
+                (runtimeError instanceof Error) + ":" +
+                runtimeError.name + ":" +
+                runtimeError.message + ":" +
+                runtimeError.cause + ":" +
+                String(runtimeError) + ":" +
+                (new WebAssembly.LinkError("link") instanceof WebAssembly.LinkError);
+
+            globalThis.compileErrorShape = null;
+            WebAssembly.compile(new Uint8Array([0])).then(
+                function () { globalThis.compileErrorShape = "unexpected"; },
+                function (err) {
+                    globalThis.compileErrorShape =
+                        (err instanceof WebAssembly.CompileError) + ":" +
+                        (err instanceof Error) + ":" +
+                        err.name;
+                });
+        """);
+
+        await FetchTests.PumpUntil(env.Runtime, () => env.Runtime.GetGlobal("compileErrorShape").IsString);
+
+        env.Runtime.GetGlobal("errorShape").AsString.Should()
+            .Be("true:true:RuntimeError:boom:7:RuntimeError: boom:true");
+        env.Runtime.GetGlobal("compileErrorShape").AsString.Should().Be("true:true:CompileError");
+    }
+
     private static string ByteList(byte[] bytes) =>
         string.Join(",", bytes.Select(b => "0x" + b.ToString("x2")));
 
@@ -268,6 +357,16 @@ public sealed class WebAssemblyBindingTests
         0x03,0x02,0x01,0x00,
         0x07,0x08,0x01,0x04,0x63,0x61,0x6c,0x6c,0x00,0x01,
         0x0a,0x0a,0x01,0x08,0x00,0x20,0x00,0x20,0x01,0x10,0x00,0x0b,
+    ];
+
+    private static byte[] ImportedZeroArgModuleBytes() =>
+    [
+        0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+        0x01,0x04,0x01,0x60,0x00,0x00,
+        0x02,0x10,0x01,0x03,0x65,0x6e,0x76,0x08,0x73,0x63,0x68,0x65,0x64,0x75,0x6c,0x65,0x00,0x00,
+        0x03,0x02,0x01,0x00,
+        0x07,0x08,0x01,0x04,0x63,0x61,0x6c,0x6c,0x00,0x01,
+        0x0a,0x06,0x01,0x04,0x00,0x10,0x00,0x0b,
     ];
 
     private static byte[] ImportedMemoryModuleBytes() =>

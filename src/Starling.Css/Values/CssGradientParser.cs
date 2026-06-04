@@ -45,20 +45,29 @@ public static class CssGradientParser
         if (args.Count == 0)
             return false;
 
-        CssGradientLine? line = null;
-        var stopStart = 0;
+        var idx = 0;
 
-        // First argument may be the gradient line: an <angle> or `to <side>`.
-        if (TryParseLine(args[0], out var parsedLine))
+        // CSS Color 4: optional `in <colorspace> [<hue-method> hue]` prelude before
+        // the gradient line. Check the first token for the `in` keyword.
+        GradientInterpolationMethod? interp = null;
+        if (TryParseInterpolationPrelude(args, ref idx, out interp))
         {
-            line = parsedLine;
-            stopStart = 1;
+            // consumed from idx
         }
 
-        if (!TryParseStops(args, stopStart, out var stops))
+        CssGradientLine? line = null;
+
+        // Next argument may be the gradient line: an <angle> or `to <side>`.
+        if (idx < args.Count && TryParseLine(args[idx], out var parsedLine))
+        {
+            line = parsedLine;
+            idx++;
+        }
+
+        if (!TryParseStops(args, idx, out var stops))
             return false;
 
-        gradient = new CssGradient(CssGradientKind.Linear, repeating, stops, Line: line);
+        gradient = new CssGradient(CssGradientKind.Linear, repeating, stops, Line: line, Interpolation: interp);
         return true;
     }
 
@@ -68,34 +77,201 @@ public static class CssGradientParser
         if (args.Count == 0)
             return false;
 
+        var idx = 0;
+
+        // CSS Color 4: optional `in <colorspace>` prelude.
+        GradientInterpolationMethod? interp = null;
+        TryParseInterpolationPrelude(args, ref idx, out interp);
+
         var shape = CssRadialShape.Ellipse;
         var size = CssRadialSize.FarthestCorner;
         CssGradientPosition? position = null;
-        var stopStart = 0;
 
-        // First argument may describe the ending shape: `[<shape> || <size>] [at <position>]`.
-        if (TryParseRadialPrelude(args[0], ref shape, ref size, ref position))
-            stopStart = 1;
+        // Next argument may describe the ending shape: `[<shape> || <size>] [at <position>]`.
+        if (idx < args.Count && TryParseRadialPrelude(args[idx], ref shape, ref size, ref position))
+            idx++;
 
-        if (!TryParseStops(args, stopStart, out var stops))
+        if (!TryParseStops(args, idx, out var stops))
             return false;
 
-        gradient = new CssGradient(CssGradientKind.Radial, repeating, stops, Shape: shape, Size: size, Position: position);
+        gradient = new CssGradient(CssGradientKind.Radial, repeating, stops, Shape: shape, Size: size, Position: position, Interpolation: interp);
         return true;
     }
 
     private static bool TryParseConic(IReadOnlyList<CssValue> args, bool repeating, out CssGradient gradient)
     {
         gradient = null!;
-        // We model conic so the value round-trips, but it has no paintable brush.
-        // Skip any `from <angle> at <position>` prelude tokens that are not colors.
-        var stopStart = 0;
-        if (args.Count > 0 && !LooksLikeColorStop(args[0]))
-            stopStart = 1;
-        if (!TryParseStops(args, stopStart, out var stops))
+        if (args.Count == 0)
             return false;
-        gradient = new CssGradient(CssGradientKind.Conic, repeating, stops);
+
+        var idx = 0;
+
+        // CSS Color 4: optional `in <colorspace>` prelude (appears before `from`).
+        GradientInterpolationMethod? interp = null;
+        TryParseInterpolationPrelude(args, ref idx, out interp);
+
+        // First remaining argument may be the conic prelude: `[from <angle>] [at <position>]`.
+        // The `from` angle is stored on Line (clockwise from straight up) and the
+        // `at` position on Position, mirroring the linear/radial value shape.
+        CssGradientLine? line = null;
+        CssGradientPosition? position = null;
+        if (idx < args.Count && TryParseConicPrelude(args[idx], out line, out position))
+            idx++;
+
+        if (!TryParseStops(args, idx, out var stops))
+            return false;
+
+        gradient = new CssGradient(CssGradientKind.Conic, repeating, stops, Line: line, Position: position, Interpolation: interp);
         return true;
+    }
+
+    // --- CSS Color 4 §12.3 interpolation prelude: `in <colorspace> [<hue-method> hue]` ---
+
+    /// <summary>
+    /// Tries to parse a CSS Color 4 <c>in &lt;colorspace&gt; [&lt;hue-method&gt; hue]</c>
+    /// prelude from <paramref name="args"/> starting at <paramref name="idx"/>.
+    /// Advances <paramref name="idx"/> past the consumed arg(s) on success.
+    /// The prelude is a single arg that starts with the keyword <c>in</c>.
+    /// CSS Images 4 §3.1 — the interpolation method is the first optional part
+    /// of a gradient function before the direction/stops.
+    /// </summary>
+    private static bool TryParseInterpolationPrelude(IReadOnlyList<CssValue> args, ref int idx, out GradientInterpolationMethod? method)
+    {
+        method = null;
+        if (idx >= args.Count) return false;
+
+        // The interp prelude is a whitespace-separated token list starting with `in`
+        // inside a single comma-arg. It is either:
+        //   CssKeyword("in") → single keyword arg (the colorspace must be next arg, unusual)
+        //   CssValueList([in, colorspace, ...]) → most common form
+        // CssValueParser splits on top-level commas, so `in oklch` arrives as one
+        // CssValueList (or two separate scalar args if authored `in,oklch` — rare, skip).
+
+        var arg = args[idx];
+
+        IReadOnlyList<CssValue> tokens = arg switch
+        {
+            CssValueList list => list.Values,
+            CssKeyword { Name: "in" } => [arg],
+            _ => [],
+        };
+
+        if (tokens.Count == 0) return false;
+        if (tokens[0] is not CssKeyword { Name: "in" }) return false;
+        if (tokens.Count < 2) return false;
+
+        if (tokens[1] is not CssKeyword csKw) return false;
+        if (!TryParseColorSpace(csKw.Name, out var cs)) return false;
+
+        // Optional hue interpolation method: `<method> hue` (two tokens: keyword + "hue").
+        var hue = HueInterpolationMethod.Shorter;
+        if (tokens.Count >= 4
+            && tokens[2] is CssKeyword { Name: var hueName }
+            && tokens[3] is CssKeyword { Name: "hue" }
+            && TryParseHueMethod(hueName, out var hm))
+        {
+            hue = hm;
+        }
+
+        method = new GradientInterpolationMethod(cs, hue);
+        idx++;
+        return true;
+    }
+
+    private static bool TryParseColorSpace(string name, out GradientColorSpace cs)
+    {
+        cs = name switch
+        {
+            "srgb" => GradientColorSpace.Srgb,
+            "srgb-linear" => GradientColorSpace.SrgbLinear,
+            "oklab" => GradientColorSpace.Oklab,
+            "oklch" => GradientColorSpace.Oklch,
+            "hsl" => GradientColorSpace.Hsl,
+            "hwb" => GradientColorSpace.Hwb,
+            "lab" => GradientColorSpace.Lab,
+            "lch" => GradientColorSpace.Lch,
+            "display-p3" => GradientColorSpace.DisplayP3,
+            "a98-rgb" => GradientColorSpace.A98Rgb,
+            "prophoto-rgb" => GradientColorSpace.ProphotoRgb,
+            "rec2020" => GradientColorSpace.Rec2020,
+            "xyz-d50" => GradientColorSpace.XyzD50,
+            "xyz-d65" or "xyz" => GradientColorSpace.XyzD65,
+            _ => default,
+        };
+        return name is "srgb" or "srgb-linear" or "oklab" or "oklch" or "hsl" or "hwb"
+            or "lab" or "lch" or "display-p3" or "a98-rgb" or "prophoto-rgb"
+            or "rec2020" or "xyz-d50" or "xyz-d65" or "xyz";
+    }
+
+    private static bool TryParseHueMethod(string name, out HueInterpolationMethod hm)
+    {
+        hm = name switch
+        {
+            "shorter" => HueInterpolationMethod.Shorter,
+            "longer" => HueInterpolationMethod.Longer,
+            "increasing" => HueInterpolationMethod.Increasing,
+            "decreasing" => HueInterpolationMethod.Decreasing,
+            _ => default,
+        };
+        return name is "shorter" or "longer" or "increasing" or "decreasing";
+    }
+
+    private static bool TryParseConicPrelude(CssValue value, out CssGradientLine? line, out CssGradientPosition? position)
+    {
+        line = null;
+        position = null;
+
+        // A bare color (stop) is not a prelude.
+        if (LooksLikeColorStop(value))
+            return false;
+
+        var tokens = value switch
+        {
+            CssValueList list => list.Values,
+            _ => new[] { value },
+        };
+
+        var i = 0;
+        var matched = false;
+
+        if (i < tokens.Count && tokens[i] is CssKeyword { Name: "from" })
+        {
+            i++;
+            if (i >= tokens.Count || !TryConicAngle(tokens[i], out var deg))
+                return false; // `from` with no angle is invalid syntax.
+            line = CssGradientLine.FromAngle(deg);
+            i++;
+            matched = true;
+        }
+
+        if (i < tokens.Count && tokens[i] is CssKeyword { Name: "at" })
+        {
+            if (!TryParsePosition(tokens, i + 1, out var pos))
+                return false;
+            position = pos;
+            i = tokens.Count;
+            matched = true;
+        }
+
+        // Every prelude token must be consumed — a leftover token means this
+        // wasn't a prelude we understand, so fail soft.
+        return matched && i >= tokens.Count;
+    }
+
+    private static bool TryConicAngle(CssValue value, out double degrees)
+    {
+        switch (value)
+        {
+            case CssAngle a:
+                degrees = a.InDegrees;
+                return true;
+            case CssNumber { Value: 0 }:
+                degrees = 0;
+                return true;
+            default:
+                degrees = 0;
+                return false;
+        }
     }
 
     // --- gradient line ---
@@ -238,7 +414,10 @@ public static class CssGradientParser
                 return Fail(out stops);
         }
 
-        if (result.Count < 2)
+        // CSS Images 4 §3.4 — transition hints are not color stops and do not count
+        // toward the two-stop minimum; count only real stops.
+        var realStopCount = result.Count(s => !s.IsHint);
+        if (realStopCount < 2)
             return Fail(out stops);
 
         stops = result;
@@ -270,7 +449,7 @@ public static class CssGradientParser
                             case CssColor c when color is null:
                                 color = c;
                                 break;
-                            case CssLength or CssPercentage when TryStopPosition(item, out var p):
+                            case CssLength or CssPercentage or CssAngle when TryStopPosition(item, out var p):
                                 if (firstPos is null) firstPos = p; else secondPos = p;
                                 break;
                             case CssLength:
@@ -290,6 +469,28 @@ public static class CssGradientParser
                         into.Add(new CssColorStop(color, secondPos));
                     return true;
                 }
+            // CSS Images 4 §3.4 — transition hint: a bare <percentage> or absolute
+            // <length> between two color stops. The hint shifts the interpolation
+            // midpoint toward or away from one of the surrounding stops.
+            case CssPercentage pct:
+                {
+                    var pos = new CssGradientStopPosition(pct.Value, IsPercent: true);
+                    into.Add(CssTransitionHint.Create(pos));
+                    return true;
+                }
+            case CssAngle ang:
+                {
+                    // Conic angle hints: treat angle as fraction of turn.
+                    var pos = new CssGradientStopPosition(ang.InDegrees / 360.0 * 100.0, IsPercent: true);
+                    into.Add(CssTransitionHint.Create(pos));
+                    return true;
+                }
+            case CssLength len when len.Unit.IsAbsolute():
+                {
+                    var pos = new CssGradientStopPosition(len.Unit.AbsoluteToPx(len.Value), IsPercent: false);
+                    into.Add(CssTransitionHint.Create(pos));
+                    return true;
+                }
             default:
                 return false;
         }
@@ -301,6 +502,11 @@ public static class CssGradientParser
         {
             case CssPercentage pct:
                 position = new CssGradientStopPosition(pct.Value, IsPercent: true);
+                return true;
+            case CssAngle ang:
+                // Conic color-stop angle: a full turn (360deg) is 100% of the
+                // gradient, so store it as the equivalent percentage.
+                position = new CssGradientStopPosition(ang.InDegrees / 360.0 * 100.0, IsPercent: true);
                 return true;
             case CssLength len when len.Unit.IsAbsolute():
                 position = new CssGradientStopPosition(len.Unit.AbsoluteToPx(len.Value), IsPercent: false);

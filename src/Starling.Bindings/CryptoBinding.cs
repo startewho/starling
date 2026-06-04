@@ -76,7 +76,7 @@ public static class CryptoBinding
                 $"getRandomValues: byte length {ta.ByteLength} exceeds the 65536-byte quota"));
 
         // Fill the underlying ArrayBuffer bytes that back this view.
-        var span = ta.Buffer.Bytes.AsSpan(ta.ByteOffset, ta.ByteLength);
+        var span = ta.Buffer.GetSpan(ta.ByteOffset, ta.ByteLength);
         RandomNumberGenerator.Fill(span);
 
         // Return the same TypedArray object (identity).

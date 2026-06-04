@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using Starling.Js.Bytecode;
+using Starling.Js.Modules;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
 using Starling.Loop;
@@ -141,6 +142,160 @@ public sealed class TimersTests
     }
 
     [TestMethod]
+    public void Timer_resolved_promise_resumes_async_function()
+    {
+        var (runtime, loop, _) = NewHost();
+
+        Eval(runtime, @"
+            globalThis.__afterAwait = false;
+            async function boot() {
+                await new Promise(resolve => setTimeout(resolve, 0));
+                globalThis.__afterAwait = true;
+            }
+            boot();
+        ");
+
+        loop.AdvanceBy(0);
+        runtime.GetGlobal("__afterAwait").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Wrapped_setTimeout_resolved_promise_resumes_async_function()
+    {
+        var (runtime, loop, _) = NewHost();
+
+        Eval(runtime, @"
+            globalThis.__trace = '';
+            var originalSetTimeout = globalThis.setTimeout;
+            globalThis.setTimeout = function (callback, delay) {
+                return originalSetTimeout(function () {
+                    globalThis.__trace += 'fire;';
+                    return callback();
+                }, delay);
+            };
+            globalThis.__afterAwait = false;
+            async function boot() {
+                globalThis.__trace += 'start;';
+                await new Promise(resolve => globalThis.setTimeout(resolve, 0));
+                globalThis.__trace += 'after;';
+                globalThis.__afterAwait = true;
+            }
+            boot();
+        ");
+
+        loop.AdvanceBy(0);
+        runtime.GetGlobal("__afterAwait").AsBool.Should().BeTrue(runtime.GetGlobal("__trace").AsString);
+    }
+
+    [TestMethod]
+    public void Dynamic_imported_async_function_resumes_after_timer()
+    {
+        var (runtime, loop, _) = NewHost();
+        _ = new ModuleLoader(runtime, new MapModuleHost(new Dictionary<string, string>
+        {
+            ["runtime.js"] = """
+                export const dotnet = {
+                    async runMain() {
+                        globalThis.__trace += 'run-start;';
+                        await new Promise(resolve => globalThis.setTimeout(resolve, 0));
+                        globalThis.__trace += 'run-after;';
+                    }
+                };
+                """,
+        }));
+
+        Eval(runtime, @"
+            globalThis.__trace = '';
+            globalThis.__done = false;
+            import('runtime.js').then(function (ns) {
+                globalThis.__trace += 'imported;';
+                ns.dotnet.runMain().then(function () {
+                    globalThis.__trace += 'run-resolve;';
+                    globalThis.__done = true;
+                }, function (error) {
+                    globalThis.__trace += 'run-reject:' + (error && error.message ? error.message : String(error)) + ';';
+                });
+            }, function (error) {
+                globalThis.__trace += 'import-reject:' + (error && error.message ? error.message : String(error)) + ';';
+            });
+        ");
+
+        loop.AdvanceBy(0);
+        runtime.GetGlobal("__done").AsBool.Should().BeTrue(runtime.GetGlobal("__trace").AsString);
+        runtime.GetGlobal("__trace").AsString.Should().Be("imported;run-start;run-after;run-resolve;");
+    }
+
+    [TestMethod]
+    public void Async_try_finally_return_await_resumes_after_timer()
+    {
+        var (runtime, loop, _) = NewHost();
+
+        Eval(runtime, @"
+            globalThis.__trace = '';
+            globalThis.__done = false;
+            async function runMain() {
+                try {
+                    globalThis.__trace += 'push;';
+                    return await (async function () {
+                        globalThis.__trace += 'before-timer;';
+                        await new Promise(resolve => globalThis.setTimeout(resolve, 0));
+                        globalThis.__trace += 'after-timer;';
+                        return 42;
+                    })();
+                } finally {
+                    globalThis.__trace += 'pop;';
+                }
+            }
+            runMain().then(function (value) {
+                globalThis.__trace += 'resolve:' + value + ';';
+                globalThis.__done = true;
+            }, function (error) {
+                globalThis.__trace += 'reject:' + (error && error.message ? error.message : String(error)) + ';';
+            });
+        ");
+
+        loop.AdvanceBy(0);
+        runtime.GetGlobal("__done").AsBool.Should().BeTrue(runtime.GetGlobal("__trace").AsString);
+        runtime.GetGlobal("__trace").AsString.Should().Be("push;before-timer;after-timer;pop;resolve:42;");
+    }
+
+    [TestMethod]
+    public void Async_try_finally_return_comma_await_resumes_after_timer()
+    {
+        var (runtime, loop, _) = NewHost();
+
+        Eval(runtime, @"
+            globalThis.__trace = '';
+            globalThis.__done = false;
+            function push() { globalThis.__trace += 'push;'; }
+            function pop() { globalThis.__trace += 'pop;'; }
+            async function nextStep() {
+                globalThis.__trace += 'next;';
+                return 42;
+            }
+            async function runMain() {
+                try {
+                    return push(),
+                        await new Promise(resolve => globalThis.setTimeout(resolve, 0)),
+                        await nextStep();
+                } finally {
+                    pop();
+                }
+            }
+            runMain().then(function (value) {
+                globalThis.__trace += 'resolve:' + value + ';';
+                globalThis.__done = true;
+            }, function (error) {
+                globalThis.__trace += 'reject:' + (error && error.message ? error.message : String(error)) + ';';
+            });
+        ");
+
+        loop.AdvanceBy(0);
+        runtime.GetGlobal("__done").AsBool.Should().BeTrue(runtime.GetGlobal("__trace").AsString);
+        runtime.GetGlobal("__trace").AsString.Should().Be("push;next;pop;resolve:42;");
+    }
+
+    [TestMethod]
     public void Handler_throw_is_routed_to_ConsoleSink_and_subsequent_timers_still_fire()
     {
         var (runtime, loop, errors) = NewHost();
@@ -194,5 +349,14 @@ public sealed class TimersTests
         var program = new JsParser(source).ParseProgram();
         var chunk = JsCompiler.Compile(program);
         return new JsVm(runtime).Run(chunk);
+    }
+
+    private sealed class MapModuleHost(Dictionary<string, string> modules) : IModuleHost
+    {
+        public string? Resolve(string specifier, string? referrer) =>
+            modules.ContainsKey(specifier) ? specifier : null;
+
+        public string? FetchSource(string resolvedUrl) =>
+            modules.TryGetValue(resolvedUrl, out var source) ? source : null;
     }
 }

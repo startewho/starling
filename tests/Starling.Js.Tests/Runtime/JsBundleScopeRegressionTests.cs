@@ -9,6 +9,56 @@ namespace Starling.Js.Tests.Runtime;
 public class JsBundleScopeRegressionTests
 {
     [TestMethod]
+    public void Minified_scheduler_guard_runs_right_side_for_undefined_let()
+    {
+        const string src = """
+            let Jo;
+            let calls = 0;
+            const Ke = {
+                safeSetTimeout(callback, delay) {
+                    calls++;
+                    return 7;
+                }
+            };
+            function Ko() {}
+            function schedule() {
+                Jo || (Jo = Ke.safeSetTimeout(Ko, 0));
+            }
+            schedule();
+            calls + ":" + Jo;
+            """;
+
+        Eval(src).AsString.Should().Be("1:7");
+    }
+
+    [TestMethod]
+    public void Wrapped_zero_arg_scheduler_guard_runs_through_arguments_spread()
+    {
+        const string src = """
+            let Jo;
+            let trace = "";
+            const Ke = {
+                safeSetTimeout(callback, delay) {
+                    trace += "safe;";
+                    return 7;
+                }
+            };
+            function Ko() {}
+            const current = function () {
+                Jo || (Jo = Ke.safeSetTimeout(Ko, 0));
+            };
+            const wrapped = function () {
+                trace += "wrap;";
+                return current(...arguments);
+            };
+            wrapped();
+            trace + Jo;
+            """;
+
+        Eval(src).AsString.Should().Be("wrap;safe;7");
+    }
+
+    [TestMethod]
     public void Reused_minified_parameter_name_keeps_inner_call_argument_binding()
     {
         const string src = """

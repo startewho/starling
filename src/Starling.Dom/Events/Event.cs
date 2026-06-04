@@ -5,6 +5,8 @@ namespace Starling.Dom.Events;
 /// </summary>
 public class Event
 {
+    private IReadOnlyList<EventTarget> _composedPath = Array.Empty<EventTarget>();
+
     public Event(string type, EventInit init = default)
     {
         // Empty type is allowed: document.createEvent() produces an event whose
@@ -62,6 +64,11 @@ public class Event
     /// <c>EventTarget.DispatchEvent</c> (which would throw internally).</summary>
     public bool IsBeingDispatched => DispatchFlag;
 
+    public IReadOnlyList<EventTarget> ComposedPath => _composedPath;
+
+    internal void SetComposedPath(IReadOnlyList<EventTarget> path) =>
+        _composedPath = path;
+
     public void StopPropagation() => PropagationStopped = true;
 
     public void StopImmediatePropagation()
@@ -85,6 +92,7 @@ public class Event
         DefaultPrevented = false;
         PropagationStopped = false;
         ImmediatePropagationStopped = false;
+        _composedPath = Array.Empty<EventTarget>();
     }
 }
 

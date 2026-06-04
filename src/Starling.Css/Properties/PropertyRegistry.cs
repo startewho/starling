@@ -4,12 +4,25 @@ using Starling.Css.Values;
 
 namespace Starling.Css.Properties;
 
+
 public static class PropertyRegistry
 {
     // Build-once / read-many name→id table, read on every declaration parse:
     // FrozenDictionary per the repo C# performance policy (hot lookup path).
     private static readonly FrozenDictionary<string, PropertyId> Names =
         Enum.GetValues<PropertyId>().ToFrozenDictionary(ToCssName, id => id, StringComparer.OrdinalIgnoreCase);
+
+    // Build-once -webkit- prefix alias table. CSS Masking 1 / CSS Backgrounds 3:
+    // most real-world sites use prefixed forms (-webkit-mask-image,
+    // -webkit-background-clip, etc.). One FrozenDictionary lookup instead of
+    // a linear scan of Names.
+    private const string WebkitPrefix = "-webkit-";
+    private static readonly FrozenDictionary<string, PropertyId> WebkitAliases =
+        Enum.GetValues<PropertyId>()
+            .ToFrozenDictionary(
+                id => WebkitPrefix + ToCssName(id),
+                id => id,
+                StringComparer.OrdinalIgnoreCase);
 
     // Build-once / read-many inheritance set, read on every cascade: FrozenSet.
     private static readonly FrozenSet<PropertyId> Inherited = FrozenSet.ToFrozenSet<PropertyId>(
@@ -107,7 +120,20 @@ public static class PropertyRegistry
     public static IReadOnlyList<PropertyId> All { get; } = Enum.GetValues<PropertyId>();
 
     public static bool TryGetPropertyId(string name, out PropertyId id)
-        => Names.TryGetValue(name, out id);
+    {
+        if (Names.TryGetValue(name, out id))
+            return true;
+
+        // CSS Masking 1 / CSS Backgrounds 3: browsers ship mask-* and
+        // background-clip:text behind the -webkit- prefix. The WebkitAliases
+        // FrozenDictionary maps each "-webkit-<canonical>" to its PropertyId in
+        // a single O(1) lookup.
+        if (name.StartsWith(WebkitPrefix, StringComparison.Ordinal)
+            && WebkitAliases.TryGetValue(name, out id))
+            return true;
+
+        return false;
+    }
 
     public static string Name(PropertyId id) => ToCssName(id);
 
@@ -461,6 +487,7 @@ public static class PropertyRegistry
                     yield return item;
                 break;
             case "mask":
+            case "-webkit-mask":
                 foreach (var item in ExpandMask(values, important))
                     yield return item;
                 break;
@@ -802,6 +829,17 @@ public static class PropertyRegistry
                     var modes = values.Where(v => v is not CssKeyword { Name: "" or "," }).ToList();
                     yield return new PropertyDeclaration(PropertyId.BackgroundBlendMode,
                         modes.Count == 1 ? modes[0] : new CssValueList(modes), important);
+                }
+                break;
+
+            // CSS Masking 1 §7 — clip-path: none | <basic-shape> || <geometry-box> | url()
+            case "clip-path":
+                {
+                    var clipPath = CssBasicShapeParser.TryParseClipPath(values);
+                    if (clipPath is not null)
+                        yield return new PropertyDeclaration(PropertyId.ClipPath, clipPath, important);
+                    else if (values.Count == 1)
+                        yield return new PropertyDeclaration(PropertyId.ClipPath, values[0], important);
                 }
                 break;
 
@@ -1759,6 +1797,8 @@ public static class PropertyRegistry
         ["overscroll-behavior"] = [PropertyId.OverscrollBehaviorX, PropertyId.OverscrollBehaviorY],
         ["outline"] = [PropertyId.OutlineColor, PropertyId.OutlineStyle, PropertyId.OutlineWidth],
         ["mask"] = [PropertyId.MaskImage, PropertyId.MaskMode, PropertyId.MaskPosition, PropertyId.MaskSize, PropertyId.MaskRepeat, PropertyId.MaskOrigin, PropertyId.MaskClip, PropertyId.MaskComposite],
+        // CSS Masking 1: -webkit-mask is an alias for mask.
+        ["-webkit-mask"] = [PropertyId.MaskImage, PropertyId.MaskMode, PropertyId.MaskPosition, PropertyId.MaskSize, PropertyId.MaskRepeat, PropertyId.MaskOrigin, PropertyId.MaskClip, PropertyId.MaskComposite],
         ["font"] = [PropertyId.FontStyle, PropertyId.FontWeight, PropertyId.FontStretch, PropertyId.FontSize, PropertyId.LineHeight, PropertyId.FontFamily],
         ["scroll-timeline"] = [PropertyId.ScrollTimelineName, PropertyId.ScrollTimelineAxis],
         ["view-timeline"] = [PropertyId.ViewTimelineName, PropertyId.ViewTimelineAxis],

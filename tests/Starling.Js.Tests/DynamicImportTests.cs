@@ -620,6 +620,157 @@ public class DynamicImportTests
     }
 
     [TestMethod]
+    public void Dynamic_imported_dotnet_runtime_globals_survive_async_emscripten_callback()
+    {
+        var modules = new Dictionary<string, string>
+        {
+            ["runtime"] = """
+                let api = null;
+                let registry = null;
+
+                export function setRuntimeGlobals(globals) {
+                    api = globals.api;
+                }
+
+                export function initializeExports() {
+                    Object.assign(api, { marker: 1 });
+                    registry = {
+                        registerRuntime(runtimeApi) {
+                            runtimeApi.runtimeId = 0;
+                            report(runtimeApi.marker + ':' + runtimeApi.runtimeId);
+                        }
+                    };
+                }
+
+                export async function configureRuntimeStartup() {
+                }
+
+                export function configureEmscriptenStartup(module) {
+                    module.onRuntimeInitialized = async () => {
+                        registry.registerRuntime(api);
+                    };
+                }
+                """,
+        };
+        var source = """
+            async function boot() {
+                const runtime = await import('runtime');
+                const {
+                    initializeExports,
+                    configureRuntimeStartup,
+                    configureEmscriptenStartup,
+                    setRuntimeGlobals
+                } = runtime;
+
+                const globals = { api: {} };
+                const module = {};
+                setRuntimeGlobals(globals);
+                initializeExports(globals);
+                await configureRuntimeStartup(module);
+                configureEmscriptenStartup(module);
+                await module.onRuntimeInitialized();
+            }
+
+            boot().catch(function (error) {
+                report('error:' + error.message);
+            });
+            """;
+        RunClassicScript(source, modules).AsString.Should().Be("1:0");
+    }
+
+    [TestMethod]
+    public void Dynamic_imported_class_method_reads_updated_module_binding()
+    {
+        var modules = new Dictionary<string, string>
+        {
+            ["runtime"] = """
+                let helpers = null;
+                class RuntimeList {
+                    register() {
+                        report(typeof helpers + ':' + typeof helpers.config);
+                    }
+                }
+                const list = new RuntimeList();
+                export function setHelpers(value) {
+                    helpers = value;
+                }
+                export function register() {
+                    list.register();
+                }
+                """,
+        };
+        var source = """
+            import('runtime').then(function (runtime) {
+                runtime.setHelpers({ config: {} });
+                runtime.register();
+            });
+            """;
+        RunClassicScript(source, modules).AsString.Should().Be("object:object");
+    }
+
+    [TestMethod]
+    public void Dynamic_imported_dotnet_minified_runtime_shape_preserves_api_binding()
+    {
+        var modules = new Dictionary<string, string>
+        {
+            ["runtime"] = """
+                let Ke,et,ct,lt,pt,it=null,ut=!1;
+                function ft(e) {
+                    if (ut) throw new Error("Runtime module already loaded");
+                    ut=!0,Ke=e.module,et=e.internal,ct=e.runtimeHelpers,lt=e.loaderHelpers,pt=e.diagnosticHelpers,it=e.api;
+                    const t={gitHash:"hash"};
+                    Object.assign(ct,t),Object.assign(e.module.config,{}),Object.assign(e.api,{Module:e.module,...e.module}),Object.assign(e.api,{INTERNAL:e.internal});
+                }
+
+                let tl;
+                function nl(r) {
+                    const o=Ke,a=r,i=globalThis;
+                    Object.assign(a.internal,{get_dotnet_instance:()=>it});
+                    const l={entry:1};
+                    return Object.assign(it,{INTERNAL:a.internal,Module:o,runtimeBuildInfo:{wasmEnableExceptionHandling:!0},...l}),i.getDotnetRuntime?tl=i.getDotnetRuntime.__list:(i.getDotnetRuntime=e=>i.getDotnetRuntime.__list.getRuntime(e),i.getDotnetRuntime.__list=tl=new rl),it;
+                }
+
+                function configureEmscriptenStartup(e) {
+                    e.onRuntimeInitialized = async () => {
+                        tl.registerRuntime(it);
+                    };
+                }
+
+                class rl {
+                    constructor(){this.list={}}
+                    registerRuntime(e) {
+                        return void 0===e.runtimeId&&(e.runtimeId=Object.keys(this.list).length),this.list[e.runtimeId]={deref:()=>e},lt.config.runtimeId=e.runtimeId,report(typeof e + ':' + e.entry + ':' + e.runtimeId),e.runtimeId;
+                    }
+                    getRuntime(e){const t=this.list[e];return t?t.deref():void 0}
+                }
+
+                export { configureEmscriptenStartup, nl as initializeExports, ft as setRuntimeGlobals };
+                """,
+        };
+        var source = """
+            async function boot(modules) {
+                const {
+                    initializeExports,
+                    configureEmscriptenStartup,
+                    setRuntimeGlobals
+                } = modules[0];
+                const Ue={},Pe={config:{}},Me={},Le={},Ne={},ze={},We={config:ze};
+                const Fe={mono:{},binding:{},internal:Ne,module:We,loaderHelpers:Pe,runtimeHelpers:Ue,diagnosticHelpers:Me,api:Le};
+                setRuntimeGlobals(Fe);
+                initializeExports(Fe);
+                await Promise.resolve();
+                configureEmscriptenStartup(We);
+                await We.onRuntimeInitialized();
+            }
+
+            Promise.all([import('runtime')]).then(boot).catch(function (error) {
+                report('error:' + error.message);
+            });
+            """;
+        RunClassicScript(source, modules).AsString.Should().Be("object:1:0");
+    }
+
+    [TestMethod]
     public void Dynamic_import_from_classic_script_rejects_on_missing()
     {
         var source = @"

@@ -416,7 +416,8 @@ public sealed partial class JsParser
 
         var method = new MethodDefinition(key, methodKind, isStatic, computed,
             parameters, body, memberStart, endPos,
-            Generator: isGenerator, Async: isAsync, Strict: true);
+            Generator: isGenerator, Async: isAsync, Strict: true,
+            SourceText: SourceSlice(memberStart, endPos));
         if (isCtor)
         {
             if (existingCtor is not null)

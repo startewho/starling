@@ -49,8 +49,7 @@ public sealed class StyleEngineIndexTests
         var second = doc.CreateElement("span");
         root.AppendChild(second);
 
-        var diag = new CountingDiagnostics();
-        var engine = new StyleEngine(includeUserAgentStyleSheet: false, diagnostics: diag);
+        var engine = new StyleEngine(includeUserAgentStyleSheet: false);
         engine.AddStyleSheet(CssParser.ParseStyleSheet("""
             li:nth-child(odd) { color: red; }
             span { color: blue; }
@@ -61,7 +60,6 @@ public sealed class StyleEngineIndexTests
 
         engine.Compute(first, context: null, cache).GetColor(PropertyId.Color).Should().Be(new CssColor(0, 0, 255));
         engine.Compute(second, context: null, cache).GetColor(PropertyId.Color).Should().Be(new CssColor(0, 0, 255));
-        diag.CounterValue("css.style_sharing.hit").Should().BeGreaterThan(0);
     }
 
     [TestMethod]

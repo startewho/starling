@@ -1,4 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+using System.Globalization;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing;
 
 namespace Starling.Paint.Svg;
 
@@ -14,8 +17,27 @@ internal sealed class SvgStyle
     /// <summary>Fill paint, or null when <c>fill="none"</c>.</summary>
     public Color? Fill { get; set; } = Color.Black; // SVG default fill is black.
 
+    /// <summary>
+    /// Paint-server id from <c>fill="url(#id)"</c> (a <c>&lt;pattern&gt;</c> /
+    /// gradient reference), or null for a plain color fill. When set it takes
+    /// precedence over <see cref="Fill"/>.
+    /// </summary>
+    public string? FillRef { get; set; }
+
+    /// <summary>
+    /// Fallback color from <c>fill="url(#id) &lt;color&gt;"</c>, used when
+    /// <see cref="FillRef"/> cannot be resolved.
+    /// </summary>
+    public Color? FillFallback { get; set; }
+
     /// <summary>Stroke paint, or null when there is no stroke.</summary>
     public Color? Stroke { get; set; }
+
+    /// <summary>
+    /// Paint-server id from <c>stroke="url(#id)"</c>, analogous to
+    /// <see cref="FillRef"/> for the stroke paint.
+    /// </summary>
+    public string? StrokeRef { get; set; }
 
     public float StrokeWidth { get; set; } = 1f;
 
@@ -25,18 +47,48 @@ internal sealed class SvgStyle
     public float FillOpacity { get; set; } = 1f;
     public float StrokeOpacity { get; set; } = 1f;
 
+    /// <summary>
+    /// Group-level opacity for <c>&lt;g opacity="…"&gt;</c>. Distinct from
+    /// <see cref="Opacity"/> (which folds into each child's alpha directly).
+    /// When rendering a group, a value less than 1 triggers offscreen
+    /// compositing so overlapping children don't double-blend.
+    /// </summary>
+    public float GroupOpacity { get; set; } = 1f;
+
+    /// <summary>
+    /// Stroke dash array lengths. null or empty means solid stroke.
+    /// Values are in user units; the pen builder scales them by stroke width.
+    /// </summary>
+    public float[]? StrokeDashArray { get; set; }
+
+    /// <summary>Stroke dash offset (user units).</summary>
+    public float StrokeDashOffset { get; set; }
+
+    public LineCap StrokeLineCap { get; set; } = LineCap.Butt;
+    public LineJoin StrokeLineJoin { get; set; } = LineJoin.Miter;
+    public double StrokeMiterLimit { get; set; } = 4.0;
+
     /// <summary>The inherited <c>currentColor</c> (CSS <c>color</c>).</summary>
     public Color CurrentColor { get; set; } = Color.Black;
 
     public SvgStyle Clone() => new()
     {
         Fill = Fill,
+        FillRef = FillRef,
+        FillFallback = FillFallback,
         Stroke = Stroke,
+        StrokeRef = StrokeRef,
         StrokeWidth = StrokeWidth,
         FillEvenOdd = FillEvenOdd,
         Opacity = Opacity,
         FillOpacity = FillOpacity,
         StrokeOpacity = StrokeOpacity,
+        GroupOpacity = GroupOpacity,
+        StrokeDashArray = StrokeDashArray,
+        StrokeDashOffset = StrokeDashOffset,
+        StrokeLineCap = StrokeLineCap,
+        StrokeLineJoin = StrokeLineJoin,
+        StrokeMiterLimit = StrokeMiterLimit,
         CurrentColor = CurrentColor,
     };
 
@@ -73,12 +125,35 @@ internal sealed class SvgStyle
         switch (property.Trim().ToLowerInvariant())
         {
             case "fill":
-                if (SvgColor.TryParse(value, CurrentColor, out var f, out var fNone))
+                // `fill="url(#id)"` references a paint server (a <pattern> or
+                // gradient). Capture the id and let DrawShape resolve it. An
+                // optional trailing fallback color is parsed and stored.
+                if (TryFuncIri(value, out var fillId, out var fillFallbackStr))
+                {
+                    FillRef = fillId;
+                    if (fillFallbackStr is not null
+                        && SvgColor.TryParse(fillFallbackStr, CurrentColor, out var fb, out var fbNone))
+                        FillFallback = fbNone ? null : fb;
+                    else
+                        FillFallback = null;
+                }
+                else if (SvgColor.TryParse(value, CurrentColor, out var f, out var fNone))
+                {
                     Fill = fNone ? null : f;
+                    FillRef = null;
+                    FillFallback = null;
+                }
                 break;
             case "stroke":
-                if (SvgColor.TryParse(value, CurrentColor, out var s, out var sNone))
+                if (TryFuncIri(value, out var strokeId, out _))
+                {
+                    StrokeRef = strokeId;
+                }
+                else if (SvgColor.TryParse(value, CurrentColor, out var s, out var sNone))
+                {
                     Stroke = sNone ? null : s;
+                    StrokeRef = null;
+                }
                 break;
             case "stroke-width":
                 if (TryLength(value, out var sw)) StrokeWidth = sw;
@@ -87,7 +162,12 @@ internal sealed class SvgStyle
                 FillEvenOdd = value.Equals("evenodd", StringComparison.OrdinalIgnoreCase);
                 break;
             case "opacity":
-                if (TryNumber(value, out var o)) Opacity = Math.Clamp(o, 0f, 1f);
+                // `opacity` on a <g> sets the group opacity for compositing.
+                if (TryNumber(value, out var o))
+                {
+                    Opacity = Math.Clamp(o, 0f, 1f);
+                    GroupOpacity = Opacity;
+                }
                 break;
             case "fill-opacity":
                 if (TryNumber(value, out var fo)) FillOpacity = Math.Clamp(fo, 0f, 1f);
@@ -99,12 +179,65 @@ internal sealed class SvgStyle
                 if (SvgColor.TryParse(value, CurrentColor, out var cc, out var ccNone) && !ccNone)
                     CurrentColor = cc;
                 break;
+            case "stroke-dasharray":
+                StrokeDashArray = ParseDashArray(value);
+                break;
+            case "stroke-dashoffset":
+                if (TryLength(value, out var sdo)) StrokeDashOffset = sdo;
+                break;
+            case "stroke-linecap":
+                StrokeLineCap = value.Trim().ToLowerInvariant() switch
+                {
+                    "round" => LineCap.Round,
+                    "square" => LineCap.Square,
+                    _ => LineCap.Butt,
+                };
+                break;
+            case "stroke-linejoin":
+                StrokeLineJoin = value.Trim().ToLowerInvariant() switch
+                {
+                    "round" => LineJoin.Round,
+                    "bevel" => LineJoin.Bevel,
+                    _ => LineJoin.Miter,
+                };
+                break;
+            case "stroke-miterlimit":
+                if (TryNumber(value, out var ml)) StrokeMiterLimit = Math.Max(1.0, ml);
+                break;
         }
     }
 
     private static bool TryNumber(string v, out float value)
-        => float.TryParse(v, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out value);
+        => float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+
+    /// <summary>
+    /// Parse a CSS funciri <c>url(#id)</c> (optionally quoted) into its fragment
+    /// id. A trailing fallback paint (e.g. <c>url(#p) red</c>) is captured in
+    /// <paramref name="fallback"/>.
+    /// </summary>
+    private static bool TryFuncIri(string value, out string id, out string? fallback)
+    {
+        id = string.Empty;
+        fallback = null;
+        var v = value.TrimStart();
+        if (!v.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
+            return false;
+        int close = v.IndexOf(')');
+        if (close < 0)
+            return false;
+        var inner = v[4..close].Trim().Trim('"', '\'').Trim();
+        if (!inner.StartsWith('#'))
+            return false;
+        inner = inner[1..].Trim();
+        if (inner.Length == 0)
+            return false;
+        id = inner;
+        // Anything after the closing ')' is the optional fallback.
+        var tail = v[(close + 1)..].Trim();
+        if (tail.Length > 0)
+            fallback = tail;
+        return true;
+    }
 
     /// <summary>
     /// Parse a length that may carry a <c>px</c> suffix (the only unit icons
@@ -116,6 +249,40 @@ internal sealed class SvgStyle
         v = v.Trim();
         if (v.EndsWith("px", StringComparison.OrdinalIgnoreCase)) v = v[..^2].Trim();
         return TryNumber(v, out value);
+    }
+
+    /// <summary>
+    /// Parse a <c>stroke-dasharray</c> value: a list of lengths separated by
+    /// commas or whitespace. Returns null for <c>"none"</c>.
+    /// SVG 1.1 §11.4: an odd-length list is duplicated to even length.
+    /// </summary>
+    private static float[]? ParseDashArray(string v)
+    {
+        v = v.Trim();
+        if (v.Equals("none", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var parts = v.Split([' ', '\t', '\r', '\n', ','], StringSplitOptions.RemoveEmptyEntries);
+        var vals = new List<float>(parts.Length);
+        foreach (var p in parts)
+        {
+            var t = p.Trim();
+            if (t.EndsWith('%')) continue; // skip percentage dash lengths
+            // Strip trailing unit.
+            int end = t.Length;
+            while (end > 0 && char.IsLetter(t[end - 1])) end--;
+            if (float.TryParse(t.AsSpan(0, end), NumberStyles.Float, CultureInfo.InvariantCulture, out var f) && f >= 0)
+                vals.Add(f);
+        }
+        if (vals.Count == 0)
+            return null;
+        // Duplicate odd-length list.
+        if (vals.Count % 2 != 0)
+        {
+            int n = vals.Count;
+            for (int i = 0; i < n; i++)
+                vals.Add(vals[i]);
+        }
+        return vals.ToArray();
     }
 
     /// <summary>

@@ -36,6 +36,29 @@ public sealed class WindowDocumentTests
     }
 
     [TestMethod]
+    public void Html_element_specific_instanceof_checks_use_tag_name()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            var input = document.createElement('input');
+            var button = document.createElement('button');
+            var option = document.createElement('option');
+            var select = document.createElement('select');
+            var textarea = document.createElement('textarea');
+            var span = document.createElement('span');
+            result =
+                input instanceof HTMLElement &&
+                input instanceof HTMLInputElement &&
+                button instanceof HTMLButtonElement &&
+                option instanceof HTMLOptionElement &&
+                select instanceof HTMLSelectElement &&
+                textarea instanceof HTMLTextAreaElement &&
+                !(span instanceof HTMLInputElement) &&
+                !(span instanceof HTMLButtonElement);
+        """).AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Element_id_attribute_round_trips()
     {
         var (runtime, _) = BuildEnv();
@@ -157,6 +180,58 @@ public sealed class WindowDocumentTests
             inner.dispatchEvent(new Event('bubble', { bubbles: true }));
             result = outerCount;
         """).AsNumber.Should().Be(0);
+    }
+
+    [TestMethod]
+    public void Event_composedPath_returns_dispatch_path()
+    {
+        var (runtime, _) = BuildEnv();
+        var errors = new List<string>();
+        runtime.Realm.ConsoleSink = (lvl, msg) => errors.Add($"{lvl} {msg}");
+        Eval(runtime, """
+            var outer = document.createElement('div');
+            var button = document.createElement('button');
+            outer.appendChild(button);
+            document.body.appendChild(outer);
+            var ok = false;
+            document.addEventListener('click', function (e) {
+                var path = e.composedPath();
+                ok = Array.isArray(path) &&
+                    path.length >= 5 &&
+                    path[0] === button &&
+                    path[1] === outer &&
+                    path[path.length - 1] === document;
+            });
+            button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            result = ok;
+        """).AsBool.Should().BeTrue();
+        errors.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void MouseEvent_dispatch_preserves_subtype_accessors_for_listeners()
+    {
+        var (runtime, _) = BuildEnv();
+        var errors = new List<string>();
+        runtime.Realm.ConsoleSink = (lvl, msg) => errors.Add($"{lvl} {msg}");
+        Eval(runtime, """
+            var button = document.createElement('button');
+            document.body.appendChild(button);
+            var ok = false;
+            button.addEventListener('click', function (e) {
+                ok = e instanceof MouseEvent &&
+                    e.clientX === 17 &&
+                    e.clientY === 9 &&
+                    e.button === 1;
+            });
+            button.dispatchEvent(new MouseEvent('click', {
+                clientX: 17,
+                clientY: 9,
+                button: 1
+            }));
+            result = ok;
+        """).AsBool.Should().BeTrue();
+        errors.Should().BeEmpty();
     }
 
     [TestMethod]
