@@ -3058,12 +3058,12 @@ public static class NodeBindings
     /// <summary>Build a DOMTokenList JS object wrapping the element's classList.
     /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
     /// forEach, keys, values, entries. Properties: length, value.</summary>
-    private static JsObject BuildDomTokenList(JsRealm realm, Element element)
+    private static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element)
         => BuildDomTokenList(realm, element, element.ClassList, "class");
 
-    private static JsObject BuildDomTokenList(JsRealm realm, Element element, DomTokenList cl, string attrName)
+    private static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element, DomTokenList cl, string attrName)
     {
-        var obj = new JsObject(realm.ObjectPrototype);
+        var obj = new DomTokenListObject(realm.ObjectPrototype, cl);
 
         // Object.prototype.toString.call(classList) === "[object DOMTokenList]".
         obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
