@@ -433,15 +433,15 @@ internal sealed class JsDocumentWrapper : JsObject
         }
     }
 
-    public override IEnumerable<Starling.Js.Runtime.JsPropertyKey> OwnPropertyKeys
+public override IEnumerable<Starling.Js.Runtime.JsPropertyKey> OwnPropertyKeys
+{
+    get
     {
-        get
-        {
-            foreach (var k in base.OwnPropertyKeys) yield return k;
-            foreach (var n in SupportedNames())
-                yield return Starling.Js.Runtime.JsPropertyKey.String(n);
-        }
+        foreach (var n in SupportedNames())
+            yield return Starling.Js.Runtime.JsPropertyKey.String(n);
+        foreach (var k in base.OwnPropertyKeys) yield return k;
     }
+}
 }
 
 /// <summary>
