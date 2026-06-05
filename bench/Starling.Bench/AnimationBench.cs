@@ -69,7 +69,7 @@ public class AnimationBench
         _style = new StyleEngine();
         _style.AddStyleSheet(CssParser.ParseStyleSheet(css));
         _measurer = new ImageSharpTextMeasurer(FontResolver.Default);
-        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
         _session = new LayoutSession(_style) { VerifyAgainstFullRebuild = false };
         // Warm: full build + cascade. The cascade's AnimationCompositor.Compose
         // starts the animations (OnAnimationsCascaded), so later frames just tick

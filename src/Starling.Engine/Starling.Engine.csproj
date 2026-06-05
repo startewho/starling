@@ -10,6 +10,11 @@
     <InternalsVisibleTo Include="Starling.Gui" />
   </ItemGroup>
   <ItemGroup>
+    <!-- AddStarlingEngine(IServiceCollection) registers the engine's shared
+         services (Painter, StarlingEngine, BrowserSession) for hosts that use DI. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Pure-managed legacy single-byte / CJK encodings (Rule-0 clean).
          NU1510: .NET 10 ships an in-box copy of this assembly, but the
          encoding provider must still be registered explicitly at startup

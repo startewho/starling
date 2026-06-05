@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Starling.Common.Diagnostics;
 using Starling.Common.Encoding;
 using Starling.Css;
@@ -39,14 +40,16 @@ internal sealed class StylesheetFetcher : IDisposable
     // Concurrent because FetchAllAsync starts multiple external fetches in
     // parallel; their cache writes (on the network continuation) can race.
     private readonly ConcurrentDictionary<string, (StyleSheet Sheet, StarlingUrl Url)> _byUrl = new(StringComparer.Ordinal);
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Func<StarlingHttpClient> _httpFactory;
     private StarlingHttpClient? _sharedHttp;
     private readonly bool _ownsHttp;
 
-    public StylesheetFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
+    public StylesheetFetcher(ILoggerFactory loggerFactory, Func<StarlingHttpClient> httpFactory)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<StylesheetFetcher>();
         _httpFactory = httpFactory;
         _ownsHttp = true;
     }
@@ -57,9 +60,10 @@ internal sealed class StylesheetFetcher : IDisposable
     /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
     /// shared client is owned by the caller and is not disposed by this fetcher.
     /// </summary>
-    public StylesheetFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    public StylesheetFetcher(ILoggerFactory loggerFactory, StarlingHttpClient sharedHttp)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<StylesheetFetcher>();
         _sharedHttp = sharedHttp;
         _httpFactory = () => sharedHttp;
         _ownsHttp = false;
@@ -114,7 +118,7 @@ internal sealed class StylesheetFetcher : IDisposable
             var absolute = ResolveAbsolute(href, baseUrl);
             if (absolute is null)
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve <link href='{href}'>");
+                StylesheetFetcherLog.CannotResolveStylesheetHref(_log, href);
                 continue;
             }
 
@@ -156,7 +160,7 @@ internal sealed class StylesheetFetcher : IDisposable
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached.Sheet;
 
-        using var _ = _diag.Span("engine", "fetch_stylesheet");
+        using var _ = StarlingTelemetry.Span("engine", "fetch_stylesheet");
         Activity.Current?.SetTag("url", key);
 
         try
@@ -168,8 +172,8 @@ internal sealed class StylesheetFetcher : IDisposable
                 var path = url.ToFileSystemPath();
                 if (!File.Exists(path))
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Missing local stylesheet: {path}");
-                    _diag.Counter("engine.fetch.stylesheet.failed", 1);
+                    StylesheetFetcherLog.MissingLocalStylesheet(_log, path);
+                    StarlingTelemetry.Counter("engine.fetch.stylesheet.failed", 1);
                     return null;
                 }
                 bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -180,16 +184,15 @@ internal sealed class StylesheetFetcher : IDisposable
                 var response = await _sharedHttp.GetAsync(url, ct).ConfigureAwait(false);
                 if (response.IsErr)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Stylesheet fetch failed {url}: {response.Error}");
-                    _diag.Counter("engine.fetch.stylesheet.failed", 1);
+                    StylesheetFetcherLog.StylesheetFetchFailed(_log, url.ToString(), response.Error.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.stylesheet.failed", 1);
                     return null;
                 }
                 Activity.Current?.SetTag("http.status_code", response.Value.StatusCode);
                 if (response.Value.StatusCode is < 200 or >= 400)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine",
-                        $"Stylesheet fetch HTTP {response.Value.StatusCode} from {url}");
-                    _diag.Counter("engine.fetch.stylesheet.failed", 1);
+                    StylesheetFetcherLog.StylesheetFetchHttpError(_log, response.Value.StatusCode, url.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.stylesheet.failed", 1);
                     return null;
                 }
                 bytes = response.Value.Body.ToArray();
@@ -197,22 +200,22 @@ internal sealed class StylesheetFetcher : IDisposable
             }
             else
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Unsupported stylesheet scheme '{url.Scheme}' for {url}");
-                _diag.Counter("engine.fetch.stylesheet.failed", 1);
+                StylesheetFetcherLog.UnsupportedStylesheetScheme(_log, url.Scheme, url.ToString());
+                StarlingTelemetry.Counter("engine.fetch.stylesheet.failed", 1);
                 return null;
             }
 
             Activity.Current?.SetTag("bytes", bytes.Length);
             var text = DecodeCss(contentType, bytes);
-            var sheet = CssParser.ParseStyleSheet(text, StyleOrigin.Author, _diag);
+            var sheet = CssParser.ParseStyleSheet(text, StyleOrigin.Author);
             _byUrl[key] = (sheet, url);
-            _diag.Counter("engine.fetch.stylesheet", 1);
+            StarlingTelemetry.Counter("engine.fetch.stylesheet", 1);
             return sheet;
         }
         catch (IOException ex)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Stylesheet read failed {url}: {ex.Message}");
-            _diag.Counter("engine.fetch.stylesheet.failed", 1);
+            StylesheetFetcherLog.StylesheetReadFailed(_log, ex, url.ToString());
+            StarlingTelemetry.Counter("engine.fetch.stylesheet.failed", 1);
             return null;
         }
     }
@@ -283,4 +286,25 @@ internal sealed class StylesheetFetcher : IDisposable
         if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
+}
+
+internal static partial class StylesheetFetcherLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not resolve <link href='{Href}'>")]
+    public static partial void CannotResolveStylesheetHref(ILogger logger, string href);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Missing local stylesheet: {Path}")]
+    public static partial void MissingLocalStylesheet(ILogger logger, string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stylesheet fetch failed {Url}: {Error}")]
+    public static partial void StylesheetFetchFailed(ILogger logger, string url, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stylesheet fetch HTTP {StatusCode} from {Url}")]
+    public static partial void StylesheetFetchHttpError(ILogger logger, int statusCode, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Unsupported stylesheet scheme '{Scheme}' for {Url}")]
+    public static partial void UnsupportedStylesheetScheme(ILogger logger, string scheme, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stylesheet read failed {Url}")]
+    public static partial void StylesheetReadFailed(ILogger logger, Exception ex, string url);
 }

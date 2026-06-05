@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Starling.Bindings;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -47,7 +48,7 @@ public sealed record ScriptSessionOptions(
     ScriptFetcherDelegate Fetcher,
     StarlingHttpClient Http,
     ILayoutHost? LayoutHost,
-    Starling.Common.Diagnostics.IDiagnostics Diag)
+    ILoggerFactory LoggerFactory)
 {
     /// <summary>Layout viewport size in CSS px. Backends expose this through
     /// <c>window.innerWidth</c>/<c>innerHeight</c> and <c>window.screen</c>.

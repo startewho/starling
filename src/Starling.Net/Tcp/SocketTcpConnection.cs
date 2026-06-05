@@ -1,23 +1,27 @@
 using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Starling.Net.Tcp;
+
+internal static partial class SocketTcpConnectionLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "socket shutdown threw; peer may already be gone")]
+    public static partial void ShutdownFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// <see cref="ITcpConnection"/> implementation backed by a real
 /// <see cref="System.Net.Sockets.Socket"/>. Pure managed per Rule 0.
 /// </summary>
-internal sealed class SocketTcpConnection : ITcpConnection
+internal sealed class SocketTcpConnection(Socket socket, TcpEndpoint endpoint, ILogger<SocketTcpConnection>? log = null)
+    : ITcpConnection
 {
-    private readonly Socket _socket;
+    private readonly Socket _socket = socket ?? throw new ArgumentNullException(nameof(socket));
+    private readonly ILogger _log = log ?? NullLogger<SocketTcpConnection>.Instance;
     private bool _open = true;
 
-    public TcpEndpoint Endpoint { get; }
-
-    public SocketTcpConnection(Socket socket, TcpEndpoint endpoint)
-    {
-        _socket = socket ?? throw new ArgumentNullException(nameof(socket));
-        Endpoint = endpoint;
-    }
+    public TcpEndpoint Endpoint { get; } = endpoint;
 
     public bool IsOpen => _open && _socket.Connected;
 
@@ -53,7 +57,8 @@ internal sealed class SocketTcpConnection : ITcpConnection
     {
         if (!_open) return ValueTask.CompletedTask;
         _open = false;
-        try { _socket.Shutdown(SocketShutdown.Both); } catch (SocketException) { }
+        try { _socket.Shutdown(SocketShutdown.Both); }
+        catch (SocketException ex) { SocketTcpConnectionLog.ShutdownFailed(_log, ex); }
         _ = ct;
         return ValueTask.CompletedTask;
     }

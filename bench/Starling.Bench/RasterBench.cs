@@ -30,7 +30,7 @@ public class RasterBench
     [GlobalSetup]
     public void Setup()
     {
-        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
         _solid = BuildList(Fixtures.SolidBackgrounds(150), Fixtures.SolidBackgroundsCss);
         _borders = BuildList(Fixtures.ManyBorders(150), Fixtures.ManyBordersCss);
         _text = BuildList(Fixtures.TextHeavyParagraphs(80), css: null);

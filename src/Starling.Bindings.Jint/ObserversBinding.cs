@@ -3,7 +3,7 @@ using Jint.Native;
 using Jint.Native.Object;
 using Jint.Runtime;
 using Jint.Runtime.Descriptors;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Starling.Bindings.Jint;
 
@@ -119,6 +119,7 @@ internal static class ObserversBinding
         JintInterop.DefineDataProp(entry, "time", JintInterop.Num(0));
 
         var entries = new JsArray(engine, new JsValue[] { entry });
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         try
         {
             engine.Invoke(callback, observer, new JsValue[] { entries, observer });
@@ -126,12 +127,12 @@ internal static class ObserversBinding
         }
         catch (JavaScriptException ex)
         {
-            ctx.Diag.Log(DiagLevel.Warn, "engine.js",
-                $"Uncaught (in IntersectionObserver) {JintInterop.DescribeError(ex.Error, ex.Message)}");
+            ObserversBindingLog.UncaughtInIntersectionObserver(jsLog,
+                JintInterop.DescribeError(ex.Error, ex.Message));
         }
         catch (Exception ex)
         {
-            ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Uncaught (in IntersectionObserver) {ex.Message}");
+            ObserversBindingLog.UncaughtInIntersectionObserver(jsLog, ex.Message);
         }
     }
 
@@ -149,4 +150,10 @@ internal static class ObserversBinding
         JintInterop.DefineDataProp(o, "left", JintInterop.Num(x));
         return o;
     }
+}
+
+internal static partial class ObserversBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught (in IntersectionObserver) {Detail}")]
+    public static partial void UncaughtInIntersectionObserver(ILogger logger, string detail);
 }

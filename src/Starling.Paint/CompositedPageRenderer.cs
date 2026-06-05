@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Dom;
@@ -19,7 +20,8 @@ namespace Starling.Paint;
 /// </summary>
 public sealed class CompositedPageRenderer : IDisposable
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly IPaintBackend _backend;
     private readonly TileGrid _tiles;
     private bool _disposed;
@@ -27,11 +29,12 @@ public sealed class CompositedPageRenderer : IDisposable
     public CompositedPageRenderer(
         FontResolver? fonts = null,
         FontFaceRegistry? webFonts = null,
-        IDiagnostics? diagnostics = null)
+        ILoggerFactory? loggerFactory = null)
     {
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _backend = PaintBackendSelector.Create(fonts ?? FontResolver.Default, webFonts, _diag);
-        _tiles = new TileGrid(_diag);
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<CompositedPageRenderer>();
+        _backend = PaintBackendSelector.Create(fonts ?? FontResolver.Default, webFonts);
+        _tiles = new TileGrid();
     }
 
     public string BackendName => _backend.Name;
@@ -51,16 +54,16 @@ public sealed class CompositedPageRenderer : IDisposable
 
         try
         {
-            var tree = new LayerTreeBuilder(styleOverride, images, _diag,
+            var tree = new LayerTreeBuilder(styleOverride, images,
                 isAnimatingLayerRoot: isAnimatingLayerRoot,
                 layerIdFor: _tiles.LayerIdFor,
                 scrollOffsets: scrollOffsets).Build(root);
-            var compositor = new Starling.Paint.Compositor.Compositor(_backend, _diag, _tiles);
+            var compositor = new Starling.Paint.Compositor.Compositor(_backend, _tiles);
             return compositor.RenderGpuTextures(tree, viewport, scale, drawingOverlays);
         }
         catch (Exception ex)
         {
-            _diag.LogException("paint", ex, $"composited page render via '{_backend.Name}' failed");
+            CompositedPageRendererLog.RenderFailed(_log, ex, _backend.Name);
             throw;
         }
     }
@@ -77,4 +80,10 @@ public sealed class CompositedPageRenderer : IDisposable
         _disposed = true;
         _backend.Dispose();
     }
+}
+
+internal static partial class CompositedPageRendererLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "composited page render via '{BackendName}' failed")]
+    public static partial void RenderFailed(ILogger logger, Exception ex, string backendName);
 }

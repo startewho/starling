@@ -1,8 +1,19 @@
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Org.BouncyCastle.X509;
 using BcCertificate = Org.BouncyCastle.X509.X509Certificate;
 
 namespace Starling.Net.Tls;
+
+internal static partial class SystemRootCertificatesLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "skipping unparseable certificate in {StoreLocation} Root store")]
+    public static partial void DroppedCert(ILogger logger, Exception ex, string storeLocation);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "OS Root store unavailable for {StoreLocation}")]
+    public static partial void StoreUnavailable(ILogger logger, Exception ex, string storeLocation);
+}
 
 /// <summary>
 /// Reads root certificates the operating system trusts (the platform "Root"
@@ -16,8 +27,9 @@ namespace Starling.Net.Tls;
 /// </summary>
 internal static class SystemRootCertificates
 {
-    public static IReadOnlyList<BcCertificate> Load()
+    public static IReadOnlyList<BcCertificate> Load(ILogger? log = null)
     {
+        log ??= NullLogger.Instance;
         var parser = new X509CertificateParser();
         var certificates = new List<BcCertificate>();
 
@@ -33,16 +45,18 @@ internal static class SystemRootCertificates
                     {
                         certificates.Add(parser.ReadCertificate(osCertificate.RawData));
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         // Skip any entry BouncyCastle can't parse; one bad cert
                         // must not poison the whole store.
+                        SystemRootCertificatesLog.DroppedCert(log, ex, location.ToString());
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // Store unavailable on this platform/scope — fall through.
+                SystemRootCertificatesLog.StoreUnavailable(log, ex, location.ToString());
             }
         }
 

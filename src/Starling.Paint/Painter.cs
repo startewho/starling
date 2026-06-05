@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Css;
@@ -26,7 +28,8 @@ namespace Starling.Paint;
 public sealed class Painter
 {
     private readonly FontResolver _fonts;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
 
     // One animation timeline per document, kept alive across the per-layout
     // StyleEngine rebuilds. Every StyleEngine this painter builds for a given
@@ -35,10 +38,11 @@ public sealed class Painter
     // with its document.
     private readonly ConditionalWeakTable<Document, AnimationTimeline> _timelines = new();
 
-    public Painter(FontResolver? fonts = null, IDiagnostics? diag = null)
+    public Painter(FontResolver? fonts = null, ILoggerFactory? loggerFactory = null)
     {
         _fonts = fonts ?? FontResolver.Default;
-        _diag = diag ?? NoopDiagnostics.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<Painter>();
     }
 
     /// <summary>The persistent <see cref="AnimationTimeline"/> for
@@ -53,7 +57,7 @@ public sealed class Painter
     }
 
     public CompositedPageRenderer CreateCompositedRenderer(FontFaceRegistry? webFonts = null)
-        => new(_fonts, webFonts, _diag);
+        => new(_fonts, webFonts, _loggerFactory);
 
     /// <summary>
     /// Run the full pipeline: build a box tree, lay it out, build a paint
@@ -103,10 +107,10 @@ public sealed class Painter
         var root = LayoutDocument(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs, colorScheme);
 
         PaintList displayList;
-        using (_diag.Span("paint", "display_list"))
+        using (StarlingTelemetry.Span("paint", "display_list"))
             displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
 
-        using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
+        using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
             // DisplayList is the renderer-neutral seam. ImageSharp.Drawing 3
             // is the only backend after the Skia shim removal. When a clip
@@ -119,8 +123,8 @@ public sealed class Painter
                 // process it silently widens the raster→command_record gap.
                 // Span it so that cost is attributable.
                 IPaintBackend backend;
-                using (_diag.Span("paint", "raster.backend_init"))
-                    backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
+                using (StarlingTelemetry.Span("paint", "raster.backend_init"))
+                    backend = PaintBackendSelector.Create(_fonts, webFonts);
                 using (backend)
                     return clipViewport is { } clip
                         ? backend.Render(displayList, clip)
@@ -132,7 +136,7 @@ public sealed class Painter
                 // shim missing, etc.) through diagnostics before unwinding so
                 // Aspire shows the full exception on the raster span instead
                 // of just a silently failed activity.
-                _diag.LogException("paint", ex, $"raster backend '{PaintBackendSelector.Selected}' failed");
+                PainterLog.RasterBackendFailed(_log, ex, PaintBackendSelector.Selected.ToString());
                 throw;
             }
         }
@@ -159,16 +163,16 @@ public sealed class Painter
         ArgumentNullException.ThrowIfNull(root);
 
         PaintList displayList;
-        using (_diag.Span("paint", "display_list"))
+        using (StarlingTelemetry.Span("paint", "display_list"))
             displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
 
-        using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
+        using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
             try
             {
                 IPaintBackend backend;
-                using (_diag.Span("paint", "raster.backend_init"))
-                    backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
+                using (StarlingTelemetry.Span("paint", "raster.backend_init"))
+                    backend = PaintBackendSelector.Create(_fonts, webFonts);
                 using (backend)
                     return clipViewport is { } clip
                         ? backend.Render(displayList, clip)
@@ -176,7 +180,7 @@ public sealed class Painter
             }
             catch (Exception ex)
             {
-                _diag.LogException("paint", ex, $"raster backend '{PaintBackendSelector.Selected}' failed");
+                PainterLog.RasterBackendFailed(_log, ex, PaintBackendSelector.Selected.ToString());
                 throw;
             }
         }
@@ -249,15 +253,15 @@ public sealed class Painter
         ArgumentNullException.ThrowIfNull(document);
 
         StyleEngine style;
-        using (_diag.Span("paint", "style_cascade"))
-            style = CreateStyleEngine(document, viewport, defaultFontSize, externalStylesheet, _diag, colorScheme);
+        using (StarlingTelemetry.Span("paint", "style_cascade"))
+            style = CreateStyleEngine(document, viewport, defaultFontSize, externalStylesheet, _loggerFactory, colorScheme);
 
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _diag, ct);
+            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory, ct);
             Starling.Layout.Box.BlockBox root;
-            using (_diag.Span("paint", "layout"))
+            using (StarlingTelemetry.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
             return (root, style);
         }
@@ -292,20 +296,20 @@ public sealed class Painter
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _diag);
+            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory);
             Starling.Layout.Box.BlockBox root;
-            using (_diag.Span("paint", "layout"))
+            using (StarlingTelemetry.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
 
             PaintList displayList;
-            using (_diag.Span("paint", "display_list"))
+            using (StarlingTelemetry.Span("paint", "display_list"))
                 displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
 
-            using (_diag.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
+            using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
             {
                 IPaintBackend backend;
-                using (_diag.Span("paint", "raster.backend_init"))
-                    backend = PaintBackendSelector.Create(_fonts, webFonts, _diag);
+                using (StarlingTelemetry.Span("paint", "raster.backend_init"))
+                    backend = PaintBackendSelector.Create(_fonts, webFonts);
                 using (backend)
                     return clipViewport is { } clip
                         ? backend.Render(displayList, clip)
@@ -341,7 +345,7 @@ public sealed class Painter
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            using (_diag.Span("paint", "layout.incremental"))
+            using (StarlingTelemetry.Span("paint", "layout.incremental"))
                 return session.Layout(document, viewport, measurer, nowMs, ct);
         }
         finally
@@ -366,8 +370,8 @@ public sealed class Painter
         ColorScheme colorScheme = ColorScheme.Light)
     {
         ArgumentNullException.ThrowIfNull(document);
-        using (_diag.Span("paint", "style_cascade.standalone"))
-            return CreateStyleEngine(document, viewport, defaultFontSize, externalStylesheet, _diag, colorScheme);
+        using (StarlingTelemetry.Span("paint", "style_cascade.standalone"))
+            return CreateStyleEngine(document, viewport, defaultFontSize, externalStylesheet, _loggerFactory, colorScheme);
     }
 
     private StyleEngine CreateStyleEngine(
@@ -375,13 +379,13 @@ public sealed class Painter
         LayoutSize viewport,
         float? defaultFontSize,
         Func<Element, StyleSheet?>? externalStylesheet,
-        IDiagnostics diag,
+        ILoggerFactory loggerFactory,
         ColorScheme colorScheme)
     {
         // Reuse the document's persistent timeline so animation/transition state
         // outlives this (per-layout) StyleEngine.
         var style = new StyleEngine(
-            includeUserAgentStyleSheet: true, diagnostics: diag, timeline: GetAnimationTimeline(document));
+            includeUserAgentStyleSheet: true, loggerFactory: loggerFactory, timeline: GetAnimationTimeline(document));
         // Expose the UA's preferred color scheme through @media
         // (prefers-color-scheme: …) and the real viewport size through both
         // @media width/height/orientation queries and the vw/vh/sv*/lv*/dv*
@@ -405,15 +409,14 @@ public sealed class Painter
                 defaultFontSize.Value,
                 size => CssParser.ParseStyleSheet(
                     FormattableString.Invariant($"body {{ font-size: {size}px; }}"),
-                    StyleOrigin.User,
-                    diag));
+                    StyleOrigin.User));
             style.AddStyleSheet(sheet);
         }
 
         // Walk the tree in document order so `<style>` and `<link rel=stylesheet>`
         // contribute to the cascade in source order — required by [CSS Cascade
         // 4 §6.3]: tree order is the tiebreaker after origin/importance/specificity.
-        AddAuthorStylesheets(document, externalStylesheet, style, diag);
+        AddAuthorStylesheets(document, externalStylesheet, style, loggerFactory);
 
         return style;
     }
@@ -436,7 +439,7 @@ public sealed class Painter
         Node node,
         Func<Element, StyleSheet?>? externalStylesheet,
         StyleEngine style,
-        IDiagnostics diag)
+        ILoggerFactory loggerFactory)
     {
         if (node is Element element)
         {
@@ -456,7 +459,7 @@ public sealed class Painter
                     }
                     else
                     {
-                        sheet = CssParser.ParseStyleSheet(source, StyleOrigin.Author, diag);
+                        sheet = CssParser.ParseStyleSheet(source, StyleOrigin.Author);
                         s_inlineSheetCache.Remove(element);
                         s_inlineSheetCache.Add(element, new CachedSheet { Source = source, Sheet = sheet });
                     }
@@ -472,6 +475,12 @@ public sealed class Painter
         }
 
         for (var child = node.FirstChild; child is not null; child = child.NextSibling)
-            AddAuthorStylesheets(child, externalStylesheet, style, diag);
+            AddAuthorStylesheets(child, externalStylesheet, style, loggerFactory);
     }
+}
+
+internal static partial class PainterLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "raster backend '{Backend}' failed")]
+    public static partial void RasterBackendFailed(ILogger logger, Exception ex, string backend);
 }

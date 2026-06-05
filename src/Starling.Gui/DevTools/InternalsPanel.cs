@@ -4,11 +4,22 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Chrome;
 using Starling.Gui.Theme;
 using Starling.Telemetry;
 
 namespace Starling.Gui.DevTools;
+
+internal static partial class InternalsPanelLog
+{
+    [LoggerMessage(Level = LogLevel.Trace, Message = "internals activity pump stopped")]
+    public static partial void ActivityPumpStopped(ILogger logger, OperationCanceledException ex);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "internals metrics pump stopped")]
+    public static partial void MetricsPumpStopped(ILogger logger, OperationCanceledException ex);
+}
 
 /// <summary>
 /// Live internals panel. Module chips count distinct activity sources and
@@ -22,6 +33,7 @@ public sealed class InternalsPanel : Grid, IDisposable
 
     private readonly ThemeManager _tm;
     private readonly TelemetryStream _stream;
+    private readonly ILogger _log;
     private readonly StackPanel _chips;
     private readonly StackPanel _metricsCard;
     private readonly Dictionary<string, int> _opCounts = new(StringComparer.Ordinal);
@@ -30,10 +42,12 @@ public sealed class InternalsPanel : Grid, IDisposable
     private readonly InMemoryMeterSink.Subscription _meterSub;
     private readonly CancellationTokenSource _pumpCts = new();
 
-    public InternalsPanel(ThemeManager tm, TelemetryStream stream)
+    public InternalsPanel(ThemeManager tm, TelemetryStream stream,
+        ILogger<InternalsPanel>? log = null)
     {
         _tm = tm;
         _stream = stream;
+        _log = log ?? NullLogger<InternalsPanel>.Instance;
         var t = tm.Tokens;
 
         Background = new SolidColorBrush(t.Panel);
@@ -90,7 +104,7 @@ public sealed class InternalsPanel : Grid, IDisposable
                 });
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex) { InternalsPanelLog.ActivityPumpStopped(_log, ex); }
     }
 
     private async Task PumpMetricsAsync(InMemoryMeterSink.Subscription sub, CancellationToken ct)
@@ -106,7 +120,7 @@ public sealed class InternalsPanel : Grid, IDisposable
                 });
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex) { InternalsPanelLog.MetricsPumpStopped(_log, ex); }
     }
 
     private void BumpCount(ActivityRecord record)
@@ -210,8 +224,8 @@ public sealed class InternalsPanel : Grid, IDisposable
 
     private static string AreaOf(string operationName)
     {
-        // OtelDiagnostics emits names shaped like "area.operation" (see
-        // OtelDiagnostics.Span). Take the prefix before the first dot.
+        // StarlingTelemetry emits span names shaped like "area.operation" (see
+        // StarlingTelemetry.Span). Take the prefix before the first dot.
         var dot = operationName.IndexOf('.');
         return dot > 0 ? operationName[..dot] : operationName;
     }

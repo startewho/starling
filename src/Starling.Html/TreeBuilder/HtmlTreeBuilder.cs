@@ -33,7 +33,6 @@ public sealed class HtmlTreeBuilder
     private readonly Document _document = new();
     private readonly StackOfOpenElements _openElements = new();
     private readonly StringBuilder _pendingText = new();
-    private readonly IDiagnostics _diag;
     private readonly CountingParseErrorSink? _errorCounter;
     private readonly bool _scriptingEnabled;
 
@@ -58,19 +57,18 @@ public sealed class HtmlTreeBuilder
     /// </summary>
     private readonly Element? _fragmentContext;
 
-    public HtmlTreeBuilder(HtmlTokenizer tokenizer, IDiagnostics? diagnostics = null,
+    public HtmlTreeBuilder(HtmlTokenizer tokenizer,
         CountingParseErrorSink? errorCounter = null, bool scriptingEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(tokenizer);
         _tokenizer = tokenizer;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
         _errorCounter = errorCounter;
         _scriptingEnabled = scriptingEnabled;
     }
 
-    private HtmlTreeBuilder(HtmlTokenizer tokenizer, Element fragmentContext, IDiagnostics? diagnostics,
+    private HtmlTreeBuilder(HtmlTokenizer tokenizer, Element fragmentContext,
         CountingParseErrorSink? errorCounter)
-        : this(tokenizer, diagnostics, errorCounter)
+        : this(tokenizer, errorCounter)
     {
         _fragmentContext = fragmentContext;
     }
@@ -79,7 +77,6 @@ public sealed class HtmlTreeBuilder
     /// Runs tree construction over <paramref name="html"/>.
     /// </summary>
     /// <param name="html">The HTML source to parse.</param>
-    /// <param name="diagnostics">Optional diagnostics sink for spans/counters.</param>
     /// <param name="scriptingEnabled">
     /// WHATWG HTML §13.2 "scripting flag". When <c>true</c> (the engine, which
     /// runs JS) a <c>&lt;noscript&gt;</c> start tag in the "in head" insertion
@@ -89,16 +86,14 @@ public sealed class HtmlTreeBuilder
     /// which assumes scripting disabled) the legacy element-parsing behavior is
     /// preserved.
     /// </param>
-    public static Document Parse(string html, IDiagnostics? diagnostics = null,
-        bool scriptingEnabled = false)
+    public static Document Parse(string html, bool scriptingEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(html);
-        var diag = diagnostics ?? NoopDiagnostics.Instance;
         var errorCounter = new CountingParseErrorSink();
         var tokenizer = new HtmlTokenizer(errorCounter);
         tokenizer.Feed(html);
         tokenizer.EndOfInput();
-        var builder = new HtmlTreeBuilder(tokenizer, diag, errorCounter, scriptingEnabled);
+        var builder = new HtmlTreeBuilder(tokenizer, errorCounter, scriptingEnabled);
         return builder.Run();
     }
 
@@ -110,13 +105,12 @@ public sealed class HtmlTreeBuilder
     /// document). The context element itself is not added to the output.
     /// </summary>
     public static DocumentFragment ParseFragment(string markup, Element contextElement,
-        Document ownerDocument, IDiagnostics? diagnostics = null)
+        Document ownerDocument)
     {
         ArgumentNullException.ThrowIfNull(markup);
         ArgumentNullException.ThrowIfNull(contextElement);
         ArgumentNullException.ThrowIfNull(ownerDocument);
 
-        var diag = diagnostics ?? NoopDiagnostics.Instance;
         var errorCounter = new CountingParseErrorSink();
         var tokenizer = new HtmlTokenizer(errorCounter);
         // §13.4 step 4: set the tokenizer's state per the context element so RCDATA
@@ -125,13 +119,13 @@ public sealed class HtmlTreeBuilder
         tokenizer.Feed(markup);
         tokenizer.EndOfInput();
 
-        var builder = new HtmlTreeBuilder(tokenizer, contextElement, diag, errorCounter);
+        var builder = new HtmlTreeBuilder(tokenizer, contextElement, errorCounter);
         return builder.RunFragment(ownerDocument);
     }
 
     private DocumentFragment RunFragment(Document ownerDocument)
     {
-        using var _ = _diag.Span("html", "parse-fragment");
+        using var _ = StarlingTelemetry.Span("html", "parse-fragment");
 
         // §13.4 steps 5-7: create a synthetic <html> root, push it as the only
         // open element, and reset the insertion mode appropriately for the
@@ -216,7 +210,7 @@ public sealed class HtmlTreeBuilder
 
     public Document Run()
     {
-        using var _ = _diag.Span("html", "parse");
+        using var _ = StarlingTelemetry.Span("html", "parse");
         try
         {
             while (_tokenizer.ReadToken() is { } token)
@@ -230,9 +224,9 @@ public sealed class HtmlTreeBuilder
             var errorCount = _errorCounter?.Count ?? 0;
             Activity.Current?.SetTag("html.tokens", _tokenCount);
             Activity.Current?.SetTag("html.parse_errors", errorCount);
-            _diag.Counter("html.parses", 1);
+            StarlingTelemetry.Counter("html.parses", 1);
             if (errorCount > 0)
-                _diag.Counter("html.parse_errors", errorCount);
+                StarlingTelemetry.Counter("html.parse_errors", errorCount);
             return _document;
         }
         catch (Exception ex)

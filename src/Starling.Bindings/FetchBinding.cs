@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Js.Intrinsics;
 using Starling.Js.Runtime;
@@ -42,6 +44,7 @@ namespace Starling.Bindings;
 public static class FetchBinding
 {
     private static readonly ConditionalWeakTable<JsRuntime, PendingFetchCounter> PendingFetches = new();
+    private static readonly ILogger Log = NullLoggerFactory.Instance.CreateLogger(typeof(FetchBinding));
 
     /// <summary>Install fetch + Headers + Request + Response + AbortController.
     /// Idempotent per realm.</summary>
@@ -573,7 +576,7 @@ public static class FetchBinding
                             new[] { MakeAbortError(realm, sig.Reason) })));
                     return;
                 }
-                sig.OnAbort(_ => { try { cts.Cancel(); } catch { } });
+                sig.OnAbort(_ => { try { cts.Cancel(); } catch (Exception ex) { FetchBindingLog.AbortSignalCancelFailed(Log, ex); } });
             }
 
             // Dispatch on the thread pool; settle via microtask queue.
@@ -804,7 +807,7 @@ public static class FetchBinding
         foreach (var (k, v) in req.Headers.Store.Entries())
         {
             // Skip pseudo-headers / banned headers (none enforced here).
-            try { hdrs.Add(k, v); } catch { /* invalid header chars -> skip */ }
+            try { hdrs.Add(k, v); } catch (Exception ex) { FetchBindingLog.InvalidHeaderSkipped(Log, ex, k); }
         }
         // Default Host header is added by the wire writer.
         ReadOnlyMemory<byte> body = req.BodyBytes;
@@ -1098,6 +1101,8 @@ internal sealed class ResponseObject : JsObject, IBodyOwner
 
 internal sealed class AbortSignalObject : JsObject
 {
+    private static readonly ILogger s_log = NullLoggerFactory.Instance.CreateLogger(typeof(AbortSignalObject));
+
     public bool Aborted { get; private set; }
     public JsValue Reason { get; private set; } = JsValue.Undefined;
     public InMemoryEventTarget HostTarget { get; } = new();
@@ -1128,7 +1133,7 @@ internal sealed class AbortSignalObject : JsObject
         // Fire the 'abort' event on the signal.
         var ev = new Starling.Dom.Events.Event("abort");
         HostTarget.DispatchEvent(ev);
-        foreach (var cb in toFire) { try { cb(reason); } catch { /* swallow */ } }
+        foreach (var cb in toFire) { try { cb(reason); } catch (Exception ex) { FetchBindingLog.AbortCallbackFailed(s_log, ex); } }
     }
 
     public static AbortSignalObject Require(JsRealm realm, JsValue thisV)
@@ -1150,4 +1155,16 @@ internal sealed class AbortControllerObject : JsObject
         if (thisV.IsObject && thisV.AsObject is AbortControllerObject c) return c;
         throw new JsThrow(realm.NewTypeError("'this' is not an AbortController"));
     }
+}
+
+internal static partial class FetchBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "abort-signal CancellationTokenSource.Cancel() failed (best-effort)")]
+    public static partial void AbortSignalCancelFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "skipping HTTP header '{Name}' with invalid characters")]
+    public static partial void InvalidHeaderSkipped(ILogger logger, Exception ex, string name);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "abort callback threw (fan-out, swallowed)")]
+    public static partial void AbortCallbackFailed(ILogger logger, Exception ex);
 }

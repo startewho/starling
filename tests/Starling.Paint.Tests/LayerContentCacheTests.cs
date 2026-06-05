@@ -43,11 +43,11 @@ public sealed class LayerContentCacheTests
         using var inner = new ImageSharpBackend(FontResolver.Default, webFonts: null);
         using var counting = new CountingBackend(inner);
         var tiles = new TileGrid();
-        var compositor = new CompositorEngine(counting, null, tiles);
+        var compositor = new CompositorEngine(counting, tiles);
 
         // Frame 1 seeds the caches: root + promoted div each raster once.
         var root1 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree1 = new LayerTreeBuilder(null, null, null, layerIdFor: tiles.LayerIdFor).Build(root1);
+        var tree1 = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root1);
         using (compositor.Render(tree1, new LayoutRect(0, 0, W, H), scale)) { }
         counting.RenderCount.Should().Be(2, "the first frame rasters the root and the promoted div");
 
@@ -55,7 +55,7 @@ public sealed class LayerContentCacheTests
         // from the slice, so both slices hash identically and serve from cache.
         doc.GetElementById("box")!.SetAttribute("style", baseStyle + "transform:rotate(70deg)");
         var root2 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree2 = new LayerTreeBuilder(null, null, null, layerIdFor: tiles.LayerIdFor).Build(root2);
+        var tree2 = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root2);
         using (compositor.Render(tree2, new LayoutRect(0, 0, W, H), scale)) { }
         counting.RenderCount.Should().Be(2, "a transform-only change re-blits every layer from cache — no new raster");
     }
@@ -76,10 +76,10 @@ public sealed class LayerContentCacheTests
         using var inner = new ImageSharpBackend(FontResolver.Default, webFonts: null);
         using var counting = new CountingBackend(inner);
         var tiles = new TileGrid();
-        var compositor = new CompositorEngine(counting, null, tiles);
+        var compositor = new CompositorEngine(counting, tiles);
 
         var root1 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree1 = new LayerTreeBuilder(null, null, null, layerIdFor: tiles.LayerIdFor).Build(root1);
+        var tree1 = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root1);
         using (compositor.Render(tree1, new LayoutRect(0, 0, W, H), scale)) { }
         counting.RenderCount.Should().Be(2);
 
@@ -87,7 +87,7 @@ public sealed class LayerContentCacheTests
         // changes (new hash → re-raster) but the root slice is unchanged (hit).
         doc.GetElementById("box")!.SetAttribute("style", baseStyle + "background-color:#22cc22");
         var root2 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree2 = new LayerTreeBuilder(null, null, null, layerIdFor: tiles.LayerIdFor).Build(root2);
+        var tree2 = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root2);
         using (compositor.Render(tree2, new LayoutRect(0, 0, W, H), scale)) { }
         counting.RenderCount.Should().Be(3, "exactly one layer (the recoloured div) re-rasters; the root serves from cache");
     }
@@ -108,10 +108,10 @@ public sealed class LayerContentCacheTests
 
         // A persistent-tile-grid compositor that has already cached every layer's tiles.
         var tiles = new TileGrid();
-        var cached = new CompositorEngine(backend, null, tiles);
+        var cached = new CompositorEngine(backend, tiles);
         var root = engine.LayoutDocument(doc, new Size(W, H));
-        using (cached.Render(new LayerTreeBuilder(null, null, null, layerIdFor: tiles.LayerIdFor).Build(root), new LayoutRect(0, 0, W, H), scale)) { }
-        using var reblit = cached.Render(new LayerTreeBuilder(null, null, null, layerIdFor: tiles.LayerIdFor).Build(root), new LayoutRect(0, 0, W, H), scale);
+        using (cached.Render(new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root), new LayoutRect(0, 0, W, H), scale)) { }
+        using var reblit = cached.Render(new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root), new LayoutRect(0, 0, W, H), scale);
 
         // A cold compositor with its own fresh per-layer caches (no persistence).
         var fresh = new CompositorEngine(backend);

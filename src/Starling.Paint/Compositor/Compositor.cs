@@ -21,7 +21,6 @@ namespace Starling.Paint.Compositor;
 internal sealed class Compositor
 {
     private readonly IPaintBackend _backend;
-    private readonly IDiagnostics _diag;
     // Session-scoped per-layer tile cache. Supplied by the host so tiles
     // persist across frames; one-shot renders / tests get a private grid so they still
     // tile (and stay self-contained) without cross-frame reuse.
@@ -34,12 +33,11 @@ internal sealed class Compositor
     private int _frameTileHits;
     private int _frameTileMisses;
 
-    public Compositor(IPaintBackend backend, IDiagnostics? diagnostics = null, TileGrid? tileGrid = null)
+    public Compositor(IPaintBackend backend, TileGrid? tileGrid = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         _backend = backend;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _tileGrid = tileGrid ?? new TileGrid(_diag);
+        _tileGrid = tileGrid ?? new TileGrid();
     }
 
     /// <summary>
@@ -62,8 +60,8 @@ internal sealed class Compositor
         var width = (int)Math.Ceiling(viewport.Width * scale);
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
-        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
-        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        using var composite = StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        StarlingTelemetry.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
         var output = new byte[checked(width * height * 4)];
         FillWhite(output);
 
@@ -109,8 +107,8 @@ internal sealed class Compositor
         var width = (int)Math.Ceiling(viewport.Width * scale);
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
-        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
-        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        using var composite = StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        StarlingTelemetry.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
         var output = new byte[checked(width * height * 4)];
         FillWhite(output);
 
@@ -497,8 +495,8 @@ internal sealed class Compositor
     {
         var total = _frameTileHits + _frameTileMisses;
         if (total == 0) return;
-        _diag.Gauge(RenderMetrics.TileMissRatio, (double)_frameTileMisses / total);
-        _diag.Counter(RenderMetrics.TileRastersPerFrame, _frameTileMisses);
+        StarlingTelemetry.Gauge(RenderMetrics.TileMissRatio, (double)_frameTileMisses / total);
+        StarlingTelemetry.Counter(RenderMetrics.TileRastersPerFrame, _frameTileMisses);
     }
 
     // A layer spanning this many tiles or fewer renders all of them (no viewport cull) —

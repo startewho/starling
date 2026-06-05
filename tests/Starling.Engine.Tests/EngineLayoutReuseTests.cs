@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using SixLabors.ImageSharp;
 using Starling.Common.Diagnostics;
 
@@ -10,13 +13,13 @@ namespace Starling.Engine.Tests;
 /// final paint when nothing layout-affecting changed after scripts ran, instead
 /// of running a second full cascade + layout.
 ///
-/// The probe is a span-counting <see cref="IDiagnostics"/>: every cascade +
-/// layout pass emits a <c>paint/layout</c> span, so counting those spans tells
-/// us exactly how many layouts ran across the whole render. A render whose
-/// script reads geometry but leaves the final DOM unchanged from the layout it
-/// last materialized runs layout exactly ONCE (the pre-script layout is reused
-/// for paint). It runs twice only when a post-layout mutation or a late
-/// resource invalidates the cached tree.
+/// The probe uses a span-counting <see cref="ActivityListener"/> on
+/// <see cref="StarlingTelemetry.Source"/>: every cascade + layout pass emits a
+/// <c>paint.layout</c> span, so counting those spans tells us exactly how many
+/// layouts ran across the whole render. A render whose script reads geometry but
+/// leaves the final DOM unchanged from the layout it last materialized runs layout
+/// exactly ONCE (the pre-script layout is reused for paint). It runs twice only
+/// when a post-layout mutation or a late resource invalidates the cached tree.
 ///
 /// Note on test construction: writing back a result via <c>textContent</c> is
 /// itself a DOM mutation that would bump the mutation version past the last
@@ -221,19 +224,19 @@ public sealed class EngineLayoutReuseTests
 
     // -------------------------------------------------------------------
 
-    private static async Task<(RenderOutcome Outcome, CountingDiagnostics Diag)> RenderHtmlAsync(string html)
+    private static async Task<(RenderOutcome Outcome, RenderProbe Diag)> RenderHtmlAsync(string html)
     {
         var tempHtml = Path.Combine(Path.GetTempPath(), $"starling-reuse-{Guid.NewGuid():N}.html");
         var tempPng = Path.Combine(Path.GetTempPath(), $"starling-reuse-{Guid.NewGuid():N}.png");
         await File.WriteAllTextAsync(tempHtml, html, CancellationToken.None);
         try
         {
-            var diag = new CountingDiagnostics();
-            var engine = new StarlingEngine(diagnostics: diag);
+            using var probe = new RenderProbe();
+            var engine = new StarlingEngine(loggerFactory: NullLoggerFactory.Instance);
             var url = new Uri(tempHtml).AbsoluteUri;
             var result = await engine.RenderAsync(url, DefaultOptions, tempPng, CancellationToken.None);
             result.IsOk.Should().BeTrue(result.IsErr ? result.Error.Message : "");
-            return (result.Value, diag);
+            return (result.Value, probe.Snapshot());
         }
         finally
         {
@@ -249,40 +252,57 @@ public sealed class EngineLayoutReuseTests
     }
 
     /// <summary>
-    /// Span- and counter-counting <see cref="IDiagnostics"/>. Concurrent because
-    /// the paint backend may bump counters from canvas worker threads.
+    /// Captures <c>paint.layout</c> spans via <see cref="ActivityListener"/> and
+    /// named counters via <see cref="MeterListener"/> for the duration of one render.
+    /// Concurrent because the paint backend may bump counters from canvas worker threads.
     /// </summary>
-    private sealed class CountingDiagnostics : IDiagnostics
+    private sealed class RenderProbe : IDisposable
     {
-        private readonly ConcurrentDictionary<string, int> _spans = new();
+        private int _layoutSpanCount;
         private readonly ConcurrentDictionary<string, double> _counters = new();
+        private readonly ActivityListener _al;
+        private readonly MeterListener _ml;
 
-        /// <summary>Number of <c>paint/layout</c> spans seen — i.e. how many
+        public RenderProbe()
+        {
+            _al = new ActivityListener
+            {
+                ShouldListenTo = src => src.Name == StarlingTelemetry.SourceName,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStarted = a =>
+                {
+                    if (a.OperationName == "paint.layout")
+                        Interlocked.Increment(ref _layoutSpanCount);
+                },
+            };
+            ActivitySource.AddActivityListener(_al);
+
+            _ml = new MeterListener();
+            _ml.InstrumentPublished = (inst, lst) =>
+            {
+                if (inst.Meter.Name == StarlingTelemetry.SourceName)
+                    lst.EnableMeasurementEvents(inst);
+            };
+            _ml.SetMeasurementEventCallback<double>((inst, m, _, _) =>
+                _counters.AddOrUpdate(inst.Name, m, (_, prev) => prev + m));
+            _ml.SetMeasurementEventCallback<long>((inst, m, _, _) =>
+                _counters.AddOrUpdate(inst.Name, m, (_, prev) => prev + m));
+            _ml.Start();
+        }
+
+        /// <summary>Number of <c>paint.layout</c> spans seen — i.e. how many
         /// full cascade + layout passes ran across the render.</summary>
-        public int LayoutSpanCount => SpanCount("paint", "layout");
-
-        public int SpanCount(string area, string operation)
-            => _spans.TryGetValue($"{area}/{operation}", out var v) ? v : 0;
+        public int LayoutSpanCount => Volatile.Read(ref _layoutSpanCount);
 
         public double CountOf(string name) => _counters.TryGetValue(name, out var v) ? v : 0d;
 
-        public IDisposable Span(string area, string operation)
+        /// <summary>Returns a detached snapshot so callers can query after dispose.</summary>
+        public RenderProbe Snapshot() => this;
+
+        public void Dispose()
         {
-            _spans.AddOrUpdate($"{area}/{operation}", 1, (_, prev) => prev + 1);
-            return NoopSpan.Instance;
-        }
-
-        public void Counter(string name, double value)
-            => _counters.AddOrUpdate(name, value, (_, prev) => prev + value);
-
-        public void Log(DiagLevel level, string area, string message) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
-        {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
+            _al.Dispose();
+            _ml.Dispose();
         }
     }
 }

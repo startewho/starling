@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Starling.Common.Diagnostics;
+using Starling.Engine;
 using Starling.Gui.Theme;
 using Starling.Telemetry;
 
@@ -38,7 +39,7 @@ internal static class Program
         // Sample this process's CPU/memory only when telemetry is being exported
         // or detailed local diagnostics are enabled.
         if (DiagnosticsMode.ProcessSampler || !string.IsNullOrWhiteSpace(otlp))
-            s_resourceSampler = new ProcessResourceSampler(Services.GetRequiredService<IDiagnostics>());
+            s_resourceSampler = new ProcessResourceSampler(Services.GetRequiredService<ILogger<ProcessResourceSampler>>());
 
         var log = Services.GetRequiredService<ILoggerFactory>()
             .CreateLogger("Starling.Gui.Startup");
@@ -64,6 +65,7 @@ internal static class Program
         // plain ServiceProvider — we don't actually want the host's lifetime.
         var host = Host.CreateApplicationBuilder();
         host.Services.AddSingleton<ThemeManager>();
+        host.Services.AddStarlingEngine();
         host.AddStarlingTelemetry("starling-gui");
 
         var provider = host.Services.BuildServiceProvider();

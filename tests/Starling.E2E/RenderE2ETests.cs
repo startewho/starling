@@ -1,6 +1,6 @@
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using SixLabors.ImageSharp;
-using Starling.Common.Diagnostics;
 using Starling.Engine;
 namespace Starling.E2E;
 
@@ -22,7 +22,7 @@ public class RenderE2ETests
         File.Exists(fixture).Should().BeTrue($"fixture missing: {fixture}");
 
         var output = Path.Combine(Path.GetTempPath(), $"starling-e2e-{Guid.NewGuid():N}.png");
-        var engine = new StarlingEngine(diagnostics: NoopDiagnostics.Instance);
+        var engine = new StarlingEngine(loggerFactory: NullLoggerFactory.Instance);
 
         try
         {

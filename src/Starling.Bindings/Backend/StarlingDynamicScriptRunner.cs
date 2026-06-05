@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -26,7 +28,9 @@ namespace Starling.Bindings.Backend;
 /// </remarks>
 internal sealed class StarlingDynamicScriptRunner
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
+    private readonly ILogger _jsConsoleLog;
     private readonly JsRuntime _runtime;
     private readonly StarlingUrl _baseUrl;
     private readonly Func<StarlingUrl, CancellationToken, Task<string?>> _fetch;
@@ -36,10 +40,12 @@ internal sealed class StarlingDynamicScriptRunner
     private static readonly object Marker = new();
 
     public StarlingDynamicScriptRunner(
-        IDiagnostics diag, JsRuntime runtime, StarlingUrl baseUrl,
+        ILoggerFactory loggerFactory, JsRuntime runtime, StarlingUrl baseUrl,
         Func<StarlingUrl, CancellationToken, Task<string?>> fetch)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<StarlingDynamicScriptRunner>();
+        _jsConsoleLog = _loggerFactory.CreateLogger("Starling.engine.js");
         _runtime = runtime;
         _baseUrl = baseUrl;
         _fetch = fetch;
@@ -96,7 +102,7 @@ internal sealed class StarlingDynamicScriptRunner
         var absolute = ResolveAbsolute(src, _baseUrl);
         if (absolute is null)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve dynamic <script src='{src}'>");
+            StarlingDynamicScriptRunnerLog.UnresolvableSrc(_log, src);
             FireEvent(script, "error");
             return;
         }
@@ -112,7 +118,7 @@ internal sealed class StarlingDynamicScriptRunner
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Dynamic script fetch failed {absolute}: {ex.Message}");
+            StarlingDynamicScriptRunnerLog.DynamicScriptFetchFailed(_log, ex, absolute);
             source = null;
         }
 
@@ -131,20 +137,19 @@ internal sealed class StarlingDynamicScriptRunner
                 var program = new JsParser(source).ParseProgram();
                 var chunk = JsCompiler.Compile(program);
                 new JsVm(_runtime).Run(chunk);
-                _diag.Counter("engine.script.dynamic.ok", 1);
+                StarlingTelemetry.Counter("engine.script.dynamic.ok", 1);
                 ranOk = true;
             }
             catch (JsThrow ex)
             {
-                _diag.Counter("engine.script.dynamic.failed", 1);
-                _diag.Log(DiagLevel.Warn, "engine.js",
-                    $"Uncaught dynamic script error ({label}): {StarlingScriptSession.DescribeThrow(ex.Value)}");
+                StarlingTelemetry.Counter("engine.script.dynamic.failed", 1);
+                StarlingDynamicScriptRunnerLog.UncaughtDynamicScriptError(
+                    _jsConsoleLog, label, StarlingScriptSession.DescribeThrow(ex.Value));
             }
             catch (Exception ex)
             {
-                _diag.Counter("engine.script.dynamic.failed", 1);
-                _diag.Log(DiagLevel.Warn, "engine.js",
-                    $"Dynamic script compile/run failure ({label}): {ex.Message}");
+                StarlingTelemetry.Counter("engine.script.dynamic.failed", 1);
+                StarlingDynamicScriptRunnerLog.DynamicScriptRunFailed(_jsConsoleLog, ex, label);
             }
         });
 
@@ -161,8 +166,7 @@ internal sealed class StarlingDynamicScriptRunner
             }
             catch (Exception ex)
             {
-                _diag.Log(DiagLevel.Warn, "engine.js",
-                    $"Dynamic script '{type}' handler threw: {ex.Message}");
+                StarlingDynamicScriptRunnerLog.DynamicScriptEventHandlerThrew(_jsConsoleLog, ex, type);
             }
         });
     }
@@ -174,4 +178,22 @@ internal sealed class StarlingDynamicScriptRunner
             : UrlParser.Parse(href, baseUrl);
         return parsed.IsOk ? parsed.Value : null;
     }
+}
+
+internal static partial class StarlingDynamicScriptRunnerLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "could not resolve dynamic <script src='{Src}'>")]
+    public static partial void UnresolvableSrc(ILogger logger, string src);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "dynamic script fetch failed: {Absolute}")]
+    public static partial void DynamicScriptFetchFailed(ILogger logger, Exception ex, object absolute);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "uncaught dynamic script error ({Label}): {JsMessage}")]
+    public static partial void UncaughtDynamicScriptError(ILogger logger, string label, string jsMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "dynamic script compile/run failure ({Label})")]
+    public static partial void DynamicScriptRunFailed(ILogger logger, Exception ex, string label);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "dynamic script '{EventType}' handler threw")]
+    public static partial void DynamicScriptEventHandlerThrew(ILogger logger, Exception ex, string eventType);
 }

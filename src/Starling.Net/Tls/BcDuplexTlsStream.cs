@@ -1,7 +1,15 @@
 using System.Buffers;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Org.BouncyCastle.Tls;
 
 namespace Starling.Net.Tls;
+
+internal static partial class BcDuplexTlsStreamLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "close_notify flush failed; peer may already be gone")]
+    public static partial void CloseNotifyFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// A full-duplex <see cref="Stream"/> over BouncyCastle's <em>non-blocking</em>
@@ -23,12 +31,14 @@ internal sealed class BcDuplexTlsStream : Stream
     private readonly object _tlsGate = new();
     private readonly SemaphoreSlim _socketWrite = new(1, 1);
     private readonly byte[] _cipherReadBuffer = new byte[CipherBufferSize];
+    private readonly ILogger _log;
     private bool _disposed;
 
-    private BcDuplexTlsStream(TlsClientProtocol protocol, Stream transport)
+    private BcDuplexTlsStream(TlsClientProtocol protocol, Stream transport, ILogger log)
     {
         _protocol = protocol;
         _transport = transport;
+        _log = log;
     }
 
     /// <summary>
@@ -37,8 +47,10 @@ internal sealed class BcDuplexTlsStream : Stream
     /// The handshake is single-threaded, so no locking is needed here.
     /// </summary>
     public static async Task<BcDuplexTlsStream> HandshakeAsync(
-        TlsClientProtocol protocol, TlsClient client, Stream transport, CancellationToken ct)
+        TlsClientProtocol protocol, TlsClient client, Stream transport, CancellationToken ct,
+        ILogger<BcDuplexTlsStream>? log = null)
     {
+        log ??= NullLogger<BcDuplexTlsStream>.Instance;
         protocol.Connect(client);
         await PumpOutputAsync(protocol, transport, ct).ConfigureAwait(false); // send ClientHello
 
@@ -52,7 +64,7 @@ internal sealed class BcDuplexTlsStream : Stream
             await PumpOutputAsync(protocol, transport, ct).ConfigureAwait(false); // e.g. client Finished
         }
 
-        return new BcDuplexTlsStream(protocol, transport);
+        return new BcDuplexTlsStream(protocol, transport, log);
     }
 
     private static async Task PumpOutputAsync(TlsClientProtocol protocol, Stream transport, CancellationToken ct)
@@ -194,7 +206,7 @@ internal sealed class BcDuplexTlsStream : Stream
                     finally { _socketWrite.Release(); }
                 }
             }
-            catch { /* the peer may already be gone */ }
+            catch (Exception ex) { BcDuplexTlsStreamLog.CloseNotifyFailed(_log, ex); /* the peer may already be gone */ }
 
             _socketWrite.Dispose();
             _transport.Dispose();

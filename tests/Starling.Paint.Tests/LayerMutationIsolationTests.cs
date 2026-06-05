@@ -66,7 +66,7 @@ public sealed class LayerMutationIsolationTests
         using var inner = new ImageSharpBackend(FontResolver.Default, webFonts: null);
         using var counting = new CountingBackend(inner);
         var tiles = new TileGrid();
-        var compositor = new CompositorEngine(counting, null, tiles);
+        var compositor = new CompositorEngine(counting, tiles);
 
         // The status element is the promoted (recently-mutated) layer.
         bool Promote(Box box) => ReferenceEquals(box.Element, status);
@@ -75,7 +75,7 @@ public sealed class LayerMutationIsolationTests
         {
             FirstText(status)!.Data = f % 2 == 0 ? "running 16 ms" : "running 32 ms";
             var root = engine.LayoutDocument(doc, size);
-            var tree = new LayerTreeBuilder(null, null, null, isAnimatingLayerRoot: Promote,
+            var tree = new LayerTreeBuilder(isAnimatingLayerRoot: Promote,
                 layerIdFor: tiles.LayerIdFor).Build(root);
             tree.Children.Should().HaveCount(1, "the status line is promoted to its own layer");
 

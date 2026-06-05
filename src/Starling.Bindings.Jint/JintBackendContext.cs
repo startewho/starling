@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Loop;
 using StarlingUrl = global::Starling.Url.Url;
@@ -16,7 +17,7 @@ namespace Starling.Bindings.Jint;
 /// This is the stable contract binding families depend on. Do not change the
 /// shape of the public surface lightly. Binding families read <see cref="Engine"/>,
 /// <see cref="Document"/>, <see cref="BaseUrl"/>, <see cref="Http"/>,
-/// <see cref="Diag"/>, <see cref="Loop"/>, and use <see cref="Wrappers"/> +
+/// <see cref="LoggerFactory"/>, <see cref="Loop"/>, and use <see cref="Wrappers"/> +
 /// <see cref="JintInterop"/> helpers; they never construct this directly.
 /// </remarks>
 public sealed class JintBackendContext
@@ -33,13 +34,16 @@ public sealed class JintBackendContext
     /// <summary>JS-owned HTTP client for fetch / XHR / dynamic scripts.</summary>
     public Starling.Net.StarlingHttpClient Http { get; }
 
-    /// <summary>Session diagnostics sink.</summary>
-    public IDiagnostics Diag { get; }
+    /// <summary>Session logger factory, shared by all binding families.</summary>
+    public ILoggerFactory LoggerFactory { get; }
+
+    /// <summary>Session logger for the context itself.</summary>
+    public ILogger Log { get; }
 
     /// <summary>Per-engine Dom↔JS wrapper identity map + prototype slots.</summary>
     public JintDomWrapper Wrappers { get; }
 
-    /// <summary>Simulated event loop driving timers / requestAnimationFrame / the pump.
+    /// <summary>Simulated event loop driving timers, requestAnimationFrame, and the pump.
     /// The session advances it in PumpOnce.</summary>
     public WebEventLoop Loop { get; }
 
@@ -120,7 +124,7 @@ public sealed class JintBackendContext
         Document document,
         StarlingUrl baseUrl,
         Starling.Net.StarlingHttpClient http,
-        IDiagnostics diag,
+        ILoggerFactory loggerFactory,
         WebEventLoop loop,
         ILayoutHost? layoutHost,
         Func<StarlingUrl, CancellationToken, Task<string?>> fetch)
@@ -129,7 +133,8 @@ public sealed class JintBackendContext
         Document = document;
         BaseUrl = baseUrl;
         Http = http;
-        Diag = diag;
+        LoggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        Log = LoggerFactory.CreateLogger<JintBackendContext>();
         Loop = loop;
         LayoutHost = layoutHost;
         Fetch = fetch;

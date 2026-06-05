@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Dom;
@@ -25,21 +27,23 @@ public sealed class LayoutEngine
     private readonly StyleEngine _style;
     private readonly ITextMeasurer _measurer;
     private readonly IImageResolver _images;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly CancellationToken _abort;
 
     public LayoutEngine(
         StyleEngine style,
         ITextMeasurer? measurer = null,
         IImageResolver? images = null,
-        IDiagnostics? diagnostics = null,
+        ILoggerFactory? loggerFactory = null,
         CancellationToken abort = default)
     {
         ArgumentNullException.ThrowIfNull(style);
         _style = style;
         _measurer = measurer ?? DefaultTextMeasurer.Instance;
         _images = images ?? NullImageResolver.Instance;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<LayoutEngine>();
         _abort = abort;
     }
 
@@ -82,46 +86,45 @@ public sealed class LayoutEngine
     /// </summary>
     private void Verify(BlockBox produced, Document document, Size viewport, double? nowMs)
     {
-        using var _ = _diag.Span("layout", "verify");
+        using var _ = StarlingTelemetry.Span("layout", "verify");
         var reference = LayoutOnce(document, viewport, nowMs);
         var divergence = LayoutVerifier.FindFirstDivergence(produced, reference);
         if (divergence is { } d)
         {
-            _diag.Counter("layout.verify.divergent", 1);
-            _diag.Log(DiagLevel.Error, "layout.verify",
-                $"layout divergence: {d}");
+            StarlingTelemetry.Counter("layout.verify.divergent", 1);
+            LayoutEngineLog.LayoutDivergence(_log, d.ToString());
         }
         else
         {
-            _diag.Counter("layout.verify.ok", 1);
+            StarlingTelemetry.Counter("layout.verify.ok", 1);
         }
     }
 
     private BlockBox LayoutOnce(Document document, Size viewport, double? nowMs)
     {
-        _diag.Counter("layout.runs", 1);
-        using var span = _diag.Span("layout", "run");
+        StarlingTelemetry.Counter("layout.runs", 1);
+        using var span = StarlingTelemetry.Span("layout", "run");
         Activity.Current?.SetTag("layout.viewport_width", viewport.Width);
         Activity.Current?.SetTag("layout.viewport_height", viewport.Height);
 
         BlockBox root;
-        using (_diag.Span("layout", "box_tree_build"))
+        using (StarlingTelemetry.Span("layout", "box_tree_build"))
         {
             var builder = new BoxTreeBuilder(_style, _images, nowMs);
             root = builder.Build(document);
         }
 
         BlockLayout block;
-        using (_diag.Span("layout", "block"))
+        using (StarlingTelemetry.Span("layout", "block"))
         {
-            block = new BlockLayout(_measurer, viewport, _diag, _abort);
+            block = new BlockLayout(_measurer, viewport, _abort);
             block.Layout(root);
         }
 
         // Second pass: place position:absolute / fixed descendants and apply
         // position:relative offsets. The viewport rect doubles as the
         // initial containing block and as the fixed-positioning anchor.
-        using (_diag.Span("layout", "position"))
+        using (StarlingTelemetry.Span("layout", "position"))
         {
             var positioning = new Starling.Layout.Position.PositionLayout(block, viewport);
             positioning.LayoutPositioned(root);
@@ -129,4 +132,10 @@ public sealed class LayoutEngine
 
         return root;
     }
+}
+
+internal static partial class LayoutEngineLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "layout divergence: {Divergence}")]
+    public static partial void LayoutDivergence(ILogger logger, string divergence);
 }

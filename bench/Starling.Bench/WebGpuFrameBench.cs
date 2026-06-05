@@ -42,8 +42,8 @@ public class WebGpuFrameBench
         var root = new LayoutEngine(style, measurer).LayoutDocument(doc, Viewport);
         _list = new DisplayListBuilder().Build(root);
 
-        _gpu = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
-        _cpu = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: false);
+        _gpu = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
+        _cpu = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: false);
     }
 
     [GlobalCleanup]

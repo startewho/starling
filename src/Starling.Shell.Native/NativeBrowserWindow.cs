@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
@@ -172,15 +174,18 @@ internal sealed class NativeBrowserWindow : IDisposable
     private readonly int _maxFrames;
     private readonly string? _startUrl;
     private readonly string? _wasmIslandUrl;
+    private readonly ILogger _log;
 
     public NativeBrowserWindow(
         int maxFrames = 0,
         string? startUrl = null,
-        string? wasmIslandUrl = null)
+        string? wasmIslandUrl = null,
+        ILogger<NativeBrowserWindow>? log = null)
     {
         _maxFrames = maxFrames;
         _startUrl = startUrl;
         _wasmIslandUrl = wasmIslandUrl;
+        _log = log ?? NullLogger<NativeBrowserWindow>.Instance;
     }
 
     public void Dispose() { }
@@ -218,9 +223,9 @@ internal sealed class NativeBrowserWindow : IDisposable
         }
         finally
         {
-            try { File.Delete(page1Path); } catch { /* best-effort */ }
-            try { File.Delete(page2Path); } catch { /* best-effort */ }
-            try { File.Delete(statusPath); } catch { /* best-effort */ }
+            try { File.Delete(page1Path); } catch (Exception ex) { /* best-effort */ NativeBrowserWindowLog.TempFileDeleteFailed(_log, ex, page1Path); }
+            try { File.Delete(page2Path); } catch (Exception ex) { /* best-effort */ NativeBrowserWindowLog.TempFileDeleteFailed(_log, ex, page2Path); }
+            try { File.Delete(statusPath); } catch (Exception ex) { /* best-effort */ NativeBrowserWindowLog.TempFileDeleteFailed(_log, ex, statusPath); }
         }
     }
 
@@ -754,7 +759,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 // Pointer is over chrome. Use default cursor and skip page hover.
                 if (pos.X < SidebarWidthCss || pos.Y < ChromeHeightCss || IsStatusBarPoint(pos.X, pos.Y))
                 {
-                    SetCursor(m.Cursor, "default");
+                    SetCursor(m.Cursor, "default", _log);
                     UpdateHover(null);
                     return;
                 }
@@ -770,7 +775,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     viewportY: scrollY,
                     scrollOffsets: null);
                 var cursor = BoxHitTester.ResolveCursor(hit);
-                SetCursor(m.Cursor, cursor);
+                SetCursor(m.Cursor, cursor, _log);
 
                 // Drive CSS :hover from the innermost element under the pointer.
                 Element? hoverEl = null;
@@ -2195,7 +2200,7 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     // ── Cursor mapping ────────────────────────────────────────────────────────
 
-    private static void SetCursor(ICursor cursor, string cssKeyword)
+    private static void SetCursor(ICursor cursor, string cssKeyword, ILogger log)
     {
         var sc = cssKeyword switch
         {
@@ -2215,9 +2220,19 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             cursor.StandardCursor = sc;
         }
-        catch
+        catch (Exception ex)
         {
             // Cursor API is best-effort; suppress if the backend doesn't support it.
+            NativeBrowserWindowLog.SetCursorFailed(log, ex, cssKeyword);
         }
     }
+}
+
+internal static partial class NativeBrowserWindowLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to delete temp file '{Path}' (best-effort cleanup)")]
+    public static partial void TempFileDeleteFailed(ILogger logger, Exception ex, string path);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Cursor API rejected CSS keyword '{CssKeyword}' (best-effort; backend may not support it)")]
+    public static partial void SetCursorFailed(ILogger logger, Exception ex, string cssKeyword);
 }

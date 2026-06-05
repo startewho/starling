@@ -1,4 +1,5 @@
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Css.Cascade;
 using Starling.Layout.Box;
 using Starling.Layout.Tree;
@@ -8,6 +9,15 @@ using Starling.Paint.Compositor;
 using LayoutRect = Starling.Layout.Rect;
 
 namespace Starling.Gui.Core.Rendering;
+
+internal static partial class NativeViewportRendererLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "present.cold: total={TotalMs}ms layertree.build={BuildMs}ms renderToSurface={RenderMs}ms")]
+    public static partial void PresentCold(ILogger logger, long totalMs, long buildMs, long renderMs);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "layer-tree present via '{BackendName}' failed")]
+    public static partial void PresentFailed(ILogger logger, Exception ex, string backendName);
+}
 
 /// <summary>
 /// Renders page content into a native window surface. The host supplies a
@@ -21,7 +31,7 @@ namespace Starling.Gui.Core.Rendering;
 /// </remarks>
 public sealed class NativeViewportRenderer : IDisposable
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILogger<NativeViewportRenderer> _log;
     private readonly IPaintBackend _backend;
 
     private readonly bool _ownsBackend;
@@ -32,24 +42,25 @@ public sealed class NativeViewportRenderer : IDisposable
     private readonly TileGrid _tiles;
     private bool _disposed;
 
-    public NativeViewportRenderer(IDiagnostics? diagnostics = null)
-        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diagnostics), diagnostics,
+    public NativeViewportRenderer(ILogger<NativeViewportRenderer>? log = null)
+        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null),
+            log,
             ownsBackend: true)
     {
     }
 
-    internal NativeViewportRenderer(IPaintBackend backend, IDiagnostics? diagnostics = null)
-        : this(backend, diagnostics, ownsBackend: false)
+    internal NativeViewportRenderer(IPaintBackend backend, ILogger<NativeViewportRenderer>? log = null)
+        : this(backend, log, ownsBackend: false)
     {
     }
 
-    private NativeViewportRenderer(IPaintBackend backend, IDiagnostics? diagnostics, bool ownsBackend)
+    private NativeViewportRenderer(IPaintBackend backend, ILogger<NativeViewportRenderer>? log, bool ownsBackend)
     {
         ArgumentNullException.ThrowIfNull(backend);
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _log = log ?? NullLogger<NativeViewportRenderer>.Instance;
         _backend = backend;
         _ownsBackend = ownsBackend;
-        _tiles = new TileGrid(_diag);
+        _tiles = new TileGrid();
     }
 
     /// <summary>
@@ -78,23 +89,23 @@ public sealed class NativeViewportRenderer : IDisposable
             // DIAG (open-time investigation): split the cold first present into
             // layer-tree build vs raster+GPU present. Logged only for slow frames.
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var tree = new LayerTreeBuilder(styleOverride, images, _diag,
+            var tree = new LayerTreeBuilder(styleOverride, images,
                 isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
                 scrollOffsets: scrollOffsets).Build(root);
             var tBuild = sw.ElapsedMilliseconds;
             var region = viewport ?? new LayoutRect(0, 0,
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
-            var compositor = new Compositor(_backend, _diag, _tiles);
+            var compositor = new Compositor(_backend, _tiles);
             var ok = compositor.RenderToSurface(tree, region, scale, presenter, drawingOverlays);
             if (sw.ElapsedMilliseconds > 100)
-                _diag.Log(DiagLevel.Info, "shell",
-                    $"present.cold: total={sw.ElapsedMilliseconds}ms layertree.build={tBuild}ms renderToSurface={sw.ElapsedMilliseconds - tBuild}ms");
+                NativeViewportRendererLog.PresentCold(_log,
+                    sw.ElapsedMilliseconds, tBuild, sw.ElapsedMilliseconds - tBuild);
             return ok;
         }
         catch (Exception ex)
         {
-            _diag.LogException("shell", ex, $"layer-tree present via '{_backend.Name}' failed");
+            NativeViewportRendererLog.PresentFailed(_log, ex, _backend.Name);
             throw;
         }
     }
@@ -153,32 +164,32 @@ public sealed class NativeViewportRenderer : IDisposable
         var contentDevW = Math.Max(1, surfaceWidth - leftDevW);
         var contentDevH = Math.Max(1, surfaceHeight - chromeDevH - bottomDevH);
 
-        var chromeTree = new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(chromeRoot);
+        var chromeTree = new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(chromeRoot);
         var leftChromeTree = leftChromeRoot is null
             ? null
-            : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(leftChromeRoot);
-        var pageTree = new LayerTreeBuilder(styleOverride, images, _diag,
+            : new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(leftChromeRoot);
+        var pageTree = new LayerTreeBuilder(styleOverride, images,
             isAnimatingLayerRoot: pageAnimating, layerIdFor: _tiles.LayerIdFor).Build(pageRoot);
         // Optional overlay (find highlight, context menu, …) drawn in page space,
         // scrolling and clipping with the page content region.
         var overlayTree = overlayRoot is null
             ? null
-            : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(overlayRoot);
+            : new LayerTreeBuilder(null, images, layerIdFor: _tiles.LayerIdFor).Build(overlayRoot);
         // Screen-fixed overlay (context menu, devtools panel, …) drawn in window
         // space over everything, no scroll.
         var screenOverlayTree = screenOverlayRoot is null
             ? null
-            : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(screenOverlayRoot);
+            : new LayerTreeBuilder(null, images, layerIdFor: _tiles.LayerIdFor).Build(screenOverlayRoot);
         // Bottom chrome (status bar): same width as the page, fixed at the window
         // bottom to the right of the sidebar.
         var bottomChromeTree = bottomChromeRoot is null
             ? null
-            : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRoot);
+            : new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRoot);
         var bottomChromeRightTree = bottomChromeRightRoot is null
             ? null
-            : new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRightRoot);
+            : new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRightRoot);
 
-        var compositor = new Compositor(_backend, _diag, _tiles);
+        var compositor = new Compositor(_backend, _tiles);
         var ops = new List<LayerBlend>();
 
         // Sidebar: left strip, full height.
