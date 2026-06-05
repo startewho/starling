@@ -1305,7 +1305,8 @@ public sealed class JsLexer
         || c == '\v'
         || c == '\f'
         || c == '\u00A0'   // NBSP
-        || c == '\uFEFF';
+        || c == '\uFEFF'
+        || c == '\u3000';  // IDEOGRAPHIC SPACE
 
     private static bool IsLineTerminator(char c)
         => c == '\n'
