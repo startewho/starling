@@ -37,6 +37,8 @@ project.lock.json
 
 # Claude Code agent worktrees
 .claude/worktrees/
+.claude/workflows/
+.grok/
 
 # OS
 .DS_Store
@@ -44,6 +46,7 @@ Thumbs.db
 
 # Starling-specific
 testdata/wpt/results/
+testdata/wpt/results.baseline/
 testdata/sites/blazor-status/
 # web-platform-tests corpus (fetched via tools/fetch-wpt.sh; the rest of
 # testdata/wpt/ holds hand-committed encoding fixtures used by Engine tests).
