@@ -48,7 +48,15 @@ internal sealed class HtmlCollectionObject : JsObject
         index = 0;
         if (name.Length == 0) return false;
         if (name.Length > 1 && name[0] == '0') return false;
-        return int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out index);
+        if (!ulong.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var v))
+            return false;
+        // WebIDL "array index": an integer in [0, 2^32-2]. 2^32-1 (4294967295)
+        // and above are NOT array indices — they fall through to named-property
+        // lookup. A value beyond int range is a valid index but always past the
+        // end of any real collection, so clamp it to int.MaxValue (=> undefined).
+        if (v > 4294967294UL) return false;
+        index = v > int.MaxValue ? int.MaxValue : (int)v;
+        return true;
     }
 
     private Element? NamedItem(string name)
@@ -66,19 +74,20 @@ internal sealed class HtmlCollectionObject : JsObject
     // of HTML-namespace elements, in tree order with no duplicates.
     private List<string> SupportedNames()
     {
+        // HTML §2.7.2.1 "supported property names": process each element in tree
+        // order, appending its id then (for HTML elements) its name — so the two
+        // keys of one element stay adjacent — skipping duplicates.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var names = new List<string>();
-        var items = Items;
-        foreach (var e in items)
+        foreach (var e in Items)
         {
             var id = e.GetAttribute("id");
             if (!string.IsNullOrEmpty(id) && seen.Add(id)) names.Add(id);
-        }
-        foreach (var e in items)
-        {
-            if (e.Namespace != Element.HtmlNamespace) continue;
-            var n = e.GetAttribute("name");
-            if (!string.IsNullOrEmpty(n) && seen.Add(n)) names.Add(n);
+            if (e.Namespace == Element.HtmlNamespace)
+            {
+                var n = e.GetAttribute("name");
+                if (!string.IsNullOrEmpty(n) && seen.Add(n)) names.Add(n);
+            }
         }
         return names;
     }
@@ -86,55 +95,116 @@ internal sealed class HtmlCollectionObject : JsObject
     public override JsValue Get(string name)
     {
         var items = Items;
-        if (name == "length") return JsValue.Number(items.Count);
         if (TryIndex(name, out var index))
             return index < items.Count ? JsValue.Object(DomWrappers.Wrap(_realm, items[index])) : JsValue.Undefined;
-        // An own/prototype property (item, namedItem, @@iterator) wins over a
-        // named element only when no element has that id/name.
-        if (NamedItem(name) is { } named && !HasOwnOrProto(name))
+        // A named element resolves only when the name is a visible named property
+        // (not shadowed by an own expando or a prototype/built-in like item/length).
+        if (IsVisibleNamedProperty(name) && NamedItem(name) is { } named)
             return JsValue.Object(DomWrappers.Wrap(_realm, named));
-        return base.Get(name);
+        return base.Get(name); // length lives on the prototype; expandos / built-ins resolve here
     }
 
-    private bool HasOwnOrProto(string name)
+    // WebIDL named-property visibility (HTMLCollection has no [LegacyOverrideBuiltins]):
+    // a supported name is shadowed when an own expando OR any prototype property
+    // shares the name. Uses base.HasOwn so the synthesized index/named properties
+    // (which this override reports) don't make every name look "shadowed".
+    private bool IsShadowed(string name)
     {
-        for (var o = (JsObject)this; o is not null; o = o.GetPrototypeOf())
-            if (o.HasOwn(name)) return true;
+        if (base.HasOwn(name)) return true; // real own expando
+        for (var p = GetPrototypeOf(); p is not null; p = p.GetPrototypeOf())
+            if (p.HasOwn(name)) return true; // prototype / built-in (item, namedItem, length, …)
         return false;
     }
 
+    private bool IsVisibleNamedProperty(string name)
+        => !TryIndex(name, out _) && !IsShadowed(name) && NamedItem(name) is not null;
+
     public override bool HasOwn(string name)
     {
-        if (name == "length") return true;
         if (TryIndex(name, out var index)) return index < Items.Count;
         if (base.HasOwn(name)) return true;
-        return NamedItem(name) is not null;
+        return IsVisibleNamedProperty(name);
     }
 
     public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
     {
         var items = Items;
-        if (name == "length")
-            return PropertyDescriptor.Data(JsValue.Number(items.Count), writable: false, enumerable: false, configurable: true);
+        // Indexed and named properties are read-only (HTMLCollection has no indexed
+        // or named setter), so the descriptor is writable:false — matching the
+        // Set/Delete/DefineOwnProperty overrides and making a strict-mode write
+        // (e.g. coll[0] = x) fail per WebIDL rather than silently appear to succeed.
         if (TryIndex(name, out var index))
             return index < items.Count
-                ? PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, items[index])), writable: true, enumerable: true, configurable: true)
+                ? PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, items[index])), writable: false, enumerable: true, configurable: true)
                 : null;
         if (base.GetOwnPropertyDescriptor(name) is { } own) return own;
-        if (NamedItem(name) is { } named)
-            return PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, named)), writable: true, enumerable: true, configurable: true);
+        if (IsVisibleNamedProperty(name) && NamedItem(name) is { } named)
+            return PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, named)), writable: false, enumerable: true, configurable: true);
         return null;
+    }
+
+    // The own string keys in spec order: array indices, then supported property
+    // names, then any expando (ordinary) string keys. `Keys` drives
+    // Object.getOwnPropertyNames; OwnPropertyKeys adds the expando symbols.
+    public override IEnumerable<string> Keys
+    {
+        get
+        {
+            var count = Items.Count;
+            for (var i = 0; i < count; i++)
+                yield return i.ToString(CultureInfo.InvariantCulture);
+            // WebIDL [[OwnPropertyKeys]]: after the indices come the supported
+            // names that are NOT array indices and NOT shadowed by an own expando
+            // or a prototype/built-in key — so the own-key list stays duplicate-free
+            // and never collides with an index ("0"), "length", or "item".
+            foreach (var n in SupportedNames())
+                if (!TryIndex(n, out _) && !IsShadowed(n))
+                    yield return n;
+            foreach (var k in base.Keys)
+                yield return k; // expando properties set directly on the collection
+        }
     }
 
     public override IEnumerable<JsPropertyKey> OwnPropertyKeys
     {
         get
         {
-            var count = Items.Count;
-            for (var i = 0; i < count; i++)
-                yield return JsPropertyKey.String(i.ToString(CultureInfo.InvariantCulture));
-            foreach (var n in SupportedNames())
-                yield return JsPropertyKey.String(n);
+            foreach (var k in Keys)
+                yield return JsPropertyKey.String(k);
+            foreach (var s in SymbolKeys)
+                yield return JsPropertyKey.Symbol(s);
         }
+    }
+
+    // Legacy platform object: no indexed or named property setter, so a plain
+    // assignment to an array index or a VISIBLE supported named property is ignored
+    // (in loose mode; strict-mode throwing is handled by the VM's set path). A name
+    // shadowed by the prototype (e.g. "item") is not a visible named property, so it
+    // behaves as an ordinary expando. Any other key is an ordinary expando.
+    public override void Set(string name, JsValue value)
+    {
+        if (TryIndex(name, out _)) return;
+        if (IsVisibleNamedProperty(name)) return;
+        base.Set(name, value);
+    }
+
+    // Legacy platform object [[Delete]] (WebIDL): an indexed property is never
+    // deletable, and HTMLCollection (no [LegacyOverrideBuiltins]) also refuses to
+    // delete a visible supported named property. Expando keys delete normally.
+    public override bool Delete(string name)
+    {
+        if (TryIndex(name, out _)) return false;
+        if (IsVisibleNamedProperty(name)) return false;
+        return base.Delete(name);
+    }
+
+    // Legacy platform object [[DefineOwnProperty]] (WebIDL): HTMLCollection has no
+    // indexed or named property setter, so defining over an array index, or over a
+    // visible supported named property, fails; any other key is an ordinary expando.
+    public override bool DefineOwnProperty(string name, PropertyDescriptor desc)
+    {
+        if (TryIndex(name, out _)) return false;
+        if (IsVisibleNamedProperty(name)) return false;
+        return base.DefineOwnProperty(name, desc);
     }
 }

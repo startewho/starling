@@ -18,9 +18,11 @@ public abstract class CharacterData : Node
             if (_data == normalized)
                 return;
 
+            var oldData = _data;
             _data = normalized;
             OnTreeMutated();
             OwnerDocument?.RecordLayoutMutation(this, LayoutChangeKind.TextChanged);
+            OwnerDocument?.CharacterDataMutated?.Invoke(this, oldData);
         }
     }
 

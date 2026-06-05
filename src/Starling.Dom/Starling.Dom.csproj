@@ -9,6 +9,12 @@
     <!-- The engine subscribes to Document.NodeConnected to fetch + run
          <script> elements injected at runtime, kept off the public surface. -->
     <InternalsVisibleTo Include="Starling.Engine" />
+    <!-- The bindings layer subscribes to Document's mutation hooks
+         (AttributeMutated/ChildListMutated/CharacterDataMutated) to queue
+         MutationRecords, kept off the public surface. -->
+    <InternalsVisibleTo Include="Starling.Bindings" />
+    <!-- Tests exercise the internal mutation hooks directly. -->
+    <InternalsVisibleTo Include="Starling.Dom.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Starling.Common\Starling.Common.csproj" />
