@@ -202,6 +202,52 @@ public sealed class LegacyPlatformObjectTests
         """).AsString.Should().Be("true,true,true");
     }
 
+    // ---- getElementsByName returns a live NodeList (HTML §3.1.5) -------------
+
+    [TestMethod]
+    public void GetElementsByName_returns_live_node_list()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            var a = document.createElement('div');
+            a.setAttribute('name', 'x');
+            document.body.appendChild(a);
+            var list = document.getElementsByName('x');
+            var tag = Object.prototype.toString.call(list);
+            var isArr = Array.isArray(list);
+            var inst = list instanceof NodeList;
+            var len1 = list.length;
+            var b = document.createElement('span');
+            b.setAttribute('name', 'x');
+            document.body.appendChild(b);           // live: list reflects the new match
+            result = tag + ',' + isArr + ',' + inst + ',' + len1 + ',' + list.length
+                + ',' + (list[0] === a) + ',' + (list.item(1) === b);
+        """).AsString.Should().Be("[object NodeList],false,true,1,2,true,true");
+    }
+
+    [TestMethod]
+    public void NodeList_has_full_value_iterator_surface()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            var a = document.createElement('div'); a.setAttribute('name', 'y'); a.id = 'A';
+            var b = document.createElement('div'); b.setAttribute('name', 'y'); b.id = 'B';
+            document.body.appendChild(a);
+            document.body.appendChild(b);
+            var list = document.getElementsByName('y');
+            var forOf = '';
+            for (var n of list) forOf += n.id;          // @@iterator
+            var spreadLen = [...list].length;
+            var fe = '';
+            list.forEach(function (n) { fe += n.id; });
+            var hasIter = (typeof list.values === 'function')
+                && (typeof list.keys === 'function')
+                && (typeof list.entries === 'function');
+            var keys = [...list.keys()].join(',');
+            result = forOf + ',' + spreadLen + ',' + fe + ',' + hasIter + ',' + keys;
+        """).AsString.Should().Be("AB,2,AB,true,0,1");
+    }
+
     private static (JsRuntime, Document) BuildEnv()
     {
         var doc = new Document();
