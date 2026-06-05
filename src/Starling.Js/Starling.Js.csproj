@@ -4,7 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Starling.Common\Starling.Common.csproj" />
-    <ProjectReference Include="..\..\lib\starling-regexp\src\Starling.RegExp\Starling.RegExp.csproj" />
+    <ProjectReference Include="..\Starling.RegExp\Starling.RegExp.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Starling.RegExp</PackageId>
+    <Description>A JavaScript-style regular expression engine for .NET. Pike virtual machine matcher with a parser that follows the ECMAScript spec, including the §22.2.1.1 early errors.</Description>
+    <PackageTags>regex;regexp;ecmascript;javascript;js;pike-vm</PackageTags>
+  </PropertyGroup>
+</Project>
