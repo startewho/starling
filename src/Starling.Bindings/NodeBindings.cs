@@ -1657,15 +1657,16 @@ public static class NodeBindings
             var cls = JsValue.ToStringValue(args[0]);
             return BuildHtmlCollection(realm, () => d.GetElementsByClassName(cls));
         }, length: 1);
-        // HTML §3.1.5 — document.getElementsByName(name): live collection of all
+        // HTML §3.1.5 — document.getElementsByName(name): a live NodeList of all
         // elements (any namespace) whose `name` content attribute equals name, in
-        // tree order. (Currently returns an HTMLCollection via BuildHtmlCollection.)
+        // tree order.
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByName", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0)
+                return BuildNodeList(realm, static () => Array.Empty<Node>());
             var name = JsValue.ToStringValue(args[0]);
-            return BuildHtmlCollection(realm,
-                () => d.DescendantElements().Where(e => e.GetAttribute("name") == name).ToList());
+            return BuildNodeList(realm,
+                () => d.DescendantElements().Where(e => e.GetAttribute("name") == name).ToList<Node>());
         }, length: 1);
         // HTML §3.1.5 document named collections — each a live HTMLCollection of
         // HTML-namespace elements of a given kind (so namedItem / [name] work).
@@ -2029,6 +2030,68 @@ public static class NodeBindings
     /// <summary>A live HTMLCollection over the elements yielded by <paramref name="source"/>.</summary>
     internal static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
         => JsValue.Object(new HtmlCollectionObject(realm, HtmlCollectionProto(realm), source));
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JsRealm, JsObject> NodeListProtos = new();
+
+    private static JsObject NodeListProto(JsRealm realm)
+    {
+        if (NodeListProtos.TryGetValue(realm, out var proto)) return proto;
+        // Reuse the global NodeList.prototype (installed by EventTargetBinding) so
+        // `list instanceof NodeList` holds, then augment it with the interface
+        // members. NodeList has an iterable<Node> declaration, so it exposes a full
+        // value-iterator surface (values/keys/entries/forEach + @@iterator) — unlike
+        // HTMLCollection.
+        proto = realm.GlobalObject.Get("NodeList") is { IsObject: true } ctor
+                && ctor.AsObject.Get("prototype") is { IsObject: true } p
+            ? p.AsObject
+            : new JsObject(realm.ObjectPrototype);
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("NodeList"), writable: false, enumerable: false, configurable: true));
+        // length is a read-only accessor on the prototype (WebIDL interface
+        // attribute, not an own property of the instance).
+        EventTargetBinding.DefineAccessor(realm, proto, "length",
+            (thisV, _) => thisV.IsObject && thisV.AsObject is NodeListObject c
+                ? JsValue.Number(c.Count) : JsValue.Number(0));
+        EventTargetBinding.DefineMethod(realm, proto, "item", (thisV, args) =>
+            thisV.IsObject && thisV.AsObject is NodeListObject c && args.Length > 0
+                ? c.Item((int)JsValue.ToNumber(args[0])) : JsValue.Null, length: 1);
+
+        JsValue Iter(JsValue thisV, Starling.Js.Intrinsics.ArrayIteratorKind kind)
+            => thisV.IsObject && thisV.AsObject is NodeListObject c
+                ? Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                    realm, MakeArray(realm, c.Values().ToList()), kind)
+                : JsValue.Undefined;
+        EventTargetBinding.DefineMethod(realm, proto, "values",
+            (t, _) => Iter(t, Starling.Js.Intrinsics.ArrayIteratorKind.Value), length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "keys",
+            (t, _) => Iter(t, Starling.Js.Intrinsics.ArrayIteratorKind.Key), length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "entries",
+            (t, _) => Iter(t, Starling.Js.Intrinsics.ArrayIteratorKind.KeyAndValue), length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "forEach", (thisV, args) =>
+        {
+            if (thisV.IsObject && thisV.AsObject is NodeListObject c
+                && args.Length > 0 && AbstractOperations.IsCallable(args[0]))
+            {
+                var fn = args[0];
+                var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
+                var snapshot = c.Values().ToList();
+                for (var i = 0; i < snapshot.Count; i++)
+                    AbstractOperations.Call(realm.ActiveVm, fn, thisArg,
+                        new[] { snapshot[i], JsValue.Number(i), thisV });
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+        // @@iterator === values (per the iterable<Node> declaration).
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
+            PropertyDescriptor.Data(proto.Get("values"), writable: true, enumerable: false, configurable: true));
+
+        NodeListProtos.Add(realm, proto);
+        return proto;
+    }
+
+    /// <summary>A live NodeList over the nodes yielded by <paramref name="source"/>.</summary>
+    internal static JsValue BuildNodeList(JsRealm realm, Func<IReadOnlyList<Node>> source)
+        => JsValue.Object(new NodeListObject(realm, NodeListProto(realm), source));
 
     private static void InstallFormControlAccessors(JsRealm realm, JsObject proto)
     {
