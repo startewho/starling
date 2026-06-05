@@ -467,25 +467,25 @@ public static class IFrameBinding
                 switch (reader.NodeType)
                 {
                     case System.Xml.XmlNodeType.Element:
-                    {
-                        var qname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
-                        var ns = string.IsNullOrEmpty(reader.NamespaceURI) ? null : reader.NamespaceURI;
-                        var el = doc.CreateElementNS(ns, qname);
-                        var empty = reader.IsEmptyElement;
-                        if (reader.HasAttributes)
                         {
-                            for (var i = 0; i < reader.AttributeCount; i++)
+                            var qname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
+                            var ns = string.IsNullOrEmpty(reader.NamespaceURI) ? null : reader.NamespaceURI;
+                            var el = doc.CreateElementNS(ns, qname);
+                            var empty = reader.IsEmptyElement;
+                            if (reader.HasAttributes)
                             {
-                                reader.MoveToAttribute(i);
-                                var aname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
-                                el.SetAttribute(aname, reader.Value);
+                                for (var i = 0; i < reader.AttributeCount; i++)
+                                {
+                                    reader.MoveToAttribute(i);
+                                    var aname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
+                                    el.SetAttribute(aname, reader.Value);
+                                }
+                                reader.MoveToElement();
                             }
-                            reader.MoveToElement();
+                            current.AppendChild(el);
+                            if (!empty) { stack.Push(current); current = el; }
+                            break;
                         }
-                        current.AppendChild(el);
-                        if (!empty) { stack.Push(current); current = el; }
-                        break;
-                    }
                     case System.Xml.XmlNodeType.EndElement:
                         if (stack.Count > 0) current = stack.Pop();
                         break;

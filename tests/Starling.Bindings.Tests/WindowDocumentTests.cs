@@ -81,9 +81,9 @@ public sealed class WindowDocumentTests
             result = document.body.children.length;
         """).AsNumber.Should().Be(1);
         doc.GetElementById("hello").Should().NotBeNull();
-        // B5-1-followup: children is a real JsArray, not a plain "array-like".
-        Eval(runtime, "result = Array.isArray(document.body.children);")
-            .AsBool.Should().BeTrue();
+        // children is a live HTMLCollection (DOM §4.2.10), not a JS Array.
+        Eval(runtime, "result = Object.prototype.toString.call(document.body.children);")
+            .AsString.Should().Be("[object HTMLCollection]");
     }
 
     [TestMethod]

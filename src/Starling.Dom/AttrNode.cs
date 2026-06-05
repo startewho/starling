@@ -88,10 +88,11 @@ public sealed class AttrNode : Node
         {
             var newValue = value ?? "";
             if (_value == newValue) return;
+            var oldValue = _value;
             _value = newValue;
             // Propagate to the element's attribute storage so getAttribute()
             // and the NamedNodeMap are consistent.
-            OwnerElement?.SyncAttrNodeValue(this, newValue);
+            OwnerElement?.SyncAttrNodeValue(this, newValue, oldValue);
         }
     }
 

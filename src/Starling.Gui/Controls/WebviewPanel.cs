@@ -633,16 +633,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // (overflow:scroll) offsets into the layer tree so inner-scrolled pages
             // present on the zero-copy surface instead of dropping to readback.
             using (var frame = _renderSession.Render(new PageFrameRequest
-                   {
-                       Root = _currentPage.Root,
-                       Scale = (float)_currentScale,
-                       StyleOverride = styleOverride,
-                       Images = _currentPage.ImageResolver,
-                       Viewport = rect,
-                       IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-                       Overlays = overlays,
-                       ScrollOffsets = scrollLookup,
-                   }, _surfaceTarget))
+            {
+                Root = _currentPage.Root,
+                Scale = (float)_currentScale,
+                StyleOverride = styleOverride,
+                Images = _currentPage.ImageResolver,
+                Viewport = rect,
+                IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
+                Overlays = overlays,
+                ScrollOffsets = scrollLookup,
+            }, _surfaceTarget))
             {
                 ok = frame.Presented;
             }
@@ -2597,7 +2597,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (_focusedInput is null) return false;
         var target = _focusedInput;
         var down = new KeyboardEvent("keydown", new EventInit(Bubbles: true, Cancelable: true))
-            { Key = "Enter", Code = "Enter" };
+        { Key = "Enter", Code = "Enter" };
         var mutated = DispatchDom(target, down);
         if (target.LocalName == "input")
         {
@@ -2606,7 +2606,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         }
 
         var up = new KeyboardEvent("keyup", new EventInit(Bubbles: true, Cancelable: true))
-            { Key = "Enter", Code = "Enter" };
+        { Key = "Enter", Code = "Enter" };
         mutated |= DispatchDom(target, up);
         if (mutated) RefreshLiveLayout();
         return mutated;

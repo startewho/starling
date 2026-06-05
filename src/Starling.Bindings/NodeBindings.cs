@@ -1195,6 +1195,37 @@ public static class NodeBindings
             return JsValue.Object(clObj);
         });
 
+        // Per-interface reflected DOMTokenList attributes (HTML): relList (a,
+        // area, link — and SVGAElement), iframe.sandbox, link.sizes,
+        // output.htmlFor (reflects "for"). Gated by local name so unrelated
+        // elements report undefined; the wrapper is cached for stable identity.
+        void DefineTokenListAttr(string jsName, string attr, string ck, Func<Element, bool> applies)
+        {
+            EventTargetBinding.DefineAccessor(realm, elProto, jsName, (thisV, _) =>
+            {
+                if (DomWrappers.UnwrapElement(thisV) is not { } e || !applies(e)
+                    || thisV.AsObject is not { } w)
+                    return JsValue.Undefined;
+                var hit = w.Get(ck);
+                if (!hit.IsUndefined) return hit;
+                var o = JsValue.Object(BuildDomTokenList(realm, e, e.TokenListFor(attr), attr));
+                w.Set(ck, o);
+                return o;
+            });
+        }
+        const string svgNs = "http://www.w3.org/2000/svg";
+        // relList: HTML a/area/link, plus SVGAElement (svg <a>). Other namespaces
+        // (MathML, custom, null) report undefined per the IDL.
+        DefineTokenListAttr("relList", "rel", "__relList__", e =>
+            (e.Namespace == Element.HtmlNamespace && e.LocalName is "a" or "area" or "link")
+            || (e.Namespace == svgNs && e.LocalName == "a"));
+        DefineTokenListAttr("sandbox", "sandbox", "__sandbox__",
+            e => e.Namespace == Element.HtmlNamespace && e.LocalName == "iframe");
+        DefineTokenListAttr("sizes", "sizes", "__sizes__",
+            e => e.Namespace == Element.HtmlNamespace && e.LocalName == "link");
+        DefineTokenListAttr("htmlFor", "for", "__htmlForList__",
+            e => e.Namespace == Element.HtmlNamespace && e.LocalName == "output");
+
         // ---- style ----------------------------------------------------------
         // Returns a per-element inline-style CSSStyleDeclaration-shaped object.
         // The element stores inline styles as a flat string in the `style`
@@ -1427,9 +1458,49 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "doctype", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.DocType is { } dt
                 ? JsValue.Object(DomWrappers.Wrap(realm, dt)) : JsValue.Null);
+        // HTML §3.1.5 document.body: the first child of the html element that is
+        // a body or frameset element in the HTML namespace — where the html
+        // element is the document element only when it is itself an HTML-namespace
+        // <html>. A body/frameset that is the root, under a non-HTML <html>, or in
+        // another namespace does not count.
         EventTargetBinding.DefineAccessor(realm, docProto, "body", (thisV, _) =>
-            DomWrappers.UnwrapDocument(thisV)?.Body is { } b
-                ? JsValue.Object(DomWrappers.Wrap(realm, b)) : JsValue.Null);
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d
+                || d.DocumentElement is not { LocalName: "html", Namespace: Element.HtmlNamespace } htmlEl)
+                return JsValue.Null;
+            for (var c = htmlEl.FirstChild; c is not null; c = c.NextSibling)
+                if (c is Element { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" } b)
+                    return JsValue.Object(DomWrappers.Wrap(realm, b));
+            return JsValue.Null;
+        },
+        (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Undefined;
+            var val = args.Length > 0 ? args[0] : JsValue.Undefined;
+            // The IDL type is HTMLElement?: a non-element (string, plain object)
+            // is a TypeError; an element that is not a body/frameset is a
+            // HierarchyRequestError.
+            if (!val.IsObject || DomWrappers.UnwrapElement(val) is not { } newEl)
+                throw new JsThrow(realm.NewTypeError("document.body must be an HTMLElement"));
+            if (newEl is not { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" })
+                throw DomExceptionBinding.Throw(realm, "HierarchyRequestError",
+                    "document.body must be a body or frameset element");
+            // Replace the current body/frameset if present; otherwise append to the
+            // document element (HierarchyRequestError when there is none).
+            Element? current = null;
+            if (d.DocumentElement is { LocalName: "html", Namespace: Element.HtmlNamespace } htmlEl2)
+                for (var c = htmlEl2.FirstChild; c is not null; c = c.NextSibling)
+                    if (c is Element { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" } b)
+                    { current = b; break; }
+            if (current is not null)
+                current.ParentNode!.ReplaceChild(newEl, current);
+            else if (d.DocumentElement is { } root)
+                root.AppendChild(newEl);
+            else
+                throw DomExceptionBinding.Throw(realm, "HierarchyRequestError",
+                    "document.body cannot be set without a document element");
+            return JsValue.Undefined;
+        });
         EventTargetBinding.DefineAccessor(realm, docProto, "head", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.Head is { } h
                 ? JsValue.Object(DomWrappers.Wrap(realm, h)) : JsValue.Null);
@@ -1445,9 +1516,28 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, docProto, "title", (thisV, _) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.String("");
-            foreach (var n in d.Descendants())
-                if (n is Element { LocalName: "title" } t) return JsValue.String(t.TextContent.Trim());
-            return JsValue.String("");
+            // The title element is the first title (in tree order) — an SVG title
+            // child of an SVG root, else any title element. Its value is the child
+            // text content with ASCII whitespace stripped and collapsed.
+            var title = FirstTitleElement(d);
+            return JsValue.String(title is null ? "" : StripAndCollapseAsciiWhitespace(title.TextContent));
+        },
+        (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d) return JsValue.Undefined;
+            var value = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "";
+            var existing = FirstTitleElement(d);
+            if (existing is not null) { existing.TextContent = value; return JsValue.Undefined; }
+            // No title yet: for an HTML document create one in the head (do nothing
+            // if there is no head element). SVG roots are left to the SVG path.
+            if (d.DocumentElement is { LocalName: "html", Namespace: Element.HtmlNamespace }
+                && d.Head is { } head)
+            {
+                var t = d.CreateElement("title");
+                t.TextContent = value;
+                head.AppendChild(t);
+            }
+            return JsValue.Undefined;
         });
         EventTargetBinding.DefineAccessor(realm, docProto, "URL", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV) is { } d ? JsValue.String(WindowBinding.UrlFor(realm, d)) : JsValue.String(""));
@@ -1567,6 +1657,35 @@ public static class NodeBindings
             var cls = JsValue.ToStringValue(args[0]);
             return BuildHtmlCollection(realm, () => d.GetElementsByClassName(cls));
         }, length: 1);
+        // HTML §3.1.5 — document.getElementsByName(name): a live NodeList of all
+        // elements (any namespace) whose `name` content attribute equals name, in
+        // tree order.
+        EventTargetBinding.DefineMethod(realm, docProto, "getElementsByName", (thisV, args) =>
+        {
+            if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0)
+                return BuildNodeList(realm, static () => Array.Empty<Node>());
+            var name = JsValue.ToStringValue(args[0]);
+            return BuildNodeList(realm,
+                () => d.DescendantElements().Where(e => e.GetAttribute("name") == name).ToList<Node>());
+        }, length: 1);
+        // HTML §3.1.5 document named collections — each a live HTMLCollection of
+        // HTML-namespace elements of a given kind (so namedItem / [name] work).
+        void DefineDocCollection(string prop, Func<Element, bool> match)
+            => EventTargetBinding.DefineAccessor(realm, docProto, prop, (thisV, _) =>
+                DomWrappers.UnwrapDocument(thisV) is { } dc
+                    ? BuildHtmlCollection(realm,
+                        () => dc.DescendantElements()
+                            .Where(e => e.Namespace == Element.HtmlNamespace && match(e)).ToList())
+                    : MakeArray(realm, Array.Empty<JsValue>()));
+        DefineDocCollection("images", e => e.LocalName == "img");
+        DefineDocCollection("forms", e => e.LocalName == "form");
+        DefineDocCollection("scripts", e => e.LocalName == "script");
+        DefineDocCollection("embeds", e => e.LocalName == "embed");
+        DefineDocCollection("plugins", e => e.LocalName == "embed");
+        // links: a/area elements that have an href attribute.
+        DefineDocCollection("links", e => e.LocalName is "a" or "area" && e.HasAttribute("href"));
+        // anchors: a elements that have a name attribute.
+        DefineDocCollection("anchors", e => e.LocalName == "a" && e.HasAttribute("name"));
         EventTargetBinding.DefineMethod(realm, docProto, "querySelector", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return JsValue.Null;
@@ -1877,6 +1996,13 @@ public static class NodeBindings
         proto = new JsObject(realm.ObjectPrototype);
         proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
             PropertyDescriptor.Data(JsValue.String("HTMLCollection"), writable: false, enumerable: false, configurable: true));
+        // length is a read-only accessor on the prototype (per WebIDL it is an
+        // interface attribute, NOT an own property of the instance), so
+        // collection.hasOwnProperty("length") is false and it never appears in the
+        // instance's own-key list.
+        EventTargetBinding.DefineAccessor(realm, proto, "length",
+            (thisV, _) => thisV.IsObject && thisV.AsObject is HtmlCollectionObject c
+                ? JsValue.Number(c.Count) : JsValue.Number(0));
         EventTargetBinding.DefineMethod(realm, proto, "item", (thisV, args) =>
             thisV.IsObject && thisV.AsObject is HtmlCollectionObject c && args.Length > 0
                 ? c.Item((int)JsValue.ToNumber(args[0])) : JsValue.Null, length: 1);
@@ -1890,16 +2016,82 @@ public static class NodeBindings
                     realm, MakeArray(realm, c.Values().ToList()), Starling.Js.Intrinsics.ArrayIteratorKind.Value);
             return JsValue.Undefined;
         }
-        EventTargetBinding.DefineMethod(realm, proto, "values", Iterate, length: 0);
+        // HTMLCollection is iterable but, unlike NodeList, its WebIDL has no
+        // value-iterator declaration — so it exposes @@iterator only, with no
+        // named values/keys/entries/forEach methods (the WPT iterator test
+        // checks `"values" in collection` is false).
+        var iterFn = new JsNativeFunction(realm, "values", 0, Iterate, isConstructor: false);
         proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
-            PropertyDescriptor.Data(proto.Get("values"), writable: true, enumerable: false, configurable: true));
+            PropertyDescriptor.Data(JsValue.Object(iterFn), writable: true, enumerable: false, configurable: true));
         HtmlCollectionProtos.Add(realm, proto);
         return proto;
     }
 
     /// <summary>A live HTMLCollection over the elements yielded by <paramref name="source"/>.</summary>
-    private static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
+    internal static JsValue BuildHtmlCollection(JsRealm realm, Func<IReadOnlyList<Element>> source)
         => JsValue.Object(new HtmlCollectionObject(realm, HtmlCollectionProto(realm), source));
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JsRealm, JsObject> NodeListProtos = new();
+
+    private static JsObject NodeListProto(JsRealm realm)
+    {
+        if (NodeListProtos.TryGetValue(realm, out var proto)) return proto;
+        // Reuse the global NodeList.prototype (installed by EventTargetBinding) so
+        // `list instanceof NodeList` holds, then augment it with the interface
+        // members. NodeList has an iterable<Node> declaration, so it exposes a full
+        // value-iterator surface (values/keys/entries/forEach + @@iterator) — unlike
+        // HTMLCollection.
+        proto = realm.GlobalObject.Get("NodeList") is { IsObject: true } ctor
+                && ctor.AsObject.Get("prototype") is { IsObject: true } p
+            ? p.AsObject
+            : new JsObject(realm.ObjectPrototype);
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("NodeList"), writable: false, enumerable: false, configurable: true));
+        // length is a read-only accessor on the prototype (WebIDL interface
+        // attribute, not an own property of the instance).
+        EventTargetBinding.DefineAccessor(realm, proto, "length",
+            (thisV, _) => thisV.IsObject && thisV.AsObject is NodeListObject c
+                ? JsValue.Number(c.Count) : JsValue.Number(0));
+        EventTargetBinding.DefineMethod(realm, proto, "item", (thisV, args) =>
+            thisV.IsObject && thisV.AsObject is NodeListObject c && args.Length > 0
+                ? c.Item((int)JsValue.ToNumber(args[0])) : JsValue.Null, length: 1);
+
+        JsValue Iter(JsValue thisV, Starling.Js.Intrinsics.ArrayIteratorKind kind)
+            => thisV.IsObject && thisV.AsObject is NodeListObject c
+                ? Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                    realm, MakeArray(realm, c.Values().ToList()), kind)
+                : JsValue.Undefined;
+        EventTargetBinding.DefineMethod(realm, proto, "values",
+            (t, _) => Iter(t, Starling.Js.Intrinsics.ArrayIteratorKind.Value), length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "keys",
+            (t, _) => Iter(t, Starling.Js.Intrinsics.ArrayIteratorKind.Key), length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "entries",
+            (t, _) => Iter(t, Starling.Js.Intrinsics.ArrayIteratorKind.KeyAndValue), length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "forEach", (thisV, args) =>
+        {
+            if (thisV.IsObject && thisV.AsObject is NodeListObject c
+                && args.Length > 0 && AbstractOperations.IsCallable(args[0]))
+            {
+                var fn = args[0];
+                var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
+                var snapshot = c.Values().ToList();
+                for (var i = 0; i < snapshot.Count; i++)
+                    AbstractOperations.Call(realm.ActiveVm, fn, thisArg,
+                        new[] { snapshot[i], JsValue.Number(i), thisV });
+            }
+            return JsValue.Undefined;
+        }, length: 1);
+        // @@iterator === values (per the iterable<Node> declaration).
+        proto.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
+            PropertyDescriptor.Data(proto.Get("values"), writable: true, enumerable: false, configurable: true));
+
+        NodeListProtos.Add(realm, proto);
+        return proto;
+    }
+
+    /// <summary>A live NodeList over the nodes yielded by <paramref name="source"/>.</summary>
+    internal static JsValue BuildNodeList(JsRealm realm, Func<IReadOnlyList<Node>> source)
+        => JsValue.Object(new NodeListObject(realm, NodeListProto(realm), source));
 
     private static void InstallFormControlAccessors(JsRealm realm, JsObject proto)
     {
@@ -2584,6 +2776,43 @@ public static class NodeBindings
     private static JsRealm ThrowRealmFor(JsRealm realm, Document doc)
         => IFrameBinding.RealmForDocument(realm, doc) ?? realm;
 
+    /// <summary>The document's title element (HTML §document.title): when the
+    /// document element is an SVG <c>svg</c>, the first SVG <c>title</c> child of
+    /// it; otherwise the first <c>title</c> element in tree order.</summary>
+    private static Element? FirstTitleElement(Document d)
+    {
+        const string svgNs = "http://www.w3.org/2000/svg";
+        if (d.DocumentElement is { LocalName: "svg", Namespace: svgNs } svgRoot)
+        {
+            for (var c = svgRoot.FirstChild; c is not null; c = c.NextSibling)
+                if (c is Element { LocalName: "title", Namespace: svgNs } st) return st;
+            return null;
+        }
+        foreach (var n in d.Descendants())
+            if (n is Element { LocalName: "title" } t) return t;
+        return null;
+    }
+
+    /// <summary>Infra "strip and collapse ASCII whitespace": remove leading and
+    /// trailing ASCII whitespace and replace any internal run of ASCII whitespace
+    /// (tab/LF/FF/CR/space only — U+000B and other Unicode spaces are kept) with a
+    /// single U+0020.</summary>
+    private static string StripAndCollapseAsciiWhitespace(string s)
+    {
+        static bool IsAsciiWs(char c) => c is '\t' or '\n' or '\f' or '\r' or ' ';
+        var sb = new System.Text.StringBuilder(s.Length);
+        var pendingSpace = false;
+        var started = false;
+        foreach (var c in s)
+        {
+            if (IsAsciiWs(c)) { pendingSpace = started; continue; }
+            if (pendingSpace) { sb.Append(' '); pendingSpace = false; }
+            sb.Append(c);
+            started = true;
+        }
+        return sb.ToString();
+    }
+
     private static bool IsValidName(string name)
     {
         if (string.IsNullOrEmpty(name) || !IsNameStart(name[0])) return false;
@@ -2899,10 +3128,12 @@ public static class NodeBindings
     /// <summary>Build a DOMTokenList JS object wrapping the element's classList.
     /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
     /// forEach, keys, values, entries. Properties: length, value.</summary>
-    private static JsObject BuildDomTokenList(JsRealm realm, Element element)
+    private static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element)
+        => BuildDomTokenList(realm, element, element.ClassList, "class");
+
+    private static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element, DomTokenList cl, string attrName)
     {
-        var obj = new JsObject(realm.ObjectPrototype);
-        var cl = element.ClassList;
+        var obj = new DomTokenListObject(realm.ObjectPrototype, cl);
 
         // Object.prototype.toString.call(classList) === "[object DOMTokenList]".
         obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.ToStringTag,
@@ -2911,10 +3142,10 @@ public static class NodeBindings
         EventTargetBinding.DefineAccessor(realm, obj, "length",
             (_, _) => JsValue.Number(cl.Count));
         EventTargetBinding.DefineAccessor(realm, obj, "value",
-            (_, _) => JsValue.String(element.GetAttribute("class") ?? ""),
+            (_, _) => JsValue.String(element.GetAttribute(attrName) ?? ""),
             (_, args) =>
             {
-                element.SetAttribute("class", args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
+                element.SetAttribute(attrName, args.Length > 0 ? JsValue.ToStringValue(args[0]) : "");
                 return JsValue.Undefined;
             });
 
@@ -2974,10 +3205,8 @@ public static class NodeBindings
             var newToken = JsValue.ToStringValue(args[1]);
             ValidateDomToken(realm, oldToken);
             ValidateDomToken(realm, newToken);
-            if (!cl.Contains(oldToken)) return JsValue.False;
-            cl.Remove(oldToken);
-            cl.Add(newToken);
-            return JsValue.True;
+            // Single attribute write so replace() yields exactly one mutation.
+            return JsValue.Boolean(cl.Replace(oldToken, newToken));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, obj, "item", (_, args) =>
         {
@@ -2997,30 +3226,31 @@ public static class NodeBindings
             }
             return JsValue.Undefined;
         }, length: 1);
-        EventTargetBinding.DefineMethod(realm, obj, "keys", (_, _) =>
+        // keys/values/entries are spec'd as iterators (not Arrays — the WPT
+        // "must not be Array" assertions check this), so build a snapshot array
+        // of the current tokens and hand back a real array iterator over it.
+        JsValue TokenArray()
         {
-            var items = new List<JsValue>();
-            for (var i = 0; i < cl.Count; i++) items.Add(JsValue.Number(i));
-            return MakeArray(realm, items);
-        }, length: 0);
-        EventTargetBinding.DefineMethod(realm, obj, "values", (_, _) =>
-        {
-            var items = new List<JsValue>();
+            var items = new List<JsValue>(cl.Count);
             for (var i = 0; i < cl.Count; i++) items.Add(JsValue.String(cl[i]));
             return MakeArray(realm, items);
-        }, length: 0);
+        }
+        EventTargetBinding.DefineMethod(realm, obj, "keys", (_, _) =>
+            Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                realm, TokenArray(), Starling.Js.Intrinsics.ArrayIteratorKind.Key), length: 0);
+        JsValue ValuesIterator(JsValue _t, JsValue[] _a) =>
+            Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                realm, TokenArray(), Starling.Js.Intrinsics.ArrayIteratorKind.Value);
+        EventTargetBinding.DefineMethod(realm, obj, "values", ValuesIterator, length: 0);
         EventTargetBinding.DefineMethod(realm, obj, "entries", (_, _) =>
-        {
-            var items = new List<JsValue>();
-            for (var i = 0; i < cl.Count; i++)
-            {
-                var pair = new JsArray(realm, new[] { JsValue.Number(i), JsValue.String(cl[i]) });
-                items.Add(JsValue.Object(pair));
-            }
-            return MakeArray(realm, items);
-        }, length: 0);
+            Starling.Js.Intrinsics.IteratorIntrinsics.CreateArrayIterator(
+                realm, TokenArray(), Starling.Js.Intrinsics.ArrayIteratorKind.KeyAndValue), length: 0);
+        // DOMTokenList is iterable: @@iterator is the same function object as
+        // values() (spec'd as an alias for a setlike/indexed iterable).
+        obj.DefineOwnProperty(Starling.Js.Intrinsics.SymbolCtor.Iterator,
+            PropertyDescriptor.Data(obj.Get("values"), writable: true, enumerable: false, configurable: true));
         EventTargetBinding.DefineMethod(realm, obj, "toString",
-            (_, _) => JsValue.String(element.GetAttribute("class") ?? ""), length: 0);
+            (_, _) => JsValue.String(element.GetAttribute(attrName) ?? ""), length: 0);
 
         return obj;
     }

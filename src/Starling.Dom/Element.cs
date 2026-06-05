@@ -76,6 +76,18 @@ public class Element : Node
 
     public DomTokenList ClassList { get; }
 
+    /// <summary>A live <see cref="DomTokenList"/> over an arbitrary reflected
+    /// attribute (e.g. <c>rel</c> for <c>relList</c>, <c>sandbox</c>, <c>sizes</c>,
+    /// <c>for</c> for an output's <c>htmlFor</c>). Reads/writes the attribute, so
+    /// it stays in sync with direct attribute mutations.</summary>
+    public DomTokenList TokenListFor(string attributeName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(attributeName);
+        return new DomTokenList(
+            () => GetAttribute(attributeName) ?? string.Empty,
+            value => SetAttribute(attributeName, value));
+    }
+
     /// <summary>
     /// The live IDL value of a form control (<c>&lt;input&gt;</c> /
     /// <c>&lt;textarea&gt;</c>) — the text the user has typed or that a script
@@ -196,10 +208,12 @@ public class Element : Node
 
     public override string ToString() => $"<{TagName}>";
 
-    internal void OnAttributeMutated(string attrName)
+    internal void OnAttributeMutated(string attrName, string? oldValue = null)
     {
         if (OwnerDocument is { } d)
         {
+            // Notify mutation observers (DOM §4.3) with the pre-change value.
+            d.AttributeMutated?.Invoke(this, attrName, oldValue);
             d.NoteAttributeMutation(attrName);
             // Always advance MutationVersion — observers, PumpFrame, and live
             // collections rely on "any DOM change advances this counter". But
@@ -225,11 +239,11 @@ public class Element : Node
     /// value change on an attached attribute node back into any dependent state
     /// (mutation observers, style engine invalidation, etc.). Currently just
     /// bumps the mutation version via OnAttributeMutated.</summary>
-    internal void SyncAttrNodeValue(AttrNode attr, string newValue)
+    internal void SyncAttrNodeValue(AttrNode attr, string newValue, string? oldValue = null)
     {
         // The AttrNode._value field is already updated by the caller.
         // Fire the same mutation hook that setAttribute fires so all observers
         // (cascade invalidation, mutation records) are notified.
-        OnAttributeMutated(attr.Name);
+        OnAttributeMutated(attr.Name, oldValue);
     }
 }

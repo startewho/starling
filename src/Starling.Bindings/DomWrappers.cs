@@ -65,7 +65,9 @@ public static class DomWrappers
             DocumentType => realm.DocumentTypePrototype ?? realm.NodePrototype ?? realm.ObjectPrototype,
             _ => realm.NodePrototype ?? realm.ObjectPrototype,
         };
-        var wrapper = new JsObject(proto);
+        var wrapper = node is Document doc
+            ? new JsDocumentWrapper(proto, doc, realm)
+            : new JsObject(proto);
         EventTargetBinding.BindWrapper(wrapper, node);
         cache.Add(node, wrapper);
         return wrapper;
@@ -305,6 +307,143 @@ internal sealed class JsNamedNodeMapObject : JsObject
                 if (!IsOnPrototype(attr.Name)) yield return attr.Name;
             // Any explicitly installed own props (currently none for this exotic object)
             foreach (var k in base.Keys) yield return k;
+        }
+    }
+}
+
+/// <summary>
+/// Exotic JS object backing a <c>Document</c> wrapper: a legacy platform object
+/// with named properties (HTML §3.1.5). <c>document[name]</c> / <c>name in
+/// document</c> resolve to the named <c>embed</c>/<c>form</c>/<c>iframe</c>/
+/// <c>img</c>/<c>object</c> element(s) — a single iframe yields its content
+/// window, a single other element yields the element, several yield an
+/// HTMLCollection — but only when the name is not already an own/prototype
+/// property (so document methods and attributes still win).
+/// </summary>
+internal sealed class JsDocumentWrapper : JsObject
+{
+    private readonly Document _doc;
+    private readonly JsRealm _realm;
+
+    public JsDocumentWrapper(JsObject proto, Document doc, JsRealm realm) : base(proto)
+    {
+        _doc = doc;
+        _realm = realm;
+    }
+
+    private static bool NameAccessible(Element e) =>
+        e.Namespace == Element.HtmlNamespace
+        && e.LocalName is "embed" or "form" or "iframe" or "img" or "object"
+        && !string.IsNullOrEmpty(e.GetAttribute("name"));
+
+    // id grants a named property for object elements, and for img elements that
+    // also carry a name attribute.
+    private static bool IdAccessible(Element e) =>
+        e.Namespace == Element.HtmlNamespace
+        && !string.IsNullOrEmpty(e.GetAttribute("id"))
+        && (e.LocalName == "object"
+            || (e.LocalName == "img" && !string.IsNullOrEmpty(e.GetAttribute("name"))));
+
+    private List<Element> NamedElements(string name)
+    {
+        var result = new List<Element>();
+        if (string.IsNullOrEmpty(name)) return result;
+        foreach (var e in _doc.DescendantElements())
+            if ((NameAccessible(e) && e.GetAttribute("name") == name)
+                || (IdAccessible(e) && e.GetAttribute("id") == name))
+                result.Add(e);
+        return result;
+    }
+
+    private JsValue NamedValue(string lookupName, List<Element> matches)
+    {
+        if (matches.Count == 1)
+        {
+            var el = matches[0];
+            if (el.LocalName == "iframe" && el.Namespace == Element.HtmlNamespace)
+                return JsValue.Object(IFrameBinding.EnsureContentWindow(_realm, IFrameBinding.EnsureContext(el)));
+            return JsValue.Object(DomWrappers.Wrap(_realm, el));
+        }
+        // Several matches → a live HTMLCollection re-evaluated on access, keyed by
+        // the SAME name the property was looked up under — not a name/id guessed
+        // off the first match, which could rebuild the collection for a different
+        // key when an element's id and name differ.
+        return NodeBindings.BuildHtmlCollection(_realm, () => NamedElements(lookupName));
+    }
+
+    private bool ShadowedByPrototype(string name)
+    {
+        for (var p = GetPrototypeOf(); p is not null; p = p.GetPrototypeOf())
+            if (p.HasOwn(name)) return true;
+        return false;
+    }
+
+    // The VM resolves property reads and the `in` operator through
+    // GetOwnPropertyDescriptor, so the named-property lookup lives here. A named
+    // property is exposed only when it is not an own data property and not
+    // shadowed by anything on the prototype chain (no [LegacyOverrideBuiltins]).
+    public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
+    {
+        if (base.GetOwnPropertyDescriptor(name) is { } own) return own;
+        if (ShadowedByPrototype(name)) return null;
+        var matches = NamedElements(name);
+        if (matches.Count == 0) return null;
+        return PropertyDescriptor.Data(NamedValue(name, matches), writable: true, enumerable: true, configurable: true);
+    }
+
+    public override JsValue Get(string name)
+    {
+        // An own property (expando) wins even when its value is undefined — decide
+        // ownership via HasOwn, not the returned value, so `document.foo = undefined`
+        // is not later overridden by a named element called "foo".
+        if (base.HasOwn(name)) return base.Get(name);
+        if (!ShadowedByPrototype(name) && NamedElements(name) is { Count: > 0 } matches)
+            return NamedValue(name, matches);
+        return base.Get(name); // prototype / built-ins (getElementById, …) resolve here
+    }
+
+    public override bool HasOwn(string name)
+    {
+        if (base.HasOwn(name)) return true;
+        return !ShadowedByPrototype(name) && NamedElements(name).Count > 0;
+    }
+
+    // The supported property names (HTML §3.1.5): the name of each accessible
+    // embed/form/iframe/img/object and the id of each accessible object / named
+    // img, in tree order, de-duplicated and not shadowed by a prototype property.
+    private IEnumerable<string> SupportedNames()
+    {
+        // Suppress names that already exist as an own (expando) property: those win
+        // (GetOwnPropertyDescriptor returns the own property first), so emitting the
+        // supported name too would put a duplicate in the own-key list.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in _doc.DescendantElements())
+        {
+            if (NameAccessible(e) && e.GetAttribute("name") is { Length: > 0 } n
+                && !base.HasOwn(n) && !ShadowedByPrototype(n) && seen.Add(n)) yield return n;
+            if (IdAccessible(e) && e.GetAttribute("id") is { Length: > 0 } id
+                && !base.HasOwn(id) && !ShadowedByPrototype(id) && seen.Add(id)) yield return id;
+        }
+    }
+
+    // Legacy platform objects enumerate supported property names BEFORE ordinary
+    // own (expando) keys; Keys and OwnPropertyKeys must agree on that order.
+    public override IEnumerable<string> Keys
+    {
+        get
+        {
+            foreach (var n in SupportedNames()) yield return n;
+            foreach (var k in base.Keys) yield return k;
+        }
+    }
+
+    public override IEnumerable<Starling.Js.Runtime.JsPropertyKey> OwnPropertyKeys
+    {
+        get
+        {
+            foreach (var n in SupportedNames())
+                yield return Starling.Js.Runtime.JsPropertyKey.String(n);
+            foreach (var k in base.OwnPropertyKeys) yield return k;
         }
     }
 }
