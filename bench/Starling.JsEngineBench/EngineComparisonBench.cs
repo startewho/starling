@@ -94,10 +94,10 @@ public class EngineComparisonBench
         catch (Exception ex) { _jintPrepared = default; Skip("Jint/prepare", ex); }
 
         // Validate one run of each engine; mark unsupported pairs to skip.
-        _skipStarling         = !Validate("Starling",          RunStarling);
+        _skipStarling = !Validate("Starling", RunStarling);
         _skipStarlingPrepared = _starlingChunk is null || !Validate("Starling_Prepared", RunStarlingPrepared);
-        _skipJint             = !Validate("Jint",              RunJint);
-        _skipJintPrepared     = !_jintPrepared.IsValid || !Validate("Jint_ParsedScript", RunJintPrepared);
+        _skipJint = !Validate("Jint", RunJint);
+        _skipJintPrepared = !_jintPrepared.IsValid || !Validate("Jint_ParsedScript", RunJintPrepared);
     }
 
     private bool Validate<T>(string label, Func<T> run)

@@ -243,7 +243,7 @@ public sealed class GradientPaintTests
         }
         coloredPixels.Should().NotBeEmpty("conic gradient must produce colored pixels inside glyphs");
         // Check at least two distinct hues exist (gradient, not a flat color).
-        var hasRedish  = coloredPixels.Any(p => p.r > p.b + 30);
+        var hasRedish = coloredPixels.Any(p => p.r > p.b + 30);
         var hasBlueish = coloredPixels.Any(p => p.b > p.r + 30);
         (hasRedish || hasBlueish).Should().BeTrue(
             "conic gradient must produce color variation across the glyph band");
@@ -412,12 +412,12 @@ public sealed class GradientPaintTests
         listOklab.Add(new FillGradient(new LayoutRect(0, 0, 100, 100), gradOklab));
 
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        using var bmpSrgb  = backend.Render(listSrgb,  new LayoutSize(100, 100));
+        using var bmpSrgb = backend.Render(listSrgb, new LayoutSize(100, 100));
         using var bmpOklab = backend.Render(listOklab, new LayoutSize(100, 100));
 
         // The midpoint of the gradient sweep (right side) should differ between
         // sRGB and Oklab interpolation.
-        var srgbMid  = bmpSrgb.GetPixel(90, 50);
+        var srgbMid = bmpSrgb.GetPixel(90, 50);
         var oklabMid = bmpOklab.GetPixel(90, 50);
 
         // At minimum they should not be bit-identical (Oklab produces different midpoint).

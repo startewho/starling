@@ -625,217 +625,217 @@ public sealed class StarlingEngine
 
                     var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
 
-                // Lazy pre-script layout — see RenderAsync for rationale. The
-                // trigger string identifies which JS read forced the layout
-                // (offsetWidth / getBoundingClientRect / getComputedStyle:foo)
-                // and is attached as a tag on the emitted span so the trace
-                // identifies the culprit script's read without needing a dump.
-                (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Prelayout(string? trigger)
-                {
-                    using (_diag.Span("engine", "prelayout_for_js"))
+                    // Lazy pre-script layout — see RenderAsync for rationale. The
+                    // trigger string identifies which JS read forced the layout
+                    // (offsetWidth / getBoundingClientRect / getComputedStyle:foo)
+                    // and is attached as a tag on the emitted span so the trace
+                    // identifies the culprit script's read without needing a dump.
+                    (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Prelayout(string? trigger)
                     {
-                        if (trigger is not null)
+                        using (_diag.Span("engine", "prelayout_for_js"))
                         {
-                            System.Diagnostics.Activity.Current?.SetTag("layout.trigger", trigger);
-                            // Also emit as a log so the Aspire structured-logs
-                            // API surfaces it — span attributes aren't returned
-                            // by list_trace_structured_logs, and a forced
-                            // prelayout is a notable event (~200 ms per
-                            // occurrence on a real page) worth Info severity.
-                            _diag.Log(DiagLevel.Info, "engine", $"prelayout trigger: {trigger}");
-                        }
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        var result = _painter.LayoutDocumentWithStyle(
-                            doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
-                        sw.Stop();
-                        // Surface wall time alongside the trigger so the
-                        // structured-logs view shows where forced-reflow time
-                        // is going without needing to click the trace.
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"prelayout done ({trigger ?? "<no-trigger>"}): {sw.ElapsedMilliseconds} ms");
-                        return result;
-                    }
-                }
-
-                // Cheap cascade-only path for getComputedStyle reads on
-                // purely-cascaded properties — see RenderAsync.
-                Starling.Css.Cascade.StyleEngine BuildCascadeOnly()
-                    => _painter.BuildStyleEngine(
-                        doc, viewport, options.FontSize, stylesheets.Resolve,
-                        options.PreferredColorScheme);
-
-                // Re-fetch resources a script run injected (new <img> / <link>),
-                // plus CSS background images, before laying out for paint.
-                async Task FetchInjectedAndBackgroundsAsync()
-                {
-                    await Task.WhenAll(
-                        images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
-                        stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
-                    ).ConfigureAwait(false);
-                    await images
-                        .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
-                        .ConfigureAwait(false);
-                }
-
-                // Lay out the current DOM for paint and build the owning page.
-                // Only hand the client to the page when we own it; a shared
-                // session client outlives the page and is disposed by the caller.
-                // When <paramref name="reuseHost"/> already holds a layout that
-                // matches the current mutation version (script forced a
-                // prelayout AND nothing has mutated since), reuse it — saves
-                // ~200 ms on real pages by skipping the third full layout pass.
-                LaidOutPage BuildPage(BoxLayoutHost? reuseHost = null)
-                {
-                    Starling.Layout.Box.BlockBox root;
-                    Starling.Css.Cascade.StyleEngine style;
-                    if (reuseHost is { HasLayout: true } h
-                        && h.LaidOutVersion == doc.LayoutInvalidationVersion)
-                    {
-                        (root, style) = h.Materialized;
-                    }
-                    else
-                    {
-                        (root, style) = _painter.LayoutDocumentWithStyle(
-                            doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
-                    }
-                    return new LaidOutPage(
-                        root, doc, style, viewport, url, ExtractTitle(doc), images, stylesheets, webFonts,
-                        options.FontSize, security, ownsHttp ? http : null);
-                }
-
-                // ---- Progressive path: run only render-blocking scripts, paint,
-                // then settle deferred (async) scripts and reflow only if they
-                // changed the DOM. Used by the interactive shell. ----
-                if (onFirstPaint is not null && hasScripts)
-                {
-                    var progressiveHost = new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly);
-                    var session = BeginScripts(doc, u, scripts, progressiveHost, viewport, ct);
-                    var sessionEnded = false;
-                    void EndSessionOnce() { if (!sessionEnded) { sessionEnded = true; EndScripts(session); } }
-                    try
-                    {
-                        using (var critSpan = _diag.Span("engine", "run_scripts.critical"))
-                        {
-                            Activity.Current?.SetTag("script.count", scripts.Scripts.Count);
-                            Activity.Current?.SetTag("script.module_count", scripts.ModuleScripts.Count);
-                            var critSw = System.Diagnostics.Stopwatch.StartNew();
-                            RunCriticalScripts(session, deferAsync: true, includeParserDeferred: false, ct);
-                            critSw.Stop();
+                            if (trigger is not null)
+                            {
+                                System.Diagnostics.Activity.Current?.SetTag("layout.trigger", trigger);
+                                // Also emit as a log so the Aspire structured-logs
+                                // API surfaces it — span attributes aren't returned
+                                // by list_trace_structured_logs, and a forced
+                                // prelayout is a notable event (~200 ms per
+                                // occurrence on a real page) worth Info severity.
+                                _diag.Log(DiagLevel.Info, "engine", $"prelayout trigger: {trigger}");
+                            }
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            var result = _painter.LayoutDocumentWithStyle(
+                                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                colorScheme: options.PreferredColorScheme, ct: ct);
+                            sw.Stop();
+                            // Surface wall time alongside the trigger so the
+                            // structured-logs view shows where forced-reflow time
+                            // is going without needing to click the trace.
                             _diag.Log(DiagLevel.Info, "engine",
-                                $"run_scripts.critical: {critSw.ElapsedMilliseconds} ms ({scripts.Scripts.Count} classic + {scripts.ModuleScripts.Count} module); " +
-                                $"layout-host: relayouts={progressiveHost.RelayoutCount}, cached-reads={progressiveHost.FreshHits}, cascade-only={progressiveHost.CascadeOnlyHits}");
+                                $"prelayout done ({trigger ?? "<no-trigger>"}): {sw.ElapsedMilliseconds} ms");
+                            return result;
                         }
+                    }
 
-                        // First paint: lay out the post-critical DOM and hand it to
-                        // the caller. From here the displayed page owns the shared
-                        // resources + http client, so the catch must not free them.
-                        var injSw = System.Diagnostics.Stopwatch.StartNew();
-                        await FetchSheetsThenFontsAsync().ConfigureAwait(false);
-                        injSw.Stop();
-                        var paintSw = System.Diagnostics.Stopwatch.StartNew();
-                        // Reuse the JS layout host's materialized layout if its
-                        // mutation version still matches — avoids a third full
-                        // layout pass when scripts already triggered one.
-                        var page1 = BuildPage(progressiveHost);
-                        paintSw.Stop();
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"post-critical: fetch_styles_fonts={injSw.ElapsedMilliseconds}ms, build_page={paintSw.ElapsedMilliseconds}ms" +
-                            $" (reused_host_layout={(progressiveHost.HasLayout && progressiveHost.LaidOutVersion == doc.LayoutInvalidationVersion)})");
-                        httpHandedToPage = ownsHttp;
-                        resourcesHandedToPage = true;
+                    // Cheap cascade-only path for getComputedStyle reads on
+                    // purely-cascaded properties — see RenderAsync.
+                    Starling.Css.Cascade.StyleEngine BuildCascadeOnly()
+                        => _painter.BuildStyleEngine(
+                            doc, viewport, options.FontSize, stylesheets.Resolve,
+                            options.PreferredColorScheme);
 
-                        var versionAtPaint = doc.MutationVersion;
-                        var imagesAtPaint = images.LoadedCount;
-                        var sheetsAtPaint = stylesheets.LoadedCount;
-                        onFirstPaint(page1);
-
-                        var deferredFetchSw = System.Diagnostics.Stopwatch.StartNew();
+                    // Re-fetch resources a script run injected (new <img> / <link>),
+                    // plus CSS background images, before laying out for paint.
+                    async Task FetchInjectedAndBackgroundsAsync()
+                    {
                         await Task.WhenAll(
-                            scripts.FetchDeferredAsync(doc, baseUrl: u, ct),
-                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct)
+                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
+                            stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
                         ).ConfigureAwait(false);
                         await images
                             .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
                             .ConfigureAwait(false);
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"phase: deferred_resources@{pageSw.ElapsedMilliseconds}ms ({deferredFetchSw.ElapsedMilliseconds}ms)");
-
-                        // Deferred scripts settle here, after first paint.
-                        using (_diag.Span("engine", "run_scripts.deferred"))
-                            await RunDeferredScriptsAsync(session, deferAsync: true, runParserDeferred: true, ct).ConfigureAwait(false);
-
-                        // Keep the realm LIVE past load: instead of tearing the
-                        // session down, hand it to the returned page as a
-                        // PageScripting so the shell can dispatch DOM events and
-                        // pump timers/rAF/fetch interactively. The page owns it
-                        // now (disposes the JS http client + fetcher + DOM hooks),
-                        // so we do NOT EndScripts/DisposeScripts on this path. All
-                        // fallible work runs first; the hand-off (which flips the
-                        // teardown guards) happens last so any throw before it
-                        // still tears the session down via the catch.
-                        LaidOutPage HandOff(LaidOutPage page)
-                        {
-                            var live = new PageScripting(
-                                session.Session, session.Http, session.Fetcher, doc);
-                            sessionEnded = true;  // page.Dispose() tears the session down now
-                            scriptsDisposed = true;
-                            page.AttachScripting(live);
-                            return page;
-                        }
-
-                        // Common case (analytics/beacons): deferred work touched no
-                        // DOM and no late layout-affecting resources arrived, so
-                        // page1 is still correct — return it (now live).
-                        if (doc.MutationVersion == versionAtPaint
-                            && images.LoadedCount == imagesAtPaint
-                            && stylesheets.LoadedCount == sheetsAtPaint)
-                            return Result<LaidOutPage, RenderError>.Ok(HandOff(page1));
-
-                        // Deferred scripts mutated the DOM or late resources
-                        // arrived: re-fetch what they injected and reflow into a
-                        // successor. Relayout transfers page1's shared resources
-                        // to it and marks page1 inert, so the caller can dispose
-                        // page1 safely.
-                        await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
-                        var (root2, style2) = _painter.LayoutDocumentWithStyle(
-                            doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
-                        return Result<LaidOutPage, RenderError>.Ok(HandOff(page1.Relayout(root2, style2, viewport)));
                     }
-                    catch
+
+                    // Lay out the current DOM for paint and build the owning page.
+                    // Only hand the client to the page when we own it; a shared
+                    // session client outlives the page and is disposed by the caller.
+                    // When <paramref name="reuseHost"/> already holds a layout that
+                    // matches the current mutation version (script forced a
+                    // prelayout AND nothing has mutated since), reuse it — saves
+                    // ~200 ms on real pages by skipping the third full layout pass.
+                    LaidOutPage BuildPage(BoxLayoutHost? reuseHost = null)
                     {
-                        // After first paint the caller owns the resources; only
-                        // tear the session/fetcher down and propagate (the outer
-                        // catch skips resource disposal via resourcesHandedToPage).
-                        EndSessionOnce();
-                        DisposeScripts();
-                        throw;
+                        Starling.Layout.Box.BlockBox root;
+                        Starling.Css.Cascade.StyleEngine style;
+                        if (reuseHost is { HasLayout: true } h
+                            && h.LaidOutVersion == doc.LayoutInvalidationVersion)
+                        {
+                            (root, style) = h.Materialized;
+                        }
+                        else
+                        {
+                            (root, style) = _painter.LayoutDocumentWithStyle(
+                                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                colorScheme: options.PreferredColorScheme, ct: ct);
+                        }
+                        return new LaidOutPage(
+                            root, doc, style, viewport, url, ExtractTitle(doc), images, stylesheets, webFonts,
+                            options.FontSize, security, ownsHttp ? http : null);
                     }
-                }
 
-                // ---- Non-progressive path: run everything before painting the
-                // single returned page (snapshot semantics / no callback). ----
-                if (hasScripts)
-                {
-                    await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly), viewport, ct).ConfigureAwait(false);
-                    DisposeScripts();
-                    await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
-                }
-                else
-                {
-                    DisposeScripts();
-                    await images
-                        .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
-                        .ConfigureAwait(false);
-                }
+                    // ---- Progressive path: run only render-blocking scripts, paint,
+                    // then settle deferred (async) scripts and reflow only if they
+                    // changed the DOM. Used by the interactive shell. ----
+                    if (onFirstPaint is not null && hasScripts)
+                    {
+                        var progressiveHost = new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly);
+                        var session = BeginScripts(doc, u, scripts, progressiveHost, viewport, ct);
+                        var sessionEnded = false;
+                        void EndSessionOnce() { if (!sessionEnded) { sessionEnded = true; EndScripts(session); } }
+                        try
+                        {
+                            using (var critSpan = _diag.Span("engine", "run_scripts.critical"))
+                            {
+                                Activity.Current?.SetTag("script.count", scripts.Scripts.Count);
+                                Activity.Current?.SetTag("script.module_count", scripts.ModuleScripts.Count);
+                                var critSw = System.Diagnostics.Stopwatch.StartNew();
+                                RunCriticalScripts(session, deferAsync: true, includeParserDeferred: false, ct);
+                                critSw.Stop();
+                                _diag.Log(DiagLevel.Info, "engine",
+                                    $"run_scripts.critical: {critSw.ElapsedMilliseconds} ms ({scripts.Scripts.Count} classic + {scripts.ModuleScripts.Count} module); " +
+                                    $"layout-host: relayouts={progressiveHost.RelayoutCount}, cached-reads={progressiveHost.FreshHits}, cascade-only={progressiveHost.CascadeOnlyHits}");
+                            }
 
-                var page = BuildPage();
-                httpHandedToPage = ownsHttp;
-                resourcesHandedToPage = true;
-                return Result<LaidOutPage, RenderError>.Ok(page);
-            }
+                            // First paint: lay out the post-critical DOM and hand it to
+                            // the caller. From here the displayed page owns the shared
+                            // resources + http client, so the catch must not free them.
+                            var injSw = System.Diagnostics.Stopwatch.StartNew();
+                            await FetchSheetsThenFontsAsync().ConfigureAwait(false);
+                            injSw.Stop();
+                            var paintSw = System.Diagnostics.Stopwatch.StartNew();
+                            // Reuse the JS layout host's materialized layout if its
+                            // mutation version still matches — avoids a third full
+                            // layout pass when scripts already triggered one.
+                            var page1 = BuildPage(progressiveHost);
+                            paintSw.Stop();
+                            _diag.Log(DiagLevel.Info, "engine",
+                                $"post-critical: fetch_styles_fonts={injSw.ElapsedMilliseconds}ms, build_page={paintSw.ElapsedMilliseconds}ms" +
+                                $" (reused_host_layout={(progressiveHost.HasLayout && progressiveHost.LaidOutVersion == doc.LayoutInvalidationVersion)})");
+                            httpHandedToPage = ownsHttp;
+                            resourcesHandedToPage = true;
+
+                            var versionAtPaint = doc.MutationVersion;
+                            var imagesAtPaint = images.LoadedCount;
+                            var sheetsAtPaint = stylesheets.LoadedCount;
+                            onFirstPaint(page1);
+
+                            var deferredFetchSw = System.Diagnostics.Stopwatch.StartNew();
+                            await Task.WhenAll(
+                                scripts.FetchDeferredAsync(doc, baseUrl: u, ct),
+                                images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct)
+                            ).ConfigureAwait(false);
+                            await images
+                                .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
+                                .ConfigureAwait(false);
+                            _diag.Log(DiagLevel.Info, "engine",
+                                $"phase: deferred_resources@{pageSw.ElapsedMilliseconds}ms ({deferredFetchSw.ElapsedMilliseconds}ms)");
+
+                            // Deferred scripts settle here, after first paint.
+                            using (_diag.Span("engine", "run_scripts.deferred"))
+                                await RunDeferredScriptsAsync(session, deferAsync: true, runParserDeferred: true, ct).ConfigureAwait(false);
+
+                            // Keep the realm LIVE past load: instead of tearing the
+                            // session down, hand it to the returned page as a
+                            // PageScripting so the shell can dispatch DOM events and
+                            // pump timers/rAF/fetch interactively. The page owns it
+                            // now (disposes the JS http client + fetcher + DOM hooks),
+                            // so we do NOT EndScripts/DisposeScripts on this path. All
+                            // fallible work runs first; the hand-off (which flips the
+                            // teardown guards) happens last so any throw before it
+                            // still tears the session down via the catch.
+                            LaidOutPage HandOff(LaidOutPage page)
+                            {
+                                var live = new PageScripting(
+                                    session.Session, session.Http, session.Fetcher, doc);
+                                sessionEnded = true;  // page.Dispose() tears the session down now
+                                scriptsDisposed = true;
+                                page.AttachScripting(live);
+                                return page;
+                            }
+
+                            // Common case (analytics/beacons): deferred work touched no
+                            // DOM and no late layout-affecting resources arrived, so
+                            // page1 is still correct — return it (now live).
+                            if (doc.MutationVersion == versionAtPaint
+                                && images.LoadedCount == imagesAtPaint
+                                && stylesheets.LoadedCount == sheetsAtPaint)
+                                return Result<LaidOutPage, RenderError>.Ok(HandOff(page1));
+
+                            // Deferred scripts mutated the DOM or late resources
+                            // arrived: re-fetch what they injected and reflow into a
+                            // successor. Relayout transfers page1's shared resources
+                            // to it and marks page1 inert, so the caller can dispose
+                            // page1 safely.
+                            await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
+                            var (root2, style2) = _painter.LayoutDocumentWithStyle(
+                                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                colorScheme: options.PreferredColorScheme, ct: ct);
+                            return Result<LaidOutPage, RenderError>.Ok(HandOff(page1.Relayout(root2, style2, viewport)));
+                        }
+                        catch
+                        {
+                            // After first paint the caller owns the resources; only
+                            // tear the session/fetcher down and propagate (the outer
+                            // catch skips resource disposal via resourcesHandedToPage).
+                            EndSessionOnce();
+                            DisposeScripts();
+                            throw;
+                        }
+                    }
+
+                    // ---- Non-progressive path: run everything before painting the
+                    // single returned page (snapshot semantics / no callback). ----
+                    if (hasScripts)
+                    {
+                        await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly), viewport, ct).ConfigureAwait(false);
+                        DisposeScripts();
+                        await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        DisposeScripts();
+                        await images
+                            .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    var page = BuildPage();
+                    httpHandedToPage = ownsHttp;
+                    resourcesHandedToPage = true;
+                    return Result<LaidOutPage, RenderError>.Ok(page);
+                }
             }
             catch
             {
