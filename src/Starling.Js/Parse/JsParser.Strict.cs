@@ -9,7 +9,7 @@ namespace Starling.Js.Parse;
 /// 15.7, B.1.2). Strictness is tracked by <see cref="JsParser._strict"/> with a
 /// stack discipline; the per-scope helpers here save and restore it.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     /// <summary>§11.2.2 — true when <paramref name="s"/> is a "use strict"
     /// directive: an ExpressionStatement consisting of a single StringLiteral
@@ -243,8 +243,6 @@ public sealed partial class JsParser
     /// (ContainsUseStrict). Read by callers right after
     /// <see cref="ParseFunctionBody"/> to enforce the simple-parameter-list
     /// rule, independent of any inherited strictness.</summary>
-    private bool _lastBodyContainsUseStrict;
-    private bool _prologueHadUseStrict;
 
     private (BlockStatement Body, bool Strict) ParseFunctionBody()
     {
@@ -268,7 +266,7 @@ public sealed partial class JsParser
         {
             var body = new List<Statement>();
             // The directive prologue can flip this body to strict.
-            ScanDirectivePrologue(body, ParseStatement);
+            ScanDirectivePrologue(body, isProgram: false);
             while (!Check(JsTokenKind.RBrace) && !Check(JsTokenKind.EndOfFile))
                 body.Add(ParseStatement());
             var end = _current.End;
