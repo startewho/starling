@@ -10,17 +10,14 @@ using LayoutRect = Starling.Layout.Rect;
 namespace Starling.Gui.Core.Rendering;
 
 /// <summary>
-/// Renders a page's layer tree straight to a window swapchain for the zero-copy
-/// present path. The host supplies a <see cref="GpuSurfacePresenter"/>, and this
-/// renderer builds the layer tree, uploads changed layer content, composites, and
-/// presents.
+/// Renders page content into a native window surface. The host supplies a
+/// <see cref="GpuSurfacePresenter"/>. This renderer builds the layer tree, sends
+/// changed layer content to the presenter, and presents the frame.
 /// </summary>
 /// <remarks>
-/// Holds the same persistent per-layer caches as the Avalonia path (keyed by
-/// slice content hash), so a transform/opacity-only frame re-blits cached layer
-/// textures with no re-raster. The paint backend (CPU vs WebGPU) is still chosen
-/// by <c>STARLING_PAINT_BACKEND</c>; it rasterizes the changed layer slices that
-/// the presenter then uploads and blends.
+/// The renderer keeps one tile cache for the session. Frames that only move or
+/// fade layers can reuse cached layer textures. The paint backend still draws
+/// changed layer slices, then the presenter blends them on the GPU.
 /// </remarks>
 public sealed class NativeViewportRenderer : IDisposable
 {
@@ -56,11 +53,10 @@ public sealed class NativeViewportRenderer : IDisposable
     }
 
     /// <summary>
-    /// Builds <paramref name="root"/>'s layer tree and presents it on
-    /// <paramref name="presenter"/>'s swapchain. <paramref name="viewport"/> is the
-    /// page-coordinate visible region (scroll offset + size); null renders the
-    /// whole page. Returns <c>false</c> if the frame could not be presented (the
-    /// surface may need reconfiguring — present the next frame).
+    /// Builds a layer tree for <paramref name="root"/> and presents it through
+    /// <paramref name="presenter"/>. <paramref name="viewport"/> is the visible
+    /// page region. Pass <c>null</c> to render the whole page. Returns
+    /// <c>false</c> when the frame was not presented.
     /// </summary>
     public bool Present(
         BlockBox root,
@@ -70,7 +66,7 @@ public sealed class NativeViewportRenderer : IDisposable
         IImageResolver? images = null,
         LayoutRect? viewport = null,
         Func<Box, bool>? isAnimatingLayerRoot = null,
-        IReadOnlyList<SurfaceOverlayRect>? overlays = null,
+        IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null,
         Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -90,7 +86,7 @@ public sealed class NativeViewportRenderer : IDisposable
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
             var compositor = new Compositor(_backend, _diag, _tiles);
-            var ok = compositor.RenderToSurface(tree, region, scale, presenter, overlays);
+            var ok = compositor.RenderToSurface(tree, region, scale, presenter, drawingOverlays);
             if (sw.ElapsedMilliseconds > 100)
                 _diag.Log(DiagLevel.Info, "shell",
                     $"present.cold: total={sw.ElapsedMilliseconds}ms layertree.build={tBuild}ms renderToSurface={sw.ElapsedMilliseconds - tBuild}ms");
@@ -104,9 +100,9 @@ public sealed class NativeViewportRenderer : IDisposable
     }
 
     /// <summary>
-    /// Presents engine-rendered chrome composited above and beside the page, in
-    /// one zero-copy frame. The chrome documents and page blend into one
-    /// swapchain present.
+    /// Presents chrome and page content in one surface frame. Top chrome, side
+    /// chrome, bottom chrome, page content, and overlays are blended into the
+    /// same present.
     /// </summary>
     public bool PresentComposited(
         GpuSurfacePresenter presenter,
@@ -272,7 +268,7 @@ public sealed class NativeViewportRenderer : IDisposable
         return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
     }
 
-    /// <summary>Drops the tile cache — call on navigation to a new document.</summary>
+    /// <summary>Clears cached tiles after navigation to a new document.</summary>
     public void ResetForNavigation()
     {
         _tiles.Clear();

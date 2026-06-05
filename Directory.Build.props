@@ -32,11 +32,9 @@
          so this takes precedence over the repo-root sixlabors.lic on CI. -->
     <SixLaborsLicenseKey Condition="'$(SixLaborsLicenseKey)' == ''">$(SIXLABORS_LICENSE_KEY)</SixLaborsLicenseKey>
 
-    <!-- Local dev: point Six Labors license validation at the repo-root
-         sixlabors.lic so every consumer project finds it; the targets glob is
-         rooted at each project dir and won't walk up. ImageSharp.Drawing 3 +
-         Fonts 3 + image codec licensing require this. -->
-    <SixLaborsLicenseFile Condition="'$(SixLaborsLicenseFile)' == '' And Exists('$(MSBuildThisFileDirectory)sixlabors.lic')">$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
+    <!-- Local dev: the Six Labors license FILE is resolved from the shared
+         org-root Starling.Org.props, imported below. -->
+
 
     <!--
       Strict-on-purpose, but a handful of CA / RCS rules are noisy on
@@ -46,6 +44,21 @@
     -->
     <NoWarn>$(NoWarn);CA1303;CA1304;CA1305;CA1812;CA1716;CA1031;CA1822;CA2007;CA1062</NoWarn>
     <NoWarn>$(NoWarn);RCS1163;RCS1124;RCS1118;RCS1158;RCS1192;RCS1238</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Six Labors license: prefer the shared copy at the starling-browser org root,
+    declared once in Starling.Org.props (found by walking up the folder tree, so
+    it resolves from nested submodules too); fall back to a repo-local
+    sixlabors.lic for standalone clones. CI finds neither and uses
+    SIXLABORS_LICENSE_KEY above.
+  -->
+  <PropertyGroup>
+    <StarlingOrgProps>$([MSBuild]::GetPathOfFileAbove('Starling.Org.props', '$(MSBuildThisFileDirectory)'))</StarlingOrgProps>
+  </PropertyGroup>
+  <Import Project="$(StarlingOrgProps)" Condition="'$(StarlingOrgProps)' != ''" />
+  <PropertyGroup>
+    <SixLaborsLicenseFile Condition="'$(SixLaborsLicenseFile)' == '' And Exists('$(MSBuildThisFileDirectory)sixlabors.lic')">$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
   </PropertyGroup>
 
   <!--
