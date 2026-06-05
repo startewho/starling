@@ -117,6 +117,24 @@ public sealed class BrowserToolsTests
         dispatcher.PressedKey.Should().Be(("Tab", true, true, false, true));
     }
 
+    [TestMethod]
+    public async Task Work_queue_dispatches_tool_calls_when_drained()
+    {
+        var queue = new BrowserControlWorkQueue();
+        var controller = new CapturingController();
+        queue.Attach(controller);
+
+        var move = queue.MoveMouseAsync(42, 75, CancellationToken.None);
+        move.IsCompleted.Should().BeFalse("the native host owns when queued work runs");
+
+        queue.Drain();
+        var result = await move;
+
+        result.Ok.Should().BeTrue();
+        result.Detail.Should().Be("moved");
+        controller.MousePosition.Should().Be((42, 75));
+    }
+
     // The catalog only needs a dispatcher to construct; these tests never invoke it.
     private class ThrowingDispatcher : IBrowserControlDispatcher
     {
@@ -176,5 +194,47 @@ public sealed class BrowserToolsTests
                 isBusy: false,
                 detail: "ok"));
         }
+    }
+
+    private sealed class CapturingController : IBrowserController
+    {
+        public (double X, double Y) MousePosition { get; private set; }
+
+        public Task<BrowserControlResult> MoveMouseFromToolAsync(double x, double y, CancellationToken ct)
+        {
+            MousePosition = (x, y);
+            return Task.FromResult(BrowserControlResult.Success(
+                url: "about:blank",
+                title: "Test",
+                canGoBack: false,
+                canGoForward: false,
+                detail: "moved"));
+        }
+
+        public Task<BrowserControlResult> NavigateFromToolAsync(string url, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> BackFromToolAsync(CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ForwardFromToolAsync(CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ReloadFromToolAsync(CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ScreenshotFromToolAsync(string path, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ScreenshotViewportFromToolAsync(string path, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> InspectFromToolAsync(bool includeHtml, string? logPath, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ConsoleFromToolAsync(string? minLevel, int limit, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> NetworkFromToolAsync(int limit, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ClickFromToolAsync(double x, double y, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ClickSelectorFromToolAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ScrollFromToolAsync(double deltaX, double deltaY, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ScrollToFromToolAsync(double? x, double? y, string? selector, string? position, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> PressKeyFromToolAsync(string key, bool shift, bool ctrl, bool alt, bool meta, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> TypeTextFromToolAsync(string text, bool submit, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ResizeFromToolAsync(double width, double height, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> WaitFromToolAsync(string state, string? value, int timeoutMs, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> QueryFromToolAsync(string selector, bool includeText, bool includeHtml, int limit, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> HighlightFromToolAsync(string selector, string? color, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> SelectElementFromToolAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> FocusElementFromToolAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> FindFromToolAsync(string query, string direction, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ClipboardFromToolAsync(string action, string? text, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> BookmarksFromToolAsync(string? id, CancellationToken ct) => throw new NotSupportedException();
+        public Task<BrowserControlResult> ComputedStyleFromToolAsync(string selector, CancellationToken ct) => throw new NotSupportedException();
     }
 }

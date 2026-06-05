@@ -1,6 +1,7 @@
 using AwesomeAssertions;
 using Starling.Common.Image;
 using Starling.Css.Cascade;
+using Starling.Css.Values;
 using Starling.Html;
 using Starling.Layout;
 using Starling.Layout.Box;
@@ -203,10 +204,11 @@ public sealed class GpuCompositeParityTests
         var root = Layout("<body style=\"margin:0;background-color:#102030\"></body>", W, H);
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
         var tree = new LayerTreeBuilder().Build(root);
-        var overlays = new[]
-        {
-            new SurfaceOverlayRect(20, 30, 50, 40, 255, 0, 0, 255),
-        };
+        var overlayScene = SurfaceOverlayScene.Create(50, 40, 0x450C0A7E1L,
+            builder => builder.FillInstances(
+                SurfaceOverlayPrimitive.Rectangle,
+                [new SurfaceOverlayInstance(0, 0, 50, 40, new CssColor(255, 0, 0, 255))]));
+        var overlays = new[] { new SurfaceOverlayLayer(20, 30, 50, 40, overlayScene) };
 
         using var rendered = new CompositorEngine(backend)
             .RenderGpuTextures(tree, new LayoutRect(0, 0, W, H), 1.0f, overlays);

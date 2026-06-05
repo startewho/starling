@@ -55,7 +55,7 @@ public sealed class PageFrameRequest
     public LayoutRect? Viewport { get; init; }
     public int PageVersion { get; init; }
     public Func<Box, bool>? IsAnimatingLayerRoot { get; init; }
-    public IReadOnlyList<SurfaceOverlayRect>? Overlays { get; init; }
+    public IReadOnlyList<SurfaceOverlayLayer>? DrawingOverlays { get; init; }
     public Func<Element, (double X, double Y)>? ScrollOffsets { get; init; }
     public bool UseLayerTree { get; init; }
 }
@@ -236,7 +236,6 @@ internal sealed class DefaultRenderSession : IRenderSession
 {
     private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
-    // private readonly PageRendererHost _bitmapRenderer;
     private readonly NativeViewportRenderer? _surfaceRenderer;
     private bool _disposed;
 
@@ -246,7 +245,6 @@ internal sealed class DefaultRenderSession : IRenderSession
         ArgumentNullException.ThrowIfNull(backend);
         _diag = diagnostics;
         _backend = backend;
-        // _bitmapRenderer = new PageRendererHost(_backend, _diag);
         _surfaceRenderer = supportsSurfaceTargets ? new NativeViewportRenderer(_backend, _diag) : null;
     }
 
@@ -260,7 +258,6 @@ internal sealed class DefaultRenderSession : IRenderSession
 
         return target.Kind switch
         {
-            // FrameTargetKind.CpuBitmap => RenderBitmap(request),
             FrameTargetKind.Surface => RenderSurface(request, target),
             _ => RenderFrame.Unavailable(),
         };
@@ -311,34 +308,8 @@ internal sealed class DefaultRenderSession : IRenderSession
 
     public void ResetForNavigation()
     {
-        // _bitmapRenderer.ResetForNavigation();
         _surfaceRenderer?.ResetForNavigation();
     }
-
-    // public void InvalidateBitmapCache()
-    //     => _bitmapRenderer.InvalidateCache();
-
-    // private RenderFrame RenderBitmap(PageFrameRequest request)
-    // {
-    //     var bitmap = request.UseLayerTree
-    //         ? _bitmapRenderer.RenderViaLayerTree(
-    //             request.Root,
-    //             request.Scale,
-    //             request.StyleOverride,
-    //             request.Images,
-    //             request.Viewport,
-    //             request.IsAnimatingLayerRoot)
-    //         : _bitmapRenderer.Render(
-    //             request.Root,
-    //             request.Scale,
-    //             request.StyleOverride,
-    //             request.Images,
-    //             request.Viewport,
-    //             request.PageVersion,
-    //             request.ScrollOffsets);
-    //
-    //     return RenderFrame.FromBitmap(bitmap);
-    // }
 
     private RenderFrame RenderSurface(PageFrameRequest request, IFrameTarget target)
     {
@@ -359,7 +330,7 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.Images,
             request.Viewport,
             request.IsAnimatingLayerRoot,
-            request.Overlays,
+            request.DrawingOverlays,
             request.ScrollOffsets);
         if (!ok)
         {
@@ -377,7 +348,6 @@ internal sealed class DefaultRenderSession : IRenderSession
 
         _disposed = true;
         _surfaceRenderer?.Dispose();
-        // _bitmapRenderer.Dispose();
         _backend.Dispose();
     }
 }
