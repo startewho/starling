@@ -4,6 +4,7 @@ using Jint.Native.Object;
 using Jint.Runtime;
 using Jint.Runtime.Descriptors;
 using Jint.Runtime.Interop;
+using Microsoft.Extensions.Logging;
 using Starling.Css.Selectors;
 using Starling.Dom;
 using Starling.Html;
@@ -967,6 +968,7 @@ internal static class NodeBindings
         var engine = ctx.Engine;
         var obj = new JsObject(engine);
         var cl = element.ClassList;
+        var log = ctx.LoggerFactory.CreateLogger(typeof(NodeBindings));
 
         Accessor(ctx, obj, "length", (_, _) => JintInterop.Num(cl.Count));
         Accessor(ctx, obj, "value",
@@ -976,16 +978,25 @@ internal static class NodeBindings
         Method(ctx, obj, "contains", (_, args) =>
         {
             if (args.Length == 0) return JsBoolean.False;
-            try { return JintInterop.Bool(cl.Contains(Str(args[0]))); } catch { return JsBoolean.False; }
+            try { return JintInterop.Bool(cl.Contains(Str(args[0]))); }
+            catch (Exception ex) { NodeBindingsLog.ClassListInvalidToken(log, "contains", ex.Message); return JsBoolean.False; }
         }, 1);
         Method(ctx, obj, "add", (_, args) =>
         {
-            foreach (var a in args) { try { cl.Add(Str(a)); } catch { /* invalid token */ } }
+            foreach (var a in args)
+            {
+                try { cl.Add(Str(a)); }
+                catch (Exception ex) { /* invalid token */ NodeBindingsLog.ClassListInvalidToken(log, "add", ex.Message); }
+            }
             return JsValue.Undefined;
         }, 0);
         Method(ctx, obj, "remove", (_, args) =>
         {
-            foreach (var a in args) { try { cl.Remove(Str(a)); } catch { /* invalid token */ } }
+            foreach (var a in args)
+            {
+                try { cl.Remove(Str(a)); }
+                catch (Exception ex) { /* invalid token */ NodeBindingsLog.ClassListInvalidToken(log, "remove", ex.Message); }
+            }
             return JsValue.Undefined;
         }, 0);
         Method(ctx, obj, "toggle", (_, args) =>
@@ -995,11 +1006,31 @@ internal static class NodeBindings
             bool result;
             if (args.Length > 1 && !args[1].IsUndefined())
             {
-                if (Bool(args[1])) { try { cl.Add(token); } catch { /* invalid */ } result = true; }
-                else { try { cl.Remove(token); } catch { /* invalid */ } result = false; }
+                if (Bool(args[1]))
+                {
+                    try { cl.Add(token); }
+                    catch (Exception ex) { /* invalid */ NodeBindingsLog.ClassListInvalidToken(log, "toggle-add", ex.Message); }
+                    result = true;
+                }
+                else
+                {
+                    try { cl.Remove(token); }
+                    catch (Exception ex) { /* invalid */ NodeBindingsLog.ClassListInvalidToken(log, "toggle-remove", ex.Message); }
+                    result = false;
+                }
             }
-            else if (cl.Contains(token)) { try { cl.Remove(token); } catch { /* invalid */ } result = false; }
-            else { try { cl.Add(token); } catch { /* invalid */ } result = true; }
+            else if (cl.Contains(token))
+            {
+                try { cl.Remove(token); }
+                catch (Exception ex) { /* invalid */ NodeBindingsLog.ClassListInvalidToken(log, "toggle-remove", ex.Message); }
+                result = false;
+            }
+            else
+            {
+                try { cl.Add(token); }
+                catch (Exception ex) { /* invalid */ NodeBindingsLog.ClassListInvalidToken(log, "toggle-add", ex.Message); }
+                result = true;
+            }
             return JintInterop.Bool(result);
         }, 1);
         Method(ctx, obj, "replace", (_, args) =>
@@ -1014,7 +1045,11 @@ internal static class NodeBindings
                 cl.Add(newT);
                 return JsBoolean.True;
             }
-            catch { return JsBoolean.False; }
+            catch (Exception ex)
+            {
+                NodeBindingsLog.ClassListInvalidToken(log, "replace", ex.Message);
+                return JsBoolean.False;
+            }
         }, 2);
         Method(ctx, obj, "item", (_, args) =>
         {
@@ -1212,7 +1247,7 @@ internal static class NodeBindings
     private static DocumentFragment ParseFragment(Element context, string markup)
     {
         var ownerDocument = context.OwnerDocument ?? new Document();
-        return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument, null);
+        return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument);
     }
 
     private static void InsertAdjacent(JintDomWrapper w, Node parent, JsValue arg, Node? before)
@@ -1793,4 +1828,11 @@ internal sealed class JintDatasetObject : ObjectInstance
         keys.AddRange(base.GetOwnPropertyKeys(types));
         return keys;
     }
+}
+
+internal static partial class NodeBindingsLog
+{
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "classList.{Operation} rejected invalid token: {Reason}")]
+    public static partial void ClassListInvalidToken(ILogger logger, string operation, string reason);
 }

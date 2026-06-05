@@ -6,6 +6,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Provided transitively by the Aspire host SDK; the repo-wide global ref
+         (Directory.Build.props) would otherwise trip NU1510. -->
+    <PackageReference Remove="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Aspire.Hosting.Yarp" />
   </ItemGroup>
 

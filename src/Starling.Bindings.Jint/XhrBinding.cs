@@ -7,6 +7,7 @@ using Jint.Native.Object;
 using Jint.Runtime;
 using Jint.Runtime.Descriptors;
 using Jint.Runtime.Interop;
+using Microsoft.Extensions.Logging;
 using Starling.Net.Http;
 using JsTypedArray = global::Jint.Native.JsTypedArray;
 using StarlingUrl = global::Starling.Url.Url;
@@ -233,10 +234,12 @@ internal static class XhrBinding
             return JsValue.Undefined;
         }, length: 0);
 
+        var ctxLog = ctx.LoggerFactory.CreateLogger(typeof(XhrBinding));
         JintInterop.DefineMethod(engine, proto, "abort", (t, _) =>
         {
             var x = State(engine, t);
-            try { x.Cts?.Cancel(); } catch { /* best-effort */ }
+            try { x.Cts?.Cancel(); }
+            catch (Exception ex) { /* best-effort */ XhrBindingLog.AbortCancelFailed(ctxLog, ex.Message); }
             x.Aborted = true;
             if (x.ReadyState is not (0 or 4))
             {
@@ -339,8 +342,10 @@ internal static class XhrBinding
         }
 
         var headers = new HttpHeaders();
+        var sendLog = ctx.LoggerFactory.CreateLogger(typeof(XhrBinding));
         foreach (var (k, v) in x.RequestHeaders)
-            try { headers.Add(k, v); } catch { /* skip invalid header names */ }
+            try { headers.Add(k, v); }
+            catch (Exception ex) { /* skip invalid header names */ XhrBindingLog.InvalidHeaderSkipped(sendLog, k, ex.Message); }
         var wire = new HttpRequest(x.Method, requestUrl, headers, body);
 
         var token = x.Cts.Token;
@@ -363,8 +368,9 @@ internal static class XhrBinding
                         resp.StatusCode, resp.ReasonPhrase ?? "", hdrs, resp.Body.ToArray());
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                XhrBindingLog.SendFailed(ctx.LoggerFactory.CreateLogger(typeof(XhrBinding)), x.RequestUrl, ex.Message);
                 outcome = XhrOutcome.Error();
             }
             // Marshal the completion onto the JS thread; PumpOnce drains and runs it.
@@ -447,11 +453,11 @@ internal static class XhrBinding
 
     private static void SafeCall(JintBackendContext ctx, Function fn, JsValue thisArg, JsValue arg)
     {
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         try { ctx.Engine.Invoke(fn, thisArg, new[] { arg }); }
         catch (JavaScriptException ex)
         {
-            ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                $"Uncaught (in XHR) {JintInterop.DescribeError(ex.Error, ex.Message)}");
+            XhrBindingLog.UncaughtInXhr(jsLog, JintInterop.DescribeError(ex.Error, ex.Message));
         }
     }
 
@@ -498,7 +504,11 @@ internal static class XhrBinding
             if (jo.Get("parse") is not Function fn) return JsValue.Null;
             return engine.Invoke(fn, jo, new JsValue[] { new JsString(text) });
         }
-        catch { return JsValue.Null; }
+        catch (Exception)
+        {
+            // JSON.parse threw (invalid JSON) — return null per XHR spec for responseType=json.
+            return JsValue.Null;
+        }
     }
 
     // ---- state plumbing ----
@@ -560,4 +570,19 @@ internal readonly struct XhrOutcome
 
     public static XhrOutcome Error() =>
         new() { Ok = false, Headers = new List<(string, string)>(), Body = Array.Empty<byte>(), StatusText = "" };
+}
+
+internal static partial class XhrBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "XHR abort CTS cancel failed: {Message}")]
+    public static partial void AbortCancelFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Skipped invalid XHR request header '{Name}': {Message}")]
+    public static partial void InvalidHeaderSkipped(ILogger logger, string name, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "XHR send failed for {Url}: {Message}")]
+    public static partial void SendFailed(ILogger logger, string url, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught (in XHR) {Detail}")]
+    public static partial void UncaughtInXhr(ILogger logger, string detail);
 }

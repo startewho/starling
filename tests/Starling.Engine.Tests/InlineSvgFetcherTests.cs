@@ -1,5 +1,5 @@
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Css.Values;
 using Starling.Dom;
 using Starling.Html;
@@ -43,7 +43,7 @@ public sealed class InlineSvgFetcherTests
             """<body><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"></circle></svg></body>""");
 
         using var fetcher = new ImageFetcher(
-            NoopDiagnostics.Instance,
+            NullLoggerFactory.Instance,
             () => throw new InvalidOperationException("inline svg must not hit the network"));
 
         var ok = fetcher.TryResolveInlineSvg(svg, new CssColor(0, 128, 255), out var resolved);
@@ -70,7 +70,7 @@ public sealed class InlineSvgFetcherTests
         var svg = FirstSvg(
             """<body><svg width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="red"></rect></svg></body>""");
 
-        using var fetcher = new ImageFetcher(NoopDiagnostics.Instance, () => throw new InvalidOperationException());
+        using var fetcher = new ImageFetcher(NullLoggerFactory.Instance, () => throw new InvalidOperationException());
 
         fetcher.TryResolveInlineSvg(svg, CssColor.Black, out var a).Should().BeTrue();
         fetcher.TryResolveInlineSvg(svg, CssColor.Black, out var b).Should().BeTrue();

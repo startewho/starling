@@ -6,12 +6,13 @@ using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Threading;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Chrome;
 using Starling.Gui.Core.Rendering;
 using Starling.Gui.Theme;
 using Starling.Paint.Backend;
 using System.Diagnostics;
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Selectors;
@@ -31,6 +32,30 @@ using LayoutBox = Starling.Layout.Box.Box;
 
 namespace Starling.Gui.Controls;
 
+internal static partial class WebviewPanelLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "zero-copy GPU page surface active ({Width}x{Height} device px)")]
+    public static partial void SurfaceActive(ILogger logger, int width, int height);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "GPU page surface setup failed")]
+    public static partial void SurfaceSetupFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "GPU surface present failed")]
+    public static partial void SurfacePresentFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "live JS pump failed: {Message}")]
+    public static partial void LivePumpFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "DOM event dispatch failed: {Message}")]
+    public static partial void DomDispatchFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "click-coordinate diagnostic write failed")]
+    public static partial void HitDiagFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "caret debug log write failed")]
+    public static partial void CaretLogFailed(ILogger logger, Exception ex);
+}
+
 /// <summary>
 /// The page surface. A ScrollViewer wraps a Canvas that hosts the page
 /// bitmap plus absolute-positioned overlays for hover highlight, drag-select,
@@ -41,7 +66,8 @@ namespace Starling.Gui.Controls;
 internal sealed class WebviewPanel : UserControl, IDisposable
 {
     private readonly ThemeManager _tm;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Action<string> _onLinkActivated;
     private readonly Action<string, bool> _onStatus;
     private readonly IRenderSession _renderSession;
@@ -162,7 +188,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     public WebviewPanel(
         ThemeManager tm,
-        IDiagnostics diag,
+        ILoggerFactory loggerFactory,
         Action<string> onLinkActivated,
         Action<string, bool> onStatus,
         Func<LaidOutPage, EngineSize, LaidOutPage?>? relayout = null,
@@ -170,8 +196,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         Func<LaidOutPage, bool>? hasActiveAnimations = null)
     {
         _tm = tm;
-        _diag = diag;
-        _renderSession = RenderSessionFactory.Create(diag);
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<WebviewPanel>();
+        _renderSession = RenderSessionFactory.Create(_log);
         _onLinkActivated = onLinkActivated;
         _onStatus = onStatus;
         _relayout = relayout;
@@ -582,7 +609,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         try
         {
-            _surfaceTarget = NativePageSurfaceFrameTarget.TryCreate(surface.Value, _diag);
+            _surfaceTarget = NativePageSurfaceFrameTarget.TryCreate(surface.Value);
             if (_surfaceTarget is null)
             {
                 throw new InvalidOperationException("GPU page surface unavailable.");
@@ -592,12 +619,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             var (w, h) = DeviceSize(rect);
             _surfaceTarget.Configure(w, h);
             _useSurface = true;
-            _diag.Log(DiagLevel.Info, "gui", $"zero-copy GPU page surface active ({w}x{h} device px)");
+            WebviewPanelLog.SurfaceActive(_log, w, h);
         }
         catch (Exception ex)
         {
             // The selected GPU session must not silently switch to the bitmap path.
-            _diag.LogException("gui", ex, "GPU page surface setup failed");
+            WebviewPanelLog.SurfaceSetupFailed(_log, ex);
             _surfaceTarget?.Dispose();
             _surfaceTarget = null;
             _useSurface = false;
@@ -650,7 +677,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         }
         catch (Exception ex)
         {
-            _diag.LogException("gui", ex, "GPU surface present failed");
+            WebviewPanelLog.SurfacePresentFailed(_log, ex);
             throw;
         }
 
@@ -1288,15 +1315,17 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private static readonly bool _caretDebug =
         Environment.GetEnvironmentVariable("STARLING_CARET_DEBUG") == "1";
 
-    private static void CaretLog(string msg)
+    private void CaretLog(string msg)
     {
         if (!_caretDebug) return;
         try
         {
             System.IO.File.AppendAllText("/tmp/starling-caret.log", $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
         }
-        catch
+        catch (Exception ex)
         {
+            // Best-effort debug log; file I/O failures are logged at debug level.
+            WebviewPanelLog.CaretLogFailed(_log, ex);
         }
     }
 
@@ -1337,8 +1366,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 $"  scale={_currentScale} renderScaling={GetRenderScale()} viewportRect=({rect.X:F0},{rect.Y:F0} {rect.Width:F0}x{rect.Height:F0})\n" +
                 $"  hit: {hitDesc}\n");
         }
-        catch
+        catch (Exception ex)
         {
+            WebviewPanelLog.HitDiagFailed(_log, ex);
         }
     }
 
@@ -1610,7 +1640,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             }
             catch (Exception ex)
             {
-                _diag.Log(DiagLevel.Warn, "gui", $"live JS pump failed: {ex.Message}");
+                WebviewPanelLog.LivePumpFailed(_log, ex.Message);
                 return;
             }
         }
@@ -1708,7 +1738,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"DOM event dispatch failed: {ex.Message}");
+            WebviewPanelLog.DomDispatchFailed(_log, ex.Message);
         }
 
         if (!_liveTimer.IsEnabled) BindLiveScripting();
@@ -2299,7 +2329,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     private CompositedPageRenderer ViewportCaptureRenderer()
-        => _viewportCaptureRenderer ??= new CompositedPageRenderer(diagnostics: _diag);
+        => _viewportCaptureRenderer ??= new CompositedPageRenderer(loggerFactory: _loggerFactory);
 
     /// <summary>
     /// Debug report for the <c>browser_computed_style</c> MCP

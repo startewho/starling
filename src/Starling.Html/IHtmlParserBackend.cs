@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-using Starling.Common.Diagnostics;
 using Starling.Dom;
 
 namespace Starling.Html;
@@ -19,12 +18,11 @@ public interface IHtmlParserBackend
 
     /// <summary>Parses a full document. See <see cref="HtmlParser.Parse"/> for the
     /// <paramref name="scriptingEnabled"/> contract.</summary>
-    Document Parse(string html, IDiagnostics? diagnostics, bool scriptingEnabled);
+    Document Parse(string html, bool scriptingEnabled);
 
     /// <summary>Runs the HTML fragment parsing algorithm (§13.4) for
     /// <paramref name="markup"/> in the context of <paramref name="context"/>,
     /// returning a <see cref="DocumentFragment"/> owned by
     /// <paramref name="ownerDocument"/>.</summary>
-    DocumentFragment ParseFragment(string markup, Element context,
-        Document ownerDocument, IDiagnostics? diagnostics);
+    DocumentFragment ParseFragment(string markup, Element context, Document ownerDocument);
 }

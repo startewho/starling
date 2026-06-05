@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Starling.Engine;
 
 namespace Starling.Wpt.Tests;
@@ -62,8 +62,8 @@ public sealed class WptRunner
 
     private WptFileResult RunCore(string rel)
     {
-        var diag = new CapturingDiagnostics();
-        var engine = new StarlingEngine(diag);
+        var loggerFactory = new CapturingLoggerFactory();
+        var engine = new StarlingEngine(loggerFactory: loggerFactory);
         var options = new RenderOptions(new SixLabors.ImageSharp.Size(800, 600), 16f);
         var url = _baseUrl + "/" + rel;
 
@@ -76,10 +76,10 @@ public sealed class WptRunner
         }
         catch (OperationCanceledException)
         {
-            return NoResult(rel, "timeout (load)", diag);
+            return NoResult(rel, "timeout (load)", loggerFactory);
         }
         if (r.IsErr)
-            return NoResult(rel, "load:" + r.Error.Message, diag);
+            return NoResult(rel, "load:" + r.Error.Message, loggerFactory);
 
         using var page = r.Value;
         var json = ReadResults(page);
@@ -101,7 +101,7 @@ public sealed class WptRunner
         }
 
         if (json is null)
-            return NoResult(rel, "no-result", diag);
+            return NoResult(rel, "no-result", loggerFactory);
 
         return Parse(rel, json);
     }
@@ -112,8 +112,8 @@ public sealed class WptRunner
         return string.IsNullOrEmpty(v) ? null : v;
     }
 
-    private static WptFileResult NoResult(string rel, string detail, CapturingDiagnostics diag)
-        => new(rel, false, -1, Array.Empty<WptSubtest>(), diag.Tail() is { Length: > 0 } t ? detail + " | " + t : detail);
+    private static WptFileResult NoResult(string rel, string detail, CapturingLoggerFactory rec)
+        => new(rel, false, -1, Array.Empty<WptSubtest>(), rec.Tail() is { Length: > 0 } t ? detail + " | " + t : detail);
 
     private static WptFileResult Parse(string rel, string json)
     {
@@ -154,33 +154,36 @@ public sealed class WptRunner
 
     private static string Truncate(string s) => s.Length <= 160 ? s : s[..160];
 
-    /// <summary>Captures Warn/Error diagnostics (the engine routes page console
+    /// <summary>Captures Warn/Error log entries (the engine routes page console
     /// output and script exceptions here) so a "no-result" file can report *why*
     /// — typically the unimplemented JS/DOM feature that broke testharness.js.</summary>
-    private sealed class CapturingDiagnostics : IDiagnostics
+    private sealed class CapturingLoggerFactory : ILoggerFactory
     {
         private readonly List<string> _msgs = new();
 
-        public void Log(DiagLevel level, string area, string message)
-        {
-            if (level >= DiagLevel.Warn) Add($"[{level}] {area}: {message}");
-        }
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(this, categoryName);
 
-        public void LogException(string area, Exception exception, string? message = null)
-            => Add($"[EXC] {area}: {exception.GetType().Name}: {message ?? exception.Message}");
+        public void AddProvider(ILoggerProvider provider) { }
 
-        public IDisposable Span(string area, string operation) => NoopSpan.Instance;
-        public void Counter(string name, double value) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-
-        private void Add(string m) { if (_msgs.Count < 8) _msgs.Add(Truncate(m)); }
+        public void Dispose() { }
 
         public string Tail() => _msgs.Count == 0 ? "" : string.Join(" ;; ", _msgs);
 
-        private sealed class NoopSpan : IDisposable
+        private void TryAdd(string m) { lock (_msgs) { if (_msgs.Count < 8) _msgs.Add(Truncate(m)); } }
+
+        private sealed class CapturingLogger(CapturingLoggerFactory owner, string category) : ILogger
         {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel < LogLevel.Warning) return;
+                var msg = exception is not null
+                    ? $"[{logLevel}] {category}: {exception.GetType().Name}: {formatter(state, exception)}"
+                    : $"[{logLevel}] {category}: {formatter(state, exception)}";
+                owner.TryAdd(msg);
+            }
         }
     }
 }

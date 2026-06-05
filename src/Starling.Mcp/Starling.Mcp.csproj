@@ -7,6 +7,9 @@
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- Provided by the ASP.NET Core shared framework; the repo-wide global ref
+         (Directory.Build.props) would otherwise trip NU1510. -->
+    <PackageReference Remove="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <ProjectReference Include="..\Starling.Telemetry\Starling.Telemetry.csproj" />

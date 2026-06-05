@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.GLFW;
 
 namespace Starling.Shell.Native;
@@ -22,8 +24,9 @@ internal static unsafe class NativeClipboard
             var s = _glfw.GetClipboardString((WindowHandle*)glfwWindow);
             return string.IsNullOrEmpty(s) ? null : s;
         }
-        catch
+        catch (Exception ex)
         {
+            NativeClipboardLog.GetFailed(NullLogger.Instance, ex);
             return null;
         }
     }
@@ -36,9 +39,19 @@ internal static unsafe class NativeClipboard
         {
             _glfw.SetClipboardString((WindowHandle*)glfwWindow, text);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort: clipboard access can fail on a sandboxed host.
+            NativeClipboardLog.SetFailed(NullLogger.Instance, ex);
         }
     }
+}
+
+internal static partial class NativeClipboardLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Clipboard read failed (best-effort)")]
+    public static partial void GetFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Clipboard write failed (best-effort)")]
+    public static partial void SetFailed(ILogger logger, Exception ex);
 }

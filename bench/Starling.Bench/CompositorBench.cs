@@ -56,12 +56,12 @@ public class CompositorBench
         using var measurer = new ImageSharpTextMeasurer(FontResolver.Default);
         _root = new LayoutEngine(style, measurer).LayoutDocument(doc, Viewport);
 
-        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
         // Warm path: a persistent tile grid keyed by layer id + tile position
         // Seed it once so every WarmCache call serves every tile from cache —
         // the steady-state animation frame.
         var warmTiles = new TileGrid();
-        _compositor = new Compositor(_backend, null, warmTiles);
+        _compositor = new Compositor(_backend, warmTiles);
         _warmTree = new LayerTreeBuilder(layerIdFor: warmTiles.LayerIdFor).Build(_root);
         using (_compositor.Render(_warmTree, ViewportRect, Scale)) { }
     }
@@ -83,7 +83,7 @@ public class CompositorBench
         // each re-rasters through the WebGPU backend before the composite blend —
         // the worst case the tile cache exists to avoid.
         var coldTiles = new TileGrid();
-        var coldComp = new Compositor(_backend, null, coldTiles);
+        var coldComp = new Compositor(_backend, coldTiles);
         var coldTree = new LayerTreeBuilder(layerIdFor: coldTiles.LayerIdFor).Build(_root);
         using var bmp = coldComp.Render(coldTree, ViewportRect, Scale);
         return bmp.Width;

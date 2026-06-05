@@ -1,21 +1,21 @@
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
-using Starling.Common.Diagnostics;
 
 namespace Starling.Engine.Tests;
 
 /// <summary>
-/// A page's <c>console.*</c> level must survive into the engine's diagnostics so
+/// A page's <c>console.*</c> level must survive into the engine's logging so
 /// DevTools' ConsolePanel can colour errors and have its level-filter pills
 /// match. The engine maps each <c>ConsoleLevel</c> to the matching
-/// <see cref="DiagLevel"/> (error→Error, warn→Warn, debug/trace→Debug, the rest
-/// →Info) and logs under the "engine.js" area.
+/// <see cref="LogLevel"/> (error→Error, warn→Warning, debug/trace→Debug, the rest
+/// →Information) and logs under the "Starling.engine.js" category.
 /// </summary>
 [TestClass]
 public sealed class EngineConsoleLevelTests
 {
     [TestMethod]
-    public async Task Console_levels_map_to_matching_diag_levels()
+    public async Task Console_levels_map_to_matching_log_levels()
     {
         var html = """
             <!doctype html><html><body><script>
@@ -28,33 +28,37 @@ public sealed class EngineConsoleLevelTests
             </script></body></html>
             """;
 
-        var diag = await RenderAsync(html);
+        var (rec, _) = await RenderAsync(html);
 
-        DiagLevel LevelOf(string needle) =>
-            diag.JsLogs.Single(l => l.Message.Contains(needle, StringComparison.Ordinal)).Level;
+        var jsLogs = rec.Entries
+            .Where(e => e.Category == "Starling.engine.js")
+            .ToList();
 
-        LevelOf("a log").Should().Be(DiagLevel.Info);
-        LevelOf("an info").Should().Be(DiagLevel.Info);
-        LevelOf("a warn").Should().Be(DiagLevel.Warn);
-        LevelOf("an error").Should().Be(DiagLevel.Error);
-        LevelOf("a debug").Should().Be(DiagLevel.Debug);
-        LevelOf("a trace").Should().Be(DiagLevel.Debug);
+        LogLevel LevelOf(string needle) =>
+            jsLogs.Single(l => l.Message.Contains(needle, StringComparison.Ordinal)).Level;
+
+        LevelOf("a log").Should().Be(LogLevel.Information);
+        LevelOf("an info").Should().Be(LogLevel.Information);
+        LevelOf("a warn").Should().Be(LogLevel.Warning);
+        LevelOf("an error").Should().Be(LogLevel.Error);
+        LevelOf("a debug").Should().Be(LogLevel.Debug);
+        LevelOf("a trace").Should().Be(LogLevel.Debug);
     }
 
-    private static async Task<ConsoleRecordingDiagnostics> RenderAsync(string html)
+    private static async Task<(RecordingLoggerFactory Rec, RenderOutcome Outcome)> RenderAsync(string html)
     {
         var tempHtml = Path.Combine(Path.GetTempPath(), $"starling-console-{Guid.NewGuid():N}.html");
         var tempPng = Path.Combine(Path.GetTempPath(), $"starling-console-{Guid.NewGuid():N}.png");
         await File.WriteAllTextAsync(tempHtml, html, CancellationToken.None);
-        var diag = new ConsoleRecordingDiagnostics();
+        var rec = new RecordingLoggerFactory();
         try
         {
-            var engine = new StarlingEngine(diagnostics: diag);
+            var engine = new StarlingEngine(loggerFactory: rec);
             var url = new Uri(tempHtml).AbsoluteUri;
             var result = await engine.RenderAsync(
                 url, new RenderOptions(new Size(800, 600), 16f), tempPng, CancellationToken.None);
             result.IsOk.Should().BeTrue(result.IsErr ? result.Error.Message : "");
-            return diag;
+            return (rec, result.Value);
         }
         finally
         {
@@ -69,31 +73,26 @@ public sealed class EngineConsoleLevelTests
         catch { /* best-effort */ }
     }
 
-    /// <summary>Captures every <c>_diag.Log</c> call made under the "engine.js" area.</summary>
-    private sealed class ConsoleRecordingDiagnostics : IDiagnostics
+    /// <summary>
+    /// Minimal <see cref="ILoggerFactory"/> that records every log entry so tests
+    /// can assert on category, level, and message. JS console output lands under
+    /// category "Starling.engine.js".
+    /// </summary>
+    private sealed class RecordingLoggerFactory : ILoggerFactory
     {
-        private readonly List<(DiagLevel Level, string Message)> _jsLogs = new();
+        public readonly List<(string Category, LogLevel Level, string Message)> Entries = new();
 
-        public IReadOnlyList<(DiagLevel Level, string Message)> JsLogs
+        public ILogger CreateLogger(string categoryName) => new Rec(this, categoryName);
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
+
+        private sealed class Rec(RecordingLoggerFactory o, string cat) : ILogger
         {
-            get { lock (_jsLogs) return _jsLogs.ToList(); }
-        }
-
-        public void Log(DiagLevel level, string area, string message)
-        {
-            if (area == "engine.js")
-                lock (_jsLogs) _jsLogs.Add((level, message));
-        }
-
-        public IDisposable Span(string area, string operation) => NoopSpan.Instance;
-        public void Counter(string name, double value) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
-        {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
+            public IDisposable? BeginScope<TState>(TState s) where TState : notnull => null;
+            public bool IsEnabled(LogLevel l) => true;
+            public void Log<TState>(LogLevel l, EventId id, TState s, Exception? ex,
+                Func<TState, Exception?, string> fmt)
+            { lock (o.Entries) o.Entries.Add((cat, l, fmt(s, ex))); }
         }
     }
 }

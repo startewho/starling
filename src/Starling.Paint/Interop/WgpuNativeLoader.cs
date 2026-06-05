@@ -46,9 +46,9 @@ internal static class WgpuNativeLoader
     // Diagnostic trail: each step the loader takes is appended so we can dump
     // the whole story into the exception message when ProbeAvailability later
     // returns an error. The loader runs in [ModuleInitializer] which is too
-    // early to plumb IDiagnostics through, so this is a self-contained log.
-    private static readonly List<string> _events = new();
-    private static readonly object _eventsLock = new();
+    // early to plumb an ILogger through, so this is a self-contained log.
+    private static readonly List<string> _events = [];
+    private static readonly Lock _eventsLock = new();
     private static int _resolveCalls;
     private static int _hookedAssemblies;
 
@@ -186,7 +186,7 @@ internal static class WgpuNativeLoader
                 ? RuntimeInformation.ProcessArchitecture == Architecture.Arm64
                     ? new[] { "win-arm64", "win-x64" }
                     : new[] { "win-x64", "win-x86" }
-                : new[] { $"linux-{Arch()}" };
+                : [$"linux-{Arch()}"];
 
         // 1. Starling.Paint's wgpu-native/ sidecar (set by Starling.Paint.csproj
         //    when EnableImageSharpDrawing3=true). Placed outside runtimes/ so

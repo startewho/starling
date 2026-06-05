@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SixLabors.Fonts;
 using Starling.Layout.Text;
 
@@ -27,10 +29,11 @@ internal static class ImageSharpFontLookup
     /// </summary>
     public static FontCollection LoadCollection(FontFaceRegistry? webFonts = null)
     {
+        var log = NullLoggerFactory.Instance.CreateLogger(typeof(ImageSharpFontLookup));
         var collection = new FontCollection();
-        AddEmbeddedFonts(collection);
+        AddEmbeddedFonts(collection, log);
         var aliases = AddRegisteredWebFonts(collection, webFonts);
-        TryAddSystemFonts(collection);
+        TryAddSystemFonts(collection, log);
         if (aliases.Count > 0)
             s_webFontAliases.AddOrUpdate(collection, aliases);
         return collection;
@@ -174,7 +177,7 @@ internal static class ImageSharpFontLookup
         _ => [],
     };
 
-    private static void AddEmbeddedFonts(FontCollection collection)
+    private static void AddEmbeddedFonts(FontCollection collection, ILogger log)
     {
         var asm = typeof(ImageSharpFontLookup).Assembly;
         foreach (var name in asm.GetManifestResourceNames())
@@ -185,11 +188,15 @@ internal static class ImageSharpFontLookup
             using var stream = asm.GetManifestResourceStream(name);
             if (stream is null) continue;
             try { collection.Add(stream); }
-            catch (Exception ex) when (ex is not OutOfMemoryException) { /* skip malformed */ }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // skip malformed embedded font
+                ImageSharpFontLookupLog.EmbeddedFontSkipped(log, ex, name);
+            }
         }
     }
 
-    private static void TryAddSystemFonts(FontCollection collection)
+    private static void TryAddSystemFonts(FontCollection collection, ILogger log)
     {
         try
         {
@@ -199,6 +206,7 @@ internal static class ImageSharpFontLookup
         {
             // System fonts unavailable (sandbox, unsupported platform, etc.).
             // Bundled fonts still serve as the fallback.
+            ImageSharpFontLookupLog.SystemFontsUnavailable(log, ex);
         }
     }
 
@@ -214,4 +222,13 @@ internal static class ImageSharpFontLookup
         if (webFonts is null) return s_noAliases;
         return webFonts.AddTo(collection);
     }
+}
+
+internal static partial class ImageSharpFontLookupLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "skipping malformed embedded font resource '{ResourceName}'")]
+    public static partial void EmbeddedFontSkipped(ILogger logger, Exception ex, string resourceName);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "system fonts unavailable; bundled fonts will be used as fallback")]
+    public static partial void SystemFontsUnavailable(ILogger logger, Exception ex);
 }

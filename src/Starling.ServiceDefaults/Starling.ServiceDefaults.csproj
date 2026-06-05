@@ -10,6 +10,9 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
 
+    <!-- Provided by the ASP.NET Core shared framework; the repo-wide global ref
+         (Directory.Build.props) would otherwise trip NU1510. -->
+    <PackageReference Remove="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
     <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />

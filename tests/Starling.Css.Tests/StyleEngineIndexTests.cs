@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Text;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Parser;
@@ -25,15 +28,15 @@ public sealed class StyleEngineIndexTests
         var doc = new Document();
         var article = doc.CreateElement("article");
         doc.AppendChild(article);
-        var diag = new CountingDiagnostics();
-        var engine = new StyleEngine(includeUserAgentStyleSheet: false, diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var engine = new StyleEngine(includeUserAgentStyleSheet: false, loggerFactory: NullLoggerFactory.Instance);
         engine.AddStyleSheet(CssParser.ParseStyleSheet(css.ToString()));
 
         var style = engine.Compute(article);
 
         style.GetColor(PropertyId.Color).Should().Be(new CssColor(0, 0, 255));
-        diag.CounterValue("css.rule_candidates").Should().Be(0);
-        diag.CounterValue("css.selector_tests").Should().Be(0);
+        metrics.CountOf("css.rule_candidates").Should().Be(0);
+        metrics.CountOf("css.selector_tests").Should().Be(0);
     }
 
     [TestMethod]
@@ -172,27 +175,22 @@ public sealed class StyleEngineIndexTests
         engine.Compute(narrowChild, context: null, cache).GetColor(PropertyId.Color).Should().Be(CssColor.Black);
     }
 
-    private sealed class CountingDiagnostics : IDiagnostics
+    private sealed class MetricRecorder : IDisposable
     {
-        private readonly Dictionary<string, double> _counters = new(StringComparer.Ordinal);
+        private readonly MeterListener _l = new();
+        private readonly ConcurrentDictionary<string, double> _v = new();
 
-        public double CounterValue(string name) => _counters.TryGetValue(name, out var value) ? value : 0;
-
-        public void Log(DiagLevel level, string area, string message) { }
-
-        public IDisposable Span(string area, string operation) => NoopDisposable.Instance;
-
-        public void Counter(string name, double value)
-            => _counters[name] = CounterValue(name) + value;
-
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopDisposable : IDisposable
+        public MetricRecorder()
         {
-            public static readonly NoopDisposable Instance = new();
-            public void Dispose() { }
+            _l.InstrumentPublished = (inst, lst) =>
+            { if (inst.Meter.Name == StarlingTelemetry.SourceName) lst.EnableMeasurementEvents(inst); };
+            _l.SetMeasurementEventCallback<double>((inst, m, t, s) => Add(inst.Name, m));
+            _l.SetMeasurementEventCallback<long>((inst, m, t, s) => Add(inst.Name, m));
+            _l.Start();
         }
+
+        private void Add(string n, double m) => _v.AddOrUpdate(n, m, (_, p) => p + m);
+        public double CountOf(string name) => _v.TryGetValue(name, out var x) ? x : 0d;
+        public void Dispose() => _l.Dispose();
     }
 }

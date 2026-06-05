@@ -67,22 +67,22 @@ internal static class AnimationTraceProgram
         var viewport = new Size(1024, 768);
         using var measurer = new ImageSharpTextMeasurer(FontResolver.Default);
 
-        var diag = new TraceDiagnostics();
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: diag, useWebGpu: true);
+        var frameData = new FrameCounters();
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         using var listener = new ActivityListener
         {
-            ShouldListenTo = s => s.Name == "Starling.Bench.Trace",
+            ShouldListenTo = s => s.Name == StarlingTelemetry.SourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             ActivityStopped = a =>
             {
                 if (a.OperationName != "paint.raster.command_record") return;
-                diag.LastReused = TagInt(a, "raster.text.shaped_reused");
-                diag.LastRebuilt = TagInt(a, "raster.text.shaped_rebuilt");
-                diag.LastChars = TagInt(a, "raster.text.chars");
-                diag.LastFontMiss = TagInt(a, "raster.font.cache_miss");
-                diag.LastDrawTextMs = TagDouble(a, "raster.time.draw_text_ms");
-                diag.LastFontCreateMs = TagDouble(a, "raster.time.font_create_ms");
+                frameData.LastReused = TagInt(a, "raster.text.shaped_reused");
+                frameData.LastRebuilt = TagInt(a, "raster.text.shaped_rebuilt");
+                frameData.LastChars = TagInt(a, "raster.text.chars");
+                frameData.LastFontMiss = TagInt(a, "raster.font.cache_miss");
+                frameData.LastDrawTextMs = TagDouble(a, "raster.time.draw_text_ms");
+                frameData.LastFontCreateMs = TagDouble(a, "raster.time.font_create_ms");
             },
         };
         ActivitySource.AddActivityListener(listener);
@@ -106,20 +106,20 @@ internal static class AnimationTraceProgram
             style.AnimationEngine.Tick(clock);
             var root = new LayoutEngine(style, measurer).LayoutDocument(doc, viewport, clock);
             var list = new DisplayListBuilder().Build(root);
-            diag.Reset();
+            frameData.Reset();
             using (backend.Render(list, viewport, scale)) { }
 
             if (f < warmup) continue;
-            sumReused += diag.LastReused;
-            sumRebuilt += diag.LastRebuilt;
-            sumChars += diag.LastChars;
-            sumMiss += diag.LastFontMiss;
-            sumDrawMs += diag.LastDrawTextMs;
-            sumFontMs += diag.LastFontCreateMs;
+            sumReused += frameData.LastReused;
+            sumRebuilt += frameData.LastRebuilt;
+            sumChars += frameData.LastChars;
+            sumMiss += frameData.LastFontMiss;
+            sumDrawMs += frameData.LastDrawTextMs;
+            sumFontMs += frameData.LastFontCreateMs;
             if (f == total - 1)
             {
-                steadyReused = diag.LastReused;
-                steadyRebuilt = diag.LastRebuilt;
+                steadyReused = frameData.LastReused;
+                steadyRebuilt = frameData.LastRebuilt;
             }
         }
 
@@ -152,15 +152,11 @@ internal static class AnimationTraceProgram
         => a.GetTagItem(key) is { } v ? Convert.ToDouble(v, CultureInfo.InvariantCulture) : 0;
 
     /// <summary>
-    /// Minimal <see cref="IDiagnostics"/> that turns <c>Span</c> calls into real
-    /// <see cref="Activity"/> instances on a private source, so an
-    /// <see cref="ActivityListener"/> can read the tags the backend sets. Also
-    /// holds the last frame's captured counters.
+    /// Holds per-frame counters captured from Activity tags set by the backend
+    /// on the <c>paint.raster.command_record</c> span.
     /// </summary>
-    private sealed class TraceDiagnostics : IDiagnostics
+    private sealed class FrameCounters
     {
-        public static readonly ActivitySource Source = new("Starling.Bench.Trace");
-
         public int LastReused, LastRebuilt, LastChars, LastFontMiss;
         public double LastDrawTextMs, LastFontCreateMs;
 
@@ -168,20 +164,6 @@ internal static class AnimationTraceProgram
         {
             LastReused = LastRebuilt = LastChars = LastFontMiss = 0;
             LastDrawTextMs = LastFontCreateMs = 0;
-        }
-
-        public IDisposable Span(string area, string operation)
-            => Source.StartActivity($"{area}.{operation}") ?? (IDisposable)NoopSpan.Instance;
-
-        public void Log(DiagLevel level, string area, string message) { }
-        public void Counter(string name, double value) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
-        {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
         }
     }
 }

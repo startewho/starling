@@ -2,9 +2,41 @@ using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Core.Rendering;
 
 namespace Starling.Gui.Controls;
+
+internal static partial class PageSurfaceHostLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Win32 child window creation failed")]
+    public static partial void Win32CreateFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Win32 child window destroy failed")]
+    public static partial void Win32DestroyFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "X11 display open failed")]
+    public static partial void X11OpenDisplayFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "X11 child window creation failed")]
+    public static partial void X11CreateChildFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "X11 window destroy failed")]
+    public static partial void X11DestroyFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "X11 display close failed")]
+    public static partial void X11CloseDisplayFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "macOS Metal view creation failed")]
+    public static partial void MacMetalCreateFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "macOS Metal contentsScale update failed")]
+    public static partial void MacMetalSetScaleFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "macOS ObjC release failed")]
+    public static partial void MacMetalReleaseFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// Embeds a native GPU surface in the page region while the chrome stays in
@@ -141,6 +173,11 @@ internal sealed class PageSurfaceHost : NativeControlHost
 
 internal static class Win32PageSurface
 {
+    // Static helper class — logger sourced from NullLoggerFactory until the host
+    // integrator wires a real factory via PageSurfaceHost.LoggerFactory.
+    private static readonly ILogger Log =
+        NullLoggerFactory.Instance.CreateLogger(typeof(Win32PageSurface));
+
     private const uint WsChild = 0x40000000;
     private const uint WsVisible = 0x10000000;
     private const uint WsClipChildren = 0x02000000;
@@ -188,8 +225,9 @@ internal static class Win32PageSurface
                 hinstance,
                 0);
         }
-        catch
+        catch (Exception ex)
         {
+            PageSurfaceHostLog.Win32CreateFailed(Log, ex);
             return 0;
         }
     }
@@ -200,15 +238,21 @@ internal static class Win32PageSurface
         {
             DestroyWindow(hwnd);
         }
-        catch
+        catch (Exception ex)
         {
             /* best effort */
+            PageSurfaceHostLog.Win32DestroyFailed(Log, ex);
         }
     }
 }
 
 internal static class X11PageSurface
 {
+    // Static helper class — logger sourced from NullLoggerFactory until the host
+    // integrator wires a real factory via PageSurfaceHost.LoggerFactory.
+    private static readonly ILogger Log =
+        NullLoggerFactory.Instance.CreateLogger(typeof(X11PageSurface));
+
     private const string X11 = "libX11.so.6";
 
     [DllImport(X11)]
@@ -241,8 +285,9 @@ internal static class X11PageSurface
         {
             return XOpenDisplay(null);
         }
-        catch
+        catch (Exception ex)
         {
+            PageSurfaceHostLog.X11OpenDisplayFailed(Log, ex);
             return 0;
         }
     }
@@ -258,8 +303,9 @@ internal static class X11PageSurface
             }
             return window;
         }
-        catch
+        catch (Exception ex)
         {
+            PageSurfaceHostLog.X11CreateChildFailed(Log, ex);
             return 0;
         }
     }
@@ -273,9 +319,10 @@ internal static class X11PageSurface
             XDestroyWindow(display, window);
             XFlush(display);
         }
-        catch
+        catch (Exception ex)
         {
             /* best effort */
+            PageSurfaceHostLog.X11DestroyFailed(Log, ex);
         }
     }
 
@@ -285,9 +332,10 @@ internal static class X11PageSurface
         {
             XCloseDisplay(display);
         }
-        catch
+        catch (Exception ex)
         {
             /* best effort */
+            PageSurfaceHostLog.X11CloseDisplayFailed(Log, ex);
         }
     }
 }
@@ -298,6 +346,11 @@ internal static class X11PageSurface
 /// </summary>
 internal static unsafe class MacMetal
 {
+    // Static helper class — logger sourced from NullLoggerFactory until the host
+    // integrator wires a real factory via PageSurfaceHost.LoggerFactory.
+    private static readonly ILogger Log =
+        NullLoggerFactory.Instance.CreateLogger(typeof(MacMetal));
+
     private const string Objc = "/usr/lib/libobjc.A.dylib";
 
     [DllImport(Objc)]
@@ -412,8 +465,9 @@ internal static unsafe class MacMetal
             metalLayer = layer;
             return view;
         }
-        catch
+        catch (Exception ex)
         {
+            PageSurfaceHostLog.MacMetalCreateFailed(Log, ex);
             metalLayer = 0;
             return 0;
         }
@@ -426,9 +480,10 @@ internal static unsafe class MacMetal
         {
             MsgSendVoidDouble(metalLayer, sel_registerName("setContentsScale:"), scale);
         }
-        catch
+        catch (Exception ex)
         {
             /* best effort */
+            PageSurfaceHostLog.MacMetalSetScaleFailed(Log, ex);
         }
     }
 
@@ -439,9 +494,10 @@ internal static unsafe class MacMetal
         {
             MsgSend(obj, sel_registerName("release"));
         }
-        catch
+        catch (Exception ex)
         {
             /* best effort */
+            PageSurfaceHostLog.MacMetalReleaseFailed(Log, ex);
         }
     }
 }

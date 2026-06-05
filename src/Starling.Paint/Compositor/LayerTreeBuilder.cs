@@ -1,4 +1,3 @@
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Values;
@@ -47,7 +46,6 @@ internal sealed class LayerTreeBuilder
     public LayerTreeBuilder(
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
-        IDiagnostics? diagnostics = null,
         Func<Box, bool>? isAnimatingLayerRoot = null,
         Func<Box, long>? layerIdFor = null,
         Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)

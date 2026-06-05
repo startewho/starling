@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 using AngleSharp.Dom;
 using AngleSharp.Html.Dom;
-using Starling.Common.Diagnostics;
 using AsHtmlParser = AngleSharp.Html.Parser.HtmlParser;
 using StarlingDom = Starling.Dom;
 
@@ -26,7 +25,7 @@ public sealed class AngleSharpHtmlBackend : IHtmlParserBackend
     public string Name => "anglesharp";
 
     /// <inheritdoc/>
-    public StarlingDom.Document Parse(string html, IDiagnostics? diagnostics, bool scriptingEnabled)
+    public StarlingDom.Document Parse(string html, bool scriptingEnabled)
     {
         // scriptingEnabled is intentionally ignored for tree shape: AngleSharp does
         // not run scripts by default, so the parsed tree shape is the same either
@@ -54,7 +53,7 @@ public sealed class AngleSharpHtmlBackend : IHtmlParserBackend
 
     /// <inheritdoc/>
     public StarlingDom.DocumentFragment ParseFragment(string markup, StarlingDom.Element context,
-        StarlingDom.Document ownerDocument, IDiagnostics? diagnostics)
+        StarlingDom.Document ownerDocument)
     {
         ArgumentNullException.ThrowIfNull(markup);
         ArgumentNullException.ThrowIfNull(context);

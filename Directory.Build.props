@@ -71,6 +71,17 @@
   </ItemGroup>
 
   <!--
+    ILogger is the engine's logging surface everywhere. The Abstractions package
+    carries ILogger/ILoggerFactory/NullLogger and the [LoggerMessage] source
+    generator; concrete providers (console, OpenTelemetry, in-memory) are wired
+    up only at the host. Shared by every project so source-generated log methods
+    and NullLoggerFactory are available in libraries and tests alike.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <!--
     Test projects (IsTestProject=true) use MSTest running on the
     Microsoft Testing Platform (MTP). Each test csproj becomes a runnable
     executable hosted by the MSTest MTP runner; `dotnet test` discovers it
