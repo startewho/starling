@@ -133,6 +133,60 @@ public sealed class LegacyPlatformObjectTests
         """).AsString.Should().Be("true,5");
     }
 
+    [TestMethod]
+    public void HtmlCollection_indexed_and_named_properties_are_read_only()
+    {
+        var (runtime, _) = BuildEnv();
+        // Indexed and named properties have no setter, so their descriptors are
+        // writable:false and a strict-mode write fails (TypeError) rather than
+        // silently appearing to succeed.
+        Eval(runtime, """
+            var s = document.createElement('span');
+            s.id = 'foo';
+            document.body.appendChild(s);
+            var coll = document.getElementsByTagName('span');
+            var di = Object.getOwnPropertyDescriptor(coll, '0');
+            var dn = Object.getOwnPropertyDescriptor(coll, 'foo');
+            result = di.writable + ',' + di.enumerable + ',' + di.configurable
+                + ',' + dn.writable;
+        """).AsString.Should().Be("false,true,true,false");
+
+        Eval(runtime, """
+            'use strict';
+            var s = document.createElement('span');
+            document.body.appendChild(s);
+            var coll = document.getElementsByTagName('span');
+            try { coll[0] = 'x'; globalThis.r = 'no-throw'; }
+            catch (e) { globalThis.r = e.constructor.name; }
+        """);
+        Eval(runtime, "result = r;").AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
+    public void NodeList_indexed_properties_are_read_only()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            var a = document.createElement('div');
+            a.setAttribute('name', 'x');
+            document.body.appendChild(a);
+            var list = document.getElementsByName('x');
+            var d = Object.getOwnPropertyDescriptor(list, '0');
+            result = d.writable + ',' + d.enumerable + ',' + d.configurable;
+        """).AsString.Should().Be("false,true,true");
+
+        Eval(runtime, """
+            'use strict';
+            var a = document.createElement('div');
+            a.setAttribute('name', 'x');
+            document.body.appendChild(a);
+            var list = document.getElementsByName('x');
+            try { list[0] = 'y'; globalThis.r = 'no-throw'; }
+            catch (e) { globalThis.r = e.constructor.name; }
+        """);
+        Eval(runtime, "result = r;").AsString.Should().Be("TypeError");
+    }
+
     // ---- Document named-property wrapper own-key dedup -----------------------
 
     [TestMethod]

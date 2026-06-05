@@ -75,8 +75,11 @@ internal sealed class NodeListObject : JsObject
         if (TryIndex(name, out var i))
         {
             var items = Items;
+            // Indexed properties are read-only (NodeList has no indexed setter), so
+            // writable:false — consistent with the Set/Delete/DefineOwnProperty
+            // overrides and with WebIDL (a strict-mode list[0] = x must fail).
             return i < items.Count
-                ? PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, items[i])), writable: true, enumerable: true, configurable: true)
+                ? PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, items[i])), writable: false, enumerable: true, configurable: true)
                 : null;
         }
         return base.GetOwnPropertyDescriptor(name);
