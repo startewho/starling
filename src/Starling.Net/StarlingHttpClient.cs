@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common;
 using Starling.Common.Diagnostics;
 using Starling.Net.Dns;
@@ -11,6 +13,15 @@ using Starling.Net.Tls;
 using StarlingUrl = global::Starling.Url.Url;
 
 namespace Starling.Net;
+
+internal static partial class StarlingHttpClientLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "HTTP request failed: {Error}")]
+    public static partial void RequestFailed(ILogger logger, string error);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "transport dispose threw during cleanup")]
+    public static partial void SafeDisposeFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// Top-level HTTP client. Resolves a URL to a TCP endpoint, opens a transport
@@ -42,8 +53,9 @@ public sealed class StarlingHttpClient : IDisposable
     private readonly DnsResolver _dns;
     private readonly TcpDialer _dialer;
     private readonly ConnectionPool _pool;
-    private readonly H2ConnectionManager _h2 = new();
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly H2ConnectionManager _h2;
+    private readonly ILogger _log;
     private bool _disposed;
 
     public StarlingHttpClient() : this(new StarlingHttpClientOptions()) { }
@@ -51,7 +63,9 @@ public sealed class StarlingHttpClient : IDisposable
     public StarlingHttpClient(StarlingHttpClientOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _diag = options.Diagnostics ?? NoopDiagnostics.Instance;
+        _loggerFactory = options.LoggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<StarlingHttpClient>();
+        _h2 = new H2ConnectionManager(_loggerFactory.CreateLogger<H2ConnectionManager>());
         _dns = options.DnsResolver ?? new DnsResolver(new UdpDnsTransport());
         _dialer = new TcpDialer(_dns) { ConnectTimeout = options.ConnectTimeout };
         _pool = options.ConnectionPool ?? new ConnectionPool();
@@ -107,12 +121,12 @@ public sealed class StarlingHttpClient : IDisposable
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         requestCts.CancelAfter(_options.RequestTimeout);
 
-        using var httpSpan = _diag.Span("net", "http");
+        using var httpSpan = StarlingTelemetry.Span("net", "http");
         Activity.Current?.SetTag("http.method", request.Method);
         Activity.Current?.SetTag("http.url", url.ToString());
         Activity.Current?.SetTag("server.address", origin.Host);
         Activity.Current?.SetTag("server.port", origin.Port);
-        _diag.Counter("net.http.requests", 1);
+        StarlingTelemetry.Counter("net.http.requests", 1);
 
         try
         {
@@ -139,7 +153,7 @@ public sealed class StarlingHttpClient : IDisposable
             var pooled = _pool.TryAcquire(origin);
             if (pooled is not null)
             {
-                _diag.Counter("net.http.connection_reused", 1);
+                StarlingTelemetry.Counter("net.http.connection_reused", 1);
                 Activity.Current?.SetTag("connection.reused", true);
                 var pooledOutcome = await TrySendOnTransportAsync(
                     pooled, request, url, fromPool: true, requestCts.Token).ConfigureAwait(false);
@@ -167,7 +181,7 @@ public sealed class StarlingHttpClient : IDisposable
                 return Result<HttpResponse, NetworkError>.Err(dialed.Error);
             }
 
-            _diag.Counter("net.http.connection_opened", 1);
+            StarlingTelemetry.Counter("net.http.connection_opened", 1);
 
             var fresh = dialed.Value;
 
@@ -177,7 +191,7 @@ public sealed class StarlingHttpClient : IDisposable
             if (string.Equals(fresh.Alpn, "h2", StringComparison.Ordinal))
             {
                 var conn = await H2Connection.StartAsync(
-                    fresh, origin, _diag, c => _h2.Remove(origin, c), requestCts.Token).ConfigureAwait(false);
+                    fresh, origin, _loggerFactory.CreateLogger<H2Connection>(), c => _h2.Remove(origin, c), requestCts.Token).ConfigureAwait(false);
                 var winner = _h2.Adopt(origin, conn);
                 if (!ReferenceEquals(winner, conn))
                     await conn.DisposeAsync().ConfigureAwait(false); // lost the race; use the incumbent
@@ -220,7 +234,7 @@ public sealed class StarlingHttpClient : IDisposable
         var response = result.Value;
         Activity.Current?.SetTag("http.status_code", response.StatusCode);
         Activity.Current?.SetTag("http.response.body.size", response.Body.Length);
-        _diag.Counter("net.http.bytes_in", response.Body.Length);
+        StarlingTelemetry.Counter("net.http.bytes_in", response.Body.Length);
         if (response.StatusCode >= 500)
         {
             Activity.Current?.SetStatus(ActivityStatusCode.Error, $"HTTP {response.StatusCode}");
@@ -230,9 +244,9 @@ public sealed class StarlingHttpClient : IDisposable
     private void RecordError(NetworkError error)
     {
         var message = error.ToString();
-        _diag.Counter("net.http.failures", 1);
+        StarlingTelemetry.Counter("net.http.failures", 1);
         Activity.Current?.SetStatus(ActivityStatusCode.Error, message);
-        _diag.Log(DiagLevel.Warn, "net", message);
+        StarlingHttpClientLog.RequestFailed(_log, message);
     }
 
     private async Task<Result<IHttpTransport, NetworkError>> DialAsync(
@@ -243,14 +257,14 @@ public sealed class StarlingHttpClient : IDisposable
         // crisp and DNS-only failures are distinguishable from connect-only
         // failures. The result feeds DialDirectAsync below.
         Result<DnsResult, DnsError> dnsResult;
-        using (var dnsSpan = _diag.Span("net", "dns"))
+        using (var dnsSpan = StarlingTelemetry.Span("net", "dns"))
         {
             Activity.Current?.SetTag("dns.host", origin.Host);
-            _diag.Counter("net.dns.resolutions", 1);
+            StarlingTelemetry.Counter("net.dns.resolutions", 1);
             dnsResult = await _dns.ResolveAsync(origin.Host, ct).ConfigureAwait(false);
             if (dnsResult.IsErr)
             {
-                _diag.Counter("net.dns.failures", 1);
+                StarlingTelemetry.Counter("net.dns.failures", 1);
                 Activity.Current?.SetStatus(ActivityStatusCode.Error, dnsResult.Error.ToString());
                 return Result<IHttpTransport, NetworkError>.Err(NetworkError.DnsFailure);
             }
@@ -259,11 +273,11 @@ public sealed class StarlingHttpClient : IDisposable
         // TCP connect span. Try each resolved address; first success wins.
         ITcpConnection? tcp = null;
         TcpError? lastTcpError = null;
-        using (var tcpSpan = _diag.Span("net", "tcp_connect"))
+        using (var tcpSpan = StarlingTelemetry.Span("net", "tcp_connect"))
         {
             Activity.Current?.SetTag("server.address", origin.Host);
             Activity.Current?.SetTag("server.port", origin.Port);
-            _diag.Counter("net.tcp.connects", 1);
+            StarlingTelemetry.Counter("net.tcp.connects", 1);
 
             foreach (var ip in dnsResult.Value.Addresses)
             {
@@ -282,7 +296,7 @@ public sealed class StarlingHttpClient : IDisposable
 
             if (tcp is null)
             {
-                _diag.Counter("net.tcp.failures", 1);
+                StarlingTelemetry.Counter("net.tcp.failures", 1);
                 var err = lastTcpError == TcpError.Timeout
                     ? NetworkError.ConnectTimeout
                     : NetworkError.ConnectFailed;
@@ -293,9 +307,9 @@ public sealed class StarlingHttpClient : IDisposable
 
         if (url.IsHttps)
         {
-            using var tlsSpan = _diag.Span("net", "tls_handshake");
+            using var tlsSpan = StarlingTelemetry.Span("net", "tls_handshake");
             Activity.Current?.SetTag("server.address", origin.Host);
-            _diag.Counter("net.tls.handshakes", 1);
+            StarlingTelemetry.Counter("net.tls.handshakes", 1);
 
             var tlsResult = await BcTlsTransport.ConnectAsync(
                 tcp,
@@ -303,7 +317,7 @@ public sealed class StarlingHttpClient : IDisposable
                 ct).ConfigureAwait(false);
             if (tlsResult.IsErr)
             {
-                _diag.Counter("net.tls.failures", 1);
+                StarlingTelemetry.Counter("net.tls.failures", 1);
                 await tcp.DisposeAsync().ConfigureAwait(false);
                 var err = tlsResult.Error == TlsError.CertificateRejected
                     ? NetworkError.TlsCertificateRejected
@@ -346,20 +360,20 @@ public sealed class StarlingHttpClient : IDisposable
         {
             ApplyRequestCookies(request, url);
 
-            using (var writeSpan = _diag.Span("net", "h1_request"))
+            using (var writeSpan = StarlingTelemetry.Span("net", "h1_request"))
             {
-                _diag.Counter("net.h1.requests_written", 1);
+                StarlingTelemetry.Counter("net.h1.requests_written", 1);
                 await _options.RequestWriter
                     .WriteAsync(request, transport.Stream, ct)
                     .ConfigureAwait(false);
                 if (!request.Body.IsEmpty)
-                    _diag.Counter("net.http.bytes_out", request.Body.Length);
+                    StarlingTelemetry.Counter("net.http.bytes_out", request.Body.Length);
             }
 
             Result<HttpResponse, HttpError> parseResult;
-            using (var parseSpan = _diag.Span("net", "h1_response"))
+            using (var parseSpan = StarlingTelemetry.Span("net", "h1_response"))
             {
-                _diag.Counter("net.h1.responses_parsed", 1);
+                StarlingTelemetry.Counter("net.h1.responses_parsed", 1);
                 parseResult = await _options.ResponseParser
                     .ParseAsync(transport.Stream, ct).ConfigureAwait(false);
                 if (parseResult.IsOk)
@@ -440,12 +454,12 @@ public sealed class StarlingHttpClient : IDisposable
         ApplyRequestCookies(request, url);
         Activity.Current?.SetTag("connection.reused", reused);
         Activity.Current?.SetTag("network.protocol.version", "2");
-        if (reused) _diag.Counter("net.http.connection_reused", 1);
+        if (reused) StarlingTelemetry.Counter("net.http.connection_reused", 1);
 
         Result<HttpResponse, NetworkError> result;
-        using (var span = _diag.Span("net", "h2_request"))
+        using (var span = StarlingTelemetry.Span("net", "h2_request"))
         {
-            _diag.Counter("net.h2.requests_sent", 1);
+            StarlingTelemetry.Counter("net.h2.requests_sent", 1);
             result = await conn.SendAsync(request, url, ct).ConfigureAwait(false);
         }
 
@@ -486,10 +500,10 @@ public sealed class StarlingHttpClient : IDisposable
         }
     }
 
-    private static async ValueTask SafeDisposeAsync(IHttpTransport transport)
+    private async ValueTask SafeDisposeAsync(IHttpTransport transport)
     {
         try { await transport.DisposeAsync().ConfigureAwait(false); }
-        catch { /* a half-broken socket may throw on shutdown; we don't care */ }
+        catch (Exception ex) { StarlingHttpClientLog.SafeDisposeFailed(_log, ex); /* a half-broken socket may throw on shutdown; we don't care */ }
     }
 
     public void Dispose()
@@ -555,13 +569,13 @@ public sealed class StarlingHttpClientOptions
     public ConnectionPool? ConnectionPool { get; init; }
 
     /// <summary>
-    /// Optional diagnostics sink. When set, the client emits per-request
-    /// spans (http / dns / tcp_connect / tls_handshake / h1_request /
-    /// h1_response / h2_request) and counters (net.http.*, net.dns.*,
-    /// net.tcp.*, net.tls.*, net.h1.*, net.h2.*). Defaults to
-    /// <see cref="NoopDiagnostics.Instance"/>.
+    /// Optional logger factory. When set, the client emits per-request log
+    /// messages and passes the factory through to HTTP/2 connections.
+    /// Tracing spans and metrics are always emitted via
+    /// <see cref="Starling.Common.Diagnostics.StarlingTelemetry"/> regardless.
+    /// Defaults to <see cref="NullLoggerFactory.Instance"/>.
     /// </summary>
-    public IDiagnostics? Diagnostics { get; init; }
+    public ILoggerFactory? LoggerFactory { get; init; }
 }
 
 public enum NetworkError

@@ -84,7 +84,7 @@ public sealed class TemplateContentTests
         // innerHTML on a <template> parses the markup as template content.
         var doc = new Document();
         var tpl = (HtmlTemplateElement)doc.CreateElement("template");
-        var fragment = HtmlParsing.Backend.ParseFragment("<tr><td>c</td></tr>", tpl, doc, null);
+        var fragment = HtmlParsing.Backend.ParseFragment("<tr><td>c</td></tr>", tpl, doc);
 
         fragment.TextContent.Should().Be("c");
     }

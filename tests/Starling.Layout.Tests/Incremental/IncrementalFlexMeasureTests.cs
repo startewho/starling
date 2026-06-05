@@ -1,5 +1,5 @@
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Css.Cascade;
 using Starling.Css.Parser;
 using Starling.Dom;
@@ -60,7 +60,7 @@ public sealed class IncrementalFlexMeasureTests
         var style = new StyleEngine();
         style.AddStyleSheet(CssParser.ParseStyleSheet(Css));
         var measurer = new CountingMeasurer();
-        var session = new LayoutSession(style, diagnostics: NoopDiagnostics.Instance);
+        var session = new LayoutSession(style, loggerFactory: NullLoggerFactory.Instance);
 
         // Frame 0: full build measures the whole page (the baseline cost).
         session.Layout(doc, Viewport, measurer, nowMs: null);
@@ -88,7 +88,7 @@ public sealed class IncrementalFlexMeasureTests
         doc.RecordLayoutMutations = true;
         var style = new StyleEngine();
         style.AddStyleSheet(CssParser.ParseStyleSheet(Css));
-        var session = new LayoutSession(style, diagnostics: NoopDiagnostics.Instance);
+        var session = new LayoutSession(style, loggerFactory: NullLoggerFactory.Instance);
 
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 

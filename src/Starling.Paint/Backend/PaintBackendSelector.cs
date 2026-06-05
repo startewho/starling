@@ -1,4 +1,3 @@
-using Starling.Common.Diagnostics;
 using Starling.Layout.Text;
 
 namespace Starling.Paint.Backend;
@@ -46,13 +45,13 @@ internal static class PaintBackendSelector
         };
     }
 
-    internal static IPaintBackend Create(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diag = null)
+    internal static IPaintBackend Create(FontResolver fonts, FontFaceRegistry? webFonts)
     {
         ArgumentNullException.ThrowIfNull(fonts);
         return Selected switch
         {
-            PaintBackendKind.ImageSharp => new ImageSharpBackend(fonts, webFonts, diag, useWebGpu: false),
-            PaintBackendKind.ImageSharpWebGpu => new ImageSharpBackend(fonts, webFonts, diag, useWebGpu: true),
+            PaintBackendKind.ImageSharp => new ImageSharpBackend(fonts, webFonts, useWebGpu: false),
+            PaintBackendKind.ImageSharpWebGpu => new ImageSharpBackend(fonts, webFonts, useWebGpu: true),
             _ => throw new InvalidOperationException($"Unhandled paint backend: {Selected}."),
         };
     }

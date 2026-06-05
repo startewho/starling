@@ -2876,7 +2876,7 @@ public static class NodeBindings
     private static DocumentFragment ParseFragment(Element context, string markup)
     {
         var ownerDocument = context.OwnerDocument ?? new Document();
-        return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument, null);
+        return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument);
     }
 
     /// <summary>Lookup a method on a parent prototype and call it bound to

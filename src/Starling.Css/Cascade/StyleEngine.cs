@@ -1,5 +1,6 @@
 using System.Diagnostics;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Css.Animations;
 using Starling.Css.CounterStyle;
 using Starling.Css.Media;
@@ -19,7 +20,8 @@ public sealed class StyleEngine
     private readonly Dictionary<StyleOrigin, LayerOrder> _layerOrders = new();
     private readonly Dictionary<StyleSheet, SheetIndex> _sheetIndexes
         = new(ReferenceEqualityComparer.Instance);
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private MediaContext _mediaContext = MediaContext.Default;
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<CssComponentValue>> s_emptyCustomProperties
         = new Dictionary<string, IReadOnlyList<CssComponentValue>>(StringComparer.Ordinal);
@@ -70,8 +72,8 @@ public sealed class StyleEngine
 
     private readonly AnimationTimeline _timeline;
 
-    public StyleEngine(bool includeUserAgentStyleSheet = true, IDiagnostics? diagnostics = null)
-        : this(includeUserAgentStyleSheet, diagnostics, timeline: null)
+    public StyleEngine(bool includeUserAgentStyleSheet = true, ILoggerFactory? loggerFactory = null)
+        : this(includeUserAgentStyleSheet, loggerFactory, timeline: null)
     {
     }
 
@@ -84,9 +86,10 @@ public sealed class StyleEngine
     /// fresh, engine-local timeline is created (the single-shot render and unit
     /// test default).
     /// </summary>
-    public StyleEngine(bool includeUserAgentStyleSheet, IDiagnostics? diagnostics, AnimationTimeline? timeline)
+    public StyleEngine(bool includeUserAgentStyleSheet, ILoggerFactory? loggerFactory, AnimationTimeline? timeline)
     {
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<StyleEngine>();
         _timeline = timeline ?? new AnimationTimeline();
         // The keyframe registry tracks the *current* stylesheet set, which is
         // re-attached on every layout. A reused timeline still holds the prior
@@ -138,7 +141,7 @@ public sealed class StyleEngine
         ArgumentNullException.ThrowIfNull(sheet);
         _sheets.Add(sheet);
         RegisterLayers(sheet.Rules, sheet.Origin, currentPath: null);
-        var index = BuildSheetIndex(sheet, _diag, _layerOrders[sheet.Origin]);
+        var index = BuildSheetIndex(sheet, _loggerFactory, _layerOrders[sheet.Origin]);
         _sheetIndexes[sheet] = index;
         if (!_structuralRebuildSensitive && SheetUsesHasOrEmpty(index))
             _structuralRebuildSensitive = true;
@@ -282,14 +285,15 @@ public sealed class StyleEngine
         public string? LayerPath { get; } = layerPath;
     }
 
-    private static SheetIndex BuildSheetIndex(StyleSheet sheet, IDiagnostics diag, LayerOrder layerOrder)
+    private static SheetIndex BuildSheetIndex(StyleSheet sheet, ILoggerFactory loggerFactory, LayerOrder layerOrder)
     {
         var index = new SheetIndex();
         var sourceOrder = 0;
+        var log = loggerFactory.CreateLogger(typeof(StyleEngine));
         IndexRules(
             index,
             sheet.Rules,
-            diag,
+            log,
             layerOrder,
             currentLayerPath: null,
             parentSelectors: null,
@@ -301,7 +305,7 @@ public sealed class StyleEngine
     private static void IndexRules(
         SheetIndex index,
         IReadOnlyList<CssRule> rules,
-        IDiagnostics diag,
+        ILogger log,
         LayerOrder layerOrder,
         string? currentLayerPath,
         SelectorList? parentSelectors,
@@ -325,7 +329,7 @@ public sealed class StyleEngine
                     }
                     catch (FormatException ex)
                     {
-                        diag.Log(DiagLevel.Warn, "css", $"dropping rule with invalid selector: {ex.Message}");
+                        StyleEngineLog.InvalidSelector(log, ex.Message);
                         break;
                     }
                     index.SelectorLists.Add(parsed);
@@ -343,7 +347,7 @@ public sealed class StyleEngine
                         IndexRules(
                             index,
                             styleRule.NestedRulesOrEmpty,
-                            diag,
+                            log,
                             layerOrder,
                             currentLayerPath,
                             parsed,
@@ -355,7 +359,7 @@ public sealed class StyleEngine
                     IndexRules(
                         index,
                         atRule.Rules,
-                        diag,
+                        log,
                         layerOrder,
                         currentLayerPath,
                         parentSelectors,
@@ -366,7 +370,7 @@ public sealed class StyleEngine
                     IndexRules(
                         index,
                         atRule.Rules,
-                        diag,
+                        log,
                         layerOrder,
                         currentLayerPath,
                         parentSelectors,
@@ -377,7 +381,7 @@ public sealed class StyleEngine
                     IndexRules(
                         index,
                         atRule.Rules,
-                        diag,
+                        log,
                         layerOrder,
                         currentLayerPath,
                         parentSelectors,
@@ -405,7 +409,7 @@ public sealed class StyleEngine
                     IndexRules(
                         index,
                         atRule.Rules,
-                        diag,
+                        log,
                         layerOrder,
                         layerPath,
                         parentSelectors,
@@ -847,7 +851,7 @@ public sealed class StyleEngine
         var inlineStyle = element.GetAttribute("style");
         if (!string.IsNullOrWhiteSpace(inlineStyle))
         {
-            var parser = new CssParser(inlineStyle, _diag);
+            var parser = new CssParser(inlineStyle);
             var declarations = parser.ParseDeclarationList();
             AddDeclarations(
                 declarations,
@@ -1952,6 +1956,12 @@ public sealed class StyleEngine
             (StyleOrigin.UserAgent, true) => 5,
             _ => 0,
         };
+}
+
+internal static partial class StyleEngineLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "dropping rule with invalid selector: {Reason}")]
+    public static partial void InvalidSelector(ILogger logger, string reason);
 }
 
 internal enum RuleConditionKind

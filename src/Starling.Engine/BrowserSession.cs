@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common;
 using Starling.Common.Diagnostics;
 using Starling.Net;
@@ -13,20 +15,20 @@ namespace Starling.Engine;
 public sealed class BrowserSession : IDisposable
 {
     private readonly StarlingEngine _engine;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly StarlingHttpClient _http;
 
-    public BrowserSession(IDiagnostics? diagnostics = null, CookieJar? cookieJar = null)
+    public BrowserSession(ILoggerFactory? loggerFactory = null, CookieJar? cookieJar = null)
     {
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         Cookies = cookieJar ?? new CookieJar();
         StarlingHttpClient NewClient() => new(new StarlingHttpClientOptions
         {
             CookieJar = Cookies,
-            Diagnostics = diagnostics,
+            LoggerFactory = _loggerFactory,
         });
         _http = NewClient();
-        _engine = new StarlingEngine(diagnostics, httpFactory: NewClient);
+        _engine = new StarlingEngine(_loggerFactory, httpFactory: NewClient);
     }
 
     public NavigationHistory History { get; } = new();
@@ -188,18 +190,26 @@ public sealed class BrowserSession : IDisposable
         string? url,
         Func<Task<Result<T, RenderError>>> work)
     {
-        using var span = _diag.Span("session", op);
+        using var span = StarlingTelemetry.Span("session", op);
         if (!string.IsNullOrEmpty(url))
             Activity.Current?.SetTag("http.url", url);
-        _diag.Counter("session.navigations", 1);
+        StarlingTelemetry.Counter("session.navigations", 1);
 
         var result = await work().ConfigureAwait(false);
         if (result.IsErr)
         {
-            _diag.Counter("session.navigation_failures", 1);
-            _diag.Log(DiagLevel.Error, "session", $"{op} failed: {result.Error.Message}");
+            StarlingTelemetry.Counter("session.navigation_failures", 1);
+            BrowserSessionLog.NavigationFailed(_log, op, result.Error.Message);
             Activity.Current?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
         }
         return result;
     }
+
+    private ILogger _log => _loggerFactory.CreateLogger<BrowserSession>();
+}
+
+internal static partial class BrowserSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Op} failed: {Message}")]
+    public static partial void NavigationFailed(ILogger logger, string op, string message);
 }

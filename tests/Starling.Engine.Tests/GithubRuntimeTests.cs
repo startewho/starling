@@ -41,7 +41,7 @@ public sealed class GithubRuntimeTests
     public void Github_classic_scripts_parse_compile_and_eval()
     {
         var ghDir = GithubDir();
-        var doc = HtmlParser.Parse(File.ReadAllText(Path.Combine(ghDir, "index.html")), null, scriptingEnabled: true);
+        var doc = HtmlParser.Parse(File.ReadAllText(Path.Combine(ghDir, "index.html")), scriptingEnabled: true);
 
         var runtime = new JsRuntime();
         var consoleErrors = new List<string>();

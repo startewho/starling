@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Parser;
@@ -35,12 +38,12 @@ public sealed class LayoutSessionTests
         return new LayoutEngine(style).LayoutDocument(doc, Viewport);
     }
 
-    private static (LayoutSession Session, CountingDiagnostics Diag) SessionWith(string css)
+    private static (LayoutSession Session, MetricRecorder Metrics) SessionWith(string css)
     {
         var style = new StyleEngine();
         style.AddStyleSheet(CssParser.ParseStyleSheet(css));
-        var diag = new CountingDiagnostics();
-        return (new LayoutSession(style, diagnostics: diag), diag);
+        var metrics = new MetricRecorder();
+        return (new LayoutSession(style, loggerFactory: NullLoggerFactory.Instance), metrics);
     }
 
     private static Starling.Dom.Text FirstText(Element el)
@@ -52,21 +55,24 @@ public sealed class LayoutSessionTests
     public void Text_change_relays_incrementally_and_matches_full_rebuild()
     {
         var doc = Parse("<body><div id=a>alpha</div><div id=b>beta</div><div id=c>gamma</div></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
 
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
-        diag.Counter("layout.incremental.full_rebuild").Should().Be(1);
+        var baselineFullRebuild = metrics.CountOf("layout.incremental.full_rebuild");
+        (metrics.CountOf("layout.incremental.full_rebuild") - baselineFullRebuild + 1).Should().Be(1);
 
         // Grow the middle div's text so its block (and everything after it) shifts.
         FirstText(doc.GetElementById("b")!).Data =
             "beta beta beta beta beta beta beta beta beta beta beta beta wraps onto lines";
 
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
+        var baselineFullRebuild2 = metrics.CountOf("layout.incremental.full_rebuild");
         var incremental = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         // The incremental path was actually taken (not a silent full-rebuild fallback)...
-        diag.Counter("layout.incremental.relayout").Should().Be(1);
-        diag.Counter("layout.incremental.full_rebuild").Should().Be(1);
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(1);
+        (metrics.CountOf("layout.incremental.full_rebuild") - baselineFullRebuild2).Should().Be(0);
         // ...and it matches a full rebuild exactly.
         LayoutVerifier.FindFirstDivergence(incremental, FullRebuild(doc)).Should().BeNull();
     }
@@ -94,16 +100,17 @@ public sealed class LayoutSessionTests
     public void Style_attribute_change_relays_incrementally_and_matches_full_rebuild()
     {
         var doc = Parse("<body><div id=a>alpha</div><div id=b style='height:10px'>beta</div><div id=c>gamma</div></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         // A layout-relevant attribute write — height grows, so #c shifts down.
         doc.GetElementById("b")!.SetAttribute("style", "height:120px");
 
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
         var incremental = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
-        diag.Counter("layout.incremental.relayout").Should().Be(1);
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(1);
         LayoutVerifier.FindFirstDivergence(incremental, FullRebuild(doc)).Should().BeNull();
     }
 
@@ -113,18 +120,20 @@ public sealed class LayoutSessionTests
     public void Child_insert_relays_incrementally_and_matches_full_rebuild()
     {
         var doc = Parse("<body><div id=a>alpha</div><div id=b>beta</div></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         var added = doc.CreateElement("div");
         added.AppendChild(doc.CreateTextNode("delta"));
         doc.GetElementById("a")!.ParentNode!.AppendChild(added);
 
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
+        var baselineFullRebuild = metrics.CountOf("layout.incremental.full_rebuild");
         var rebuilt = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
-        diag.Counter("layout.incremental.relayout").Should().Be(1);
-        diag.Counter("layout.incremental.full_rebuild").Should().Be(1); // initial only
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(1);
+        (metrics.CountOf("layout.incremental.full_rebuild") - baselineFullRebuild).Should().Be(0, "only the initial full build happened before this action");
         LayoutVerifier.FindFirstDivergence(rebuilt, FullRebuild(doc)).Should().BeNull();
     }
 
@@ -132,16 +141,17 @@ public sealed class LayoutSessionTests
     public void Child_remove_relays_incrementally_and_matches_full_rebuild()
     {
         var doc = Parse("<body><div id=a>alpha</div><div id=b>beta</div><div id=c>gamma</div></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         var b = doc.GetElementById("b")!;
         b.ParentNode!.RemoveChild(b);
 
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
         var rebuilt = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
-        diag.Counter("layout.incremental.relayout").Should().Be(1);
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(1);
         LayoutVerifier.FindFirstDivergence(rebuilt, FullRebuild(doc)).Should().BeNull();
     }
 
@@ -176,7 +186,7 @@ public sealed class LayoutSessionTests
         // shifted siblings rather than reuse them stale.
         const string css = "section:nth-child(even) { padding-left: 40px; }";
         var doc = Parse("<body><main id=main><section id=a>a</section><section id=b>b</section><section id=c>c</section></main></body>");
-        var (session, _) = SessionWith(css);
+        var (session, metrics) = SessionWith(css);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         var lead = doc.CreateElement("section");
@@ -187,6 +197,7 @@ public sealed class LayoutSessionTests
         var after = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
         LayoutVerifier.FindFirstDivergence(after, FullRebuildWith(doc, css))
             .Should().BeNull("positional restyle must be re-cascaded, not reused stale");
+        metrics.Dispose();
     }
 
     // ---- selector-aware invalidation (plan §7) -------------------------------
@@ -198,7 +209,7 @@ public sealed class LayoutSessionTests
         // relayout, even though the static heuristic treats data-* as cosmetic.
         const string css = "div[data-state=\"open\"] { padding-left: 40px; }";
         var doc = Parse("<body><div id=a data-state=\"closed\">alpha</div><div id=b>beta</div></body>");
-        var (session, diag) = SessionWith(css);
+        var (session, metrics) = SessionWith(css);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         // The layout pass taught the document which attributes the CSS selects on.
@@ -208,9 +219,11 @@ public sealed class LayoutSessionTests
         doc.GetElementById("a")!.SetAttribute("data-state", "open");
         doc.LayoutInvalidationVersion.Should().Be(before + 1, "a write to a selector-referenced attribute is layout-relevant");
 
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
         var incremental = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
-        diag.Counter("layout.incremental.relayout").Should().Be(1);
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(1);
         LayoutVerifier.FindFirstDivergence(incremental, FullRebuildWith(doc, css)).Should().BeNull();
+        metrics.Dispose();
     }
 
     [TestMethod]
@@ -218,18 +231,21 @@ public sealed class LayoutSessionTests
     {
         const string css = "main:has(section) { padding: 10px; }";
         var doc = Parse("<body><main id=main><section id=a>a</section></main></body>");
-        var (session, diag) = SessionWith(css);
+        var (session, metrics) = SessionWith(css);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         var added = doc.CreateElement("section");
         added.AppendChild(doc.CreateTextNode("b"));
         doc.GetElementById("main")!.AppendChild(added);
 
+        var baselineFullRebuild = metrics.CountOf("layout.incremental.full_rebuild");
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
         var after = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
-        diag.Counter("layout.incremental.full_rebuild").Should().Be(2, "a :has rule forces structural full rebuild");
-        diag.Counter("layout.incremental.relayout").Should().Be(0);
+        (metrics.CountOf("layout.incremental.full_rebuild") - baselineFullRebuild).Should().Be(1, "a :has rule forces structural full rebuild");
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(0);
         LayoutVerifier.FindFirstDivergence(after, FullRebuildWith(doc, css)).Should().BeNull();
+        metrics.Dispose();
     }
 
     [TestMethod]
@@ -237,7 +253,7 @@ public sealed class LayoutSessionTests
     {
         // Mixed content: a block, then text — the text is in an anonymous block.
         var doc = Parse("<body><div id=host><p>block</p>tail text</div></body>");
-        var session = new LayoutSession(new StyleEngine(), diagnostics: new CountingDiagnostics());
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
         // Insert a bare text node before the <p> — changes how inline runs bucket.
@@ -255,13 +271,14 @@ public sealed class LayoutSessionTests
     public void Frame_with_no_mutations_reuses_the_whole_tree()
     {
         var doc = Parse("<body><div id=a>alpha</div><div id=b>beta</div></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
         var again = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
-        diag.Counter("layout.incremental.relayout").Should().Be(1);
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(1);
         LayoutVerifier.FindFirstDivergence(again, FullRebuild(doc)).Should().BeNull();
     }
 
@@ -271,18 +288,23 @@ public sealed class LayoutSessionTests
     public void Self_verification_passes_across_a_sequence_of_text_changes()
     {
         var doc = Parse("<body><div id=a>alpha</div><div id=b>beta</div><div id=c>gamma</div></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag) { VerifyAgainstFullRebuild = true };
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance) { VerifyAgainstFullRebuild = true };
 
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
+
+        var baselineVerifyOk = metrics.CountOf("layout.incremental.verify_ok");
+        var baselineDivergent = metrics.CountOf("layout.incremental.divergent");
+        var baselineRelayout = metrics.CountOf("layout.incremental.relayout");
+
         FirstText(doc.GetElementById("b")!).Data = "beta grew a lot longer than it used to be and wraps";
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
         FirstText(doc.GetElementById("a")!).Data = "alpha";
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
 
-        diag.Counter("layout.incremental.verify_ok").Should().Be(2);
-        diag.Counter("layout.incremental.divergent").Should().Be(0);
-        diag.Counter("layout.incremental.relayout").Should().Be(2);
+        (metrics.CountOf("layout.incremental.verify_ok") - baselineVerifyOk).Should().Be(2);
+        (metrics.CountOf("layout.incremental.divergent") - baselineDivergent).Should().Be(0);
+        (metrics.CountOf("layout.incremental.relayout") - baselineRelayout).Should().Be(2);
     }
 
     // ---- form-control value: the todo-input typing case ---------------------
@@ -296,11 +318,12 @@ public sealed class LayoutSessionTests
         // it the reconciler reuses the stale, empty input box and the typed text
         // never appears (the GUI "can't type into the input" regression).
         var doc = Parse("<body><input id=field type=text></body>");
-        var diag = new CountingDiagnostics();
-        var session = new LayoutSession(new StyleEngine(), diagnostics: diag);
+        using var metrics = new MetricRecorder();
+        var session = new LayoutSession(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance);
 
+        var baselineFullRebuild = metrics.CountOf("layout.incremental.full_rebuild");
         session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
-        diag.Counter("layout.incremental.full_rebuild").Should().Be(1);
+        (metrics.CountOf("layout.incremental.full_rebuild") - baselineFullRebuild).Should().Be(1);
 
         doc.GetElementById("field")!.InputValue = "Buy milk";
         var after = session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
@@ -326,19 +349,22 @@ public sealed class LayoutSessionTests
         return null;
     }
 
-    private sealed class CountingDiagnostics : IDiagnostics
+    private sealed class MetricRecorder : IDisposable
     {
-        private readonly Dictionary<string, double> _counters = new(StringComparer.Ordinal);
-        public double Counter(string name) => _counters.TryGetValue(name, out var v) ? v : 0;
-        void IDiagnostics.Counter(string name, double value)
+        private readonly MeterListener _l = new();
+        private readonly ConcurrentDictionary<string, double> _v = new();
+
+        public MetricRecorder()
         {
-            _counters.TryGetValue(name, out var v);
-            _counters[name] = v + value;
+            _l.InstrumentPublished = (inst, lst) =>
+            { if (inst.Meter.Name == StarlingTelemetry.SourceName) lst.EnableMeasurementEvents(inst); };
+            _l.SetMeasurementEventCallback<double>((inst, m, t, s) => Add(inst.Name, m));
+            _l.SetMeasurementEventCallback<long>((inst, m, t, s) => Add(inst.Name, m));
+            _l.Start();
         }
-        void IDiagnostics.Log(DiagLevel level, string area, string message) { }
-        IDisposable IDiagnostics.Span(string area, string operation) => NullSpan.Instance;
-        void IDiagnostics.Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        void IDiagnostics.LogException(string area, Exception exception, string? message) { }
-        private sealed class NullSpan : IDisposable { public static readonly NullSpan Instance = new(); public void Dispose() { } }
+
+        private void Add(string n, double m) => _v.AddOrUpdate(n, m, (_, p) => p + m);
+        public double CountOf(string name) => _v.TryGetValue(name, out var x) ? x : 0d;
+        public void Dispose() => _l.Dispose();
     }
 }

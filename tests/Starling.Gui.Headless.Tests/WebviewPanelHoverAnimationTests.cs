@@ -2,7 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Engine;
 using Starling.Gui.Controls;
 using Starling.Gui.Theme;
@@ -79,7 +79,7 @@ public class WebviewPanelHoverAnimationTests
     private static (Window, WebviewPanel) ShowPanel(StarlingEngine engine, LaidOutPage page)
     {
         var panel = new WebviewPanel(
-            new ThemeManager(), NoopDiagnostics.Instance, _ => { }, (_, _) => { },
+            new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)),
             prepareAnimationFrame: (pg, ms) => engine.PrepareAnimationFrame(pg, ms),
             hasActiveAnimations: engine.HasActiveAnimations);

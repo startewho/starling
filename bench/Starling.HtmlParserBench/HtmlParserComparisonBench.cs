@@ -64,5 +64,5 @@ public class HtmlParserComparisonBench
     public int AngleSharp() => _angle.ParseDocument(_html).DocumentElement.TextContent.Length;
 
     [Benchmark]
-    public int AngleSharpCopy() => _angleBackend.Parse(_html, null, scriptingEnabled: false).TextContent.Length;
+    public int AngleSharpCopy() => _angleBackend.Parse(_html, scriptingEnabled: false).TextContent.Length;
 }

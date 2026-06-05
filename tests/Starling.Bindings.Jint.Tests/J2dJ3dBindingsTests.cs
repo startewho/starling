@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using Jint;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Html;
 using Starling.Loop;
 
@@ -183,7 +184,7 @@ public sealed class J2dJ3dBindingsTests
             document: doc,
             baseUrl: parsedBaseUrl,
             http: http,
-            diag: Starling.Common.Diagnostics.NoopDiagnostics.Instance,
+            loggerFactory: NullLoggerFactory.Instance,
             loop: new WebEventLoop(),
             layoutHost: null,
             fetch: (_, _) => Task.FromResult<string?>(null));

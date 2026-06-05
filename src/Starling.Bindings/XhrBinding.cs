@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Js.Runtime;
 using Starling.Net;
@@ -29,6 +31,8 @@ namespace Starling.Bindings;
 /// </remarks>
 public static class XhrBinding
 {
+    private static readonly ILogger Log = NullLoggerFactory.Instance.CreateLogger(typeof(XhrBinding));
+
     public static void Install(JsRuntime runtime, StarlingHttpClient client, Document document)
     {
         ArgumentNullException.ThrowIfNull(runtime);
@@ -160,7 +164,7 @@ public static class XhrBinding
         EventTargetBinding.DefineMethod(realm, proto, "abort", (thisV, _) =>
         {
             var x = XhrObject.Require(realm, thisV);
-            try { x.Cts?.Cancel(); } catch { }
+            try { x.Cts?.Cancel(); } catch (Exception ex) { XhrBindingLog.AbortCancelFailed(Log, ex); }
             x.Aborted = true;
             if (x.ReadyState != 0 && x.ReadyState != 4)
             {
@@ -208,7 +212,7 @@ public static class XhrBinding
         }
         var hdrs = new HttpHeaders();
         foreach (var (k, v) in x.RequestHeaders.Entries())
-            try { hdrs.Add(k, v); } catch { }
+            try { hdrs.Add(k, v); } catch (Exception ex) { XhrBindingLog.InvalidHeaderSkipped(Log, ex, k); }
         var wire = new HttpRequest(x.Method, parsed.Value, hdrs, body);
 
         x.Cts = new CancellationTokenSource();
@@ -318,7 +322,7 @@ public static class XhrBinding
             if (!AbstractOperations.IsCallable(parse)) return JsValue.Null;
             return AbstractOperations.Call(realm.ActiveVm, parse, json, new[] { JsValue.String(text) });
         }
-        catch { return JsValue.Null; }
+        catch (Exception ex) { XhrBindingLog.JsonParseFailed(Log, ex); return JsValue.Null; }
     }
 }
 
@@ -353,4 +357,16 @@ internal sealed class XhrObject : JsObject
         if (thisV.IsObject && thisV.AsObject is XhrObject x) return x;
         throw new JsThrow(realm.NewTypeError("'this' is not an XMLHttpRequest"));
     }
+}
+
+internal static partial class XhrBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "XHR abort: CancellationTokenSource.Cancel() failed (best-effort)")]
+    public static partial void AbortCancelFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "skipping XHR request header '{Name}' with invalid characters")]
+    public static partial void InvalidHeaderSkipped(ILogger logger, Exception ex, string name);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "XHR JSON response parse failed; returning null")]
+    public static partial void JsonParseFailed(ILogger logger, Exception ex);
 }

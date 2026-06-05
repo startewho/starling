@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -38,7 +40,8 @@ internal sealed class StarlingScriptSession : IScriptSession
     private readonly Document _document;
     private readonly StarlingUrl _baseUrl;
     private readonly ScriptFetcherDelegate _fetcher;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly StarlingDynamicScriptRunner _dynamicRunner;
     private readonly StarlingModuleHost _moduleHost;
     private readonly ModuleLoader _moduleLoader;
@@ -58,7 +61,8 @@ internal sealed class StarlingScriptSession : IScriptSession
         _document = options.Document;
         _baseUrl = options.BaseUrl;
         _fetcher = options.Fetcher;
-        _diag = options.Diag;
+        _loggerFactory = options.LoggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<StarlingScriptSession>();
         _loop = new WebEventLoop();
 
         _runtime = new JsRuntime();
@@ -96,7 +100,7 @@ internal sealed class StarlingScriptSession : IScriptSession
         // the NodeConnected hook so the hook can route script-inserted async /
         // external scripts to it.
         _dynamicRunner = new StarlingDynamicScriptRunner(
-            _diag, _runtime, _baseUrl,
+            _loggerFactory, _runtime, _baseUrl,
             (url, token) => _fetcher(url, token));
         ScriptSrcHook.Register(_runtime.Realm, _dynamicRunner.OnSrcSet);
 
@@ -118,7 +122,7 @@ internal sealed class StarlingScriptSession : IScriptSession
         // Per-script span so `STARLING_DIAG_TRACE=1` reveals which inline tag
         // or external URL is responsible for the run_scripts wall time. The
         // label is the source url (or "<inline>") set by the engine.
-        using var _ = _diag.Span("js", $"run {label} ({source.Length} chars)");
+        using var _ = StarlingTelemetry.Span("js", $"run {label} ({source.Length} chars)");
         // STARLING_DIAG_DUMP_SCRIPTS=<dir> writes every classic script to that
         // directory so the source of a slow inline can be inspected without
         // re-fetching the page. Numbered so order matches the trace stream.
@@ -133,18 +137,22 @@ internal sealed class StarlingScriptSession : IScriptSession
                     System.IO.Path.Combine(dumpDir, $"script-{seq:D3}.js"),
                     "// label: " + label + "\n" + source);
             }
-            catch (IOException) { /* dumping is best-effort */ }
+            catch (IOException ex)
+            {
+                // dumping is best-effort
+                StarlingScriptSessionLog.ScriptDumpFailed(_log, ex, dumpDir);
+            }
         }
         try
         {
             Starling.Js.Bytecode.Chunk chunk;
-            using (_diag.Span("js", "parse+compile"))
+            using (StarlingTelemetry.Span("js", "parse+compile"))
             {
                 var program = new JsParser(source).ParseProgram();
                 chunk = JsCompiler.Compile(program, label);
             }
             var vm = new JsVm(_runtime);
-            using (_diag.Span("js", "execute"))
+            using (StarlingTelemetry.Span("js", "execute"))
             {
                 vm.Run(chunk);
             }
@@ -277,8 +285,8 @@ internal sealed class StarlingScriptSession : IScriptSession
         }
         catch (ScriptThrow ex)
         {
-            _diag.Counter("engine.script.failed", 1);
-            _diag.Log(DiagLevel.Warn, "engine.js", $"Injected script error ({label}): {ex.Message}");
+            StarlingTelemetry.Counter("engine.script.failed", 1);
+            StarlingScriptSessionLog.InjectedScriptError(_log, ex, label);
         }
     }
 
@@ -355,7 +363,11 @@ internal sealed class StarlingScriptSession : IScriptSession
                     return string.IsNullOrEmpty(m) ? n : $"{n}: {m}";
                 }
             }
-            catch { /* fall through to generic stringification */ }
+            catch (Exception ex)
+            {
+                // fall through to generic stringification
+                StarlingScriptSessionLog.DescribeThrowFailed(NullLogger<StarlingScriptSession>.Instance, ex);
+            }
         }
         return JsValue.ToStringValue(v);
     }
@@ -385,4 +397,16 @@ public sealed class StarlingScriptEngineFactory : IScriptEngineFactory
 
     public IScriptSession CreateSession(ScriptSessionOptions options)
         => new StarlingScriptSession(options);
+}
+
+internal static partial class StarlingScriptSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "script dump to '{DumpDir}' failed (best-effort, ignored)")]
+    public static partial void ScriptDumpFailed(ILogger logger, Exception ex, string dumpDir);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "injected script error in {Label}")]
+    public static partial void InjectedScriptError(ILogger logger, Exception ex, string label);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "failed to extract name/message from thrown JS object (falling back to ToString)")]
+    public static partial void DescribeThrowFailed(ILogger logger, Exception ex);
 }

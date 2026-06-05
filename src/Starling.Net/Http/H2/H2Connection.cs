@@ -1,4 +1,6 @@
 using System.Globalization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common;
 using Starling.Common.Diagnostics;
 using Starling.Net.Http.Decoding;
@@ -6,6 +8,21 @@ using Starling.Net.Http.H2.Hpack;
 using StarlingUrl = global::Starling.Url.Url;
 
 namespace Starling.Net.Http.H2;
+
+internal static partial class H2ConnectionLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "h2 connection error {ErrorCode}: {ErrorMessage}")]
+    public static partial void ConnectionError(ILogger logger, string errorCode, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "transport dispose threw during reader-loop teardown")]
+    public static partial void TransportDisposeFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "best-effort control frame failed on dying connection")]
+    public static partial void SafeWriteFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "reader task threw during DisposeAsync cleanup")]
+    public static partial void ReaderTaskCleanupFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// A single HTTP/2 connection multiplexing many request/response streams over
@@ -34,7 +51,7 @@ internal sealed class H2Connection : IAsyncDisposable
     private readonly H2FrameWriter _writer;
     private readonly HpackEncoder _encoder = new();
     private readonly HpackDecoder _decoder = new(H2Protocol.DefaultHeaderTableSize);
-    private readonly IDiagnostics _diag;
+    private readonly ILogger _log;
     private readonly Action<H2Connection>? _onClosed;
 
     private readonly object _lock = new();
@@ -73,11 +90,11 @@ internal sealed class H2Connection : IAsyncDisposable
     /// <summary>The verified leaf certificate of the underlying TLS transport, if any.</summary>
     public Tls.CertificateSummary? PeerCertificate => _transport.PeerCertificate;
 
-    private H2Connection(IHttpTransport transport, OriginKey origin, IDiagnostics diag, Action<H2Connection>? onClosed)
+    private H2Connection(IHttpTransport transport, OriginKey origin, ILogger<H2Connection>? log, Action<H2Connection>? onClosed)
     {
         _transport = transport;
         Origin = origin;
-        _diag = diag;
+        _log = log ?? NullLogger<H2Connection>.Instance;
         _onClosed = onClosed;
         _lifetimeToken = _lifetime.Token;
         _reader = new H2FrameReader(transport.Stream, OurMaxFrameSize);
@@ -92,10 +109,10 @@ internal sealed class H2Connection : IAsyncDisposable
     /// SETTINGS arrive).
     /// </summary>
     public static async Task<H2Connection> StartAsync(
-        IHttpTransport transport, OriginKey origin, IDiagnostics diag,
-        Action<H2Connection>? onClosed, CancellationToken ct)
+        IHttpTransport transport, OriginKey origin, ILogger<H2Connection>? log = null,
+        Action<H2Connection>? onClosed = null, CancellationToken ct = default)
     {
-        var conn = new H2Connection(transport, origin, diag, onClosed);
+        var conn = new H2Connection(transport, origin, log, onClosed);
         await conn._writer.WritePrefaceAndSettingsAsync(
         [
             (H2SettingId.EnablePush, 0),
@@ -111,7 +128,7 @@ internal sealed class H2Connection : IAsyncDisposable
         // The CancellationToken.None here only governs whether Task.Run starts the
         // delegate; the loop's own cancellation rides on the connection lifetime token.
         conn._readerTask = Task.Run(() => conn.ReaderLoopAsync(conn._lifetimeToken), CancellationToken.None);
-        diag.Counter("net.h2.connections_opened", 1);
+        StarlingTelemetry.Counter("net.h2.connections_opened", 1);
         return conn;
     }
 
@@ -166,7 +183,7 @@ internal sealed class H2Connection : IAsyncDisposable
                 await wait.ConfigureAwait(false);
             }
 
-            _diag.Counter("net.h2.requests", 1);
+            StarlingTelemetry.Counter("net.h2.requests", 1);
             await _writer.WriteHeadersAsync(stream.Id, block, endStream: !hasBody, _peerMaxFrameSize, ct)
                 .ConfigureAwait(false);
         }
@@ -314,7 +331,7 @@ internal sealed class H2Connection : IAsyncDisposable
         {
             await SafeWriteAsync(() => _writer.WriteGoAwayAsync(0, ex.Code, ct))
                 .ConfigureAwait(false);
-            _diag.Log(DiagLevel.Warn, "net", $"h2 connection error {ex.Code}: {ex.Message}");
+            H2ConnectionLog.ConnectionError(_log, ex.Code.ToString(), ex.Message);
             CloseAll(NetworkError.ProtocolError);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.Sockets.SocketException)
@@ -701,13 +718,13 @@ internal sealed class H2Connection : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _transportDisposed, 1) != 0) return;
         try { await _transport.DisposeAsync().ConfigureAwait(false); }
-        catch { /* a half-broken socket may throw on shutdown */ }
+        catch (Exception ex) { H2ConnectionLog.TransportDisposeFailed(_log, ex); /* a half-broken socket may throw on shutdown */ }
     }
 
-    private static async Task SafeWriteAsync(Func<Task> write)
+    private async Task SafeWriteAsync(Func<Task> write)
     {
         try { await write().ConfigureAwait(false); }
-        catch { /* best-effort control frame on a dying connection */ }
+        catch (Exception ex) { H2ConnectionLog.SafeWriteFailed(_log, ex); /* best-effort control frame on a dying connection */ }
     }
 
     private static Span<byte> StripHeadersPadding(Span<byte> payload, H2Flags flags)
@@ -756,7 +773,8 @@ internal sealed class H2Connection : IAsyncDisposable
         // ReadAsync, then wait for the loop to exit before tearing down the
         // writer it might still touch.
         await SafeDisposeTransportAsync().ConfigureAwait(false);
-        try { await _readerTask.ConfigureAwait(false); } catch { /* loop teardown */ }
+        try { await _readerTask.ConfigureAwait(false); }
+        catch (Exception ex) { H2ConnectionLog.ReaderTaskCleanupFailed(_log, ex); /* loop teardown */ }
         _writer.Dispose();
         _openLock.Dispose();
         _lifetime.Dispose();

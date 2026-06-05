@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Starling.Dom.Events;
 
 /// <summary>
@@ -96,9 +99,10 @@ internal static class EventDispatcher
             {
                 entry.Listener(@event);
             }
-            catch
+            catch (Exception ex)
             {
                 // Swallow listener exceptions per spec (browsers report to console, we drop on the floor in v1).
+                EventDispatcherLog.ListenerException(NullLogger.Instance, ex, @event.Type);
             }
             finally
             {
@@ -110,4 +114,10 @@ internal static class EventDispatcher
 
         if (needsCompact) target.CompactListeners();
     }
+}
+
+internal static partial class EventDispatcherLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Event listener threw for event type '{EventType}'")]
+    public static partial void ListenerException(ILogger logger, Exception ex, string eventType);
 }

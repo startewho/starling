@@ -1,5 +1,5 @@
 using Jint.Native;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Starling.Bindings.Jint;
 
@@ -20,13 +20,13 @@ internal static class CookieBinding
     {
         ArgumentNullException.ThrowIfNull(ctx);
         var engine = ctx.Engine;
+        var log = ctx.LoggerFactory.CreateLogger(typeof(CookieBinding));
         var documentProto = ctx.Wrappers.DocumentPrototype;
         if (documentProto is null)
         {
             // NodeBindings has not installed a Document prototype slot.
             // Without it we have nowhere idempotent to attach the accessor.
-            ctx.Diag?.Log(DiagLevel.Debug, "jint.cookie",
-                "DocumentPrototype is null; document.cookie accessor not installed.");
+            CookieBindingLog.DocumentPrototypeNull(log);
             return;
         }
 
@@ -35,12 +35,22 @@ internal static class CookieBinding
             (_, args) =>
             {
                 var value = args.Length > 0 ? args[0].ToString() : "";
-                ctx.Diag?.Log(DiagLevel.Debug, "jint.cookie",
-                    $"document.cookie= ignored (no CookieJar wired): {Truncate(value)}");
+                CookieBindingLog.CookieSetIgnored(log, Truncate(value));
                 return JsValue.Undefined;
             });
     }
 
     private static string Truncate(string s, int max = 120)
         => s.Length <= max ? s : s[..max] + "…";
+}
+
+internal static partial class CookieBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "DocumentPrototype is null; document.cookie accessor not installed.")]
+    public static partial void DocumentPrototypeNull(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "document.cookie= ignored (no CookieJar wired): {Value}")]
+    public static partial void CookieSetIgnored(ILogger logger, string value);
 }

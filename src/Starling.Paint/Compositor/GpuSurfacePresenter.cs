@@ -23,18 +23,16 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     private readonly GpuOverlayRenderer _overlays;
     private readonly Surface* _surface;
     private readonly TextureFormat _format;
-    private readonly IDiagnostics _diag;
     private readonly object _gate = new();
     private int _width, _height;
     private bool _configured;
 
-    private GpuSurfacePresenter(GpuBlendEngine engine, Surface* surface, TextureFormat format, IDiagnostics? diagnostics)
+    private GpuSurfacePresenter(GpuBlendEngine engine, Surface* surface, TextureFormat format)
     {
         _engine = engine;
         _overlays = new GpuOverlayRenderer(engine);
         _surface = surface;
         _format = format;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
     }
 
     /// <summary>
@@ -42,12 +40,12 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     /// WebGPU cannot create a surface or find an adapter. The window must provide
     /// native handles through <see cref="INativeWindowSource"/>.
     /// </summary>
-    public static GpuSurfacePresenter? CreateForWindow(INativeWindowSource window, IDiagnostics? diagnostics = null)
+    public static GpuSurfacePresenter? CreateForWindow(INativeWindowSource window)
     {
         ArgumentNullException.ThrowIfNull(window);
         var engine = GpuBlendEngine.CreateForSurface(window, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
     /// <summary>
@@ -55,42 +53,36 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     /// the macOS child view that hosts the page surface. Returns <c>null</c> when
     /// the layer is zero or WebGPU cannot create a surface.
     /// </summary>
-    public static GpuSurfacePresenter? CreateForMetalLayer(nint caMetalLayer, IDiagnostics? diagnostics = null)
+    public static GpuSurfacePresenter? CreateForMetalLayer(nint caMetalLayer)
     {
         if (caMetalLayer == 0) return null;
         var engine = GpuBlendEngine.CreateForMetalLayer(caMetalLayer, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
     /// <summary>
     /// Creates a presenter for a Windows window handle. Returns <c>null</c> when
     /// <paramref name="hwnd"/> is zero or WebGPU cannot create a surface.
     /// </summary>
-    public static GpuSurfacePresenter? CreateForWindowsHwnd(
-        nint hwnd,
-        nint hinstance,
-        IDiagnostics? diagnostics = null)
+    public static GpuSurfacePresenter? CreateForWindowsHwnd(nint hwnd, nint hinstance)
     {
         if (hwnd == 0) return null;
         var engine = GpuBlendEngine.CreateForWindowsHwnd(hwnd, hinstance, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
     /// <summary>
     /// Creates a presenter for an Xlib window. Returns <c>null</c> when the
     /// display or window handle is zero, or when WebGPU cannot create a surface.
     /// </summary>
-    public static GpuSurfacePresenter? CreateForXlibWindow(
-        nint display,
-        ulong window,
-        IDiagnostics? diagnostics = null)
+    public static GpuSurfacePresenter? CreateForXlibWindow(nint display, ulong window)
     {
         if (display == 0 || window == 0) return null;
         var engine = GpuBlendEngine.CreateForXlibWindow(display, window, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
     /// <summary>The color format used by this surface.</summary>
@@ -176,7 +168,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
             // ~1s). Wrapped in its own span so a present stall is attributed here
             // rather than vanishing into gui.render's self-time.
             SurfaceTexture st = default;
-            using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentAcquireOp))
+            using (StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.PresentAcquireOp))
                 api.SurfaceGetCurrentTexture(_surface, ref st);
             if (st.Status != SurfaceGetCurrentTextureStatus.Success)
             {
@@ -198,7 +190,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
             CommandBuffer* cmd = null;
             try
             {
-                using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentEncodeOp))
+                using (StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.PresentEncodeOp))
                 {
                     _engine.BeginFrame();
                     _engine.UploadLayerTextures(ops);
@@ -245,7 +237,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                     api.QueueSubmit(_engine.Queue, 1, &cmd);
                 }
 
-                using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentSwapOp))
+                using (StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.PresentSwapOp))
                     api.SurfacePresent(_surface);
 
                 _engine.EvictStale();

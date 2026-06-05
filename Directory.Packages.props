@@ -68,6 +68,18 @@
     <!-- 10.0.8+ required transitively by Aspire.Hosting.Yarp 13.4.0 (NU1109 otherwise). -->
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
 
+    <!-- Logging is the engine's single structured-log surface. Libraries depend
+         only on the Abstractions package (ILogger + the [LoggerMessage] source
+         generator); concrete providers are registered at the host. ActivitySource
+         and Meter for StarlingTelemetry come from the net10.0 shared framework. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <!-- IServiceCollection + AddSingleton/AddTransient for AddStarlingEngine; the
+         engine library registers its services without pulling the full DI host. -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
+    <!-- Console provider: only the Headless CLI host references it, to print
+         engine logs to stderr on plain `dotnet run` (no OTLP endpoint). -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+
     <!-- Crypto: pure-managed TLS support (consumed from M2 onward) -->
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.5.0" />
 
