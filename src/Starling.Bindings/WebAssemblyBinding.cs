@@ -33,6 +33,7 @@ namespace Starling.Bindings;
 public static class WebAssemblyBinding
 {
     private const int WasmExecutionStackSize = 16 * 1024 * 1024;
+    private const int WasmtimeMaximumStackSize = 2 * 1024 * 1024;
 
     private static readonly WasmEngine SharedEngine = new(CreateEngineConfig());
     private static readonly ConditionalWeakTable<JsObject, WasmFunctionReference> WasmFunctionReferences = new();
@@ -49,7 +50,7 @@ public static class WebAssemblyBinding
             .WithRelaxedSIMD(enable: true, deterministic: true)
             .WithBulkMemory(true)
             .WithMultiValue(true)
-            .WithMaximumStackSize(2 * 1024 * 1024);
+            .WithMaximumStackSize(WasmtimeMaximumStackSize);
     }
 
     public static void Install(JsRuntime runtime)
@@ -668,11 +669,23 @@ public static class WebAssemblyBinding
         JsValue[] args)
     {
         if (t_onWasmExecutionStack)
+        {
+            if (NeedsFreshReentrantWasmStack(exportName))
+            {
+                return InvokeOnWasmExecutionStack(() =>
+                    InvokeWasmFunctionCore(state, realm, runtimeErrorProto, function, exportName, args));
+            }
+
             return InvokeWasmFunctionCore(state, realm, runtimeErrorProto, function, exportName, args);
+        }
 
         return InvokeOnWasmExecutionStack(() =>
             InvokeWasmFunctionCore(state, realm, runtimeErrorProto, function, exportName, args));
     }
+
+    private static bool NeedsFreshReentrantWasmStack(string exportName) =>
+        StringComparer.Ordinal.Equals(exportName, "mono_wasm_write_managed_pointer_unsafe")
+        || StringComparer.Ordinal.Equals(exportName, "mono_wasm_copy_managed_pointer");
 
     private static T InvokeOnWasmExecutionStack<T>(Func<T> action)
     {
