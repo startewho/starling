@@ -16,7 +16,7 @@ namespace Starling.Js.Parse;
 /// </remarks>
 public ref partial struct JsParser
 {
-    private readonly JsLexer _lex;
+    private JsLexer _lex;
     private JsToken _current;
     private int _disallowInDepth;
 
