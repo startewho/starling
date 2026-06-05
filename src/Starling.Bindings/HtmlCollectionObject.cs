@@ -129,13 +129,17 @@ internal sealed class HtmlCollectionObject : JsObject
     public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
     {
         var items = Items;
+        // Indexed and named properties are read-only (HTMLCollection has no indexed
+        // or named setter), so the descriptor is writable:false — matching the
+        // Set/Delete/DefineOwnProperty overrides and making a strict-mode write
+        // (e.g. coll[0] = x) fail per WebIDL rather than silently appear to succeed.
         if (TryIndex(name, out var index))
             return index < items.Count
-                ? PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, items[index])), writable: true, enumerable: true, configurable: true)
+                ? PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, items[index])), writable: false, enumerable: true, configurable: true)
                 : null;
         if (base.GetOwnPropertyDescriptor(name) is { } own) return own;
         if (IsVisibleNamedProperty(name) && NamedItem(name) is { } named)
-            return PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, named)), writable: true, enumerable: true, configurable: true);
+            return PropertyDescriptor.Data(JsValue.Object(DomWrappers.Wrap(_realm, named)), writable: false, enumerable: true, configurable: true);
         return null;
     }
 
