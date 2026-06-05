@@ -355,7 +355,7 @@ internal sealed class JsDocumentWrapper : JsObject
         return result;
     }
 
-    private JsValue NamedValue(List<Element> matches)
+    private JsValue NamedValue(string lookupName, List<Element> matches)
     {
         if (matches.Count == 1)
         {
@@ -364,11 +364,11 @@ internal sealed class JsDocumentWrapper : JsObject
                 return JsValue.Object(IFrameBinding.EnsureContentWindow(_realm, IFrameBinding.EnsureContext(el)));
             return JsValue.Object(DomWrappers.Wrap(_realm, el));
         }
-        // Several matches → a live HTMLCollection (re-evaluated on access).
-        var name = matches.Count > 0
-            ? (matches[0].GetAttribute("name") is { Length: > 0 } n ? n : matches[0].GetAttribute("id"))
-            : null;
-        return NodeBindings.BuildHtmlCollection(_realm, () => NamedElements(name ?? ""));
+        // Several matches → a live HTMLCollection re-evaluated on access, keyed by
+        // the SAME name the property was looked up under — not a name/id guessed
+        // off the first match, which could rebuild the collection for a different
+        // key when an element's id and name differ.
+        return NodeBindings.BuildHtmlCollection(_realm, () => NamedElements(lookupName));
     }
 
     private bool ShadowedByPrototype(string name)
@@ -388,16 +388,18 @@ internal sealed class JsDocumentWrapper : JsObject
         if (ShadowedByPrototype(name)) return null;
         var matches = NamedElements(name);
         if (matches.Count == 0) return null;
-        return PropertyDescriptor.Data(NamedValue(matches), writable: true, enumerable: true, configurable: true);
+        return PropertyDescriptor.Data(NamedValue(name, matches), writable: true, enumerable: true, configurable: true);
     }
 
     public override JsValue Get(string name)
     {
-        var b = base.Get(name);
-        if (!b.IsUndefined) return b;
-        if (ShadowedByPrototype(name)) return b;
-        var matches = NamedElements(name);
-        return matches.Count == 0 ? b : NamedValue(matches);
+        // An own property (expando) wins even when its value is undefined — decide
+        // ownership via HasOwn, not the returned value, so `document.foo = undefined`
+        // is not later overridden by a named element called "foo".
+        if (base.HasOwn(name)) return base.Get(name);
+        if (!ShadowedByPrototype(name) && NamedElements(name) is { Count: > 0 } matches)
+            return NamedValue(name, matches);
+        return base.Get(name); // prototype / built-ins (getElementById, …) resolve here
     }
 
     public override bool HasOwn(string name)
@@ -424,24 +426,26 @@ internal sealed class JsDocumentWrapper : JsObject
         }
     }
 
+    // Legacy platform objects enumerate supported property names BEFORE ordinary
+    // own (expando) keys; Keys and OwnPropertyKeys must agree on that order.
     public override IEnumerable<string> Keys
     {
         get
         {
-            foreach (var k in base.Keys) yield return k;
             foreach (var n in SupportedNames()) yield return n;
+            foreach (var k in base.Keys) yield return k;
         }
     }
 
-public override IEnumerable<Starling.Js.Runtime.JsPropertyKey> OwnPropertyKeys
-{
-    get
+    public override IEnumerable<Starling.Js.Runtime.JsPropertyKey> OwnPropertyKeys
     {
-        foreach (var n in SupportedNames())
-            yield return Starling.Js.Runtime.JsPropertyKey.String(n);
-        foreach (var k in base.OwnPropertyKeys) yield return k;
+        get
+        {
+            foreach (var n in SupportedNames())
+                yield return Starling.Js.Runtime.JsPropertyKey.String(n);
+            foreach (var k in base.OwnPropertyKeys) yield return k;
+        }
     }
-}
 }
 
 /// <summary>

@@ -149,6 +149,59 @@ public sealed class LegacyPlatformObjectTests
         """).AsNumber.Should().Be(1);
     }
 
+    [TestMethod]
+    public void Document_own_expando_set_to_undefined_wins_over_named_element()
+    {
+        var (runtime, _) = BuildEnv();
+        // An own expando whose value is undefined is still an own property and
+        // must win over a later same-named element — ownership is decided by
+        // HasOwn, not by whether the returned value happens to be undefined.
+        Eval(runtime, """
+            document.foo = undefined;
+            var img = document.createElement('img');
+            img.setAttribute('name', 'foo');
+            document.body.appendChild(img);
+            result = (document.foo === undefined) + ',' + document.hasOwnProperty('foo');
+        """).AsString.Should().Be("true,true");
+    }
+
+    [TestMethod]
+    public void Document_named_collection_uses_the_lookup_key_not_first_match_name()
+    {
+        var (runtime, _) = BuildEnv();
+        // Two imgs share id="bar" but have different name attributes. document['bar']
+        // must return the live collection keyed by "bar" (both elements), not one
+        // rebuilt from the first match's name attribute.
+        Eval(runtime, """
+            var a = document.createElement('img');
+            a.setAttribute('id', 'bar'); a.setAttribute('name', 'zzz');
+            var b = document.createElement('img');
+            b.setAttribute('id', 'bar'); b.setAttribute('name', 'yyy');
+            document.body.appendChild(a);
+            document.body.appendChild(b);
+            var coll = document['bar'];
+            result = Object.prototype.toString.call(coll) + ',' + coll.length;
+        """).AsString.Should().Be("[object HTMLCollection],2");
+    }
+
+    [TestMethod]
+    public void Document_keys_list_supported_names_before_expandos()
+    {
+        var (runtime, _) = BuildEnv();
+        // Legacy platform object ordering: supported property names come before
+        // ordinary own (expando) keys — and Keys must agree with OwnPropertyKeys.
+        Eval(runtime, """
+            document.zzexpando = 1;
+            var img = document.createElement('img');
+            img.setAttribute('name', 'navnamed');
+            document.body.appendChild(img);
+            var names = Object.getOwnPropertyNames(document);
+            var iName = names.indexOf('navnamed');
+            var iExp = names.indexOf('zzexpando');
+            result = (iName !== -1) + ',' + (iExp !== -1) + ',' + (iName < iExp);
+        """).AsString.Should().Be("true,true,true");
+    }
+
     private static (JsRuntime, Document) BuildEnv()
     {
         var doc = new Document();
