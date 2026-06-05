@@ -1017,7 +1017,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var ch0 = new double[n];
         var ch1 = new double[n];
         var ch2 = new double[n];
-        var al  = new double[n];
+        var al = new double[n];
 
         for (var i = 0; i < n; i++)
         {
@@ -1177,7 +1177,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             var c0 = ch0[lo] + (ch0[hi] - ch0[lo]) * f;
             var c1 = ch1[lo] + (ch1[hi] - ch1[lo]) * f;
             var c2 = ch2[lo] + (ch2[hi] - ch2[lo]) * f;
-            var a  = al[lo]  + (al[hi]  - al[lo])  * f;
+            var a = al[lo] + (al[hi] - al[lo]) * f;
             return (c0, c1, c2, a);
         }
     }
@@ -1325,7 +1325,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var m = mc * mc * mc;
         var s = sc * sc * sc;
 
-        var rl =  4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+        var rl = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
         var gl = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
         var bl = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
 
@@ -1344,9 +1344,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         if (d > 1e-10)
         {
             s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-            if (max == r)      h = (g - b) / d + (g < b ? 6 : 0);
+            if (max == r) h = (g - b) / d + (g < b ? 6 : 0);
             else if (max == g) h = (b - r) / d + 2;
-            else               h = (r - g) / d + 4;
+            else h = (r - g) / d + 4;
             h *= 60;
         }
         return (h, s, l);
@@ -1432,9 +1432,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var zd65 = 0.0122982 * x - 0.0204830 * y + 1.3299098 * z;
 
         // XYZ D65 → linear sRGB:
-        var rl =  3.2404542 * xd65 - 1.5371385 * yd65 - 0.4985314 * zd65;
+        var rl = 3.2404542 * xd65 - 1.5371385 * yd65 - 0.4985314 * zd65;
         var gl = -0.9692660 * xd65 + 1.8760108 * yd65 + 0.0415560 * zd65;
-        var bl =  0.0556434 * xd65 - 0.2040259 * yd65 + 1.0572252 * zd65;
+        var bl = 0.0556434 * xd65 - 0.2040259 * yd65 + 1.0572252 * zd65;
         return (LinearToSrgb01(rl), LinearToSrgb01(gl), LinearToSrgb01(bl));
     }
 
@@ -1817,78 +1817,78 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         switch (mode)
         {
             case MaskRepeatMode.NoRepeat:
-            {
-                canvas.DrawImage(src, srcRect, new RectangleF((float)offsetX, (float)offsetY, (float)tileW, (float)tileH), _resampler);
-                break;
-            }
+                {
+                    canvas.DrawImage(src, srcRect, new RectangleF((float)offsetX, (float)offsetY, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
             case MaskRepeatMode.Space:
-            {
-                // CSS Masking 1 §6.5 space: fit whole tiles, spread the leftover
-                // evenly as gaps. If only 1 tile fits, paint it at offset = 0.
-                var countX = Math.Max(1, (int)Math.Floor(canvasW / tileW));
-                var countY = Math.Max(1, (int)Math.Floor(canvasH / tileH));
-                var gapX = countX > 1 ? (canvasW - countX * tileW) / (countX - 1) : 0;
-                var gapY = countY > 1 ? (canvasH - countY * tileH) / (countY - 1) : 0;
-                for (var iy = 0; iy < countY; iy++)
-                    for (var ix = 0; ix < countX; ix++)
-                    {
-                        var tx = (float)(ix * (tileW + gapX));
-                        var ty = (float)(iy * (tileH + gapY));
-                        canvas.DrawImage(src, srcRect, new RectangleF(tx, ty, (float)tileW, (float)tileH), _resampler);
-                    }
-                break;
-            }
+                {
+                    // CSS Masking 1 §6.5 space: fit whole tiles, spread the leftover
+                    // evenly as gaps. If only 1 tile fits, paint it at offset = 0.
+                    var countX = Math.Max(1, (int)Math.Floor(canvasW / tileW));
+                    var countY = Math.Max(1, (int)Math.Floor(canvasH / tileH));
+                    var gapX = countX > 1 ? (canvasW - countX * tileW) / (countX - 1) : 0;
+                    var gapY = countY > 1 ? (canvasH - countY * tileH) / (countY - 1) : 0;
+                    for (var iy = 0; iy < countY; iy++)
+                        for (var ix = 0; ix < countX; ix++)
+                        {
+                            var tx = (float)(ix * (tileW + gapX));
+                            var ty = (float)(iy * (tileH + gapY));
+                            canvas.DrawImage(src, srcRect, new RectangleF(tx, ty, (float)tileW, (float)tileH), _resampler);
+                        }
+                    break;
+                }
             case MaskRepeatMode.Round:
-            {
-                // CSS Masking 1 §6.5 round: stretch tiles so an integer count
-                // fills the box exactly; no gaps.
-                var countX = Math.Max(1, (int)Math.Round(canvasW / tileW));
-                var countY = Math.Max(1, (int)Math.Round(canvasH / tileH));
-                var stretchW = (float)(canvasW / (double)countX);
-                var stretchH = (float)(canvasH / (double)countY);
-                for (var iy = 0; iy < countY; iy++)
-                    for (var ix = 0; ix < countX; ix++)
-                        canvas.DrawImage(src, srcRect, new RectangleF(ix * stretchW, iy * stretchH, stretchW, stretchH), _resampler);
-                break;
-            }
+                {
+                    // CSS Masking 1 §6.5 round: stretch tiles so an integer count
+                    // fills the box exactly; no gaps.
+                    var countX = Math.Max(1, (int)Math.Round(canvasW / tileW));
+                    var countY = Math.Max(1, (int)Math.Round(canvasH / tileH));
+                    var stretchW = (float)(canvasW / (double)countX);
+                    var stretchH = (float)(canvasH / (double)countY);
+                    for (var iy = 0; iy < countY; iy++)
+                        for (var ix = 0; ix < countX; ix++)
+                            canvas.DrawImage(src, srcRect, new RectangleF(ix * stretchW, iy * stretchH, stretchW, stretchH), _resampler);
+                    break;
+                }
             case MaskRepeatMode.RepeatX:
-            {
-                var dy = (float)offsetY;
-                var tilesX = (long)Math.Ceiling(canvasW / tileW) + 2;
-                if (tilesX > 1_000_000) break;
-                var startX = offsetX % tileW;
-                if (startX > 0) startX -= tileW;
-                for (var tx = startX; tx < canvasW; tx += tileW)
-                    canvas.DrawImage(src, srcRect, new RectangleF((float)tx, dy, (float)tileW, (float)tileH), _resampler);
-                break;
-            }
-            case MaskRepeatMode.RepeatY:
-            {
-                var dx = (float)offsetX;
-                var tilesY = (long)Math.Ceiling(canvasH / tileH) + 2;
-                if (tilesY > 1_000_000) break;
-                var startY = offsetY % tileH;
-                if (startY > 0) startY -= tileH;
-                for (var ty = startY; ty < canvasH; ty += tileH)
-                    canvas.DrawImage(src, srcRect, new RectangleF(dx, (float)ty, (float)tileW, (float)tileH), _resampler);
-                break;
-            }
-            default: // Repeat
-            {
-                var tilesX = (long)Math.Ceiling(canvasW / tileW) + 2;
-                var tilesY = (long)Math.Ceiling(canvasH / tileH) + 2;
-                if (tilesX * tilesY > 1_000_000) break;
-
-                var startX = offsetX % tileW;
-                if (startX > 0) startX -= tileW;
-                var startY = offsetY % tileH;
-                if (startY > 0) startY -= tileH;
-
-                for (var ty = startY; ty < canvasH; ty += tileH)
+                {
+                    var dy = (float)offsetY;
+                    var tilesX = (long)Math.Ceiling(canvasW / tileW) + 2;
+                    if (tilesX > 1_000_000) break;
+                    var startX = offsetX % tileW;
+                    if (startX > 0) startX -= tileW;
                     for (var tx = startX; tx < canvasW; tx += tileW)
-                        canvas.DrawImage(src, srcRect, new RectangleF((float)tx, (float)ty, (float)tileW, (float)tileH), _resampler);
-                break;
-            }
+                        canvas.DrawImage(src, srcRect, new RectangleF((float)tx, dy, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
+            case MaskRepeatMode.RepeatY:
+                {
+                    var dx = (float)offsetX;
+                    var tilesY = (long)Math.Ceiling(canvasH / tileH) + 2;
+                    if (tilesY > 1_000_000) break;
+                    var startY = offsetY % tileH;
+                    if (startY > 0) startY -= tileH;
+                    for (var ty = startY; ty < canvasH; ty += tileH)
+                        canvas.DrawImage(src, srcRect, new RectangleF(dx, (float)ty, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
+            default: // Repeat
+                {
+                    var tilesX = (long)Math.Ceiling(canvasW / tileW) + 2;
+                    var tilesY = (long)Math.Ceiling(canvasH / tileH) + 2;
+                    if (tilesX * tilesY > 1_000_000) break;
+
+                    var startX = offsetX % tileW;
+                    if (startX > 0) startX -= tileW;
+                    var startY = offsetY % tileH;
+                    if (startY > 0) startY -= tileH;
+
+                    for (var ty = startY; ty < canvasH; ty += tileH)
+                        for (var tx = startX; tx < canvasW; tx += tileW)
+                            canvas.DrawImage(src, srcRect, new RectangleF((float)tx, (float)ty, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
         }
     }
 
@@ -2052,7 +2052,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             if (!src[i].IsHint) { if (firstReal < 0) firstReal = i; lastReal = i; }
         }
         if (firstReal >= 0) ratios[firstReal] ??= 0.0;
-        if (lastReal >= 0)  ratios[lastReal]  ??= 1.0;
+        if (lastReal >= 0) ratios[lastReal] ??= 1.0;
 
         // Enforce non-decreasing positions (CSS Images 3: a stop's position is
         // clamped to be >= the previous stop's).
@@ -2078,7 +2078,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             while (end < ratios.Length && ratios[end] is null) end++;
             var endKnown = end;                  // ratios[end] is set (lastReal is set)
             var startVal = ratios[startKnown]!.Value;
-            var endVal   = ratios[endKnown]!.Value;
+            var endVal = ratios[endKnown]!.Value;
             var gap = endKnown - startKnown;
             for (var k = idx; k < end; k++)
                 ratios[k] = startVal + (endVal - startVal) * (k - startKnown) / gap;

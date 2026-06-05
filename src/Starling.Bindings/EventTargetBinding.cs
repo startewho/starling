@@ -470,11 +470,11 @@ public static class EventTargetBinding
         switch ((interfaceName ?? "").ToLowerInvariant())
         {
             case "customevent":
-            {
-                var ce = new CustomEvent("");
-                ce.MarkAsUninitialized();
-                return JsValue.Object(Track(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null)));
-            }
+                {
+                    var ce = new CustomEvent("");
+                    ce.MarkAsUninitialized();
+                    return JsValue.Object(Track(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null)));
+                }
             case "event":
             case "events":
             case "htmlevents":
