@@ -1657,9 +1657,9 @@ public static class NodeBindings
             var cls = JsValue.ToStringValue(args[0]);
             return BuildHtmlCollection(realm, () => d.GetElementsByClassName(cls));
         }, length: 1);
-        // HTML §3.1.5 — document.getElementsByName(name): a live NodeList of all
+        // HTML §3.1.5 — document.getElementsByName(name): live collection of all
         // elements (any namespace) whose `name` content attribute equals name, in
-        // tree order. Backed by the live-collection plumbing so it tracks DOM edits.
+        // tree order. (Currently returns an HTMLCollection via BuildHtmlCollection.)
         EventTargetBinding.DefineMethod(realm, docProto, "getElementsByName", (thisV, args) =>
         {
             if (DomWrappers.UnwrapDocument(thisV) is not { } d || args.Length == 0) return MakeArray(realm, Array.Empty<JsValue>());
