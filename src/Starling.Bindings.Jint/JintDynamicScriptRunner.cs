@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -28,7 +30,11 @@ namespace Starling.Bindings.Jint;
 /// </remarks>
 internal sealed class JintDynamicScriptRunner
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILogger _log;
+    // Dedicated logger for JS page console.* output routed through this runner.
+    // Category must stay exactly "Starling.engine.js" — the DevTools sink and MCP
+    // query tool filter on it.
+    private readonly ILogger _jsConsoleLog;
     private readonly StarlingUrl _baseUrl;
     private readonly Func<StarlingUrl, CancellationToken, Task<string?>> _fetch;
     private readonly Action<string, string> _runClassic;   // (source, label) on the JS thread
@@ -44,12 +50,14 @@ internal sealed class JintDynamicScriptRunner
     private int _inFlight;
 
     public JintDynamicScriptRunner(
-        IDiagnostics diag, StarlingUrl baseUrl,
+        ILoggerFactory loggerFactory, StarlingUrl baseUrl,
         Func<StarlingUrl, CancellationToken, Task<string?>> fetch,
         Action<string, string> runClassic,
         Action<Action> post)
     {
-        _diag = diag;
+        var factory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = factory.CreateLogger<JintDynamicScriptRunner>();
+        _jsConsoleLog = factory.CreateLogger("Starling.engine.js");
         _baseUrl = baseUrl;
         _fetch = fetch;
         _runClassic = runClassic;
@@ -91,7 +99,7 @@ internal sealed class JintDynamicScriptRunner
         var absolute = ResolveAbsolute(src, _baseUrl);
         if (absolute is null)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve dynamic <script src='{src}'>");
+            JintDynamicScriptRunnerLog.UnresolvableSrc(_log, src);
             FireEvent(script, "error");
             return;
         }
@@ -106,7 +114,7 @@ internal sealed class JintDynamicScriptRunner
             }
             catch (Exception ex)
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Dynamic script fetch failed {absolute}: {ex.Message}");
+                JintDynamicScriptRunnerLog.FetchFailed(_log, absolute.ToString(), ex.Message);
                 source = null;
             }
 
@@ -133,20 +141,18 @@ internal sealed class JintDynamicScriptRunner
         try
         {
             _runClassic(source, label);
-            _diag.Counter("engine.script.dynamic.ok", 1);
+            StarlingTelemetry.Counter("engine.script.dynamic.ok", 1);
             ranOk = true;
         }
         catch (ScriptThrow ex)
         {
-            _diag.Counter("engine.script.dynamic.failed", 1);
-            _diag.Log(DiagLevel.Warn, "engine.js",
-                $"Uncaught dynamic script error ({label}): {ex.Message}");
+            StarlingTelemetry.Counter("engine.script.dynamic.failed", 1);
+            JintDynamicScriptRunnerLog.UncaughtDynamicScriptError(_jsConsoleLog, label, ex.Message);
         }
         catch (Exception ex)
         {
-            _diag.Counter("engine.script.dynamic.failed", 1);
-            _diag.Log(DiagLevel.Warn, "engine.js",
-                $"Dynamic script compile/run failure ({label}): {ex.Message}");
+            StarlingTelemetry.Counter("engine.script.dynamic.failed", 1);
+            JintDynamicScriptRunnerLog.DynamicScriptCompileRunFailure(_jsConsoleLog, label, ex.Message);
         }
 
         FireEvent(script, ranOk ? "load" : "error");
@@ -160,8 +166,7 @@ internal sealed class JintDynamicScriptRunner
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "engine.js",
-                $"Dynamic script '{type}' handler threw: {ex.Message}");
+            JintDynamicScriptRunnerLog.ScriptEventHandlerThrew(_jsConsoleLog, type, ex.Message);
         }
     }
 
@@ -172,4 +177,22 @@ internal sealed class JintDynamicScriptRunner
             : StarlingUrlParser.Parse(href, baseUrl);
         return parsed.IsOk ? parsed.Value : null;
     }
+}
+
+internal static partial class JintDynamicScriptRunnerLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not resolve dynamic <script src='{Src}'>")]
+    public static partial void UnresolvableSrc(ILogger logger, string src);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dynamic script fetch failed {Url}: {Message}")]
+    public static partial void FetchFailed(ILogger logger, string url, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught dynamic script error ({Label}): {Message}")]
+    public static partial void UncaughtDynamicScriptError(ILogger logger, string label, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dynamic script compile/run failure ({Label}): {Message}")]
+    public static partial void DynamicScriptCompileRunFailure(ILogger logger, string label, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dynamic script '{EventType}' handler threw: {Message}")]
+    public static partial void ScriptEventHandlerThrew(ILogger logger, string eventType, string message);
 }

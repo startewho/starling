@@ -54,7 +54,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     private readonly IResampler _resampler = KnownResamplers.Bicubic;
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
-    private readonly IDiagnostics _diag;
     private readonly bool _useWebGpu;
     private readonly FontCollection _fontCollection;
     private readonly ConcurrentDictionary<FontCacheKey, Font> _fontCache = new();
@@ -62,12 +61,11 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     private readonly ConicLayerCache _conicCache = new();
     private static readonly Lazy<WebGPUEnvironmentError> _webGpuAvailability = new(WebGPUEnvironment.ProbeAvailability);
 
-    public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diagnostics = null, bool useWebGpu = false)
+    public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, bool useWebGpu = false)
     {
         ArgumentNullException.ThrowIfNull(fonts);
         _fonts = fonts;
         _webFonts = webFonts;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
         _useWebGpu = useWebGpu;
         _fontCollection = ImageSharpFontLookup.LoadCollection(webFonts);
         _boxShadowCache = new BoxShadowRasterCache();
@@ -169,12 +167,12 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         WebGPURenderTarget? target = null;
         try
         {
-            using (_diag.Span("paint", "raster.context_init"))
+            using (StarlingTelemetry.Span("paint", "raster.context_init"))
             {
                 context.ThrowIfDisposed();
             }
 
-            using (_diag.Span("paint", "raster.surface_alloc"))
+            using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
             {
                 target = context.CreateRenderTarget(WebGPUTextureFormat.Rgba8Unorm, width, height);
             }
@@ -182,7 +180,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             using var pendingImageSources = new DisposableBag();
 
             DrawingCanvas canvas;
-            using (_diag.Span("paint", "raster.command_record"))
+            using (StarlingTelemetry.Span("paint", "raster.command_record"))
             {
                 canvas = target.CreateCanvas();
                 using (canvas)
@@ -243,14 +241,14 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
     private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool opaqueBackground = true)
     {
-        using (_diag.Span("paint", "raster.context_init"))
+        using (StarlingTelemetry.Span("paint", "raster.context_init"))
         {
             // ImageSharp has no persistent CPU context; the span is kept so
             // the diagnostics trace shape stays stable for tooling.
         }
 
         Image<Rgba32> image;
-        using (_diag.Span("paint", "raster.surface_alloc"))
+        using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
             image = new Image<Rgba32>(width, height, opaqueBackground ? new Rgba32(255, 255, 255, 255) : new Rgba32(0, 0, 0, 0));
 
         using (image)
@@ -262,7 +260,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             // Stage them in a bag that is disposed after rasterization/readback.
             using var pendingImageSources = new DisposableBag();
 
-            using (_diag.Span("paint", "raster.command_record"))
+            using (StarlingTelemetry.Span("paint", "raster.command_record"))
             {
                 // The CPU image is allocated pre-filled with the background color, so
                 // the replay must not clear it again (clearWhite: false). ImageSharp
@@ -273,7 +271,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             }
 
             byte[] pixels;
-            using (_diag.Span("paint", "raster.readback"))
+            using (StarlingTelemetry.Span("paint", "raster.readback"))
             {
                 pixels = new byte[checked(width * height * 4)];
                 image.CopyPixelDataTo(pixels);
@@ -293,7 +291,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         EnsureWebGpuAvailable();
 
         WebGPURenderTarget target;
-        using (_diag.Span("paint", "raster.context_init"))
+        using (StarlingTelemetry.Span("paint", "raster.context_init"))
             target = new WebGPURenderTarget(width, height);
 
         using (target)
@@ -301,11 +299,11 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             using var pendingImageSources = new DisposableBag();
 
             DrawingCanvas canvas;
-            using (_diag.Span("paint", "raster.surface_alloc"))
+            using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
                 canvas = target.CreateCanvas();
 
             using (canvas)
-            using (_diag.Span("paint", "raster.command_record"))
+            using (StarlingTelemetry.Span("paint", "raster.command_record"))
                 // Flush seals queued commands into the canvas timeline so the GPU
                 // pipeline executes before ReadbackImage samples the texture.
                 // Without it, readback races the (un)submitted command buffer and
@@ -314,7 +312,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                     clearWhite: opaqueBackground, pendingImageSources, flush: true);
 
             byte[] pixels;
-            using (_diag.Span("paint", "raster.readback"))
+            using (StarlingTelemetry.Span("paint", "raster.readback"))
             {
                 using var image = target.ReadbackImage<Rgba32>();
                 pixels = new byte[checked(width * height * 4)];
@@ -358,7 +356,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
         if (flush)
         {
-            using (_diag.Span("paint", "raster.flush"))
+            using (StarlingTelemetry.Span("paint", "raster.flush"))
             {
                 canvas.Flush();
             }

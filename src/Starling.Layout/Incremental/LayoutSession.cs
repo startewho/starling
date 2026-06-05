@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Dom;
@@ -35,7 +37,8 @@ public sealed class LayoutSession
 {
     private readonly StyleEngine _style;
     private readonly IImageResolver _images;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
 
     // Persistent across frames: the retained tree and its lookup maps.
     private readonly Dictionary<Element, Box.Box> _elementMap = new();
@@ -43,12 +46,13 @@ public sealed class LayoutSession
     private BlockBox? _root;
     private Size _viewport;
 
-    public LayoutSession(StyleEngine style, IImageResolver? images = null, IDiagnostics? diagnostics = null)
+    public LayoutSession(StyleEngine style, IImageResolver? images = null, ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(style);
         _style = style;
         _images = images ?? NullImageResolver.Instance;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<LayoutSession>();
     }
 
     /// <summary>The retained box tree's root, or null before the first layout.</summary>
@@ -78,17 +82,17 @@ public sealed class LayoutSession
 
         if (_root is not null && viewport == _viewport && TryReconcile(batch, nowMs))
         {
-            using (_diag.Span("layout", "incremental.relayout"))
+            using (StarlingTelemetry.Span("layout", "incremental.relayout"))
                 RunLayout(measurer, viewport, abort, incremental: true);
-            _diag.Counter("layout.incremental.relayout", 1);
+            StarlingTelemetry.Counter("layout.incremental.relayout", 1);
             if (VerifyAgainstFullRebuild)
                 Verify(document, viewport, measurer, nowMs, abort);
             return _root;
         }
 
-        using (_diag.Span("layout", "incremental.full_rebuild"))
+        using (StarlingTelemetry.Span("layout", "incremental.full_rebuild"))
             FullBuild(document, viewport, measurer, nowMs, abort);
-        _diag.Counter("layout.incremental.full_rebuild", 1);
+        StarlingTelemetry.Counter("layout.incremental.full_rebuild", 1);
         return _root!;
     }
 
@@ -101,21 +105,21 @@ public sealed class LayoutSession
     /// </summary>
     private void Verify(Document document, Size viewport, ITextMeasurer measurer, double? nowMs, CancellationToken abort)
     {
-        using var _ = _diag.Span("layout", "incremental.verify");
+        using var _ = StarlingTelemetry.Span("layout", "incremental.verify");
         var reference = new BoxTreeBuilder(_style, _images, nowMs).Build(document);
-        var block = new BlockLayout(measurer, viewport, _diag, abort, incremental: false);
+        var block = new BlockLayout(measurer, viewport, abort, incremental: false);
         block.Layout(reference);
         new PositionLayout(block, viewport).LayoutPositioned(reference);
 
         var divergence = Verification.LayoutVerifier.FindFirstDivergence(_root!, reference);
         if (divergence is { } d)
         {
-            _diag.Counter("layout.incremental.divergent", 1);
-            _diag.Log(DiagLevel.Error, "layout.incremental", $"incremental layout diverged from full rebuild: {d}");
+            StarlingTelemetry.Counter("layout.incremental.divergent", 1);
+            LayoutSessionLog.IncrementalDivergence(_log, d.ToString());
         }
         else
         {
-            _diag.Counter("layout.incremental.verify_ok", 1);
+            StarlingTelemetry.Counter("layout.incremental.verify_ok", 1);
         }
     }
 
@@ -133,7 +137,7 @@ public sealed class LayoutSession
     private void RunLayout(ITextMeasurer measurer, Size viewport, CancellationToken abort, bool incremental)
     {
         var root = _root!;
-        var block = new BlockLayout(measurer, viewport, _diag, abort, incremental);
+        var block = new BlockLayout(measurer, viewport, abort, incremental);
         block.Layout(root);
         var positioning = new PositionLayout(block, viewport);
         positioning.LayoutPositioned(root);
@@ -260,4 +264,10 @@ public sealed class LayoutSession
         for (Box.Box? b = box; b is not null; b = b.Parent)
             b.SubtreeDirty = true;
     }
+}
+
+internal static partial class LayoutSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "incremental layout diverged from full rebuild: {Divergence}")]
+    public static partial void IncrementalDivergence(ILogger logger, string divergence);
 }

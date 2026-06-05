@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Js.Bytecode;
 using Starling.Js.Intrinsics;
 using Starling.RegExp;
@@ -26,6 +28,7 @@ namespace Starling.Js.Runtime;
 public sealed class JsVm
 {
     private readonly JsRuntime _runtime;
+    private readonly ILogger _log;
     private const int MaxStack = 1024;
 
     /// <summary>Maximum nested JS call depth before a <c>RangeError</c> is
@@ -68,9 +71,10 @@ public sealed class JsVm
         if (pool.Count < ArgPoolDepth) pool.Push(args);
     }
 
-    public JsVm(JsRuntime runtime)
+    public JsVm(JsRuntime runtime, ILogger<JsVm>? log = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _log = log ?? NullLogger<JsVm>.Instance;
     }
 
     /// <summary>The realm this VM dispatches against.</summary>
@@ -3178,15 +3182,15 @@ public sealed class JsVm
     {
         JsValue ret;
         try { ret = AbstractOperations.GetMethod(this, innerIter, "return"); }
-        catch { return; }
+        catch (Exception ex) { JsVmLog.AsyncIteratorCloseGetMethodFailed(_log, ex); return; }
         if (ret.IsUndefined || ret.IsNull) return;
         JsValue result;
         try { result = AbstractOperations.Call(this, ret, innerIter, Array.Empty<JsValue>()); }
-        catch { return; }
+        catch (Exception ex) { JsVmLog.AsyncIteratorCloseCallFailed(_log, ex); return; }
         // Await the close result; swallow any rejection so the original throw
         // (the missing-throw-method TypeError) wins per §7.4.11.
         try { AwaitOnWorker(suspension, result); }
-        catch (JsThrow) { /* original completion already throwing */ }
+        catch (JsThrow ex) { JsVmLog.AsyncIteratorCloseAwaitRejected(_log, ex); /* original completion already throwing */ }
     }
 
     /// <summary>§14.15 — divert a return through any enclosing finalizer.</summary>
@@ -4375,4 +4379,19 @@ internal struct TryFrame
     /// the number of additional enclosing try-frames still to unwind (and run
     /// finalizers for) before reaching the target.</summary>
     public int PendingUnwindRemaining;
+}
+
+internal static partial class JsVmLog
+{
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "async iterator close: GetMethod('return') threw; abandoning close")]
+    public static partial void AsyncIteratorCloseGetMethodFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "async iterator close: invoking 'return' threw; abandoning close")]
+    public static partial void AsyncIteratorCloseCallFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "async iterator close: awaiting 'return' result rejected; original completion wins")]
+    public static partial void AsyncIteratorCloseAwaitRejected(ILogger logger, Exception ex);
 }

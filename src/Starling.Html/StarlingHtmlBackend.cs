@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-using Starling.Common.Diagnostics;
 using Starling.Dom;
 using Starling.Html.TreeBuilder;
 
@@ -16,11 +15,10 @@ public sealed class StarlingHtmlBackend : IHtmlParserBackend
     public string Name => "starling";
 
     /// <inheritdoc/>
-    public Document Parse(string html, IDiagnostics? diagnostics, bool scriptingEnabled)
-        => HtmlTreeBuilder.Parse(html, diagnostics, scriptingEnabled);
+    public Document Parse(string html, bool scriptingEnabled)
+        => HtmlTreeBuilder.Parse(html, scriptingEnabled);
 
     /// <inheritdoc/>
-    public DocumentFragment ParseFragment(string markup, Element context,
-        Document ownerDocument, IDiagnostics? diagnostics)
-        => HtmlTreeBuilder.ParseFragment(markup, context, ownerDocument, diagnostics);
+    public DocumentFragment ParseFragment(string markup, Element context, Document ownerDocument)
+        => HtmlTreeBuilder.ParseFragment(markup, context, ownerDocument);
 }

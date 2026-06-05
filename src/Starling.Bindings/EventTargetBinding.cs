@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Js.Runtime;
@@ -22,6 +24,8 @@ namespace Starling.Bindings;
 /// </remarks>
 public static class EventTargetBinding
 {
+    private static readonly ILogger Log = NullLoggerFactory.Instance.CreateLogger(typeof(EventTargetBinding));
+
     // Lookup the host EventTarget that backs a JS wrapper.
     private static readonly ConditionalWeakTable<JsObject, EventTarget> WrapperToTarget = new();
     // Per host-EventTarget map of (type, capture) → (JS-listener → delegate).
@@ -715,9 +719,10 @@ public static class EventTargetBinding
                 });
             }
         }
-        catch
+        catch (Exception ex)
         {
             // An error inside onerror itself must not escape the dispatch loop.
+            EventTargetBindingLog.OnerrorHandlerThrew(Log, ex);
         }
         realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {message}");
     }
@@ -928,4 +933,10 @@ internal sealed class JsValueBox
 internal sealed class MutableJsValueSlot
 {
     public JsValue Value { get; set; } = JsValue.Undefined;
+}
+
+internal static partial class EventTargetBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "window.onerror handler threw (must not escape the dispatch loop)")]
+    public static partial void OnerrorHandlerThrew(ILogger logger, Exception ex);
 }

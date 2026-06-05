@@ -1,4 +1,3 @@
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Values;
@@ -32,11 +31,11 @@ internal sealed class BlockLayout
     // byte-for-byte unchanged. See Starling.Layout.Incremental.
     private readonly bool _incremental;
 
-    public BlockLayout(ITextMeasurer measurer, Size viewport, IDiagnostics? diagnostics = null, CancellationToken abort = default, bool incremental = false)
+    public BlockLayout(ITextMeasurer measurer, Size viewport, CancellationToken abort = default, bool incremental = false)
     {
         _measurer = measurer;
         _viewport = viewport;
-        _inline = new InlineLayout(measurer, viewport, diagnostics);
+        _inline = new InlineLayout(measurer, viewport);
         _abort = abort;
         _incremental = incremental;
     }

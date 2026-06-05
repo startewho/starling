@@ -1,5 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SixLabors.ImageSharp;
-using Starling.Common.Diagnostics;
 using Starling.Engine;
 using Starling.Html.Tokenizer;
 using Starling.Mcp;
@@ -17,7 +18,7 @@ namespace Starling.Headless;
 /// </summary>
 internal static class Program
 {
-    private static IDiagnostics s_diagnostics = NoopDiagnostics.Instance;
+    private static ILoggerFactory s_loggerFactory = NullLoggerFactory.Instance;
 
     public static async Task<int> Main(string[] args)
     {
@@ -36,17 +37,12 @@ internal static class Program
         var mcpUrl = ResolveMcpUrl();
         var withInMemorySinks = mcpUrl is not null;
         using var telemetry = OtelBootstrap.Initialize("starling-headless", withInMemorySinks);
-        // STARLING_DIAG_TRACE=1 lowers the console-diag floor to Trace so paint
-        // span timings ([Trace] paint: - raster.command_record (Xms)) appear
-        // on stderr. This is useful for backend perf comparisons without
-        // spinning up an OpenTelemetry collector. Default stays Info to keep
-        // normal CLI runs quiet.
-        var traceConsole = DiagnosticsMode.TraceConsole;
-        var consoleDiagnostics = new ConsoleDiagnostics { MinLevel = traceConsole ? DiagLevel.Trace : DiagLevel.Info };
-        var hasOtlp = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
-        s_diagnostics = hasOtlp || withInMemorySinks
-            ? new CompositeDiagnostics(consoleDiagnostics, telemetry.Diagnostics)
-            : consoleDiagnostics;
+        // The logger factory from Initialize already writes to stderr (console
+        // provider) and, when OTEL_EXPORTER_OTLP_ENDPOINT is set, exports log
+        // records over the OpenTelemetry Protocol. STARLING_DIAG_TRACE=1 lowers
+        // the console floor to Trace so paint span timings appear on stderr;
+        // default stays Info to keep normal CLI runs quiet.
+        s_loggerFactory = telemetry.LoggerFactory;
 
         var mcp = mcpUrl is not null && telemetry.TelemetryStream is not null
             ? StartMcpServer(mcpUrl, telemetry.TelemetryStream)
@@ -304,7 +300,7 @@ internal static class Program
         // Allow bare paths in addition to file:// URLs — agent ergonomics.
         var url = NormalizeUrlOrPath(input);
 
-        var engine = new StarlingEngine(diagnostics: s_diagnostics);
+        var engine = new StarlingEngine(loggerFactory: s_loggerFactory);
 
         if (frames > 1)
         {

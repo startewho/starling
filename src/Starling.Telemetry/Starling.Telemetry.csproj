@@ -7,6 +7,7 @@
          Headless CLI (plain Main entrypoint). The OTLP exporter reads
          OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_SERVICE_NAME from env; Aspire
          AppHost sets these automatically when it launches child resources. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" />

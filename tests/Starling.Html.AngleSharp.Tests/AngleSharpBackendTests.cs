@@ -30,8 +30,8 @@ public sealed class AngleSharpBackendTests
 
     private static void AssertSameDocument(string html)
     {
-        var starling = SerializeDocument(Starling.Parse(html, null, scriptingEnabled: false));
-        var angle = SerializeDocument(Angle.Parse(html, null, scriptingEnabled: false));
+        var starling = SerializeDocument(Starling.Parse(html, scriptingEnabled: false));
+        var angle = SerializeDocument(Angle.Parse(html, scriptingEnabled: false));
         angle.Should().Be(starling);
     }
 
@@ -63,7 +63,7 @@ public sealed class AngleSharpBackendTests
     [TestMethod]
     public void Svg_preserves_namespace_case_and_xlink_attribute()
     {
-        var doc = Angle.Parse("<svg><linearGradient id=\"g\"><a xlink:href=\"x\"></a></linearGradient></svg>", null, false);
+        var doc = Angle.Parse("<svg><linearGradient id=\"g\"><a xlink:href=\"x\"></a></linearGradient></svg>", false);
 
         var svg = doc.GetElementsByTagNameNS("http://www.w3.org/2000/svg", "svg").FirstOrDefault();
         svg.Should().NotBeNull();
@@ -81,7 +81,7 @@ public sealed class AngleSharpBackendTests
     [TestMethod]
     public void MathMl_element_lands_in_mathml_namespace()
     {
-        var doc = Angle.Parse("<math><mi>x</mi></math>", null, false);
+        var doc = Angle.Parse("<math><mi>x</mi></math>", false);
 
         var math = doc.GetElementsByTagNameNS("http://www.w3.org/1998/Math/MathML", "math").FirstOrDefault();
         math.Should().NotBeNull();
@@ -93,7 +93,7 @@ public sealed class AngleSharpBackendTests
     [TestMethod]
     public void Html_element_names_and_attributes_are_lowercased()
     {
-        var doc = Angle.Parse("<DIV ID=\"a\" Data-X=\"v\">t</DIV>", null, false);
+        var doc = Angle.Parse("<DIV ID=\"a\" Data-X=\"v\">t</DIV>", false);
 
         var div = doc.GetElementsByTagName("div").FirstOrDefault();
         div.Should().NotBeNull();
@@ -106,7 +106,7 @@ public sealed class AngleSharpBackendTests
     [TestMethod]
     public void Template_content_lands_in_content_fragment_not_children()
     {
-        var doc = Angle.Parse("<template><p>inside</p></template>", null, false);
+        var doc = Angle.Parse("<template><p>inside</p></template>", false);
 
         var template = doc.GetElementsByTagName("template").FirstOrDefault();
         template.Should().NotBeNull();
@@ -125,7 +125,7 @@ public sealed class AngleSharpBackendTests
     [TestMethod]
     public void Doctype_node_is_copied_with_name()
     {
-        var doc = Angle.Parse("<!DOCTYPE html><html><body>hi</body></html>", null, false);
+        var doc = Angle.Parse("<!DOCTYPE html><html><body>hi</body></html>", false);
 
         var doctype = doc.ChildNodes.OfType<DocumentType>().FirstOrDefault();
         doctype.Should().NotBeNull();
@@ -141,9 +141,9 @@ public sealed class AngleSharpBackendTests
         var context = owner.CreateElement("div");
 
         var starling = HtmlSerializer.SerializeChildren(
-            Starling.ParseFragment("<p>hi <b>there</b></p>", context, owner, null));
+            Starling.ParseFragment("<p>hi <b>there</b></p>", context, owner));
         var angle = HtmlSerializer.SerializeChildren(
-            Angle.ParseFragment("<p>hi <b>there</b></p>", context, owner, null));
+            Angle.ParseFragment("<p>hi <b>there</b></p>", context, owner));
 
         angle.Should().Be(starling);
     }
@@ -156,7 +156,7 @@ public sealed class AngleSharpBackendTests
 
         // A <tr> context coerces a bare <td> into the row. Assert the adapter
         // surfaces AngleSharp's parsed cell, owned by the right document.
-        var fragment = Angle.ParseFragment("<td>cell</td>", context, owner, null);
+        var fragment = Angle.ParseFragment("<td>cell</td>", context, owner);
 
         var td = fragment.ChildNodes.OfType<Element>().FirstOrDefault();
         td.Should().NotBeNull();
@@ -171,7 +171,7 @@ public sealed class AngleSharpBackendTests
         var owner = new Document();
         var context = owner.CreateElement("table");
 
-        var fragment = Angle.ParseFragment("<tr><td>a</td></tr>", context, owner, null);
+        var fragment = Angle.ParseFragment("<tr><td>a</td></tr>", context, owner);
 
         // AngleSharp wraps loose rows in a <tbody> per the table insertion mode.
         var tbody = fragment.ChildNodes.OfType<Element>().FirstOrDefault(e => e.TagName == "tbody");

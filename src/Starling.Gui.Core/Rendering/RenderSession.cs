@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Core.Contexts;
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Dom;
 using Starling.Layout.Box;
@@ -11,6 +12,12 @@ using Starling.Paint.Compositor;
 using LayoutRect = Starling.Layout.Rect;
 
 namespace Starling.Gui.Core.Rendering;
+
+internal static partial class RenderSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "STARLING_FORCE_READBACK=1: using the bitmap present path.")]
+    public static partial void ForceReadback(ILogger logger);
+}
 
 /// <summary>
 /// A render session owns the backend choice for one browser session. Callers hand it
@@ -30,19 +37,18 @@ public interface IRenderSession : IDisposable
 
 public static class RenderSessionFactory
 {
-    public static IRenderSession Create(IDiagnostics? diagnostics = null)
+    public static IRenderSession Create(ILogger? log = null)
     {
-        var diag = diagnostics ?? NoopDiagnostics.Instance;
+        var sessionLog = log ?? NullLogger.Instance;
         var forceReadback = Environment.GetEnvironmentVariable("STARLING_FORCE_READBACK") == "1";
         var supportsSurface = PaintBackendSelector.Selected == PaintBackendKind.ImageSharpWebGpu && !forceReadback;
         if (forceReadback)
         {
-            diag.Log(DiagLevel.Info, "gui",
-                "STARLING_FORCE_READBACK=1: using the bitmap present path.");
+            RenderSessionLog.ForceReadback(sessionLog);
         }
 
-        var backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diag);
-        return new DefaultRenderSession(diag, backend, supportsSurface);
+        var backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null);
+        return new DefaultRenderSession(backend, supportsSurface);
     }
 }
 
@@ -133,9 +139,9 @@ public sealed class MetalLayerFrameTarget : SurfaceFrameTarget
 
     internal override GpuSurfacePresenter? Presenter => _presenter;
 
-    public static MetalLayerFrameTarget? TryCreate(nint caMetalLayer, IDiagnostics? diagnostics = null)
+    public static MetalLayerFrameTarget? TryCreate(nint caMetalLayer)
     {
-        var presenter = GpuSurfacePresenter.CreateForMetalLayer(caMetalLayer, diagnostics);
+        var presenter = GpuSurfacePresenter.CreateForMetalLayer(caMetalLayer);
         return presenter is null ? null : new MetalLayerFrameTarget(presenter);
     }
 
@@ -155,22 +161,18 @@ public sealed class NativePageSurfaceFrameTarget : SurfaceFrameTarget
     internal override GpuSurfacePresenter? Presenter => _presenter;
 
     public static NativePageSurfaceFrameTarget? TryCreate(
-        NativePageSurface surface,
-        IDiagnostics? diagnostics = null)
+        NativePageSurface surface)
     {
         var presenter = surface.Kind switch
         {
             NativePageSurfaceKind.MetalLayer => GpuSurfacePresenter.CreateForMetalLayer(
-                surface.Handle,
-                diagnostics),
+                surface.Handle),
             NativePageSurfaceKind.WindowsHwnd => GpuSurfacePresenter.CreateForWindowsHwnd(
                 surface.Handle,
-                surface.AuxiliaryHandle,
-                diagnostics),
+                surface.AuxiliaryHandle),
             NativePageSurfaceKind.XlibWindow => GpuSurfacePresenter.CreateForXlibWindow(
                 surface.AuxiliaryHandle,
-                surface.WindowId,
-                diagnostics),
+                surface.WindowId),
             _ => null,
         };
 
@@ -192,9 +194,9 @@ public sealed class WindowSurfaceFrameTarget : SurfaceFrameTarget
 
     internal override GpuSurfacePresenter? Presenter => _presenter;
 
-    public static WindowSurfaceFrameTarget? TryCreate(INativeWindowSource window, IDiagnostics? diagnostics = null)
+    public static WindowSurfaceFrameTarget? TryCreate(INativeWindowSource window)
     {
-        var presenter = GpuSurfacePresenter.CreateForWindow(window, diagnostics);
+        var presenter = GpuSurfacePresenter.CreateForWindow(window);
         return presenter is null ? null : new WindowSurfaceFrameTarget(presenter);
     }
 
@@ -234,18 +236,15 @@ public sealed class RenderFrame : IDisposable
 
 internal sealed class DefaultRenderSession : IRenderSession
 {
-    private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
     private readonly NativeViewportRenderer? _surfaceRenderer;
     private bool _disposed;
 
-    public DefaultRenderSession(IDiagnostics diagnostics, IPaintBackend backend, bool supportsSurfaceTargets)
+    public DefaultRenderSession(IPaintBackend backend, bool supportsSurfaceTargets)
     {
-        ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(backend);
-        _diag = diagnostics;
         _backend = backend;
-        _surfaceRenderer = supportsSurfaceTargets ? new NativeViewportRenderer(_backend, _diag) : null;
+        _surfaceRenderer = supportsSurfaceTargets ? new NativeViewportRenderer(_backend) : null;
     }
 
     public bool SupportsSurfaceTargets => _surfaceRenderer is not null;

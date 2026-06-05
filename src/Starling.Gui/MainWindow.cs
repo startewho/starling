@@ -28,6 +28,33 @@ using RenderOptions = Starling.Engine.RenderOptions;
 
 namespace Starling.Gui;
 
+internal static partial class MainWindowLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "first-paint: {ElapsedMs} ms ({OpLabel})")]
+    public static partial void FirstPaint(ILogger logger, long elapsedMs, string opLabel);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "show_page: {OpLabel} navElapsed={NavElapsedMs}ms showPage(+firstPresent)={ShowPageMs}ms")]
+    public static partial void ShowPage(ILogger logger, string opLabel, long navElapsedMs, long showPageMs);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "resize relayout failed: {Message}")]
+    public static partial void RelayoutFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "screenshot failed: {Message}")]
+    public static partial void ScreenshotFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "inspect failed: {Message}")]
+    public static partial void InspectFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "clipboard failed: {Message}")]
+    public static partial void ClipboardFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "resize failed: {Message}")]
+    public static partial void ResizeFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{ToolName} failed: {Message}")]
+    public static partial void InputToolFailed(ILogger logger, string toolName, string message);
+}
+
 /// <summary>
 /// Composition root for the sidebar, toolbar, webview, status bar, DevTools,
 /// and navigation flow.
@@ -55,7 +82,8 @@ public sealed class MainWindow : Window, IBrowserController
             new Uri("avares://Starling.Gui/Assets/icon_1024.png")));
 
     private readonly ThemeManager _tm;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly TelemetryStream _telemetry;
     private readonly BrowserSession _session;
     private readonly WebviewPanel _webview;
@@ -99,10 +127,11 @@ public sealed class MainWindow : Window, IBrowserController
     public MainWindow()
     {
         _tm = Program.Services.GetRequiredService<ThemeManager>();
-        _diag = Program.Services.GetRequiredService<IDiagnostics>();
+        _loggerFactory = Program.Services.GetRequiredService<ILoggerFactory>();
+        _log = _loggerFactory.CreateLogger<MainWindow>();
         _telemetry = Program.Services.GetRequiredService<TelemetryStream>();
-        _session = new BrowserSession(_diag);
-        _webview = new WebviewPanel(_tm, _diag, OnLinkActivated, OnWebviewStatus, RelayoutForResize,
+        _session = Program.Services.GetRequiredService<BrowserSession>();
+        _webview = new WebviewPanel(_tm, _loggerFactory, OnLinkActivated, OnWebviewStatus, RelayoutForResize,
             prepareAnimationFrame: _session.PrepareAnimationFrame,
             hasActiveAnimations: _session.HasActiveAnimations);
 
@@ -567,7 +596,7 @@ public sealed class MainWindow : Window, IBrowserController
         // parent under the previous (finished) navigate span and the dashboard
         // would show one ever-growing trace instead of one trace per navigation.
         Activity.Current = null;
-        using var navSpan = _diag.Span("gui", "navigate");
+        using var navSpan = StarlingTelemetry.Span("gui", "navigate");
         var navigationActivity = Activity.Current;
         var firstPaintPosted = 0;
 
@@ -587,8 +616,7 @@ public sealed class MainWindow : Window, IBrowserController
                 // the user-meaningful "loaded and rendered" moment, distinct from
                 // the navigate-task's full-settle time (which includes deferred
                 // scripts that run after first paint).
-                _diag.Log(DiagLevel.Info, "gui",
-                    $"first-paint: {sw.ElapsedMilliseconds} ms ({opLabel})");
+                MainWindowLog.FirstPaint(_log, sw.ElapsedMilliseconds, opLabel);
                 ApplyShownPage(page, opLabel, sw.ElapsedMilliseconds);
             });
         }
@@ -615,7 +643,7 @@ public sealed class MainWindow : Window, IBrowserController
                     if (Volatile.Read(ref firstPaintPosted) != 0)
                     {
                         using var detached = GuiActivityScope.Detached();
-                        using var settleShow = _diag.Span("gui", "settle_show");
+                        using var settleShow = StarlingTelemetry.Span("gui", "settle_show");
                         ApplyShownPage(result.Value, opLabel, sw.ElapsedMilliseconds);
                     }
                     else
@@ -691,8 +719,7 @@ public sealed class MainWindow : Window, IBrowserController
         // (first-paint post) or only after the deferred phase finished.
         var showSw = System.Diagnostics.Stopwatch.StartNew();
         _webview.ShowPage(page);
-        _diag.Log(DiagLevel.Info, "gui",
-            $"show_page: {opLabel} navElapsed={elapsedMs}ms showPage(+firstPresent)={showSw.ElapsedMilliseconds}ms");
+        MainWindowLog.ShowPage(_log, opLabel, elapsedMs, showSw.ElapsedMilliseconds);
         _lastShownPage = page;
         _urlBar.SetSecurity(MapSecurity(page.Security));
         Title = string.IsNullOrWhiteSpace(page.Title) ? string.Empty : page.Title;
@@ -791,7 +818,7 @@ public sealed class MainWindow : Window, IBrowserController
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"resize relayout failed: {ex.Message}");
+            MainWindowLog.RelayoutFailed(_log, ex.Message);
             return null;
         }
     }
@@ -857,7 +884,7 @@ public sealed class MainWindow : Window, IBrowserController
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"screenshot failed: {ex.Message}");
+            MainWindowLog.ScreenshotFailed(_log, ex.Message);
             return Task.FromResult(Snapshot(success: false, error: $"screenshot failed: {ex.Message}"));
         }
     }
@@ -920,7 +947,7 @@ public sealed class MainWindow : Window, IBrowserController
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"inspect failed: {ex.Message}");
+            MainWindowLog.InspectFailed(_log, ex.Message);
             return Task.FromResult(Snapshot(success: false, error: $"inspect failed: {ex.Message}"));
         }
     }
@@ -1054,7 +1081,7 @@ public sealed class MainWindow : Window, IBrowserController
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"clipboard failed: {ex.Message}");
+            MainWindowLog.ClipboardFailed(_log, ex.Message);
             return Snapshot(success: false, error: $"clipboard failed: {ex.Message}");
         }
     }
@@ -1102,7 +1129,7 @@ public sealed class MainWindow : Window, IBrowserController
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"resize failed: {ex.Message}");
+            MainWindowLog.ResizeFailed(_log, ex.Message);
             return Task.FromResult(Snapshot(success: false, error: $"resize failed: {ex.Message}"));
         }
     }
@@ -1208,7 +1235,7 @@ public sealed class MainWindow : Window, IBrowserController
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"{name} failed: {ex.Message}");
+            MainWindowLog.InputToolFailed(_log, name, ex.Message);
             return Task.FromResult(Snapshot(success: false, error: $"{name} failed: {ex.Message}"));
         }
     }

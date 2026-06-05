@@ -3,6 +3,7 @@ using Jint; // JsValueExtensions (IsObject/AsObject/IsString/…)
 using Jint.Native;
 using Jint.Runtime;
 using Jint.Runtime.Descriptors;
+using Microsoft.Extensions.Logging;
 using Starling.Net.Http;
 using StarlingUrl = global::Starling.Url.Url;
 using StarlingUrlParser = global::Starling.Url.UrlParser;
@@ -249,6 +250,7 @@ internal static class FetchBinding
 internal sealed class FetchState
 {
     private readonly JintBackendContext _ctx;
+    private readonly ILogger _log;
     public HeadersTable Headers { get; }
     public BodyTable Bodies { get; }
     public AbortTable Abort { get; }
@@ -262,6 +264,7 @@ internal sealed class FetchState
     public FetchState(JintBackendContext ctx)
     {
         _ctx = ctx;
+        _log = ctx.LoggerFactory.CreateLogger<FetchState>();
         Headers = new HeadersTable();
         Bodies = new BodyTable();
         Abort = new AbortTable();
@@ -420,7 +423,8 @@ internal sealed class FetchState
             var hdrs = new HttpHeaders();
             foreach (var (k, v) in headers.Entries())
             {
-                try { hdrs.Add(k, v); } catch { /* invalid header chars → skip */ }
+                try { hdrs.Add(k, v); }
+                catch (Exception ex) { /* invalid header chars → skip */ FetchBindingLog.InvalidHeaderSkipped(_log, k, ex.Message); }
             }
             ReadOnlyMemory<byte> bodyMem = body;
             wire = new HttpRequest(method, url, hdrs, bodyMem);
@@ -710,4 +714,11 @@ internal sealed class AbortRec
             ? new JsString("AbortError: The operation was aborted.")
             : reason;
     }
+}
+
+internal static partial class FetchBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "Skipped invalid fetch request header '{Name}': {Reason}")]
+    public static partial void InvalidHeaderSkipped(ILogger logger, string name, string reason);
 }

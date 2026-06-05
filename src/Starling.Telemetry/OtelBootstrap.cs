@@ -14,7 +14,12 @@ namespace Starling.Telemetry;
 /// One-stop OpenTelemetry wiring for Starling host processes. Both flavours
 /// export traces, metrics, and logs over the OpenTelemetry Protocol when
 /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> is set. Without the env var, only the
-/// lightweight diagnostics facade and DevTools log sink are registered.
+/// console logger and DevTools in-memory sinks are registered.
+///
+/// <para>Engine libraries log through <c>ILogger</c> and record spans/metrics
+/// through <c>StarlingTelemetry</c>; this class just registers the providers and
+/// listeners that consume them. There is no longer a diagnostics facade to
+/// resolve from DI — code takes an <see cref="ILoggerFactory"/> instead.</para>
 /// </summary>
 public static class OtelBootstrap
 {
@@ -23,9 +28,9 @@ public static class OtelBootstrap
     /// host, such as <c>HostApplicationBuilder</c> or
     /// <c>WebApplicationBuilder</c>. Uses the framework's logging/metrics
     /// builders so anything the app already logs through
-    /// <see cref="ILogger"/> flows out as OpenTelemetry log records, and registers
-    /// <see cref="IDiagnostics"/> as a singleton so engine code can resolve
-    /// it via DI.
+    /// <see cref="ILogger"/> flows out as OpenTelemetry log records. Engine code
+    /// resolves <see cref="ILoggerFactory"/> from DI for logging and uses the
+    /// static <c>StarlingTelemetry</c> for spans/metrics.
     /// </summary>
     public static TBuilder AddStarlingTelemetry<TBuilder>(this TBuilder builder, string serviceName)
         where TBuilder : IHostApplicationBuilder
@@ -58,17 +63,14 @@ public static class OtelBootstrap
                 .ConfigureResource(rb => rb.AddService(serviceName))
                 .WithTracing(t => t
                     .AddSource(serviceName)
-                    .AddSource(OtelDiagnostics.SourceName)
+                    .AddSource(StarlingTelemetry.SourceName)
                     .AddHttpClientInstrumentation())
                 .WithMetrics(m => m
-                    .AddMeter(OtelDiagnostics.SourceName)
+                    .AddMeter(StarlingTelemetry.SourceName)
                     .AddHttpClientInstrumentation()
                     .AddRuntimeInstrumentation());
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
         }
-
-        builder.Services.AddSingleton<IDiagnostics>(sp =>
-            new OtelDiagnostics(sp.GetRequiredService<ILoggerFactory>()));
 
         // In-memory sinks feeding DevTools' ConsolePanel / PerformancePanel /
         // InternalsPanel. The activity and meter listeners self-register at
@@ -77,9 +79,9 @@ public static class OtelBootstrap
         // facade aggregates the three for DevTools to subscribe to.
         builder.Services.AddSingleton(logSink);
         builder.Services.AddSingleton(_ =>
-            new InMemoryActivitySink(DiagnosticsMode.TelemetrySinks, serviceName, OtelDiagnostics.SourceName));
+            new InMemoryActivitySink(DiagnosticsMode.TelemetrySinks, serviceName, StarlingTelemetry.SourceName));
         builder.Services.AddSingleton(_ =>
-            new InMemoryMeterSink(DiagnosticsMode.TelemetrySinks, OtelDiagnostics.SourceName));
+            new InMemoryMeterSink(DiagnosticsMode.TelemetrySinks, StarlingTelemetry.SourceName));
         builder.Services.AddSingleton<TelemetryStream>();
 
         return builder;
@@ -89,9 +91,8 @@ public static class OtelBootstrap
     /// Wire OpenTelemetry for a plain <c>Main</c>-style console app that
     /// doesn't go through <see cref="IHostApplicationBuilder"/>. Returns a
     /// disposable handle that flushes and shuts down the providers and
-    /// exposes both the <see cref="ILoggerFactory"/> and a ready-to-use
-    /// <see cref="IDiagnostics"/> — store it in a <c>using</c> at the top
-    /// of <c>Main</c> so traces/metrics aren't dropped on exit.
+    /// exposes the <see cref="ILoggerFactory"/> — store it in a <c>using</c> at
+    /// the top of <c>Main</c> so traces/metrics aren't dropped on exit.
     ///
     /// Pass <paramref name="withInMemorySinks"/> = true to additionally
     /// build the same three ring-buffer sinks <see cref="AddStarlingTelemetry"/>
@@ -114,8 +115,8 @@ public static class OtelBootstrap
             // Construct the sinks before the providers. ActivitySink and
             // MeterSink self-register their listeners at construction; the
             // log sink is wired as an ILoggerProvider on the factory below.
-            activitySink = new InMemoryActivitySink(attachInMemoryListeners, serviceName, OtelDiagnostics.SourceName);
-            meterSink = new InMemoryMeterSink(attachInMemoryListeners, OtelDiagnostics.SourceName);
+            activitySink = new InMemoryActivitySink(attachInMemoryListeners, serviceName, StarlingTelemetry.SourceName);
+            meterSink = new InMemoryMeterSink(attachInMemoryListeners, StarlingTelemetry.SourceName);
             logSink = new InMemoryLogSink();
         }
 
@@ -126,14 +127,14 @@ public static class OtelBootstrap
             tracerProvider = Sdk.CreateTracerProviderBuilder()
                 .SetResourceBuilder(resource)
                 .AddSource(serviceName)
-                .AddSource(OtelDiagnostics.SourceName)
+                .AddSource(StarlingTelemetry.SourceName)
                 .AddHttpClientInstrumentation()
                 .AddOtlpExporter()
                 .Build();
 
             meterProvider = Sdk.CreateMeterProviderBuilder()
                 .SetResourceBuilder(resource)
-                .AddMeter(OtelDiagnostics.SourceName)
+                .AddMeter(StarlingTelemetry.SourceName)
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
                 .AddOtlpExporter()
@@ -142,6 +143,12 @@ public static class OtelBootstrap
 
         var loggerFactory = LoggerFactory.Create(builder =>
         {
+            // Console → stderr, so plain `dotnet run` still shows engine logs the
+            // way the old ConsoleDiagnostics sink did. STARLING_DIAG_TRACE lowers
+            // the floor to Trace (paint span timings etc.); default stays Info to
+            // keep normal CLI runs quiet.
+            builder.SetMinimumLevel(DiagnosticsMode.TraceConsole ? LogLevel.Trace : LogLevel.Information);
+            builder.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
             if (logSink is not null)
             {
                 builder.AddProvider(logSink);
@@ -211,11 +218,9 @@ public static class OtelBootstrap
             _meter = meter;
             _telemetryStream = telemetryStream;
             LoggerFactory = loggerFactory;
-            Diagnostics = new OtelDiagnostics(loggerFactory);
         }
 
         public ILoggerFactory LoggerFactory { get; }
-        public IDiagnostics Diagnostics { get; }
 
         /// <summary>
         /// Non-null when <see cref="Initialize"/> was called with

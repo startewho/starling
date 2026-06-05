@@ -1,6 +1,6 @@
 using AwesomeAssertions;
 using Jint;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Html;
 using Starling.Js.Hosting;
 using Starling.Loop;
@@ -277,7 +277,7 @@ public sealed class TimersAnimationPumpTests
             document: doc,
             baseUrl: url,
             http: http,
-            diag: NoopDiagnostics.Instance,
+            loggerFactory: NullLoggerFactory.Instance,
             loop: new WebEventLoop(),
             layoutHost: null,
             fetch: (_, _) => System.Threading.Tasks.Task.FromResult<string?>(null));
@@ -294,7 +294,7 @@ public sealed class TimersAnimationPumpTests
             Fetcher: (_, _) => System.Threading.Tasks.Task.FromResult<string?>(null),
             Http: http,
             LayoutHost: null,
-            Diag: NoopDiagnostics.Instance);
+            LoggerFactory: NullLoggerFactory.Instance);
         var session = new JintScriptSession(options)
         {
             ConsoleSink = (_, msg) => logs.Add(msg),

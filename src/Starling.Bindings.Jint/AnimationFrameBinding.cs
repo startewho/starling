@@ -1,6 +1,6 @@
 using Jint.Native;
 using Jint.Runtime;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Starling.Bindings.Jint;
 
@@ -16,8 +16,7 @@ namespace Starling.Bindings.Jint;
 /// snapshots the rAF queue and dispatches every pending callback with the same
 /// <c>DOMHighResTimeStamp</c> (CSS Animations 1 §3.5); callbacks scheduled
 /// <i>during</i> the drain land on the <i>next</i> frame. Errors out of a
-/// callback are routed to <see cref="JintBackendContext.Diag"/> so the loop keeps
-/// firing the remaining callbacks in the frame.
+/// callback errors are logged so the loop keeps firing the remaining callbacks in the frame.
 /// </remarks>
 internal static class AnimationFrameBinding
 {
@@ -57,6 +56,7 @@ internal static class AnimationFrameBinding
 
     private static void InvokeCallback(JintBackendContext ctx, JsValue handler, double timestamp)
     {
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         try
         {
             ctx.Engine.Invoke(handler, JsValue.Undefined, new JsValue[] { JintInterop.Num(timestamp) });
@@ -64,12 +64,18 @@ internal static class AnimationFrameBinding
         }
         catch (JavaScriptException ex)
         {
-            ctx.Diag.Log(DiagLevel.Warn, "engine.js",
-                $"Uncaught (in animation frame) {JintInterop.DescribeError(ex.Error, ex.Message)}");
+            AnimationFrameBindingLog.UncaughtInAnimationFrame(jsLog,
+                JintInterop.DescribeError(ex.Error, ex.Message));
         }
         catch (Exception ex)
         {
-            ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Uncaught (in animation frame) {ex.Message}");
+            AnimationFrameBindingLog.UncaughtInAnimationFrame(jsLog, ex.Message);
         }
     }
+}
+
+internal static partial class AnimationFrameBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught (in animation frame) {Detail}")]
+    public static partial void UncaughtInAnimationFrame(ILogger logger, string detail);
 }

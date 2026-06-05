@@ -1,5 +1,5 @@
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Html;
 using Starling.Js.Hosting;
 
@@ -186,7 +186,7 @@ public sealed class ModuleBindingsTests
             Fetcher: Fetch,
             Http: http,
             LayoutHost: null,
-            Diag: NoopDiagnostics.Instance);
+            LoggerFactory: NullLoggerFactory.Instance);
 
         return new JintScriptSession(options)
         {

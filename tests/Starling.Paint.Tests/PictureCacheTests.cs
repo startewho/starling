@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Text;
 using AwesomeAssertions;
 using Starling.Common.Diagnostics;
@@ -59,9 +59,9 @@ public sealed class PictureCacheTests
         var root = LayoutTallPage(blocks: 1000, blockHeightPx: 200);
         root.Frame.Height.Should().BeGreaterThan(190000);
 
-        var diag = new RecordingDiagnostics();
+        using var metrics = new MetricRecorder();
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var renderer = new CachedPageRenderer(backend, diag);
+        var renderer = new CachedPageRenderer(backend);
 
         const int scrolls = 10;
         const int delta = 50;
@@ -73,9 +73,9 @@ public sealed class PictureCacheTests
         for (var i = 1; i <= scrolls; i++)
             using (renderer.Render(root, new LayoutRect(0, i * delta, ViewW, ViewH), 1f, version)) { }
 
-        diag.CountOf("paint.cache.miss").Should().BeLessThanOrEqualTo(1,
+        metrics.CountOf("paint.cache.miss").Should().BeLessThanOrEqualTo(1,
             "only the first render should be a full miss; every subsequent scroll overlaps the cache");
-        diag.CountOf("paint.cache.partial").Should().BeGreaterThanOrEqualTo(scrolls - 1,
+        metrics.CountOf("paint.cache.partial").Should().BeGreaterThanOrEqualTo(scrolls - 1,
             "each downward scroll exposes a fresh edge strip and must be served as a partial");
 
         // strip_area counts only stitched strips, not the seed frame (the seed
@@ -84,7 +84,7 @@ public sealed class PictureCacheTests
         // to the strip rect (not the 64px-overdraw cull rect), so no margin slack
         // is needed, but allow a band's worth of slack to be safe.
         var maxBandArea = (double)delta * ViewW;
-        diag.CountOf("paint.cache.strip_area").Should()
+        metrics.CountOf("paint.cache.strip_area").Should()
             .BeLessThanOrEqualTo((scrolls + 1) * maxBandArea,
                 "each ≤50px scroll paints at most one 50px band across the viewport width");
     }
@@ -93,23 +93,22 @@ public sealed class PictureCacheTests
     public void Version_bump_forces_full_miss_on_next_render()
     {
         var root = LayoutTallPage(blocks: 200, blockHeightPx: 200);
-        var diag = new RecordingDiagnostics();
+        using var metrics = new MetricRecorder();
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var renderer = new CachedPageRenderer(backend, diag);
+        var renderer = new CachedPageRenderer(backend);
 
         var viewport = new LayoutRect(0, 0, ViewW, ViewH);
 
         using (renderer.Render(root, viewport, 1f, pageVersion: 1)) { }
-        var missesAfterSeed = diag.CountOf("paint.cache.miss");
-        missesAfterSeed.Should().Be(1, "the seed render is a miss");
+        metrics.CountOf("paint.cache.miss").Should().Be(1, "the seed render is a miss");
 
         // Same viewport, same scale, but a bumped version: must be a fresh miss,
         // not a hit/partial.
         using (renderer.Render(root, viewport, 1f, pageVersion: 2)) { }
 
-        diag.CountOf("paint.cache.miss").Should().Be(2, "a version bump invalidates the cache wholesale");
-        diag.CountOf("paint.cache.hit").Should().Be(0);
-        diag.CountOf("paint.cache.partial").Should().Be(0);
+        metrics.CountOf("paint.cache.miss").Should().Be(2, "a version bump invalidates the cache wholesale");
+        metrics.CountOf("paint.cache.hit").Should().Be(0);
+        metrics.CountOf("paint.cache.partial").Should().Be(0);
     }
 
     [TestMethod]
@@ -117,7 +116,7 @@ public sealed class PictureCacheTests
     {
         var root = LayoutTallPage(blocks: 300, blockHeightPx: 200);
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var renderer = new CachedPageRenderer(backend, NoopDiagnostics.Instance);
+        var renderer = new CachedPageRenderer(backend);
 
         // Seed a large cache (1200px tall), then request a sub-viewport fully
         // inside it — a pure HIT, no backend call.
@@ -136,7 +135,7 @@ public sealed class PictureCacheTests
     {
         var root = LayoutTallPage(blocks: 300, blockHeightPx: 200);
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var renderer = new CachedPageRenderer(backend, NoopDiagnostics.Instance);
+        var renderer = new CachedPageRenderer(backend);
 
         // Seed at y=0, then scroll down 137px so the new viewport overlaps the
         // cache but exposes a bottom strip — a PARTIAL that stitches.
@@ -156,11 +155,11 @@ public sealed class PictureCacheTests
     public void Long_scroll_slides_window_without_growing_or_full_reseed()
     {
         var root = LayoutTallPage(blocks: 1000, blockHeightPx: 200);
-        var diag = new RecordingDiagnostics();
+        using var metrics = new MetricRecorder();
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
 
-        var cache = new PictureCache(diag);
-        var renderer = new CachedPageRenderer(backend, diag, cache);
+        var cache = new PictureCache();
+        var renderer = new CachedPageRenderer(backend, cache);
 
         using (renderer.Render(root, new LayoutRect(0, 0, ViewW, ViewH), 1f, 1)) { }
 
@@ -172,9 +171,9 @@ public sealed class PictureCacheTests
         var scrolled = new LayoutRect(0, 400, ViewW, ViewH);
         using var served = renderer.Render(root, scrolled, 1f, 1);
 
-        diag.CountOf("paint.cache.miss").Should().Be(1,
+        metrics.CountOf("paint.cache.miss").Should().Be(1,
             "only the seed is a miss; a partial scroll slides the window instead of reseeding");
-        diag.CountOf("paint.cache.partial").Should().BeGreaterThanOrEqualTo(1);
+        metrics.CountOf("paint.cache.partial").Should().BeGreaterThanOrEqualTo(1);
         ((long)cache.Bounds.Width * cache.Bounds.Height).Should().Be(ViewW * ViewH,
             "the cache window slides onto the new viewport rather than growing to the scrolled-through bounds");
 
@@ -185,16 +184,16 @@ public sealed class PictureCacheTests
         // The slid window now holds the new content; re-requesting it is a clean HIT.
         using var again = renderer.Render(root, scrolled, 1f, 1);
         BitmapPixels.PixelsEqual(again, truth).Should().BeTrue();
-        diag.CountOf("paint.cache.hit").Should().BeGreaterThanOrEqualTo(1);
+        metrics.CountOf("paint.cache.hit").Should().BeGreaterThanOrEqualTo(1);
     }
 
     [TestMethod]
     public void Scrolling_back_up_after_window_slid_repaints_only_the_exposed_strip()
     {
         var root = LayoutTallPage(blocks: 1000, blockHeightPx: 200);
-        var diag = new RecordingDiagnostics();
+        using var metrics = new MetricRecorder();
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var renderer = new CachedPageRenderer(backend, diag);
+        var renderer = new CachedPageRenderer(backend);
 
         // Seed, scroll down past the window, then scroll back up so the top edge is
         // freshly exposed again. Every step stays viewport-sized and correct.
@@ -207,50 +206,53 @@ public sealed class PictureCacheTests
 
         BitmapPixels.PixelsEqual(served, truth).Should().BeTrue(
             "scrolling back up re-exposes a top strip; the slide must reassemble it correctly");
-        diag.CountOf("paint.cache.miss").Should().Be(1, "no step jumped clear of the window");
+        metrics.CountOf("paint.cache.miss").Should().Be(1, "no step jumped clear of the window");
     }
 
     [TestMethod]
     public void Repeated_identical_viewport_is_a_pure_hit_after_seed()
     {
         var root = LayoutTallPage(blocks: 100, blockHeightPx: 200);
-        var diag = new RecordingDiagnostics();
+        using var metrics = new MetricRecorder();
         using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var renderer = new CachedPageRenderer(backend, diag);
+        var renderer = new CachedPageRenderer(backend);
 
         var viewport = new LayoutRect(0, 0, ViewW, ViewH);
         using (renderer.Render(root, viewport, 1f, 1)) { }
         using (renderer.Render(root, viewport, 1f, 1)) { }
 
-        diag.CountOf("paint.cache.miss").Should().Be(1);
-        diag.CountOf("paint.cache.hit").Should().Be(1, "the second identical render must be a pure HIT");
-        diag.CountOf("paint.cache.partial").Should().Be(0);
+        metrics.CountOf("paint.cache.miss").Should().Be(1);
+        metrics.CountOf("paint.cache.hit").Should().Be(1, "the second identical render must be a pure HIT");
+        metrics.CountOf("paint.cache.partial").Should().Be(0);
     }
 
     /// <summary>
-    /// Minimal in-memory <see cref="IDiagnostics"/> for counter assertions. Copied
-    /// from <c>ImageSharpBackendTests</c> (it's a private nested type there). The
-    /// store is concurrent because the backend's deferred raster may bump counters
-    /// from canvas worker threads.
+    /// Captures metric deltas from <see cref="StarlingTelemetry.Meter"/> for the
+    /// duration of the enclosing test. Because the meter is process-global, this
+    /// recorder observes only measurements emitted after it is constructed.
     /// </summary>
-    private sealed class RecordingDiagnostics : IDiagnostics
+    private sealed class MetricRecorder : IDisposable
     {
-        private readonly ConcurrentDictionary<string, double> _counters = new();
+        private readonly MeterListener _listener = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _values = new();
 
-        public double CountOf(string name) => _counters.TryGetValue(name, out var v) ? v : 0d;
-
-        public void Counter(string name, double value)
-            => _counters.AddOrUpdate(name, value, (_, prev) => prev + value);
-
-        public IDisposable Span(string area, string operation) => NoopSpan.Instance;
-        public void Log(DiagLevel level, string area, string message) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
+        public MetricRecorder()
         {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
+            _listener.InstrumentPublished = (inst, lst) =>
+            {
+                if (inst.Meter.Name == StarlingTelemetry.SourceName)
+                    lst.EnableMeasurementEvents(inst);
+            };
+            _listener.SetMeasurementEventCallback<double>((inst, m, _, _) => Add(inst.Name, m));
+            _listener.SetMeasurementEventCallback<long>((inst, m, _, _) => Add(inst.Name, (double)m));
+            _listener.Start();
         }
+
+        private void Add(string name, double value)
+            => _values.AddOrUpdate(name, value, (_, prev) => prev + value);
+
+        public double CountOf(string name) => _values.TryGetValue(name, out var v) ? v : 0d;
+
+        public void Dispose() => _listener.Dispose();
     }
 }

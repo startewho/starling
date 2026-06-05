@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Starling.Shell.Native.Mac;
 
@@ -28,6 +30,7 @@ internal static unsafe class MacImeBridge
     private static nint _origSetMarked;
     private static nint _origUnmark;
     private static bool _installed;
+    private static ILogger _log = NullLogger.Instance;
 
     /// <summary>
     /// Swizzles the GLFW content view so preedit changes call
@@ -35,9 +38,10 @@ internal static unsafe class MacImeBridge
     /// <paramref name="onUnmark"/>. Returns false (a no-op) off macOS, when the
     /// GLFW view class or method is absent, or if already installed.
     /// </summary>
-    public static bool Install(Action<string> onPreedit, Action onUnmark)
+    public static bool Install(Action<string> onPreedit, Action onUnmark, ILoggerFactory? loggerFactory = null)
     {
         if (_installed || !OperatingSystem.IsMacOS()) return false;
+        _log = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger(typeof(MacImeBridge));
         try
         {
             var cls = ObjC.GetClass("GLFWContentView");
@@ -75,7 +79,7 @@ internal static unsafe class MacImeBridge
     private static void SetMarkedThunk(nint self, nint cmd, nint str, NSRange selected, NSRange replacement)
     {
         try { _onPreedit?.Invoke(ObjC.StringFromAny(str) ?? ""); }
-        catch { /* never let a managed fault unwind into AppKit */ }
+        catch (Exception ex) { /* never let a managed fault unwind into AppKit */ MacImeBridgeLog.SetMarkedThunkFailed(_log, ex); }
 
         if (_origSetMarked != 0)
             ((delegate* unmanaged[Cdecl]<nint, nint, nint, NSRange, NSRange, void>)_origSetMarked)(
@@ -87,9 +91,18 @@ internal static unsafe class MacImeBridge
     private static void UnmarkThunk(nint self, nint cmd)
     {
         try { _onUnmark?.Invoke(); }
-        catch { /* never let a managed fault unwind into AppKit */ }
+        catch (Exception ex) { /* never let a managed fault unwind into AppKit */ MacImeBridgeLog.UnmarkThunkFailed(_log, ex); }
 
         if (_origUnmark != 0)
             ((delegate* unmanaged[Cdecl]<nint, nint, void>)_origUnmark)(self, cmd);
     }
+}
+
+internal static partial class MacImeBridgeLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "IME setMarkedText thunk threw; suppressed to avoid unwinding into AppKit")]
+    public static partial void SetMarkedThunkFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "IME unmarkText thunk threw; suppressed to avoid unwinding into AppKit")]
+    public static partial void UnmarkThunkFailed(ILogger logger, Exception ex);
 }

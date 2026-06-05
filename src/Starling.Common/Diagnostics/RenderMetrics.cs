@@ -2,20 +2,20 @@ namespace Starling.Common.Diagnostics;
 
 /// <summary>
 /// Canonical names for the render/paint/host telemetry the engine emits through
-/// <see cref="IDiagnostics"/>. Producers (compositor, layer-tree builder, GPU
+/// <see cref="StarlingTelemetry"/>. Producers (compositor, layer-tree builder, GPU
 /// blend, the Avalonia host loop) and the telemetry daemon both reference these
 /// constants so a metric name never drifts between the side that records it and
 /// the side that queries/correlates it.
 ///
-/// Convention: <see cref="IDiagnostics.Span"/> takes (area, operation) and the
-/// resulting span name is <c>area.operation</c>; <see cref="IDiagnostics.Counter"/>
-/// and <see cref="IDiagnostics.Gauge"/> take the full instrument name. The
+/// Convention: <see cref="StarlingTelemetry.Span"/> takes (area, operation) and the
+/// resulting span name is <c>area.operation</c>; <see cref="StarlingTelemetry.Counter"/>
+/// and <see cref="StarlingTelemetry.Gauge"/> take the full instrument name. The
 /// constants below follow that split — area/op pairs for spans, full names for
 /// counters and gauges.
 /// </summary>
 public static class RenderMetrics
 {
-    // ── Span areas (IDiagnostics.Span first argument) ──────────────────────
+    // ── Span areas (StarlingTelemetry.Span first argument) ─────────────────
     public const string PaintArea = "paint";
     public const string GuiArea = "gui";
     public const string LayoutArea = "layout";

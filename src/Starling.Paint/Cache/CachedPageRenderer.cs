@@ -1,4 +1,3 @@
-using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
@@ -26,7 +25,6 @@ namespace Starling.Paint.Cache;
 internal sealed class CachedPageRenderer
 {
     private readonly IPaintBackend _backend;
-    private readonly IDiagnostics _diag;
     private readonly PictureCache _cache;
     // Memoized "this layout has at least one position: fixed subtree" answer.
     // Tree walks for the check are O(boxes), so re-using the result across
@@ -34,12 +32,11 @@ internal sealed class CachedPageRenderer
     private int _fixedScanVersion = -1;
     private bool _hasFixed;
 
-    public CachedPageRenderer(IPaintBackend backend, IDiagnostics? diagnostics = null, PictureCache? cache = null)
+    public CachedPageRenderer(IPaintBackend backend, PictureCache? cache = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         _backend = backend;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _cache = cache ?? new PictureCache(_diag);
+        _cache = cache ?? new PictureCache();
     }
 
     /// <summary>Drops cached pixels — call on navigation / tab switch / re-layout.</summary>

@@ -4,6 +4,7 @@ using Jint.Native;
 using Jint.Native.Object;
 using Jint.Runtime;
 using Jint.Runtime.Descriptors;
+using Microsoft.Extensions.Logging;
 using Starling.Dom;
 using Starling.Dom.Events;
 using DomEvent = Starling.Dom.Events.Event;
@@ -265,6 +266,7 @@ internal static class EventTargetBinding
 
     private static void InvokeJsListener(JintBackendContext ctx, EventState state, ObjectInstance listener, DomEvent ev)
     {
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         try
         {
             var jsEvent = state.WrapNativeEvent(ev, ctx.Wrappers.EventPrototype!);
@@ -285,13 +287,12 @@ internal static class EventTargetBinding
         }
         catch (JavaScriptException ex)
         {
-            ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                $"Uncaught (in event listener) {JintInterop.DescribeError(ex.Error, ex.Message)}");
+            EventTargetBindingLog.UncaughtInEventListener(jsLog,
+                JintInterop.DescribeError(ex.Error, ex.Message));
         }
         catch (Exception ex)
         {
-            ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                $"Uncaught (in event listener) {ex.Message}");
+            EventTargetBindingLog.UncaughtInEventListener(jsLog, ex.Message);
         }
     }
 
@@ -512,4 +513,10 @@ internal sealed class JsValueBox
 {
     public JsValue Value { get; }
     public JsValueBox(JsValue value) => Value = value;
+}
+
+internal static partial class EventTargetBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught (in event listener) {Detail}")]
+    public static partial void UncaughtInEventListener(ILogger logger, string detail);
 }

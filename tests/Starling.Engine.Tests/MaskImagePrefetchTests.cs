@@ -1,6 +1,6 @@
 using System.Text;
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Css;
 using Starling.Css.Parser;
 using StarlingUrl = Starling.Url.Url;
@@ -27,12 +27,12 @@ public sealed class MaskImagePrefetchTests
     }
 
     private static ImageFetcher NewFetcher()
-        => new(NoopDiagnostics.Instance,
+        => new(NullLoggerFactory.Instance,
             () => throw new InvalidOperationException("data: URIs must not hit the network"));
 
     private static async Task PrefetchAsync(ImageFetcher fetcher, string css)
     {
-        var sheet = new CssParser(css).ParseStyleSheet(StyleOrigin.Author);
+        var sheet = CssParser.ParseStyleSheet(css, StyleOrigin.Author);
         await fetcher.FetchBackgroundsAsync(
             [(sheet, (StarlingUrl?)null)], documentBaseUrl: null, CancellationToken.None);
     }

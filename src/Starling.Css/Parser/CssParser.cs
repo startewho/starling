@@ -8,38 +8,35 @@ public sealed class CssParser
 {
     private readonly IReadOnlyList<CssToken> _tokens;
     private readonly string _source;
-    private readonly IDiagnostics _diag;
     private int _position;
     private int _declarationCount;
 
-    public CssParser(string source, IDiagnostics? diagnostics = null)
-        : this(source, CssTokenizer.Tokenize(source), diagnostics)
+    public CssParser(string source)
+        : this(source, CssTokenizer.Tokenize(source))
     {
     }
 
-    public CssParser(string source, IReadOnlyList<CssToken> tokens, IDiagnostics? diagnostics = null)
+    public CssParser(string source, IReadOnlyList<CssToken> tokens)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(tokens);
         _source = source;
         _tokens = tokens;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
     }
 
-    public static StyleSheet ParseStyleSheet(string source, StyleOrigin origin = StyleOrigin.Author,
-        IDiagnostics? diagnostics = null)
-        => new CssParser(source, diagnostics).ParseStyleSheet(origin);
+    public static StyleSheet ParseStyleSheet(string source, StyleOrigin origin = StyleOrigin.Author)
+        => new CssParser(source).ParseStyleSheet(origin);
 
     public StyleSheet ParseStyleSheet(StyleOrigin origin = StyleOrigin.Author)
     {
-        using var _ = _diag.Span("css", "parse");
+        using var _ = StarlingTelemetry.Span("css", "parse");
         try
         {
             Activity.Current?.SetTag("css.source_bytes", _source.Length);
             var rules = ConsumeRuleList(topLevel: true);
             Activity.Current?.SetTag("css.rules", rules.Count);
             Activity.Current?.SetTag("css.declarations", _declarationCount);
-            _diag.Counter("css.parses", 1);
+            StarlingTelemetry.Counter("css.parses", 1);
             return new(_source, rules, origin);
         }
         catch (Exception ex)

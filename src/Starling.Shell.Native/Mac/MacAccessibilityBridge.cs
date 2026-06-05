@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Core.Accessibility;
 
 namespace Starling.Shell.Native.Mac;
@@ -19,21 +21,23 @@ internal sealed class MacAccessibilityBridge
 {
     private readonly nint _nsWindow;
     private readonly nint _contentView;
+    private readonly ILogger _log;
 
-    private MacAccessibilityBridge(nint nsWindow, nint contentView)
+    private MacAccessibilityBridge(nint nsWindow, nint contentView, ILogger log)
     {
         _nsWindow = nsWindow;
         _contentView = contentView;
+        _log = log;
     }
 
     /// <summary>Builds a bridge for the window, or null if not macOS / no content view.</summary>
-    public static MacAccessibilityBridge? TryCreate(nint nsWindow)
+    public static MacAccessibilityBridge? TryCreate(nint nsWindow, ILogger<MacAccessibilityBridge>? log = null)
     {
         if (!OperatingSystem.IsMacOS() || nsWindow == 0) return null;
         try
         {
             var view = ObjC.Send(nsWindow, ObjC.Sel("contentView"));
-            return view == 0 ? null : new MacAccessibilityBridge(nsWindow, view);
+            return view == 0 ? null : new MacAccessibilityBridge(nsWindow, view, log ?? NullLogger<MacAccessibilityBridge>.Instance);
         }
         catch
         {
@@ -59,9 +63,10 @@ internal sealed class MacAccessibilityBridge
 
             ObjC.SendVoid(_contentView, ObjC.Sel("setAccessibilityChildren:"), array);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort: a runtime/ABI mismatch must never crash the shell.
+            MacAccessibilityBridgeLog.UpdateFailed(_log, ex);
         }
     }
 
@@ -135,4 +140,10 @@ internal sealed class MacAccessibilityBridge
         AccessibilityRole.Document => "AXGroup",
         _ => "AXGroup",
     };
+}
+
+internal static partial class MacAccessibilityBridgeLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Accessibility tree update failed (best-effort; ABI/runtime mismatch)")]
+    public static partial void UpdateFailed(ILogger logger, Exception ex);
 }

@@ -1,4 +1,3 @@
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Values;
@@ -17,13 +16,11 @@ internal sealed class InlineLayout
 {
     private readonly ITextMeasurer _measurer;
     private readonly Size? _viewport;
-    private readonly IDiagnostics _diag;
 
-    public InlineLayout(ITextMeasurer measurer, Size? viewport = null, IDiagnostics? diagnostics = null)
+    public InlineLayout(ITextMeasurer measurer, Size? viewport = null)
     {
         _measurer = measurer;
         _viewport = viewport;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
     }
 
     public double Layout(Box.Box container, double availableWidth)
@@ -651,7 +648,7 @@ internal sealed class InlineLayout
             else
             {
                 const double measureWidth = 1_000_000d;
-                var measureBlock = new Block.BlockLayout(_measurer, viewport, _diag);
+                var measureBlock = new Block.BlockLayout(_measurer, viewport);
                 var measureFlex = new Starling.Layout.Flex.FlexLayout(measureBlock, viewport);
                 measureFlex.Layout(box, measureWidth, null);
                 // Flex items are direct children placed along the main axis;
@@ -665,7 +662,7 @@ internal sealed class InlineLayout
                 subWidth = Math.Min(maxContent, available);
             }
 
-            var block = new Block.BlockLayout(_measurer, viewport, _diag);
+            var block = new Block.BlockLayout(_measurer, viewport);
             var flex = new Starling.Layout.Flex.FlexLayout(block, viewport);
             contentHeight = flex.Layout(box, subWidth, null);
             contentWidth = subWidth;
@@ -701,14 +698,14 @@ internal sealed class InlineLayout
             else
             {
                 const double measureWidth = 1_000_000d;
-                var measureLayout = new Block.BlockLayout(_measurer, viewport, _diag);
+                var measureLayout = new Block.BlockLayout(_measurer, viewport);
                 measureLayout.LayoutChildren(box, measureWidth, measure: true);
                 var maxContent = MeasureUsedWidth(box);
                 var available = Math.Max(0, availableWidth - cursorX);
                 subWidth = Math.Min(maxContent, available);
             }
 
-            var sub = new Block.BlockLayout(_measurer, viewport, _diag);
+            var sub = new Block.BlockLayout(_measurer, viewport);
             var consumed = sub.LayoutChildren(box, subWidth);
             contentWidth = subWidth;
             contentHeight = consumed;

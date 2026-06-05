@@ -1,4 +1,3 @@
-using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Dom;
 using Starling.Layout.Box;
@@ -64,7 +63,7 @@ internal sealed class TileGrid
 
     internal readonly record struct ResidentTile(int Width, int Height);
 
-    public TileGrid(IDiagnostics? diagnostics = null, long? maxBytes = null)
+    public TileGrid(long? maxBytes = null)
     {
         _maxBytes = maxBytes ?? ReadBudgetEnv();
     }

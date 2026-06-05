@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Html;
@@ -58,16 +59,19 @@ public static class IFrameBinding
         JsRealm Realm,
         StarlingHttpClient? Http,
         string DocumentUrl,
-        IDiagnostics Diag);
+        ILoggerFactory LoggerFactory)
+    {
+        public ILogger Log { get; } = LoggerFactory.CreateLogger(typeof(IFrameBinding));
+    }
 
     /// <summary>Register the parent realm's environment so subframes can
     /// resolve relative URLs and reuse the parent's HTTP client.</summary>
     public static void RegisterParent(
         JsRealm parentRealm, string documentUrl,
-        StarlingHttpClient? http, IDiagnostics? diag = null)
+        StarlingHttpClient? http, ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(parentRealm);
-        var env = new ParentEnv(parentRealm, http, documentUrl ?? "about:blank", diag ?? NoopDiagnostics.Instance);
+        var env = new ParentEnv(parentRealm, http, documentUrl ?? "about:blank", loggerFactory ?? NullLoggerFactory.Instance);
         Parents.AddOrUpdate(parentRealm, env);
     }
 
@@ -142,7 +146,7 @@ public static class IFrameBinding
     public static JsObject EnsureContentWindow(JsRealm parentRealm, BrowsingContext ctx)
     {
         if (ctx.WindowObject is not null) return ctx.WindowObject;
-        var parent = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NoopDiagnostics.Instance);
+        var parent = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NullLoggerFactory.Instance);
         EnsureRuntime(ctx, parent);
         return ctx.WindowObject!;
     }
@@ -162,7 +166,7 @@ public static class IFrameBinding
         // resolves its src and reuses the same HTTP client. The child's own
         // document URL is the resolution base, so callers up the tree don't
         // bleed.
-        RegisterParent(runtime.Realm, ctx.DocumentUrl, parent.Http, parent.Diag);
+        RegisterParent(runtime.Realm, ctx.DocumentUrl, parent.Http, parent.LoggerFactory);
     }
 
     private static void WireFrameWindow(BrowsingContext ctx, ParentEnv parent)
@@ -197,7 +201,7 @@ public static class IFrameBinding
         if (!IsFrameElement(frame)) return;
         var src = frame.GetAttribute("src");
         if (string.IsNullOrEmpty(src)) return;
-        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NoopDiagnostics.Instance);
+        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NullLoggerFactory.Instance);
         var ctx = EnsureContext(frame);
         var resolved = ResolveUrl(parentEnv.DocumentUrl, src);
         var parentRuntime = WindowBinding.RuntimeForRealm(parentRealm);
@@ -214,7 +218,7 @@ public static class IFrameBinding
             }
             catch (Exception ex)
             {
-                parentEnv.Diag.LogException("iframe", ex, $"subframe fetch failed: {resolved}");
+                IFrameBindingLog.SubframeFetchFailed(parentEnv.Log, ex, resolved);
             }
 
             void Settle()
@@ -227,7 +231,7 @@ public static class IFrameBinding
                 }
                 catch (Exception ex)
                 {
-                    parentEnv.Diag.LogException("iframe", ex, $"subframe load failed: {resolved}");
+                    IFrameBindingLog.SubframeLoadFailed(parentEnv.Log, ex, resolved);
                     FireLoad(parentRealm, frame); // still fire so test driver can move on
                 }
             }
@@ -247,7 +251,7 @@ public static class IFrameBinding
         if (ct.Contains("xml") || ct.Contains("xhtml"))
             doc = ParseXmlIntoDocument(body);
         else
-            doc = HtmlParser.Parse(body, parent.Diag, scriptingEnabled: true);
+            doc = HtmlParser.Parse(body, scriptingEnabled: true);
         AssignDocument(ctx, doc, url);
         EnsureRuntime(ctx, parent);
         ExecuteFrameScripts(ctx, parent, url);
@@ -286,7 +290,7 @@ public static class IFrameBinding
                 }
                 catch (Exception ex)
                 {
-                    parent.Diag.LogException("iframe", ex, $"subframe script fetch failed: {resolved}");
+                    IFrameBindingLog.SubframeScriptFetchFailed(parent.Log, ex, resolved);
                     continue;
                 }
             }
@@ -308,7 +312,7 @@ public static class IFrameBinding
             }
             catch (Exception ex)
             {
-                parent.Diag.LogException("iframe", ex, $"subframe script error in {label}");
+                IFrameBindingLog.SubframeScriptError(parent.Log, ex, label);
             }
         }
     }
@@ -327,7 +331,7 @@ public static class IFrameBinding
         if (!IsFrameElement(frame)) return;
         var src = frame.GetAttribute("src");
         if (string.IsNullOrEmpty(src)) return;
-        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NoopDiagnostics.Instance);
+        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NullLoggerFactory.Instance);
         if (parentEnv.Http is null) return; // no HTTP client → nothing to fetch through
         var ctx = EnsureContext(frame);
         var resolved = ResolveUrl(parentEnv.DocumentUrl, src);
@@ -338,7 +342,7 @@ public static class IFrameBinding
         }
         catch (Exception ex)
         {
-            parentEnv.Diag.LogException("iframe", ex, $"subframe sync load failed: {resolved}");
+            IFrameBindingLog.SubframeSyncLoadFailed(parentEnv.Log, ex, resolved);
         }
         FireLoad(parentRealm, frame);
     }
@@ -349,7 +353,9 @@ public static class IFrameBinding
         // iframe element (via DOM EventTarget) and to the wrapper's on-load
         // handler if any.
         var ev = new Event("load", new EventInit(Bubbles: false, Cancelable: false));
-        try { frame.DispatchEvent(ev); } catch { /* fail-soft */ }
+        // fail-soft: load event dispatch must not throw up into the caller
+        try { frame.DispatchEvent(ev); }
+        catch (Exception ex) { IFrameBindingLog.LoadEventDispatchFailed(NullLogger.Instance, ex); }
 
         // on{event} handler attached via `iframe.onload = fn` lives on the
         // JS wrapper, not the host EventTarget. Invoke it explicitly.
@@ -439,7 +445,7 @@ public static class IFrameBinding
     /// <summary>Trivial XML parse for the WPT XML/XHTML iframe pattern.
     /// We don't have an XML parser yet; fall back to the HTML parser, then
     /// flip the document's <see cref="Document.IsHtml"/> off so attribute
-    /// case behaviour matches the WHATWG XML branch.</summary>
+    /// case behavior matches the WHATWG XML branch.</summary>
     /// <summary>Parse an XML/XHTML document into a Starling DOM tree using the
     /// .NET XML reader (namespace-aware, case-preserving). A well-formedness error
     /// produces a &lt;parsererror&gt; document, matching browsers.</summary>
@@ -519,4 +525,25 @@ public static class IFrameBinding
         }
         return doc;
     }
+}
+
+internal static partial class IFrameBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe fetch failed: {Url}")]
+    public static partial void SubframeFetchFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe load failed: {Url}")]
+    public static partial void SubframeLoadFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe script fetch failed: {Url}")]
+    public static partial void SubframeScriptFetchFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe script error in {Label}")]
+    public static partial void SubframeScriptError(ILogger logger, Exception ex, string label);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe sync load failed: {Url}")]
+    public static partial void SubframeSyncLoadFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "load event dispatch failed on iframe element (fail-soft)")]
+    public static partial void LoadEventDispatchFailed(ILogger logger, Exception ex);
 }

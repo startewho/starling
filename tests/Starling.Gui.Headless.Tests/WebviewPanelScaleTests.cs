@@ -8,7 +8,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Controls;
 using Starling.Gui.Theme;
 
@@ -91,7 +91,7 @@ public class WebviewPanelScaleTests
     }
 
     private static WebviewPanel NewPanel()
-        => new(new ThemeManager(), NoopDiagnostics.Instance, _ => { }, (_, _) => { });
+        => new(new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { });
 
     private static Image GetPageImage(WebviewPanel panel)
     {

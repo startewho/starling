@@ -151,7 +151,7 @@ public sealed class ImageSharpBackendTests
         var list = new PaintList();
         list.Add(new FillRect(new LayoutRect(0, 0, 100, 100), new Starling.Css.Values.CssColor(0, 0, 255, 255), FillRectPixelAlignment.Preserve));
 
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         Action act = () =>
         {
@@ -180,7 +180,7 @@ public sealed class ImageSharpBackendTests
                 new Starling.Css.Values.CssColor(0, 128, 255, 255),
                 FillRectPixelAlignment.Preserve));
 
-            using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+            using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
             using var texture = backend.RenderTexture(
                 list,
                 new LayoutRect(0, 0, 16, 16),

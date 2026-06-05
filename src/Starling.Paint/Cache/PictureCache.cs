@@ -39,8 +39,6 @@ namespace Starling.Paint.Cache;
 /// </remarks>
 internal sealed class PictureCache
 {
-    private readonly IDiagnostics _diag;
-
     // Backing pixels for the cached region, RGBA8888, row stride _bounds.Width*4.
     private byte[]? _pixels;
     private DeviceRect _bounds;
@@ -49,11 +47,9 @@ internal sealed class PictureCache
     // the flat scroll path passes its int DisplayListVersion, which widens.
     private long _pageVersion;
 
-    /// <summary>Creates an empty cache with the given strip-painting diagnostics sink.</summary>
-    /// <param name="diagnostics">Counter sink for hit/miss/partial + strip area.</param>
-    public PictureCache(IDiagnostics? diagnostics = null)
+    /// <summary>Creates an empty cache.</summary>
+    public PictureCache()
     {
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
     }
 
     /// <summary>True once a frame has seeded the cache for the current key.</summary>
@@ -72,7 +68,7 @@ internal sealed class PictureCache
     {
         if (!TryServeRaw(viewport, scale, pageVersion, out blit))
             return false;
-        _diag.Counter("paint.cache.hit", 1);
+        StarlingTelemetry.Counter("paint.cache.hit", 1);
         return true;
     }
 
@@ -117,14 +113,14 @@ internal sealed class PictureCache
 
         if (_pixels is null || pageVersion != _pageVersion || scale != _scale || !_bounds.Intersects(want))
         {
-            _diag.Counter("paint.cache.miss", 1);
+            StarlingTelemetry.Counter("paint.cache.miss", 1);
             return new[] { want };
         }
 
         if (_bounds.Contains(want))
             return Array.Empty<DeviceRect>();
 
-        _diag.Counter("paint.cache.partial", 1);
+        StarlingTelemetry.Counter("paint.cache.partial", 1);
         return Subtract(want, _bounds);
     }
 
@@ -161,7 +157,7 @@ internal sealed class PictureCache
         foreach (var (rect, pixels) in strips)
         {
             ArgumentNullException.ThrowIfNull(pixels);
-            _diag.Counter("paint.cache.strip_area", (double)rect.Width * rect.Height);
+            StarlingTelemetry.Counter("paint.cache.strip_area", (double)rect.Width * rect.Height);
             var region = rect.Intersect(window);
             if (region.Width > 0 && region.Height > 0)
                 CopyRegion(pixels.Rgba, rect, dest, window, region);

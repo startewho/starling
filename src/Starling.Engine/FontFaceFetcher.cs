@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Starling.Common.Diagnostics;
+
 using Starling.Css.FontFace;
 using Starling.Css.Parser;
 using Starling.Net;
@@ -21,7 +23,8 @@ namespace Starling.Engine;
 /// </summary>
 internal sealed class FontFaceFetcher : IDisposable
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Func<StarlingHttpClient> _httpFactory;
     // Concurrent because FetchAllAsync warms the url() fetches in parallel;
     // their cache writes (on the network continuation) can race.
@@ -29,9 +32,10 @@ internal sealed class FontFaceFetcher : IDisposable
     private StarlingHttpClient? _sharedHttp;
     private readonly bool _ownsHttp;
 
-    public FontFaceFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
+    public FontFaceFetcher(ILoggerFactory loggerFactory, Func<StarlingHttpClient> httpFactory)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<FontFaceFetcher>();
         _httpFactory = httpFactory;
         _ownsHttp = true;
     }
@@ -42,9 +46,10 @@ internal sealed class FontFaceFetcher : IDisposable
     /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
     /// shared client is owned by the caller and is not disposed by this fetcher.
     /// </summary>
-    public FontFaceFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    public FontFaceFetcher(ILoggerFactory loggerFactory, StarlingHttpClient sharedHttp)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<FontFaceFetcher>();
         _sharedHttp = sharedHttp;
         _httpFactory = () => sharedHttp;
         _ownsHttp = false;
@@ -130,15 +135,14 @@ internal sealed class FontFaceFetcher : IDisposable
                     if (bytes is null) continue;
                     if (registry.TryAdd(rule.FamilyName, rule.Bold, rule.Italic, bytes, rule.UnicodeRange))
                     {
-                        _diag.Counter("engine.fetch.font", 1);
+                        StarlingTelemetry.Counter("engine.fetch.font", 1);
                         return;
                     }
                     break;
             }
         }
 
-        _diag.Log(DiagLevel.Warn, "engine",
-            $"@font-face '{rule.FamilyName}' did not resolve to a usable source.");
+        FontFaceFetcherLog.FontFaceNoUsableSource(_log, rule.FamilyName);
     }
 
     private static bool TryRegisterLocal(FontFaceRule rule, string name, FontFaceRegistry registry)
@@ -167,14 +171,14 @@ internal sealed class FontFaceFetcher : IDisposable
         var absolute = ResolveAbsolute(href, baseUrl);
         if (absolute is null)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve @font-face url('{href}')");
+            FontFaceFetcherLog.CannotResolveFontUrl(_log, href);
             return null;
         }
 
         var key = absolute.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
 
-        using var _ = _diag.Span("engine", "fetch_font");
+        using var _ = StarlingTelemetry.Span("engine", "fetch_font");
         Activity.Current?.SetTag("url", key);
 
         try
@@ -185,8 +189,8 @@ internal sealed class FontFaceFetcher : IDisposable
                 var path = absolute.ToFileSystemPath();
                 if (!File.Exists(path))
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Missing local font: {path}");
-                    _diag.Counter("engine.fetch.font.failed", 1);
+                    FontFaceFetcherLog.MissingLocalFont(_log, path);
+                    StarlingTelemetry.Counter("engine.fetch.font.failed", 1);
                     return null;
                 }
                 bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -197,23 +201,22 @@ internal sealed class FontFaceFetcher : IDisposable
                 var response = await _sharedHttp.GetAsync(absolute, ct).ConfigureAwait(false);
                 if (response.IsErr)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Font fetch failed {absolute}: {response.Error}");
-                    _diag.Counter("engine.fetch.font.failed", 1);
+                    FontFaceFetcherLog.FontFetchFailed(_log, absolute.ToString(), response.Error.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.font.failed", 1);
                     return null;
                 }
                 if (response.Value.StatusCode is < 200 or >= 400)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine",
-                        $"Font fetch HTTP {response.Value.StatusCode} from {absolute}");
-                    _diag.Counter("engine.fetch.font.failed", 1);
+                    FontFaceFetcherLog.FontFetchHttpError(_log, response.Value.StatusCode, absolute.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.font.failed", 1);
                     return null;
                 }
                 bytes = response.Value.Body.ToArray();
             }
             else
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Unsupported font scheme '{absolute.Scheme}'");
-                _diag.Counter("engine.fetch.font.failed", 1);
+                FontFaceFetcherLog.UnsupportedFontScheme(_log, absolute.Scheme);
+                StarlingTelemetry.Counter("engine.fetch.font.failed", 1);
                 return null;
             }
 
@@ -223,8 +226,8 @@ internal sealed class FontFaceFetcher : IDisposable
         }
         catch (IOException ex)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Font read failed {absolute}: {ex.Message}");
-            _diag.Counter("engine.fetch.font.failed", 1);
+            FontFaceFetcherLog.FontReadFailed(_log, ex, absolute.ToString());
+            StarlingTelemetry.Counter("engine.fetch.font.failed", 1);
             return null;
         }
     }
@@ -243,4 +246,28 @@ internal sealed class FontFaceFetcher : IDisposable
         if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
+}
+
+internal static partial class FontFaceFetcherLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "@font-face '{FamilyName}' did not resolve to a usable source.")]
+    public static partial void FontFaceNoUsableSource(ILogger logger, string familyName);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not resolve @font-face url('{Href}')")]
+    public static partial void CannotResolveFontUrl(ILogger logger, string href);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Missing local font: {Path}")]
+    public static partial void MissingLocalFont(ILogger logger, string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Font fetch failed {Url}: {Error}")]
+    public static partial void FontFetchFailed(ILogger logger, string url, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Font fetch HTTP {StatusCode} from {Url}")]
+    public static partial void FontFetchHttpError(ILogger logger, int statusCode, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Unsupported font scheme '{Scheme}'")]
+    public static partial void UnsupportedFontScheme(ILogger logger, string scheme);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Font read failed {Url}")]
+    public static partial void FontReadFailed(ILogger logger, Exception ex, string url);
 }
