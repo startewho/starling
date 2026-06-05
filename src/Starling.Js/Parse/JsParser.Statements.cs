@@ -8,7 +8,7 @@ namespace Starling.Js.Parse;
 /// in <c>JsParser.cs</c> via partial class. Method names mirror
 /// ES2024 §14 sub-sections.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     /// <summary>wp:M3-71 — §19.2.1.1 — parse a DIRECT-eval program seeding the
     /// caller's lexical context: caller strictness, in-function-ness (so
@@ -37,7 +37,7 @@ public sealed partial class JsParser
         // in the body depend on it). The prologue is parsed twice-tolerant: we
         // collect the leading string-literal statements, set _strict if any is
         // "use strict", then continue parsing the body under that strictness.
-        ScanDirectivePrologue(body, ParseProgramStatement);
+        ScanDirectivePrologue(body, isProgram: true);
         while (!Check(JsTokenKind.EndOfFile))
         {
             body.Add(ParseProgramStatement());
@@ -81,12 +81,11 @@ public sealed partial class JsParser
     }
 
     /// <summary>§11.2.1 — parse the directive prologue (leading
-    /// ExpressionStatements that are bare StringLiterals) using
-    /// <paramref name="parseOne"/>, appending each parsed statement to
-    /// <paramref name="into"/>. Sets <see cref="_strict"/> if a "use strict"
-    /// directive is present. Stops at (and does not consume) the first
-    /// non-directive statement.</summary>
-    private void ScanDirectivePrologue(List<Statement> into, Func<Statement> parseOne)
+    /// ExpressionStatements that are bare StringLiterals), appending each
+    /// parsed statement to <paramref name="into"/>. Sets <see cref="_strict"/>
+    /// if a "use strict" directive is present. Stops at (and does not consume)
+    /// the first non-directive statement.</summary>
+    private void ScanDirectivePrologue(List<Statement> into, bool isProgram)
     {
         // §11.2.1 — if a "use strict" directive appears, any directive in the
         // prologue that contained a legacy octal escape is a SyntaxError, even
@@ -99,7 +98,7 @@ public sealed partial class JsParser
             var lexeme = _current.Lexeme;
             var octal = _current.LegacyOctal;
             var octalPos = _current.Start;
-            var stmt = parseOne();
+            var stmt = isProgram ? ParseProgramStatement() : ParseStatement();
             into.Add(stmt);
             if (!IsDirective(stmt))
                 break; // a string used as part of a larger expression ends the prologue

@@ -11,7 +11,7 @@ namespace Starling.Js.Parse;
 /// classic <c>let x; let x;</c> / <c>let f; var f;</c> / two-function-decls
 /// redeclaration <see cref="JsParseException"/>s.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     /// <summary>Statement-list scope flavours. They differ only in whether a
     /// top-level FunctionDeclaration is lexically or var-scoped.</summary>
