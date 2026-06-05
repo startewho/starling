@@ -15,6 +15,7 @@ using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Selectors;
+using Starling.Css.Values;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Engine;
@@ -623,7 +624,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         var (styleOverride, scrollLookup) = BuildRenderInputs();
 
-        var overlays = CollectSurfaceOverlays();
+        var drawingOverlays = CollectSurfaceOverlayLayers();
         bool ok;
         try
         {
@@ -640,7 +641,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 Images = _currentPage.ImageResolver,
                 Viewport = rect,
                 IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-                Overlays = overlays,
+                DrawingOverlays = drawingOverlays,
                 ScrollOffsets = scrollLookup,
             }, _surfaceTarget))
             {
@@ -660,15 +661,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Snapshots the page-coordinate overlay rects (selection highlight, find-match
-    /// flash, blinking caret) the readback path draws as Avalonia controls, so the
-    /// surface path can paint them on top of the page. The native surface occludes
-    /// those Avalonia controls, so on the surface path they must be drawn into the
-    /// GPU frame instead. Returns null when there's nothing to overlay.
+    /// Snapshots selection, find, highlight, and caret overlays as GPU drawing
+    /// layers. The native surface covers the Avalonia controls, so the surface
+    /// path draws these overlays into the frame.
     /// </summary>
-    private IReadOnlyList<SurfaceOverlayRect>? CollectSurfaceOverlays()
+    private IReadOnlyList<SurfaceOverlayLayer>? CollectSurfaceOverlayLayers()
     {
-        List<SurfaceOverlayRect>? overlays = null;
+        List<SurfaceOverlayInstance>? instances = null;
+        var width = 1d;
+        var height = 1d;
 
         void Add(Control c)
         {
@@ -679,9 +680,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (double.IsNaN(w) || double.IsNaN(h) || w <= 0 || h <= 0) return;
             var x = Canvas.GetLeft(b);
             var y = Canvas.GetTop(b);
+            if (double.IsNaN(x) || double.IsNaN(y)) return;
             var col = brush.Color;
-            (overlays ??= new List<SurfaceOverlayRect>())
-                .Add(new SurfaceOverlayRect(x, y, w, h, col.R, col.G, col.B, col.A));
+            if (col.A == 0) return;
+            (instances ??= new List<SurfaceOverlayInstance>())
+                .Add(new SurfaceOverlayInstance(x, y, w, h, new CssColor(col.R, col.G, col.B, col.A)));
+            width = Math.Max(width, x + w);
+            height = Math.Max(height, y + h);
         }
 
         foreach (var o in _selectionOverlays) Add(o);
@@ -689,7 +694,36 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         foreach (var o in _highlightOverlays) Add(o);
         if (_caretOverlay is not null) Add(_caretOverlay);
 
-        return overlays;
+        if (instances is not { Count: > 0 })
+            return null;
+
+        var scene = SurfaceOverlayScene.Create(width, height, HashSurfaceOverlayInstances(instances),
+            builder => builder.FillInstances(SurfaceOverlayPrimitive.Rectangle, instances));
+        return [new SurfaceOverlayLayer(0, 0, width, height, scene)];
+    }
+
+    private static long HashSurfaceOverlayInstances(IReadOnlyList<SurfaceOverlayInstance> instances)
+    {
+        unchecked
+        {
+            var hash = 0x9E3779B97F4A7C15UL;
+            foreach (var instance in instances)
+            {
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.X));
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.Y));
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.W));
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.H));
+                hash = Mix(hash, ((ulong)instance.Color.R << 24) |
+                                 ((ulong)instance.Color.G << 16) |
+                                 ((ulong)instance.Color.B << 8) |
+                                 instance.Color.A);
+            }
+
+            return (long)hash;
+        }
+
+        static ulong Mix(ulong hash, ulong value)
+            => (hash ^ value) * 1099511628211UL;
     }
 
     /// <summary>
@@ -2243,7 +2277,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
         var rect = CurrentViewportRect();
         var (styleOverride, scrollLookup) = BuildRenderInputs();
-        var overlays = CollectSurfaceOverlays();
+        var drawingOverlays = CollectSurfaceOverlayLayers();
 
         using var rendered = ViewportCaptureRenderer().Render(
             _currentPage.Root,
@@ -2253,7 +2287,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _currentPage.ImageResolver,
             IsElementAnimatingLayerRoot,
             scrollLookup,
-            overlays);
+            drawingOverlays);
 
         var dir = Path.GetDirectoryName(full);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -2917,67 +2951,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (!Equals(a.Get(PropertyId.Opacity), b.Get(PropertyId.Opacity))) return false;
         return true;
     }
-
-    /// <summary>
-    /// Renders the <paramref name="viewport"/> region of <c>_currentPage.Root</c>
-    /// through the paint pipeline, threading the current hover overrides into
-    /// <see cref="DisplayListBuilder"/> so <c>a:hover</c> rules repaint without
-    /// re-layout. Called on page load, on scroll, and on every hover transition
-    /// that changes paint-affecting styles.
-    /// </summary>
-    // private void RenderPageBitmap(Starling.Layout.Rect viewport)
-    // {
-    //     if (_currentPage is null) return;
-    //
-    //     // A finished navigation can leave its stopped Activity as the UI thread's
-    //     // ambient Activity.Current (async span leak — see RunNavigation). A
-    //     // standalone render (hover / resize / scroll) must not pile into that prior
-    //     // navigation's trace, so detach from a leaked, already-stopped span. Renders
-    //     // that run inside a live navigation keep their (non-stopped) parent and nest.
-    //     if (Activity.Current is { IsStopped: true })
-    //         Activity.Current = null;
-    //
-    //     var animate = _animating && _currentPage is not null;
-    //     var (styleOverride, scrollLookup) = BuildRenderInputs();
-    //
-    //     // While animating, the painted pixels change every frame even though the
-    //     // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
-    //     // key by the animation clock to force a fresh raster each frame.
-    //     // On live animation frames with no per-container scroll offsets, use the
-    //     // compositor layer tree. Promoted layers keep content-keyed caches, while
-    //     // transform and opacity are applied at composite time. Pages with element
-    //     // scroll offsets fall back to the flat path because RenderViaLayerTree does
-    //     // not thread those offsets yet.
-    //     var useLayerTree = scrollLookup is null && _animating;
-    //     RenderFrame rendered;
-    //     using (_diag.Span("gui", "render"))
-    //     {
-    //         var pageVersion = animate
-    //             ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
-    //             : _currentPage!.DisplayListVersion;
-    //         rendered = _renderSession.Render(new PageFrameRequest
-    //         {
-    //             Root = _currentPage!.Root,
-    //             Scale = (float)_currentScale,
-    //             StyleOverride = styleOverride,
-    //             Images = _currentPage.ImageResolver,
-    //             Viewport = viewport,
-    //             PageVersion = pageVersion,
-    //             IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-    //             ScrollOffsets = scrollLookup,
-    //             UseLayerTree = useLayerTree,
-    //         }, CpuBitmapFrameTarget.Instance);
-    //     }
-    //     var cpuFrame = rendered.Bitmap
-    //         ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
-    //     WriteableBitmap bmp;
-    //     using (rendered)
-    //         bmp = BitmapBridge.ToWriteableBitmap(cpuFrame, _currentScale);
-    //
-    //     (_pageImage.Source as IDisposable)?.Dispose();
-    //     _pageImage.Source = bmp;
-    //     RecordPresentedFrame();
-    // }
 
     /// <summary>
     /// Maps a paint-time box back to its hover override. Boxes with their own
