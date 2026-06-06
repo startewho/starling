@@ -1406,7 +1406,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 var font = ResolveFont(spec, probe, size);
                 var glyphX = (float)(run.X - bounds.X);
                 var glyphY = (float)(run.Y - bounds.Y);
-                var textBlock = run.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size
+                var textBlock = run.Shaped is ImageSharpShapedRun shaped && shaped.CanReuseAtSize(size)
                     ? shaped.TextBlock
                     : new TextBlock(run.Text, new TextOptions(font));
                 c.DrawText(textBlock, new PointF(glyphX, glyphY), -1, glyphBrush, null);
@@ -1901,7 +1901,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         // here — re-shaping the run, the cost the postmortem suspected. Track
         // both so the trace shows the reuse ratio for text-heavy pages.
         TextBlock textBlock;
-        if (text.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size)
+        if (text.Shaped is ImageSharpShapedRun shaped && shaped.CanReuseAtSize(size))
         {
             textBlock = shaped.TextBlock;
         }
@@ -2045,7 +2045,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var originY = (float)(s.Y + s.OffsetY);
 
         TextBlock textBlock;
-        if (s.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size)
+        if (s.Shaped is ImageSharpShapedRun shaped && shaped.CanReuseAtSize(size))
         {
             textBlock = shaped.TextBlock;
         }

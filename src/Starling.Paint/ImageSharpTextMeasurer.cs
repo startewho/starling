@@ -188,13 +188,22 @@ internal sealed class ImageSharpShapedRun : ShapedRun
     /// </summary>
     public TextBlock TextBlock { get; }
 
+    /// <summary>The cached TextBlock can be reused when the draw size matches the
+    /// font this run was shaped with.</summary>
+    public override bool CanReuseAtSize(double fontSize) => Font.Size == fontSize;
+
     /// <summary>
-    /// Carves a backend-preserving sub-run from a 1:1 glyph/character run.
+    /// Carves a backend-preserving sub-run. Glyph slicing is exact;
+    /// <see cref="Text"/> slicing assumes a 1:1 glyph/character run (the caller's
+    /// contract). The character-range substring is clamped to the string bounds
+    /// so a non-1:1 run can never read out of range — best-effort text, never a crash.
     /// </summary>
     public override ShapedRun Slice(int startGlyph, int endGlyph)
     {
         var (glyphs, advance) = SliceGlyphs(Glyphs, Advance, startGlyph, endGlyph);
-        var sliceText = Text.Substring(startGlyph, endGlyph - startGlyph);
+        var start = Math.Clamp(startGlyph, 0, Text.Length);
+        var length = Math.Clamp(endGlyph - startGlyph, 0, Text.Length - start);
+        var sliceText = Text.Substring(start, length);
         var textBlock = new TextBlock(sliceText, new TextOptions(Font));
 
         return new ImageSharpShapedRun(sliceText, Font, textBlock, glyphs, advance);
