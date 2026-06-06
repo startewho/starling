@@ -191,9 +191,15 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
                 }
             }
 
-            var texture = new GpuPaintTexture(target);
+            var owned = new ImageSharpGpuTexture(target);
             target = null;
-            return texture;
+            return new GpuPaintTexture(
+                owned.TextureHandle,
+                owned.TextureViewHandle,
+                owned.Width,
+                owned.Height,
+                PaintTextureFormat.Rgba8Unorm,
+                owned);
         }
         finally
         {

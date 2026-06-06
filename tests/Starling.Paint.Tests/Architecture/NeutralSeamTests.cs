@@ -24,12 +24,6 @@ public sealed class NeutralSeamTests
     // Shrinks to empty as the GPU steps land. DUMP MODE: leave empty to print actuals.
     private static readonly HashSet<string> KnownGpuLeaks = new(StringComparer.Ordinal)
     {
-        // Removed by Step 5 (neutralize GPU texture):
-        "GpuPaintTexture..ctor => WebGPURenderTarget",
-        "GpuPaintTexture._target => WebGPURenderTarget",
-        "GpuPaintTexture.Target => WebGPURenderTarget",
-        "GpuPaintTexture.Format => WebGPUTextureFormat",
-        "GpuPaintTexture.<Format>k__BackingField => WebGPUTextureFormat",
         // Removed by Step 6 (neutralize GPU device context):
         "GpuPaintDeviceContext.CreateRenderTarget => WebGPURenderTarget",
         "GpuPaintDeviceContext.CreateRenderTarget => WebGPUTextureFormat",
