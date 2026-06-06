@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 using System.Globalization;
+using Starling.Css.Values;
 using System.Numerics;
 using System.Xml;
 using System.Xml.Linq;
@@ -61,11 +62,11 @@ public static class SvgImageDecoder
     /// (defaults to opaque black). Throws <see cref="SvgDecodeException"/> on
     /// malformed XML or a document with no rasterizable root.
     /// </summary>
-    public static DecodedImage Decode(ReadOnlySpan<byte> utf8, Color? currentColor = null)
+    public static DecodedImage Decode(ReadOnlySpan<byte> utf8, CssColor? currentColor = null)
         => DecodeText(DecodeText(utf8), currentColor);
 
     /// <summary>Decode from an already-decoded SVG source string.</summary>
-    public static DecodedImage DecodeText(string svg, Color? currentColor = null)
+    public static DecodedImage DecodeText(string svg, CssColor? currentColor = null)
     {
         var root = ParseRoot(svg);
 
@@ -108,7 +109,7 @@ public static class SvgImageDecoder
             DeviceHeight = pxH,
         };
 
-        var rootStyle = new SvgStyle { CurrentColor = currentColor ?? Color.Black };
+        var rootStyle = new SvgStyle { CurrentColor = ToImageSharpColor(currentColor) };
 
         // --- render via the ImageSharp.Drawing canvas ------------------------
         // The DrawingCanvas Save(options) REPLACES the current transform rather
@@ -136,6 +137,19 @@ public static class SvgImageDecoder
         var buffer = new byte[checked(pxW * pxH * 4)];
         image.CopyPixelDataTo(buffer);
         return DecodedImage.FromBuffer(pxW, pxH, buffer);
+    }
+
+    /// <summary>
+    /// Resolve the neutral <see cref="CssColor"/> the engine supplies for the SVG
+    /// <c>currentColor</c> keyword into the adapter's ImageSharp colour. Keeping
+    /// this conversion inside the decoder means the public Decode API carries no
+    /// SixLabors type — the engine never constructs an ImageSharp colour.
+    /// </summary>
+    private static Color ToImageSharpColor(CssColor? color)
+    {
+        if (color is not { } c) return Color.Black;
+        var srgb = c.ToSrgb();
+        return Color.FromPixel(new Rgba32(srgb.R, srgb.G, srgb.B, srgb.A));
     }
 
     private static XElement ParseRoot(string svg)

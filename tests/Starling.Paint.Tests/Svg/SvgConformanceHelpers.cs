@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using Starling.Css.Values;
 using Starling.Common.Image;
 using Starling.Paint.Svg;
 
@@ -24,7 +23,7 @@ internal static class SvgRaster
 {
     public const string Spec11Url = "https://www.w3.org/TR/SVG11/";
 
-    public static DecodedImage Decode(string svg, Color? currentColor = null)
+    public static DecodedImage Decode(string svg, CssColor? currentColor = null)
         => SvgImageDecoder.DecodeText(svg, currentColor);
 
     /// <summary>RGBA of the pixel at (x, y).</summary>
@@ -66,8 +65,8 @@ internal static class SvgRaster
         return n;
     }
 
-    public static Color Rgb(byte r, byte g, byte b, byte a = 255)
-        => Color.FromPixel(new Rgba32(r, g, b, a));
+    public static CssColor Rgb(byte r, byte g, byte b, byte a = 255)
+        => CssColor.FromSrgb(r / 255.0, g / 255.0, b / 255.0, a / 255.0);
 
     // Loose colour predicates, tolerant of anti-aliasing.
     public static bool IsRed((byte R, byte G, byte B, byte A) p) => p.A > 150 && p.R > 150 && p.G < 90 && p.B < 90;
