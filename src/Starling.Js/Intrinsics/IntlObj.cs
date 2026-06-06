@@ -23,16 +23,21 @@ public static class IntlObj
         var dateTimeFormatProto = realm.NewOrdinaryObject();
         var numberFormatProto = realm.NewOrdinaryObject();
         var collatorProto = realm.NewOrdinaryObject();
+        var localeProto = realm.NewOrdinaryObject();
 
         var dateTimeFormatCtor = CreateDateTimeFormatCtor(realm, dateTimeFormatProto);
         var numberFormatCtor = CreateNumberFormatCtor(realm, numberFormatProto);
         var collatorCtor = CreateCollatorCtor(realm, collatorProto);
+        var localeCtor = CreateLocaleCtor(realm, localeProto);
 
         DefineData(intl, "DateTimeFormat", JsValue.Object(dateTimeFormatCtor));
         DefineData(intl, "NumberFormat", JsValue.Object(numberFormatCtor));
         DefineData(intl, "Collator", JsValue.Object(collatorCtor));
+        DefineData(intl, "Locale", JsValue.Object(localeCtor));
         IntrinsicHelpers.DefineMethod(realm, intl, "getCanonicalLocales", 1,
             (_, args) => MakeLocaleArray(realm, ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined)));
+        IntrinsicHelpers.DefineMethod(realm, intl, "supportedValuesOf", 1,
+            (_, args) => SupportedValuesOf(realm, args.Length > 0 ? args[0] : JsValue.Undefined));
         intl.DefineOwnProperty(SymbolCtor.ToStringTag,
             PropertyDescriptor.Data(JsValue.String("Intl"), writable: false, enumerable: false, configurable: true));
 
@@ -109,6 +114,35 @@ public static class IntlObj
         return ctor;
     }
 
+    private static JsNativeFunction CreateLocaleCtor(JsRealm realm, JsObject proto)
+    {
+        var ctor = new JsNativeFunction(realm, "Locale", 1, (newTarget, args) =>
+        {
+            if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
+                throw new JsThrow(realm.NewTypeError("Intl.Locale requires 'new'"));
+            var state = CreateLocaleState(
+                realm,
+                args.Length > 0 ? args[0] : JsValue.Undefined,
+                args.Length > 1 ? args[1] : JsValue.Undefined);
+            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            return JsValue.Object(CreateLocaleInstance(realm, instProto, state));
+        }, isConstructor: true);
+        ctor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
+        proto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
+        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0,
+            (thisV, _) => JsValue.String(RequireLocale(realm, thisV).State.Name));
+        IntrinsicHelpers.DefineMethod(realm, proto, "minimize", 0,
+            (thisV, _) => JsValue.Object(CreateLocaleInstance(
+                realm,
+                proto,
+                RequireLocale(realm, thisV).State.Minimized())));
+        proto.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("Intl.Locale"), writable: false, enumerable: false, configurable: true));
+        return ctor;
+    }
+
     private static IntlDateTimeFormatObject CreateDateTimeFormatInstance(JsRealm realm, JsObject proto, IntlDateTimeFormatState state)
     {
         var obj = new IntlDateTimeFormatObject(proto, state);
@@ -133,6 +167,19 @@ public static class IntlObj
         var compare = new JsNativeFunction(realm, "compare", 2,
             (_, args) => JsValue.Number(obj.Compare(args)), isConstructor: false);
         obj.DefineOwnProperty("compare", PropertyDescriptor.BuiltinMethod(JsValue.Object(compare)));
+        return obj;
+    }
+
+    private static IntlLocaleObject CreateLocaleInstance(JsRealm realm, JsObject proto, IntlLocaleState state)
+    {
+        var obj = new IntlLocaleObject(proto, state);
+        obj.Set("baseName", JsValue.String(state.BaseName));
+        obj.Set("language", JsValue.String(state.Language));
+        obj.Set("script", state.Script is null ? JsValue.Undefined : JsValue.String(state.Script));
+        obj.Set("region", state.Region is null ? JsValue.Undefined : JsValue.String(state.Region));
+        obj.Set("calendar", state.Calendar is null ? JsValue.Undefined : JsValue.String(state.Calendar));
+        obj.Set("hourCycle", state.HourCycle is null ? JsValue.Undefined : JsValue.String(state.HourCycle));
+        obj.Set("numeric", JsValue.Boolean(state.Numeric));
         return obj;
     }
 
@@ -182,13 +229,49 @@ public static class IntlObj
         return new IntlCollatorState(locale, usage, sensitivity, numeric);
     }
 
+    private static IntlLocaleState CreateLocaleState(JsRealm realm, JsValue tagValue, JsValue optionsValue)
+    {
+        var tag = AbstractOperations.ToStringJs(realm.ActiveVm, tagValue);
+        var state = ParseLocaleState(realm, tag);
+        var options = optionsValue.IsObject ? optionsValue.AsObject : null;
+        var calendar = GetStringOption(realm, options, "calendar") ?? state.Calendar;
+        var hourCycle = GetStringOption(realm, options, "hourCycle", "h11", "h12", "h23", "h24") ?? state.HourCycle;
+        var numeric = GetBooleanOption(realm, options, "numeric") ?? state.Numeric;
+        return state with
+        {
+            Calendar = calendar,
+            HourCycle = hourCycle,
+            Numeric = numeric,
+            Name = BuildLocaleName(state.BaseName, calendar, hourCycle, numeric)
+        };
+    }
+
     private static JsValue SupportedLocalesOf(JsRealm realm, JsValue[] args)
         => MakeLocaleArray(realm, ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined));
 
+    private static JsValue SupportedValuesOf(JsRealm realm, JsValue keyValue)
+    {
+        var key = AbstractOperations.ToStringJs(realm.ActiveVm, keyValue);
+        var values = key switch
+        {
+            "calendar" => new[] { "gregory", "buddhist", "chinese", "iso8601" },
+            "collation" => new[] { "default", "emoji", "eor" },
+            "currency" => new[] { "EUR", "GBP", "JPY", "USD" },
+            "numberingSystem" => new[] { "latn", "arab", "hanidec" },
+            "timeZone" => new[] { "UTC", "America/New_York", "Europe/London" },
+            "unit" => new[] { "meter", "second", "kilometer", "byte" },
+            _ => throw new JsThrow(realm.NewRangeError("invalid key for Intl.supportedValuesOf"))
+        };
+        return MakeStringArray(realm, values);
+    }
+
     private static JsValue MakeLocaleArray(JsRealm realm, List<string> locales)
+        => MakeStringArray(realm, locales);
+
+    private static JsValue MakeStringArray(JsRealm realm, IReadOnlyList<string> values)
     {
         var arr = new JsArray(realm);
-        for (var i = 0; i < locales.Count; i++) arr.Push(JsValue.String(locales[i]));
+        for (var i = 0; i < values.Count; i++) arr.Push(JsValue.String(values[i]));
         return JsValue.Object(arr);
     }
 
@@ -277,6 +360,108 @@ public static class IntlObj
         "de-DE" or "fr-FR" or "es-ES" or "it-IT" or
         "ja-JP" or "zh-CN" or "ko-KR" or "pt-BR" or "nl-NL";
 
+    private static IntlLocaleState ParseLocaleState(JsRealm realm, string tag)
+    {
+        if (tag.Length == 0 || tag.AsSpan().IndexOfAny([' ', '\t', '\r', '\n']) >= 0)
+            throw new JsThrow(realm.NewRangeError("invalid locale tag"));
+
+        var parts = tag.Replace('_', '-').Split('-', StringSplitOptions.None);
+        if (parts.Length == 0 || parts[0].Length is < 2 or > 8 || !IsAsciiLetters(parts[0]))
+            throw new JsThrow(realm.NewRangeError("invalid locale tag"));
+
+        var language = parts[0].ToLowerInvariant();
+        string? script = null;
+        string? region = null;
+        string? calendar = null;
+        string? hourCycle = null;
+        var numeric = false;
+        var i = 1;
+
+        if (i < parts.Length && parts[i].Length == 4 && IsAsciiLetters(parts[i]))
+        {
+            script = char.ToUpperInvariant(parts[i][0]) + parts[i][1..].ToLowerInvariant();
+            i++;
+        }
+
+        if (i < parts.Length && IsRegionSubtag(parts[i]))
+        {
+            region = parts[i].ToUpperInvariant();
+            i++;
+        }
+
+        var baseParts = new List<string> { language };
+        if (script is not null) baseParts.Add(script);
+        if (region is not null) baseParts.Add(region);
+        var baseName = string.Join('-', baseParts);
+
+        for (; i < parts.Length; i++)
+        {
+            if (!string.Equals(parts[i], "u", StringComparison.OrdinalIgnoreCase)) continue;
+            i++;
+            while (i < parts.Length)
+            {
+                var key = parts[i].ToLowerInvariant();
+                if (key.Length != 2) break;
+                i++;
+                var values = new List<string>();
+                while (i < parts.Length && parts[i].Length != 2)
+                {
+                    if (parts[i].Length == 0) throw new JsThrow(realm.NewRangeError("invalid locale tag"));
+                    values.Add(parts[i].ToLowerInvariant());
+                    i++;
+                }
+
+                var value = values.Count == 0 ? string.Empty : string.Join('-', values);
+                if (key == "ca" && value.Length > 0) calendar = value;
+                else if (key == "hc" && value is "h11" or "h12" or "h23" or "h24") hourCycle = value;
+                else if (key == "kn") numeric = value.Length == 0 || value == "true";
+            }
+            break;
+        }
+
+        return new IntlLocaleState(
+            BuildLocaleName(baseName, calendar, hourCycle, numeric),
+            baseName,
+            language,
+            script,
+            region,
+            calendar,
+            hourCycle,
+            numeric);
+    }
+
+    private static string BuildLocaleName(string baseName, string? calendar, string? hourCycle, bool numeric)
+    {
+        var extensions = new List<string>();
+        if (calendar is not null) extensions.Add("ca-" + calendar);
+        if (hourCycle is not null) extensions.Add("hc-" + hourCycle);
+        if (numeric) extensions.Add("kn");
+        return extensions.Count == 0 ? baseName : baseName + "-u-" + string.Join('-', extensions);
+    }
+
+    private static bool IsRegionSubtag(string value)
+        => value.Length == 2 && IsAsciiLetters(value) || value.Length == 3 && IsAsciiDigits(value);
+
+    private static bool IsAsciiLetters(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return false;
+        }
+        return true;
+    }
+
+    private static bool IsAsciiDigits(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
+    }
+
     private static string? GetStringOption(JsRealm realm, JsObject? options, string name, params string[] allowed)
     {
         if (options is null) return null;
@@ -333,6 +518,12 @@ public static class IntlObj
         throw new JsThrow(realm.NewTypeError("Intl.Collator method called on incompatible receiver"));
     }
 
+    private static IntlLocaleObject RequireLocale(JsRealm realm, JsValue thisV)
+    {
+        if (thisV.IsObject && thisV.AsObject is IntlLocaleObject obj) return obj;
+        throw new JsThrow(realm.NewTypeError("Intl.Locale method called on incompatible receiver"));
+    }
+
     private static void DefineData(JsObject obj, string name, JsValue value)
         => obj.DefineOwnProperty(name, PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: true));
 
@@ -357,6 +548,27 @@ public static class IntlObj
         bool UseGrouping);
 
     private sealed record IntlCollatorState(IntlLocale Locale, string Usage, string Sensitivity, bool Numeric);
+
+    private sealed record IntlLocaleState(
+        string Name,
+        string BaseName,
+        string Language,
+        string? Script,
+        string? Region,
+        string? Calendar,
+        string? HourCycle,
+        bool Numeric)
+    {
+        public IntlLocaleState Minimized()
+            => Region == "US" && Script is null
+                ? this with { Name = Language, BaseName = Language, Region = null }
+                : this;
+    }
+
+    private sealed class IntlLocaleObject(JsObject prototype, IntlLocaleState state) : JsObject(prototype)
+    {
+        public IntlLocaleState State { get; } = state;
+    }
 
     private sealed class IntlDateTimeFormatObject(JsObject prototype, IntlDateTimeFormatState state) : JsObject(prototype)
     {

@@ -57,6 +57,7 @@ public class NumberTests
         Eval("Number.parseFloat('  -3.5px');").AsNumber.Should().Be(-3.5);
         Eval("Number.parseFloat('1.25e2!');").AsNumber.Should().Be(125);
         Eval("Number.parseFloat('Infinity');").AsNumber.Should().Be(double.PositiveInfinity);
+        Eval("parseFloat('1.7976931348623157e+308');").AsNumber.Should().Be(double.MaxValue);
         double.IsNaN(Eval("Number.parseFloat('abc');").AsNumber).Should().BeTrue();
     }
 
@@ -71,6 +72,37 @@ public class NumberTests
         Eval("(12.345).toPrecision(4);").AsString.Should().Be("12.35");
         Eval("(42).toLocaleString();").AsString.Should().Be("42");
         Eval("(42).valueOf();").AsNumber.Should().Be(42);
+    }
+
+    [TestMethod]
+    public void Number_high_precision_formatting_matches_upstream_jint_cases()
+    {
+        Eval("(3).toExponential(1);").AsString.Should().Be("3.0e+0");
+        Eval("(3).toExponential(50);").AsString.Should().Be("3.00000000000000000000000000000000000000000000000000e+0");
+        Eval("(3).toExponential(100);").AsString.Should().Be("3." + new string('0', 100) + "e+0");
+        Eval("(3).toFixed(1);").AsString.Should().Be("3.0");
+        Eval("(3).toFixed(50);").AsString.Should().Be("3." + new string('0', 50));
+        Eval("(3).toFixed(100);").AsString.Should().Be("3." + new string('0', 100));
+        Eval("(3).toPrecision(1);").AsString.Should().Be("3");
+        Eval("(3).toPrecision(50);").AsString.Should().Be("3." + new string('0', 49));
+        Eval("(3).toPrecision(100);").AsString.Should().Be("3." + new string('0', 99));
+    }
+
+    [TestMethod]
+    public void Number_coercion_overflow_from_numeric_and_string_literals()
+    {
+        Eval("Number(1e1000);").AsNumber.Should().Be(double.PositiveInfinity);
+        Eval("+1e1000;").AsNumber.Should().Be(double.PositiveInfinity);
+        Eval("(+1e1000).toString();").AsString.Should().Be("Infinity");
+        Eval("Number('1e1000');").AsNumber.Should().Be(double.PositiveInfinity);
+        Eval("+'1e1000';").AsNumber.Should().Be(double.PositiveInfinity);
+        Eval("(+'1e1000').toString();").AsString.Should().Be("Infinity");
+        Eval("Number(-1e1000);").AsNumber.Should().Be(double.NegativeInfinity);
+        Eval("-1e1000;").AsNumber.Should().Be(double.NegativeInfinity);
+        Eval("(-1e1000).toString();").AsString.Should().Be("-Infinity");
+        Eval("Number('-1e1000');").AsNumber.Should().Be(double.NegativeInfinity);
+        Eval("-'1e1000';").AsNumber.Should().Be(double.NegativeInfinity);
+        Eval("(-'1e1000').toString();").AsString.Should().Be("-Infinity");
     }
 
     [TestMethod]

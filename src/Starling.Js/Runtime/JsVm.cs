@@ -3396,8 +3396,9 @@ public sealed class JsVm
     {
         var d = JsValue.ToNumber(v);
         if (double.IsNaN(d) || double.IsInfinity(d) || d == 0) return 0;
-        var i = (long)Math.Truncate(d);
-        return (int)(i & 0xFFFFFFFF);
+        var i = Math.Truncate(d);
+        var mod = i - Math.Floor(i / 4294967296.0) * 4294967296.0;
+        return unchecked((int)(uint)mod);
     }
 
     /// <summary>§13.6 ApplyStringOrNumericBinaryOperator step 1 (and ToNumeric

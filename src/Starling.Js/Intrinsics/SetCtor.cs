@@ -107,14 +107,26 @@ public static class SetCtor
         if (!ReferenceEquals(instProto, realm.SetPrototype)) set.SetPrototypeOf(instProto);
         if (args.Length == 0 || args[0].IsNullish) return set;
 
+        var adder = AbstractOperations.Get(realm.ActiveVm, set, "add");
+        if (!AbstractOperations.IsCallable(adder))
+            throw new JsThrow(realm.NewTypeError("Set constructor add method is not callable"));
         var iterable = args[0];
         var record = AbstractOperations.GetIterator(realm, realm.ActiveVm, iterable);
         while (true)
         {
             var next = AbstractOperations.IteratorStep(realm, realm.ActiveVm, ref record);
             if (next is null) break;
-            var value = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
-            set.Add(value);
+            JsValue value;
+            try
+            {
+                value = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
+                AbstractOperations.Call(realm.ActiveVm, adder, JsValue.Object(set), new[] { value });
+            }
+            catch
+            {
+                AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
+                throw;
+            }
         }
         return set;
     }

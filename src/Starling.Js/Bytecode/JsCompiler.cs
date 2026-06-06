@@ -2106,7 +2106,10 @@ public sealed partial class JsCompiler
             }
             else
             {
-                foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+                // `var` loop-head bindings are function-scoped and were
+                // already hoisted. Declaring them again in this synthetic loop
+                // scope would shadow the hoisted binding, so assignment from
+                // the pattern must resolve through StoreBindingIdentifier.
             }
         }
 
@@ -2328,7 +2331,9 @@ public sealed partial class JsCompiler
             }
             else
             {
-                foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+                // `var` loop-head bindings are function-scoped and were
+                // already hoisted. Do not shadow them in the synthetic loop
+                // scope used by for-in lowering.
             }
         }
 
@@ -3814,7 +3819,7 @@ public sealed partial class JsCompiler
         // property, then args, then CallMethod which consumes
         // [receiver, callee, args...]. For plain calls, emit the callee
         // alone and route through Call (this=Undefined).
-        if (!call.Optional && call.Callee is MemberExpression me)
+        if (call.Callee is MemberExpression me)
         {
             EmitExpression(me.Object);          // [obj]
 
@@ -3854,6 +3859,24 @@ public sealed partial class JsCompiler
                 RecordPos(me);
                 _b.EmitU16(Opcode.LoadProperty, nameIdx);  // [obj, fn]
             }
+
+            // §13.3 OptionalChain — `obj.method?.(args)`. The CALL is optional: a
+            // nullish *method* short-circuits the whole call to undefined. `this`
+            // still binds to obj when the method IS present (the method-call form
+            // is preserved). This is distinct from me.Optional above, where a
+            // nullish *base* short-circuits before the property is even loaded.
+            int? methodOptCallDone = null;
+            if (call.Optional)
+            {
+                _b.Emit(Opcode.Dup);                                     // [obj, fn, fn]
+                var fnNotNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one → [obj, fn]
+                _b.Emit(Opcode.Pop);                                     // [obj]
+                _b.Emit(Opcode.Pop);                                     // []
+                _b.Emit(Opcode.LoadUndefined);                           // [undefined]
+                methodOptCallDone = _b.EmitJump(Opcode.Jump);            // skip the call
+                _b.PatchJump(fnNotNullish);                              // [obj, fn] (proceed)
+            }
+
             if (hasSpread)
             {
                 // Build args array first, then apply.
@@ -3861,12 +3884,14 @@ public sealed partial class JsCompiler
                 RecordPos(call);
                 _b.Emit(Opcode.CallApplyMethod);
                 if (optDone is { } optDoneSpread) _b.PatchJump(optDoneSpread);
+                if (methodOptCallDone is { } moSpread) _b.PatchJump(moSpread);
                 return;
             }
             foreach (var arg in call.Arguments) EmitExpression(arg);
             RecordPos(call);
             _b.Emit(Opcode.CallMethod, (byte)call.Arguments.Count);
             if (optDone is { } optDonePlain) _b.PatchJump(optDonePlain);
+            if (methodOptCallDone is { } moPlain) _b.PatchJump(moPlain);
             return;
         }
 
