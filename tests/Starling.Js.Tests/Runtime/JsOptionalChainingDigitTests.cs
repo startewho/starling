@@ -46,6 +46,11 @@ public class JsOptionalChainingDigitTests
     public void Optional_chain_short_circuits_on_nullish()
         => Eval("var a=null; typeof (a?.b)").AsString.Should().Be("undefined");
 
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-optional-chains", "13.3.9 Optional Chains")]
+    public void Optional_computed_access_does_not_evaluate_key_on_nullish_base()
+        => Eval("var n=0; var a=null; a?.[n++]; n").AsNumber.Should().Be(0);
+
     // Regression (angular.dev `e.features?.forEach(...)`): an optional METHOD
     // call must short-circuit the whole call — including evaluating the
     // arguments — when the base is nullish, instead of loading the method off

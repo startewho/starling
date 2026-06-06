@@ -71,6 +71,8 @@ public sealed class JsVm
         if (pool.Count < ArgPoolDepth) pool.Push(args);
     }
 
+    private static string NullishLabel(JsValue value) => value.IsNull ? "null" : "undefined";
+
     public JsVm(JsRuntime runtime, ILogger<JsVm>? log = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -1238,7 +1240,8 @@ public sealed class JsVm
                             var obj = Pop();
                             if (obj.IsObject) Push(AbstractOperations.Get(this, obj.AsObject, name));
                             else if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
-                            else Push(JsValue.Undefined);
+                            else throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot read properties of " + NullishLabel(obj) + " (reading '" + name + "')"));
                             break;
                         }
                     case Opcode.StoreProperty:
@@ -1257,11 +1260,11 @@ public sealed class JsVm
                                     throw new JsThrow(_runtime.Realm.NewTypeError(
                                         "Cannot assign to read-only property '" + name + "'"));
                             }
-                            else if (frameStrict && obj.IsNullish)
+                            else if (obj.IsNullish)
                             {
                                 // §13.15.2 PutValue on a nullish base is always a TypeError.
                                 throw new JsThrow(_runtime.Realm.NewTypeError(
-                                    "Cannot set property '" + name + "' of " + JsValue.ToStringValue(obj)));
+                                    "Cannot set property '" + name + "' of " + NullishLabel(obj)));
                             }
                             Push(value);
                             break;
@@ -1273,7 +1276,8 @@ public sealed class JsVm
                             var propertyKey = AbstractOperations.ToPropertyKey(this, key);
                             if (obj.IsObject) Push(AbstractOperations.Get(this, obj.AsObject, propertyKey));
                             else if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), propertyKey, obj));
-                            else Push(JsValue.Undefined);
+                            else throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot read properties of " + NullishLabel(obj) + " (reading '" + propertyKey + "')"));
                             break;
                         }
                     case Opcode.ResolveComputedKey:
@@ -1298,9 +1302,12 @@ public sealed class JsVm
                             var value = Pop();
                             var key = Pop();
                             var obj = Pop();
+                            var pk = AbstractOperations.ToPropertyKey(this, key);
+                            if (obj.IsNullish)
+                                throw new JsThrow(_runtime.Realm.NewTypeError(
+                                    "Cannot set property '" + pk + "' of " + NullishLabel(obj)));
                             if (obj.IsObject)
                             {
-                                var pk = AbstractOperations.ToPropertyKey(this, key);
                                 var ok = AbstractOperations.Set(this, obj.AsObject, pk, value);
                                 if (!ok && frameStrict)
                                     throw new JsThrow(_runtime.Realm.NewTypeError(
