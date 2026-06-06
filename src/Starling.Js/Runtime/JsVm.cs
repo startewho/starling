@@ -1188,14 +1188,26 @@ public sealed class JsVm
                         }
 
                     // ----- Comparison -----
-                    case Opcode.Eq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(JsValue.AbstractEquals(a, b))); break; }
-                    case Opcode.NEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(!JsValue.AbstractEquals(a, b))); break; }
+                    case Opcode.Eq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(AbstractEquals(a, b))); break; }
+                    case Opcode.NEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(!AbstractEquals(a, b))); break; }
                     case Opcode.StrictEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(JsValue.StrictEquals(a, b))); break; }
                     case Opcode.StrictNEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(!JsValue.StrictEquals(a, b))); break; }
-                    case Opcode.Lt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(a, b))); break; }
-                    case Opcode.LtEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(a, b) || JsValue.AbstractEquals(a, b))); break; }
-                    case Opcode.Gt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(b, a))); break; }
-                    case Opcode.GtEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(b, a) || JsValue.AbstractEquals(a, b))); break; }
+                    case Opcode.Lt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(RelationalLessThan(a, b, leftFirst: true) == true)); break; }
+                    case Opcode.LtEq:
+                        {
+                            var b = Pop(); var a = Pop();
+                            var r = RelationalLessThan(b, a, leftFirst: false);
+                            Push(JsValue.Boolean(r == false));
+                            break;
+                        }
+                    case Opcode.Gt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(RelationalLessThan(b, a, leftFirst: false) == true)); break; }
+                    case Opcode.GtEq:
+                        {
+                            var b = Pop(); var a = Pop();
+                            var r = RelationalLessThan(a, b, leftFirst: true);
+                            Push(JsValue.Boolean(r == false));
+                            break;
+                        }
 
                     // ----- Logical / typeof -----
                     case Opcode.Not: Push(JsValue.Boolean(!JsValue.ToBoolean(Pop()))); break;
@@ -3331,46 +3343,83 @@ public sealed class JsVm
         return false;
     }
 
-    /// <summary>Less-than per §7.2.13. Returns false for NaN comparisons
-    /// per the spec. Cross-type BigInt/Number compares numerically with care
-    /// for non-integer doubles per §6.1.6.1.13.</summary>
-    private static bool LessThan(JsValue a, JsValue b)
+    /// <summary>§7.2.15 IsLooselyEqual with VM-aware object-to-primitive
+    /// coercion. The value-only helper cannot call user JS methods.</summary>
+    private bool AbstractEquals(JsValue a, JsValue b)
+    {
+        if (a.Kind == b.Kind) return JsValue.StrictEquals(a, b);
+        if (a.IsNullish && b.IsNullish) return true;
+        if (a.IsBoolean) return AbstractEquals(JsValue.Number(a.AsBool ? 1 : 0), b);
+        if (b.IsBoolean) return AbstractEquals(a, JsValue.Number(b.AsBool ? 1 : 0));
+        if (a.IsObject && IsPrimitiveComparableToObject(b))
+            return AbstractEquals(AbstractOperations.ToPrimitive(this, a), b);
+        if (b.IsObject && IsPrimitiveComparableToObject(a))
+            return AbstractEquals(a, AbstractOperations.ToPrimitive(this, b));
+        return JsValue.AbstractEquals(a, b);
+    }
+
+    private static bool IsPrimitiveComparableToObject(JsValue value)
+        => value.IsString || value.IsNumber || value.IsBigInt || value.IsSymbol;
+
+    /// <summary>§7.2.14 IsLessThan. Returns <c>null</c> for the spec's
+    /// undefined result (NaN, invalid StringToBigInt), which makes <c>&lt;=</c>
+    /// and <c>&gt;=</c> reject instead of becoming simple negations.</summary>
+    private bool? RelationalLessThan(JsValue x, JsValue y, bool leftFirst)
+    {
+        JsValue px;
+        JsValue py;
+        if (leftFirst)
+        {
+            px = AbstractOperations.ToPrimitive(this, x, "number");
+            py = AbstractOperations.ToPrimitive(this, y, "number");
+        }
+        else
+        {
+            py = AbstractOperations.ToPrimitive(this, y, "number");
+            px = AbstractOperations.ToPrimitive(this, x, "number");
+        }
+
+        return LessThanPrimitives(px, py);
+    }
+
+    /// <summary>Primitive less-than after §7.2.14's ToPrimitive steps.
+    /// Cross-type BigInt/Number compares numerically with care for non-integer
+    /// doubles per §6.1.6.1.13.</summary>
+    private bool? LessThanPrimitives(JsValue a, JsValue b)
     {
         if (a.IsString && b.IsString)
             return string.CompareOrdinal(a.AsString, b.AsString) < 0;
-        if (a.IsBigInt && b.IsBigInt) return BigIntOps.LessThan(a.AsBigInt, b.AsBigInt);
-        if (a.IsBigInt && b.IsNumber) return BigIntLessThanNumber(a.AsBigInt, b.AsNumber);
-        if (a.IsNumber && b.IsBigInt) return NumberLessThanBigInt(a.AsNumber, b.AsBigInt);
         if (a.IsBigInt && b.IsString)
         {
-            // §7.2.14: parse the string as a BigInt; if it fails (non-integer
-            // or NaN) the comparison is undefined → returns false.
-            if (!System.Numerics.BigInteger.TryParse(b.AsString.Trim(),
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var rhs))
-                return false;
+            if (!JsValue.TryStringToBigInt(b.AsString, out var rhs))
+                return null;
             return a.AsBigInt < rhs;
         }
         if (a.IsString && b.IsBigInt)
         {
-            if (!System.Numerics.BigInteger.TryParse(a.AsString.Trim(),
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var lhs))
-                return false;
+            if (!JsValue.TryStringToBigInt(a.AsString, out var lhs))
+                return null;
             return lhs < b.AsBigInt;
         }
-        var ad = JsValue.ToNumber(a);
-        var bd = JsValue.ToNumber(b);
-        if (double.IsNaN(ad) || double.IsNaN(bd)) return false;
+
+        a = AbstractOperations.ToNumeric(_runtime.Realm, a);
+        b = AbstractOperations.ToNumeric(_runtime.Realm, b);
+        if (a.IsBigInt && b.IsBigInt) return BigIntOps.LessThan(a.AsBigInt, b.AsBigInt);
+        if (a.IsBigInt && b.IsNumber) return BigIntLessThanNumber(a.AsBigInt, b.AsNumber);
+        if (a.IsNumber && b.IsBigInt) return NumberLessThanBigInt(a.AsNumber, b.AsBigInt);
+
+        var ad = a.AsNumber;
+        var bd = b.AsNumber;
+        if (double.IsNaN(ad) || double.IsNaN(bd)) return null;
         return ad < bd;
     }
 
     /// <summary>BigInt &lt; Number per §6.1.6.1.13. NaN → false; infinities
     /// compare sign-wise; finite non-integers compare against the BigInt by
     /// flooring the double on the BigInt's side.</summary>
-    private static bool BigIntLessThanNumber(System.Numerics.BigInteger a, double n)
+    private static bool? BigIntLessThanNumber(System.Numerics.BigInteger a, double n)
     {
-        if (double.IsNaN(n)) return false;
+        if (double.IsNaN(n)) return null;
         if (double.IsPositiveInfinity(n)) return true;
         if (double.IsNegativeInfinity(n)) return false;
         // Compare exactly when the double is an integer; otherwise compare to
@@ -3381,9 +3430,9 @@ public sealed class JsVm
         return a <= floor;
     }
 
-    private static bool NumberLessThanBigInt(double n, System.Numerics.BigInteger b)
+    private static bool? NumberLessThanBigInt(double n, System.Numerics.BigInteger b)
     {
-        if (double.IsNaN(n)) return false;
+        if (double.IsNaN(n)) return null;
         if (double.IsPositiveInfinity(n)) return false;
         if (double.IsNegativeInfinity(n)) return true;
         if (n == Math.Truncate(n)) return new System.Numerics.BigInteger(n) < b;
@@ -3415,7 +3464,7 @@ public sealed class JsVm
     /// object operand coerces identically whether written as <c>a * b</c> or
     /// <c>a *= b</c>. (<c>+</c> already runs ToPrimitive in <see cref="JsAdd"/>.)</summary>
     private JsValue ToNumericOperand(JsValue v)
-        => v.IsObject ? AbstractOperations.ToPrimitive(this, v, "number") : v;
+        => AbstractOperations.ToNumeric(_runtime.Realm, v);
 
 
     /// <summary>B1b-2a — build a class constructor at <c>BuildClass</c>-opcode
