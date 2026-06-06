@@ -3592,7 +3592,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.Dup);                // [cur, cur]
                 var j = _b.EmitJump(jmp);           // pops one cur; [cur] if short-circuit
                 _b.Emit(Opcode.Pop);                // assign path: drop cur → []
-                EmitExpression(a.Value);            // [rhs]
+                EmitNamedEvaluation(a.Value, id.Name); // [rhs]
                 _b.Emit(Opcode.Dup);                // [rhs, rhs] — keep result after store
                 EmitStoreLocalSlot(slot);           // [rhs]
                 _b.PatchJump(j);                    // merge: [cur] or [rhs]
@@ -3605,7 +3605,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.Dup);
                 var j = _b.EmitJump(jmp);
                 _b.Emit(Opcode.Pop);
-                EmitExpression(a.Value);
+                EmitNamedEvaluation(a.Value, id.Name);
                 _b.Emit(Opcode.Dup);
                 // §16.2.1.6.2 — `import ||= …` etc. writes to an immutable binding
                 // (only on the assign path; the short-circuit path skips it).
@@ -3624,7 +3624,7 @@ public sealed partial class JsCompiler
             _b.Emit(Opcode.Dup);
             var jg = _b.EmitJump(jmp);
             _b.Emit(Opcode.Pop);
-            EmitExpression(a.Value);
+            EmitNamedEvaluation(a.Value, id.Name);
             _b.Emit(Opcode.Dup);
             _b.EmitU16(Opcode.StoreGlobal, nameIdx);  // [rhs]
             _b.PatchJump(jg);
@@ -3653,7 +3653,7 @@ public sealed partial class JsCompiler
                 // Assign path: [obj, cur]. Drop cur, eval RHS, PrivateSet
                 // (PrivateSet pops obj,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj]
-                EmitExpression(a.Value);            // [obj, rhs]
+                EmitNamedEvaluation(a.Value, "#" + ppne.Name); // [obj, rhs]
                 _b.EmitU16(Opcode.PrivateSet, pmIdx); // [rhs]
                 var jpEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: [obj, cur]; drop the dup'd base from
@@ -3674,6 +3674,7 @@ public sealed partial class JsCompiler
                 // computed member-update lowering in EmitUpdate).
                 EmitExpression(me.Object);          // [obj]
                 EmitExpression(me.Property);        // [obj, key]
+                _b.Emit(Opcode.ResolveComputedKey); // [obj, key]
                 _b.Emit(Opcode.Dup2);               // [obj, key, obj, key]
                 _b.Emit(Opcode.LoadComputed);       // [obj, key, cur]
                 _b.Emit(Opcode.Dup);                // [obj, key, cur, cur]
@@ -3682,6 +3683,8 @@ public sealed partial class JsCompiler
                 // (StoreComputed pops obj,key,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj, key]
                 EmitExpression(a.Value);            // [obj, key, rhs]
+                if (IsAnonymousFunctionDefinition(a.Value))
+                    _b.Emit(Opcode.SetFunctionNameComputed); // [obj, key, rhs]
                 _b.Emit(Opcode.StoreComputed);      // [rhs]
                 var jEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: stack is [obj, key, cur]; discard the
@@ -3699,7 +3702,8 @@ public sealed partial class JsCompiler
             }
             else
             {
-                var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
+                var propName = ((Identifier)me.Property).Name;
+                var nameIdx = _b.AddConstant(propName);
                 EmitExpression(me.Object);          // [obj]
                 _b.Emit(Opcode.Dup);                // [obj, obj]
                 _b.EmitU16(Opcode.LoadProperty, nameIdx); // [obj, cur]
@@ -3708,7 +3712,7 @@ public sealed partial class JsCompiler
                 // Assign path: [obj, cur]. Drop cur, eval RHS, store
                 // (StoreProperty pops obj,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj]
-                EmitExpression(a.Value);            // [obj, rhs]
+                EmitNamedEvaluation(a.Value, propName); // [obj, rhs]
                 _b.EmitU16(Opcode.StoreProperty, nameIdx); // [rhs]
                 var jEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: stack is [obj, cur]; drop the dup'd base
