@@ -20,11 +20,18 @@ public static class AbstractOperations
     {
         if (input.Kind != JsValueKind.Object) return input;
         var obj = input.AsObject;
-        var exotic = obj.Get(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive);
-        if (IsCallable(exotic))
+        var exotic = Get(vm, obj, JsPropertyKey.Symbol(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive));
+        if (!exotic.IsUndefined && !exotic.IsNull)
         {
+            if (!IsCallable(exotic))
+                throw new JsThrow(vm is not null
+                    ? vm.Realm.NewTypeError("@@toPrimitive must be callable")
+                    : JsValue.String("@@toPrimitive must be callable"));
             var r = Call(vm, exotic, input, new[] { JsValue.String(hint) });
             if (r.Kind != JsValueKind.Object) return r;
+            throw new JsThrow(vm is not null
+                ? vm.Realm.NewTypeError("@@toPrimitive must return a primitive value")
+                : JsValue.String("@@toPrimitive must return a primitive value"));
         }
         // §13.4.10 OrdinaryToPrimitive: try toString/valueOf in hint order.
         // Use Get (chain-walking) + Call so BOTH native (e.g.
@@ -113,6 +120,8 @@ public static class AbstractOperations
         // throws "VM required"). Covers compound-assignment / ++ / -- / unary.
         var prim = ToPrimitive(realm.ActiveVm, value, "number");
         if (prim.IsBigInt) return prim;
+        if (prim.IsSymbol)
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
         return JsValue.Number(JsValue.ToNumber(prim));
     }
 

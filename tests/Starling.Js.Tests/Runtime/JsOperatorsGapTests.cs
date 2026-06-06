@@ -458,6 +458,67 @@ public class JsOperatorsGapTests
     }
 
     // -----------------------------------------------------------------
+    //                 primitive conversion and comparisons
+    // -----------------------------------------------------------------
+
+    [TestMethod]
+    public void Loose_equality_uses_ToPrimitive_with_default_hint()
+    {
+        Eval(@"
+            var calls = 0;
+            var o = { [Symbol.toPrimitive]: function(hint) {
+                calls++;
+                return hint === 'default' ? 1 : 0;
+            } };
+            (o == 1) + ',' + calls;
+        ").AsString.Should().Be("true,1");
+    }
+
+    [TestMethod]
+    public void Loose_equality_parses_hex_string_numbers()
+        => Eval("255 == '0xff';").AsBool.Should().BeTrue();
+
+    [TestMethod]
+    public void Relational_comparison_coerces_left_operand_first_for_greater_than()
+    {
+        Eval(@"
+            var log = '';
+            var left = { valueOf: function() { log += 'L'; return 2; } };
+            var right = { valueOf: function() { log += 'R'; return 1; } };
+            (left > right) + ',' + log;
+        ").AsString.Should().Be("true,LR");
+    }
+
+    [TestMethod]
+    public void Relational_comparison_returns_false_for_undefined_result()
+        => Eval("null >= undefined;").AsBool.Should().BeFalse();
+
+    [TestMethod]
+    public void Relational_comparison_coerces_boolean_when_compared_to_bigint()
+        => Eval("(2n > true) + ',' + (0n < true);").AsString.Should().Be("true,true");
+
+    [TestMethod]
+    public void Relational_comparison_with_symbol_throws_type_error()
+    {
+        var act = () => Eval("1n > Symbol('x');");
+        act.Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
+    public void Numeric_operator_ToNumeric_throws_before_rhs_coercion()
+    {
+        Eval(@"
+            var log = '';
+            var left = { valueOf: function() { log += 'L'; return Symbol('x'); } };
+            var right = { valueOf: function() { log += 'R'; throw new Error('no'); } };
+            var name = '';
+            try { left & right; } catch (e) { name = e.name; }
+            log + ',' + name;
+        ").AsString.Should().Be("L,TypeError");
+    }
+
+    // -----------------------------------------------------------------
     //                            Helpers
     // -----------------------------------------------------------------
 

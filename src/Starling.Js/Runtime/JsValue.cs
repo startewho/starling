@@ -130,9 +130,62 @@ public readonly struct JsValue : IEquatable<JsValue>
     {
         s = s.Trim();
         if (s.Length == 0) return 0;
+        if (TryParsePrefixedInteger(s, out var integer))
+            return (double)integer;
         if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
             return d;
         return double.NaN;
+    }
+
+    private static bool TryParsePrefixedInteger(string s, out BigInteger value)
+    {
+        value = default;
+        if (s.Length < 3 || s[0] != '0') return false;
+
+        var radix = s[1] switch
+        {
+            'x' or 'X' => 16,
+            'o' or 'O' => 8,
+            'b' or 'B' => 2,
+            _ => 0,
+        };
+        if (radix == 0) return false;
+        return TryParseIntegerDigits(s.AsSpan(2), radix, out value);
+    }
+
+    internal static bool TryStringToBigInt(string s, out BigInteger value)
+    {
+        s = s.Trim();
+        if (s.Length == 0)
+        {
+            value = BigInteger.Zero;
+            return true;
+        }
+
+        if (TryParsePrefixedInteger(s, out value))
+            return true;
+
+        return BigInteger.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static bool TryParseIntegerDigits(ReadOnlySpan<char> digits, int radix, out BigInteger value)
+    {
+        value = BigInteger.Zero;
+        if (digits.Length == 0) return false;
+
+        foreach (var ch in digits)
+        {
+            int digit;
+            if (ch is >= '0' and <= '9') digit = ch - '0';
+            else if (ch is >= 'a' and <= 'f') digit = ch - 'a' + 10;
+            else if (ch is >= 'A' and <= 'F') digit = ch - 'A' + 10;
+            else return false;
+
+            if (digit >= radix) return false;
+            value = value * radix + digit;
+        }
+
+        return true;
     }
 
     /// <summary>ToString per §7.1.17.</summary>
@@ -218,9 +271,7 @@ public readonly struct JsValue : IEquatable<JsValue>
     /// successfully parses the string to the same value.</summary>
     private static bool BigIntEqualsString(BigInteger b, string s)
     {
-        var trimmed = s.Trim();
-        if (trimmed.Length == 0) return b.IsZero;
-        if (!BigInteger.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        if (!TryStringToBigInt(s, out var parsed))
             return false;
         return b == parsed;
     }
