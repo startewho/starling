@@ -96,10 +96,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         try
         {
             var doc = InlineSvgSerializer.Serialize(svg);
-            var srgb = currentColor.ToSrgb();
-            var color = SixLabors.ImageSharp.Color.FromPixel(
-                new SixLabors.ImageSharp.PixelFormats.Rgba32(srgb.R, srgb.G, srgb.B, srgb.A));
-            var decoded = SvgImageDecoder.DecodeText(doc, color);
+            var decoded = SvgImageDecoder.DecodeText(doc, currentColor);
             image = new ResolvedImage(decoded.Width, decoded.Height, decoded);
             _byElement[svg] = image;
             _inlineSvg.Add(decoded);
