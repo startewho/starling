@@ -2,6 +2,7 @@
 using System.Globalization;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace Starling.Paint.Svg;
 
@@ -71,6 +72,29 @@ internal sealed class SvgStyle
     /// <summary>The inherited <c>currentColor</c> (CSS <c>color</c>).</summary>
     public Color CurrentColor { get; set; } = Color.Black;
 
+    /// <summary><c>display:none</c> removes the element and its subtree. Not
+    /// inherited — it is resolved per element and reset on <see cref="Clone"/>.</summary>
+    public bool DisplayNone { get; set; }
+
+    /// <summary><c>visibility</c>: false hides this element's own geometry but,
+    /// unlike <see cref="DisplayNone"/>, still lets a descendant re-show itself
+    /// with <c>visibility:visible</c>. Inherited.</summary>
+    public bool Visible { get; set; } = true;
+
+    /// <summary><c>paint-order</c>: when true the stroke is painted before the
+    /// fill (i.e. <c>paint-order:stroke</c>). Inherited.</summary>
+    public bool PaintOrderStrokeFirst { get; set; }
+
+    /// <summary><c>mix-blend-mode</c> for this element's paint, or
+    /// <see cref="PixelColorBlendingMode.Normal"/>. Not inherited.</summary>
+    public PixelColorBlendingMode BlendMode { get; set; } = PixelColorBlendingMode.Normal;
+
+    /// <summary>Marker references (ids) for <c>marker-start/-mid/-end</c>, or
+    /// null. Markers apply to path/line/polyline/polygon. Inherited.</summary>
+    public string? MarkerStart { get; set; }
+    public string? MarkerMid { get; set; }
+    public string? MarkerEnd { get; set; }
+
     public SvgStyle Clone() => new()
     {
         Fill = Fill,
@@ -90,6 +114,12 @@ internal sealed class SvgStyle
         StrokeLineJoin = StrokeLineJoin,
         StrokeMiterLimit = StrokeMiterLimit,
         CurrentColor = CurrentColor,
+        // DisplayNone is deliberately NOT inherited (per-element).
+        Visible = Visible,
+        PaintOrderStrokeFirst = PaintOrderStrokeFirst,
+        MarkerStart = MarkerStart,
+        MarkerMid = MarkerMid,
+        MarkerEnd = MarkerEnd,
     };
 
     /// <summary>
@@ -204,8 +234,54 @@ internal sealed class SvgStyle
             case "stroke-miterlimit":
                 if (TryNumber(value, out var ml)) StrokeMiterLimit = Math.Max(1.0, ml);
                 break;
+            case "display":
+                // Any 'none' hides the subtree; every other value (inline, block,
+                // …) shows it. 'display' is not inherited.
+                DisplayNone = value.Equals("none", StringComparison.OrdinalIgnoreCase);
+                break;
+            case "visibility":
+                if (value.Equals("hidden", StringComparison.OrdinalIgnoreCase)
+                    || value.Equals("collapse", StringComparison.OrdinalIgnoreCase))
+                    Visible = false;
+                else if (value.Equals("visible", StringComparison.OrdinalIgnoreCase))
+                    Visible = true;
+                break;
+            case "marker-start":
+                MarkerStart = MarkerRef(value);
+                break;
+            case "marker-mid":
+                MarkerMid = MarkerRef(value);
+                break;
+            case "marker-end":
+                MarkerEnd = MarkerRef(value);
+                break;
+            case "marker":
+                MarkerStart = MarkerMid = MarkerEnd = MarkerRef(value);
+                break;
+            case "mix-blend-mode":
+                BlendMode = value.Trim().ToLowerInvariant() switch
+                {
+                    "multiply" => PixelColorBlendingMode.Multiply,
+                    "screen" => PixelColorBlendingMode.Screen,
+                    "darken" => PixelColorBlendingMode.Darken,
+                    "lighten" => PixelColorBlendingMode.Lighten,
+                    "overlay" => PixelColorBlendingMode.Overlay,
+                    "hard-light" => PixelColorBlendingMode.HardLight,
+                    _ => PixelColorBlendingMode.Normal,
+                };
+                break;
+            case "paint-order":
+                // The first painted layer decides ordering for our fill/stroke
+                // model: 'stroke …' strokes first, anything else fills first.
+                PaintOrderStrokeFirst = value.TrimStart()
+                    .StartsWith("stroke", StringComparison.OrdinalIgnoreCase);
+                break;
         }
     }
+
+    /// <summary>Parse a marker reference: <c>url(#id)</c> → id, anything else (incl. <c>none</c>) → null.</summary>
+    private static string? MarkerRef(string value)
+        => TryFuncIri(value, out var id, out _) ? id : null;
 
     private static bool TryNumber(string v, out float value)
         => float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
