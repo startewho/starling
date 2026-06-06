@@ -4268,6 +4268,12 @@ public sealed partial class JsCompiler
                     _ => throw new NotSupportedException(
                         $"object key kind '{prop.Key.GetType().Name}'"),
                 };
+                if (IsObjectLiteralProtoSetter(prop, propName))
+                {
+                    EmitExpression(prop.Value);          // [obj, value]
+                    _b.Emit(Opcode.SetObjectPrototype);  // [obj]
+                    continue;
+                }
                 var nameIdx = _b.AddConstant(propName);
                 // §named-evaluation — `{ x: function(){} }` names the function "x".
                 EmitNamedEvaluation(prop.Value, propName);       // [obj, value]
@@ -4279,7 +4285,12 @@ public sealed partial class JsCompiler
         }
     }
 
-
+    private static bool IsObjectLiteralProtoSetter(ObjectProperty prop, string propName)
+        => propName == "__proto__"
+            && !prop.Computed
+            && !prop.Shorthand
+            && !prop.IsMethod
+            && prop.Kind == MethodKind.Method;
 
     private enum RestExclusionKind { Constant, Local }
     private readonly record struct RestExclusion(RestExclusionKind Kind, string? Name, int Slot);

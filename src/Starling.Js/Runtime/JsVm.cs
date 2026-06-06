@@ -1360,6 +1360,17 @@ public sealed class JsVm
                             Push(obj);
                             break;
                         }
+                    case Opcode.SetObjectPrototype:
+                        {
+                            var value = Pop();
+                            var obj = Pop();
+                            if (value.IsObject)
+                                obj.AsObject.SetPrototypeOf(value.AsObject);
+                            else if (value.IsNull)
+                                obj.AsObject.SetPrototypeOf(null);
+                            Push(obj);
+                            break;
+                        }
                     // wp:M3-64 — §13.2.5 MakeMethod. Stack: [obj, fn]. Stamp the
                     // method's [[HomeObject]] = the object literal being built so
                     // `super.x` inside it resolves against the object's prototype.
