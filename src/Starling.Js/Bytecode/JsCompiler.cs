@@ -4218,6 +4218,7 @@ public sealed partial class JsCompiler
                 if (prop.Computed)
                 {
                     EmitComputedKey(prop.Key);  // [obj, key]
+                    _b.Emit(Opcode.ToPropertyKey); // [obj, key]
                     EmitExpression(prop.Value); // [obj, key, fn]
                     // wp:M3-64 — §13.2.5 MakeMethod: object-literal accessors get
                     // a [[HomeObject]] = the object so `super.x` resolves.
@@ -4251,7 +4252,10 @@ public sealed partial class JsCompiler
             if (prop.Computed)
             {
                 EmitComputedKey(prop.Key);           // [obj, key]
+                _b.Emit(Opcode.ToPropertyKey);       // [obj, key]
                 EmitExpression(prop.Value);          // [obj, key, value]
+                if (IsAnonymousFunctionDefinition(prop.Value))
+                    _b.Emit(Opcode.SetFunctionNameComputed); // [obj, key, value]
                 // wp:M3-64 — §13.2.5 MakeMethod: a concise method (`{ [k]() {} }`)
                 // gets a [[HomeObject]] = the object so `super.x` resolves; a plain
                 // data property (`{ [k]: fn }`) does NOT.

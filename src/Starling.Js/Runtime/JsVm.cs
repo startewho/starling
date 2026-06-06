@@ -1829,19 +1829,17 @@ public sealed class JsVm
                             // on the current `name` still being "" (so a named expression
                             // or a non-function value is never clobbered).
                             var nameIdx = ReadU16();
+                            StampInferredFunctionName(Peek(), (string)constants[nameIdx]!);
+                            break;
+                        }
+                    case Opcode.SetFunctionNameComputed:
+                        {
                             var target = Peek();
-                            if (target.IsObject && target.AsObject is JsFunction nfn)
-                            {
-                                var cur = nfn.GetOwnPropertyDescriptor("name");
-                                var isAnon = cur is null
-                                    || (cur.Value.IsData && cur.Value.Value.IsString && cur.Value.Value.AsString.Length == 0);
-                                if (isAnon)
-                                {
-                                    var nm = (string)constants[nameIdx]!;
-                                    nfn.DefineOwnProperty("name",
-                                        PropertyDescriptor.Data(JsValue.String(nm), writable: false, enumerable: false, configurable: true));
-                                }
-                            }
+                            var keyValue = stack[sp - 2];
+                            var key = keyValue.IsSymbol
+                                ? JsPropertyKey.Symbol(keyValue.AsSymbol)
+                                : JsPropertyKey.String(JsValue.ToStringValue(keyValue));
+                            StampInferredFunctionName(target, FunctionNameFromPropertyKey(key));
                             break;
                         }
 
@@ -3852,9 +3850,7 @@ public sealed class JsVm
     /// Getters/setters prefix "get "/"set ".</summary>
     private static void StampMethodName(JsFunction fn, JsPropertyKey key, Starling.Js.Bytecode.ClassMethodKind kind)
     {
-        string baseName = key.IsSymbol
-            ? (key.AsSymbol.Description is { } d ? "[" + d + "]" : "")
-            : key.AsString;
+        string baseName = FunctionNameFromPropertyKey(key);
         string prefix = kind switch
         {
             Starling.Js.Bytecode.ClassMethodKind.Get => "get ",
@@ -3863,6 +3859,22 @@ public sealed class JsVm
         };
         fn.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(prefix + baseName), writable: false, enumerable: false, configurable: true));
+    }
+
+    private static string FunctionNameFromPropertyKey(JsPropertyKey key)
+        => key.IsSymbol
+            ? (key.AsSymbol.Description is { } d ? "[" + d + "]" : "")
+            : key.AsString;
+
+    private static void StampInferredFunctionName(JsValue target, string name)
+    {
+        if (!target.IsObject || target.AsObject is not JsFunction fn) return;
+        var cur = fn.GetOwnPropertyDescriptor("name");
+        var isAnon = cur is null
+            || (cur.Value.IsData && cur.Value.Value.IsString && cur.Value.Value.AsString.Length == 0);
+        if (!isAnon) return;
+        fn.DefineOwnProperty("name",
+            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
     }
 
     /// <summary>wp:M3-04f — a zero-arg thunk that simply returns
