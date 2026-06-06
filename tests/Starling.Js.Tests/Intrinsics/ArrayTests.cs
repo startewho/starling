@@ -522,6 +522,51 @@ public class ArrayTests
     }
 
     [TestMethod]
+    public void Array_literal_defines_own_element_over_inherited_readonly_index()
+    {
+        var r = Eval(@"
+            Object.defineProperty(Array.prototype, '0', {
+                value: 100,
+                writable: false,
+                configurable: true
+            });
+            var a = [101];
+            a.hasOwnProperty('0') + ',' + a[0];");
+
+        r.AsString.Should().Be("true,101");
+    }
+
+    [TestMethod]
+    public void Array_literal_keeps_elided_index_when_inherited_index_is_readonly()
+    {
+        var r = Eval(@"
+            Object.defineProperty(Array.prototype, '1', {
+                value: 100,
+                writable: false,
+                configurable: true
+            });
+            var a = [, 12];
+            a.hasOwnProperty('1') + ',' + a[1] + ',' + a.length;");
+
+        r.AsString.Should().Be("true,12,2");
+    }
+
+    [TestMethod]
+    public void Array_literal_after_spread_appends_over_inherited_readonly_index()
+    {
+        var r = Eval(@"
+            Object.defineProperty(Array.prototype, '0', {
+                value: 100,
+                writable: false,
+                configurable: true
+            });
+            var a = [...[], 12];
+            a.hasOwnProperty('0') + ',' + a[0] + ',' + a.length;");
+
+        r.AsString.Should().Be("true,12,1");
+    }
+
+    [TestMethod]
     public void JsArray_host_side_construction_is_an_array()
     {
         var rt = new JsRuntime();

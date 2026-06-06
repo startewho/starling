@@ -5108,11 +5108,12 @@ public sealed partial class JsCompiler
 
     private void EmitArrayLiteral(ArrayExpression ae)
     {
-        // B2-4: arrays are now dense JsArray exotics, so the magic length
-        // slot is derived from the indexed slots. We still walk each element
-        // and StoreProperty its index — JsArray's exotic [[Set]] routes
-        // indexed writes into the dense backing. B3-2: spread elements
-        // dispatch through SpreadIterable which walks @@iterator.
+        // B2-4: arrays are dense JsArray exotics, so the magic length slot is
+        // derived from indexed slots. Literal element creation uses
+        // CreateDataProperty semantics, not ordinary assignment, so inherited
+        // non-writable prototype indexes cannot block a fresh array's elements.
+        // B3-2: spread elements dispatch through SpreadIterable, which walks
+        // @@iterator and appends directly.
         _b.Emit(Opcode.NewArray);
         // Track the next dense index that a plain element should land at.
         // Once a spread runs, subsequent plain elements use Array.prototype.push
@@ -5141,17 +5142,17 @@ public sealed partial class JsCompiler
             {
                 _b.Emit(Opcode.Dup);
                 EmitExpression(element);
-                _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                _b.EmitU16(Opcode.DefineDataProperty, _b.AddConstant(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                 _b.Emit(Opcode.Pop);
             }
             else
             {
-                // Push via length: arr[arr.length] = value
+                // Append via CreateDataProperty(arr, arr.length, value).
                 _b.Emit(Opcode.Dup);            // [arr, arr]
                 _b.Emit(Opcode.Dup);            // [arr, arr, arr]
                 _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
                 EmitExpression(element);        // [arr, arr, len, value]
-                _b.Emit(Opcode.StoreComputed);  // [arr, value]
+                _b.Emit(Opcode.DefineDataComputed); // [arr, arr]
                 _b.Emit(Opcode.Pop);            // [arr]
             }
         }
