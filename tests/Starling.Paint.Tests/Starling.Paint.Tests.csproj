@@ -18,6 +18,14 @@
       <Link>testdata\images\svg\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Content>
   </ItemGroup>
+  <!-- Vendored resvg test-suite SVG corpus (MIT, see testdata/spec/resvg/README.md):
+       one decode test case per file in ResvgCorpusTests. -->
+  <ItemGroup>
+    <Content Include="..\..\testdata\spec\resvg\tests\**\*.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>testdata\spec\resvg\tests\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Starling.Paint\Starling.Paint.csproj" />
     <ProjectReference Include="..\..\src\Starling.Html\Starling.Html.csproj" />
