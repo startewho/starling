@@ -321,6 +321,49 @@ public class ObjectTests
     }
 
     [TestMethod]
+    public void Object_literal_computed_key_to_property_key_runs_before_value()
+    {
+        var r = Eval(@"
+            var value = 'bad';
+            var key = {
+                toString: function() {
+                    value = 'ok';
+                    return 'p';
+                }
+            };
+            var o = { [key]: value };
+            o.p;");
+
+        r.AsString.Should().Be("ok");
+    }
+
+    [TestMethod]
+    public void Object_literal_computed_function_name_uses_string_key()
+    {
+        var r = Eval(@"
+            var key = 'id';
+            var o = { [key]: function() {} };
+            o.id.name;");
+
+        r.AsString.Should().Be("id");
+    }
+
+    [TestMethod]
+    public void Object_literal_computed_function_name_uses_symbol_description()
+    {
+        var r = Eval(@"
+            var named = Symbol('test262');
+            var anon = Symbol();
+            var o = {
+                [named]: function() {},
+                [anon]: function() {}
+            };
+            o[named].name + ',' + o[anon].name;");
+
+        r.AsString.Should().Be("[test262],");
+    }
+
+    [TestMethod]
     public void getOwnPropertyNames_includes_non_enumerable_keys()
     {
         // for/while loops aren't compiled yet (wp:M3-03). Probe length and
