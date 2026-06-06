@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Starling.Paint.Tests" />
+    <InternalsVisibleTo Include="Starling.Paint.NeutralStub" />
     <!-- GUI's PageRendererHost routes through PaintBackendSelector so
          STARLING_PAINT_BACKEND=imagesharp-webgpu flips both layout (measurer)
          and raster backend together. -->

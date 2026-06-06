@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Starling.Layout.Text;
 
 namespace Starling.Paint.Backend;
@@ -6,6 +7,7 @@ internal enum PaintBackendKind
 {
     ImageSharp,
     ImageSharpWebGpu,
+    NeutralStub,
 }
 
 /// <summary>
@@ -40,6 +42,7 @@ internal static class PaintBackendSelector
         {
             "imagesharp" => PaintBackendKind.ImageSharp,
             "imagesharp-webgpu" or "imagesharp-gpu" => PaintBackendKind.ImageSharpWebGpu,
+            "neutral-stub" => PaintBackendKind.NeutralStub,
             _ => throw new InvalidOperationException(
                 $"{EnvVar}='{raw}' is not a recognised paint backend. Allowed values: 'imagesharp', 'imagesharp-webgpu'."),
         };
@@ -50,12 +53,30 @@ internal static class PaintBackendSelector
 
     /// <summary>Single registration point: map each backend kind to its factory.
     /// A non-ImageSharp backend adds an arm here.</summary>
-    internal static IPaintBackendFactory FactoryFor(PaintBackendKind kind) => kind switch
+    private static readonly ConcurrentDictionary<PaintBackendKind, IPaintBackendFactory> Registered = new();
+
+    /// <summary>Register an externally-provided backend factory (a non-ImageSharp
+    /// backend living in its own assembly). This is the plug-in point a second
+    /// renderer uses; the registered factory takes precedence for its kind.</summary>
+    internal static void RegisterFactory(IPaintBackendFactory factory)
     {
-        PaintBackendKind.ImageSharp => new ImageSharpPaintBackendFactory(useWebGpu: false),
-        PaintBackendKind.ImageSharpWebGpu => new ImageSharpPaintBackendFactory(useWebGpu: true),
-        _ => throw new InvalidOperationException($"Unhandled paint backend: {kind}."),
-    };
+        ArgumentNullException.ThrowIfNull(factory);
+        Registered[factory.Kind] = factory;
+    }
+
+    /// <summary>Single registration point: map each backend kind to its factory.</summary>
+    internal static IPaintBackendFactory FactoryFor(PaintBackendKind kind)
+    {
+        if (Registered.TryGetValue(kind, out var registered))
+            return registered;
+        return kind switch
+        {
+            PaintBackendKind.ImageSharp => new ImageSharpPaintBackendFactory(useWebGpu: false),
+            PaintBackendKind.ImageSharpWebGpu => new ImageSharpPaintBackendFactory(useWebGpu: true),
+            _ => throw new InvalidOperationException(
+                $"No paint backend registered for {kind}. A non-ImageSharp backend must call RegisterFactory."),
+        };
+    }
 
     internal static IPaintBackend Create(FontResolver fonts, FontFaceRegistry? webFonts)
     {

@@ -62,6 +62,7 @@
   <Project Path="src/Starling.Layout/Starling.Layout.csproj" />
   <Project Path="src/Starling.Net/Starling.Net.csproj" />
   <Project Path="src/Starling.Paint/Starling.Paint.csproj" />
+  <Project Path="src/Starling.Paint.NeutralStub/Starling.Paint.NeutralStub.csproj" />
   <Project Path="src/Starling.Url/Starling.Url.csproj" />
   <Project Path="src/Starling.AppHost/Starling.AppHost.csproj" />
   <Project Path="src/Starling.ServiceDefaults/Starling.ServiceDefaults.csproj" />
