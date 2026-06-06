@@ -210,6 +210,26 @@ public class ObjectTests
     }
 
     [TestMethod]
+    public void Object_defineProperty_can_replace_configurable_accessor_with_data_descriptor()
+    {
+        var r = Eval(@"
+            var o = {};
+            Object.defineProperty(o, 'foo', {
+                get: function() { return 1; },
+                configurable: true
+            });
+            Object.defineProperty(o, 'foo', {
+                value: 101
+            });
+            var d = Object.getOwnPropertyDescriptor(o, 'foo');
+            d.value + ',' + d.writable + ',' + d.enumerable + ',' + d.configurable
+                + ',' + (typeof d.get) + ',' + (typeof d.set);
+        ");
+
+        r.AsString.Should().Be("101,false,false,true,undefined,undefined");
+    }
+
+    [TestMethod]
     public void getPrototypeOf_returns_Object_prototype_for_literal()
     {
         var rt = new JsRuntime();

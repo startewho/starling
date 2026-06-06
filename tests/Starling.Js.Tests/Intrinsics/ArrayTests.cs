@@ -70,6 +70,23 @@ public class ArrayTests
     }
 
     [TestMethod]
+    public void Array_from_observes_proxy_gets_in_spec_order()
+    {
+        var r = Eval(@"
+            var get = [];
+            var p = new Proxy({ length: 2, 0: '', 1: '' }, {
+                get: function(o, k) {
+                    get.push(k);
+                    return o[k];
+                }
+            });
+            Array.from(p);
+            (get[0] === Symbol.iterator) + ';' + get.slice(1).join(',');");
+
+        r.AsString.Should().Be("true;length,0,1");
+    }
+
+    [TestMethod]
     public void Array_from_string_yields_per_char_array()
     {
         var r = Eval("var a = Array.from('abc'); a.length + ':' + a[0] + a[1] + a[2];");
@@ -77,10 +94,47 @@ public class ArrayTests
     }
 
     [TestMethod]
+    public void Array_from_string_with_mapping_function()
+    {
+        var r = Eval("var a = Array.from('fff', function(s) { return parseInt(s, 16); }); a.length + ':' + a[0] + ',' + a[1] + ',' + a[2];");
+        r.AsString.Should().Be("3:15,15,15");
+    }
+
+    [TestMethod]
+    public void Array_from_iterator_does_not_flatten_entries()
+    {
+        Eval("Array.from(['hello', 'again'].values()).join(';');").AsString.Should().Be("hello;again");
+        Eval("Array.from(new Map([['hello', 'world'], ['another', 'value']]).keys()).join(';');").AsString.Should().Be("hello;another");
+        Eval("Array.from(['hello', 'world'].entries()).join(';');").AsString.Should().Be("0,hello;1,world");
+        Eval("Array.from([, 1, 5].entries()).join(';');").AsString.Should().Be("0,;1,1;2,5");
+    }
+
+    [TestMethod]
+    public void Array_iterator_has_proper_iterator_prototype_chain()
+    {
+        var r = Eval(@"
+            var iterator = [][Symbol.iterator]();
+            var proto1 = Object.getPrototypeOf(iterator);
+            var proto2 = Object.getPrototypeOf(proto1);
+            proto2.hasOwnProperty(Symbol.iterator) + ','
+                + proto1.hasOwnProperty(Symbol.iterator) + ','
+                + iterator.hasOwnProperty(Symbol.iterator) + ','
+                + (iterator[Symbol.iterator]() === iterator);");
+
+        r.AsString.Should().Be("true,false,false,true");
+    }
+
+    [TestMethod]
     public void Length_grows_when_index_assigned_past_end()
     {
         var r = Eval("var a = []; a[5] = 'x'; a.length + ',' + a[5];");
         r.AsString.Should().Be("6,x");
+    }
+
+    [TestMethod]
+    public void Empty_string_array_key_is_ordinary_property()
+    {
+        Eval("var x = []; x[''] = 8; x[''];").AsNumber.Should().Be(8);
     }
 
     [TestMethod]
@@ -119,6 +173,23 @@ public class ArrayTests
     }
 
     [TestMethod]
+    public void Shift_observes_proxy_gets_in_spec_order()
+    {
+        var r = Eval(@"
+            var get = [];
+            var p = new Proxy([0, 1, 2, 3], {
+                get: function(o, k) {
+                    get.push(k);
+                    return o[k];
+                }
+            });
+            Array.prototype.shift.call(p);
+            get.join(',');");
+
+        r.AsString.Should().Be("length,0,1,2,3");
+    }
+
+    [TestMethod]
     public void Unshift_inserts_at_front()
     {
         var r = Eval("var a = [2,3]; var n = a.unshift(0, 1); n + ':' + a[0] + ',' + a[1] + ',' + a[2] + ',' + a[3];");
@@ -148,6 +219,43 @@ public class ArrayTests
     {
         var r = Eval("var a = [3,1,2]; a.sort(function(a,b){return a-b;}); a[0] + ',' + a[1] + ',' + a[2];");
         r.AsString.Should().Be("1,2,3");
+    }
+
+    [TestMethod]
+    public void Sort_is_stable_for_equal_compare_results()
+    {
+        var r = Eval(@"
+            var items = [
+                { name: 'Edward', value: 0 },
+                { name: 'Sharpe', value: 0 },
+                { name: 'And', value: 0 },
+                { name: 'The', value: 1 },
+                { name: 'Magnetic', value: 0 },
+                { name: 'Zeros', value: 0 }
+            ];
+            items.sort(function(a, b) { return a.value - b.value; });
+            items.map(function(item) { return item.name; }).join(',');");
+
+        r.AsString.Should().Be("Edward,Sharpe,And,Magnetic,Zeros,The");
+    }
+
+    [TestMethod]
+    public void ToSorted_is_stable_for_equal_compare_results()
+    {
+        var r = Eval(@"
+            var items = [
+                { name: 'Edward', value: 0 },
+                { name: 'Sharpe', value: 0 },
+                { name: 'And', value: 0 },
+                { name: 'The', value: 1 },
+                { name: 'Magnetic', value: 0 },
+                { name: 'Zeros', value: 0 }
+            ];
+            var sorted = items.toSorted(function(a, b) { return a.value - b.value; });
+            sorted.map(function(item) { return item.name; }).join(',') + ';' +
+                items.map(function(item) { return item.name; }).join(',');");
+
+        r.AsString.Should().Be("Edward,Sharpe,And,Magnetic,Zeros,The;Edward,Sharpe,And,The,Magnetic,Zeros");
     }
 
     [TestMethod]
@@ -195,6 +303,29 @@ public class ArrayTests
     }
 
     [TestMethod]
+    public void Concat_observes_proxy_spread_gets_in_spec_order()
+    {
+        var r = Eval(@"
+            var get = [];
+            var arr = [1];
+            arr.constructor = undefined;
+            var p = new Proxy(arr, {
+                get: function(o, k) {
+                    get.push(k);
+                    return o[k];
+                }
+            });
+            var result = Array.prototype.concat.call(p, p);
+            var firstSpread = get[1] === Symbol.isConcatSpreadable;
+            var secondSpread = get[4] === get[1];
+            get[0] + ';' + firstSpread + ';' + get[2] + ';' + get[3] + ';' +
+                secondSpread + ';' + get[5] + ';' + get[6] + ';' +
+                get.length + ';' + result.join(',');");
+
+        r.AsString.Should().Be("constructor;true;length;0;true;length;0;7;1,1");
+    }
+
+    [TestMethod]
     public void Slice_negative_start_resolves_from_end()
     {
         var r = Eval("var a = [1,2,3,4,5]; var x = a.slice(1, 4); var y = a.slice(-2); x[0] + ',' + x[1] + ',' + x[2] + ';' + y[0] + ',' + y[1];");
@@ -209,10 +340,44 @@ public class ArrayTests
     }
 
     [TestMethod]
+    public void Join_handles_nested_and_circular_arrays()
+    {
+        var r = Eval(@"
+            var c = [1, 2, 3, 4];
+            var b = [1, 2, 3, 4];
+            b[1] = c;
+            c[1] = b;
+            Array.prototype.join.call(c);");
+
+        r.AsString.Should().Be("1,1,,3,4,3,4");
+    }
+
+    [TestMethod]
+    public void ToLocaleString_handles_nested_and_circular_arrays()
+    {
+        var r = Eval(@"
+            var c = [1, 2, 3, 4];
+            var b = [1, 2, 3, 4];
+            b[1] = c;
+            c[1] = b;
+            Array.prototype.toLocaleString.call(c);");
+
+        r.AsString.Should().Be("1,1,,3,4,3,4");
+    }
+
+    [TestMethod]
     public void ToString_uses_default_join()
     {
         var r = Eval("[1,2,3].toString();");
         r.AsString.Should().Be("1,2,3");
+    }
+
+    [TestMethod]
+    public void ToString_falls_back_to_Object_toString_when_join_is_not_callable()
+    {
+        Eval("Array.prototype.toString.call(1);").AsString.Should().Be("[object Number]");
+        Eval("Array.prototype.toString.call({});").AsString.Should().Be("[object Object]");
+        Eval("var a = [1,2,3]; a.join = null; a.toString();").AsString.Should().Be("[object Array]");
     }
 
     [TestMethod]

@@ -113,6 +113,45 @@ public class ReflectTests
     }
 
     [TestMethod]
+    public void Reflect_construct_explicit_undefined_newTarget_throws()
+    {
+        Eval(@"
+            class C { constructor() {} }
+            Reflect.construct(C, []) instanceof C;
+        ").AsBool.Should().BeTrue();
+
+        Action act = () => Eval(@"
+            class C { constructor() {} }
+            Reflect.construct(C, [], undefined);
+        ");
+
+        act.Should().Throw<JsThrow>();
+    }
+
+    [TestMethod]
+    public void Reflect_set_explicit_undefined_receiver_returns_false()
+    {
+        Eval("Reflect.set({}, 'p', 1);").AsBool.Should().BeTrue();
+        Eval("Reflect.set({}, 'p', 1, undefined);").AsBool.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Reflect_get_explicit_undefined_receiver_reaches_accessor_this()
+    {
+        var r = Eval(@"
+            'use strict';
+            var seen;
+            var obj = {};
+            Object.defineProperty(obj, 'p', { get: function() { seen = this; return 1; } });
+            Reflect.get(obj, 'p');
+            var first = seen === obj;
+            Reflect.get(obj, 'p', undefined);
+            first + ',' + (seen === undefined);");
+
+        r.AsString.Should().Be("true,true");
+    }
+
+    [TestMethod]
     public void Reflect_apply_throws_on_non_callable_target()
     {
         Action act = () => Eval("Reflect.apply({}, null, []);");

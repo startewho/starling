@@ -125,6 +125,31 @@ public class JsModuleTests
     }
 
     [TestMethod]
+    public void Multiple_star_reexports_forward_names_from_each_dependency()
+    {
+        var modules = new Dictionary<string, string>
+        {
+            ["import1"] = "export const value1 = 1;",
+            ["import2"] = "export const value2 = 2;",
+            ["barrel"] = "export * from 'import1'; export * from 'import2';",
+            ["main"] = "import { value1, value2 } from 'barrel'; report(`${value1} ${value2}`);",
+        };
+        RunGraph(modules, "main", "").AsString.Should().Be("1 2");
+    }
+
+    [TestMethod]
+    public void Named_star_export_exposes_dependency_namespace()
+    {
+        var modules = new Dictionary<string, string>
+        {
+            ["dep"] = "export const value1 = 5;",
+            ["barrel"] = "export * as ns from 'dep';",
+            ["main"] = "import { ns } from 'barrel'; report(ns.value1);",
+        };
+        RunGraph(modules, "main", "").AsNumber.Should().Be(5);
+    }
+
+    [TestMethod]
     public void Cyclic_import_evaluates_without_deadlock()
     {
         // a imports from b and b imports from a. Per spec, the function

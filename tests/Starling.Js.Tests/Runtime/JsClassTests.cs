@@ -23,6 +23,20 @@ public class JsClassTests
     }
 
     [TestMethod]
+    public void Class_declaration_is_block_scoped()
+    {
+        Eval(@"
+            class C {}
+            var c1 = C;
+            {
+              class C {}
+              var c2 = C;
+            }
+            C === c1;
+        ").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Method_callable_on_instance()
     {
         Eval(@"
@@ -47,6 +61,30 @@ public class JsClassTests
             class Foo { get x() { return 1; } }
             new Foo().x;
         ").AsNumber.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void Getter_can_destructure_nested_members()
+    {
+        Eval(@"
+            class Board {
+                constructor() {
+                    this.grid = { width: 10, height: 10 };
+                }
+
+                get width() {
+                    const { grid } = this;
+                    return grid.width;
+                }
+
+                get doubleWidth() {
+                    const { width } = this;
+                    return width * 2;
+                }
+            }
+            var board = new Board();
+            board.width + ',' + board.doubleWidth;
+        ").AsString.Should().Be("10,20");
     }
 
     [TestMethod]

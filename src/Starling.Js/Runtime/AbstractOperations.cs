@@ -165,6 +165,14 @@ public static class AbstractOperations
     public static JsValue Get(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver = default)
     {
         if (receiver.IsUndefined) receiver = JsValue.Object(obj);
+        return GetCore(vm, obj, key, receiver);
+    }
+
+    public static JsValue GetWithReceiver(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver)
+        => GetCore(vm, obj, key, receiver);
+
+    private static JsValue GetCore(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver)
+    {
         // §10.5.8: Proxy exotic objects route property reads through the [[Get]]
         // internal method (which consults the `get` trap). Done at the AO entry
         // so every call site picks it up — the VM and intrinsics all call here
@@ -219,6 +227,14 @@ public static class AbstractOperations
     public static bool Set(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver = default)
     {
         if (receiver.IsUndefined) receiver = JsValue.Object(obj);
+        return SetCore(vm, obj, key, value, receiver);
+    }
+
+    public static bool SetWithReceiver(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver)
+        => SetCore(vm, obj, key, value, receiver);
+
+    private static bool SetCore(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver)
+    {
         // §10.5.9: Proxy exotic objects route writes through the [[Set]] internal
         // method (which consults the `set` trap). See note on Get above.
         if (obj is JsProxy proxy)
@@ -262,7 +278,8 @@ public static class AbstractOperations
         // For the common case (receiver === obj) this is identical to the old
         // behavior; for super[...] = v / Reflect.set the property is created on
         // the receiver rather than the prototype that was walked.
-        var target = receiver.IsObject ? receiver.AsObject : obj;
+        if (!receiver.IsObject) return false;
+        var target = receiver.AsObject;
         if (target.HasOwn(key))
         {
             var existing = target.GetOwnPropertyDescriptor(key);

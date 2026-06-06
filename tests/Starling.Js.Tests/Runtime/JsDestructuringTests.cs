@@ -53,6 +53,26 @@ public class JsDestructuringTests
     }
 
     [TestMethod]
+    public void Parameter_destructuring_iterates_strings_and_boxes_primitives()
+    {
+        Eval("function f([a, b, c]) { return a + b + ':' + (c === undefined); } f('ab');")
+            .AsString.Should().Be("ab:true");
+        Eval("function f({ toFixed }, { slice }) { return toFixed === Number.prototype.toFixed && slice === String.prototype.slice; } f(2, '');")
+            .AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Parameter_destructuring_supports_computed_properties_length_and_nested_rest()
+    {
+        Eval("var qux = 'corge'; function f({ [qux]: grault }) { return grault; } f({ corge: 'garply' });")
+            .AsString.Should().Be("garply");
+        Eval("((x = 42, y) => {}).length + ',' + ((x, y = 42, z) => {}).length + ',' + ((a, b = 39,) => {}).length + ',' + function({a, b}, [c, d]){}.length;")
+            .AsString.Should().Be("0,1,1,2");
+        Eval("function f([x, ...[y, ...z]]) { return x + ',' + y + ',' + z.join(','); } f([1, 2, 3, 4]);")
+            .AsString.Should().Be("1,2,3,4");
+    }
+
+    [TestMethod]
     public void Assignment_patterns_write_existing_bindings_and_return_rhs()
     {
         Eval("var a = 0, b = 0; [a, b] = [8, 9]; a * 10 + b;").AsNumber.Should().Be(89);
@@ -86,6 +106,29 @@ public class JsDestructuringTests
         Eval("var f = ([a] = [9]) => a; f();").AsNumber.Should().Be(9);
         Eval("var f = ({x = 10} = {}) => x; f({x: undefined});").AsNumber.Should().Be(10);
         Eval("var a = 1, b = 2; [b, a] = [a, b]; a * 10 + b;").AsNumber.Should().Be(21);
+    }
+
+    [TestMethod]
+    public void Var_destructuring_in_for_of_hoists_nested_bindings_in_strict_mode()
+    {
+        Eval(@"
+            'use strict';
+            (function() {
+                var results = [];
+                for (var [[x, y, z] = [4, 5, 6]] of [[]]) {
+                    results.push(x, y, z);
+                }
+                return results.join(',');
+            })();
+        ").AsString.Should().Be("4,5,6");
+
+        Eval(@"
+            'use strict';
+            (function() {
+                for (var { a, b } of [{ a: 1, b: 2 }]) {}
+                return a + ',' + b;
+            })();
+        ").AsString.Should().Be("1,2");
     }
 
     [TestMethod]

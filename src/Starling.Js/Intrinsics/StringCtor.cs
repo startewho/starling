@@ -85,8 +85,12 @@ public static class StringCtor
         IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture)));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "toLocaleUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpper(CultureInfo.InvariantCulture)));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "trim", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: true)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "trimStart", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false)));
-        IntrinsicHelpers.DefineMethod(realm, stringProto, "trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true)));
+        var trimStart = IntrinsicHelpers.DefineMethod(realm, stringProto, "trimStart", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false)));
+        stringProto.DefineOwnProperty("trimLeft",
+            PropertyDescriptor.BuiltinMethod(JsValue.Object(trimStart)));
+        var trimEnd = IntrinsicHelpers.DefineMethod(realm, stringProto, "trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true)));
+        stringProto.DefineOwnProperty("trimRight",
+            PropertyDescriptor.BuiltinMethod(JsValue.Object(trimEnd)));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)));
         IntrinsicHelpers.DefineMethod(realm, stringProto, "valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV)));
 
