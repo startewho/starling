@@ -45,20 +45,27 @@ internal static class PaintBackendSelector
         };
     }
 
+    /// <summary>The factory for the currently-selected backend kind.</summary>
+    internal static IPaintBackendFactory Factory => FactoryFor(Selected);
+
+    /// <summary>Single registration point: map each backend kind to its factory.
+    /// A non-ImageSharp backend adds an arm here.</summary>
+    internal static IPaintBackendFactory FactoryFor(PaintBackendKind kind) => kind switch
+    {
+        PaintBackendKind.ImageSharp => new ImageSharpPaintBackendFactory(useWebGpu: false),
+        PaintBackendKind.ImageSharpWebGpu => new ImageSharpPaintBackendFactory(useWebGpu: true),
+        _ => throw new InvalidOperationException($"Unhandled paint backend: {kind}."),
+    };
+
     internal static IPaintBackend Create(FontResolver fonts, FontFaceRegistry? webFonts)
     {
         ArgumentNullException.ThrowIfNull(fonts);
-        return Selected switch
-        {
-            PaintBackendKind.ImageSharp => new ImageSharpBackend(fonts, webFonts, useWebGpu: false),
-            PaintBackendKind.ImageSharpWebGpu => new ImageSharpBackend(fonts, webFonts, useWebGpu: true),
-            _ => throw new InvalidOperationException($"Unhandled paint backend: {Selected}."),
-        };
+        return Factory.CreateBackend(fonts, webFonts);
     }
 
     internal static ITextMeasurer CreateMeasurer(FontResolver fonts, FontFaceRegistry? webFonts)
     {
         ArgumentNullException.ThrowIfNull(fonts);
-        return new ImageSharpTextMeasurer(fonts, webFonts);
+        return Factory.CreateMeasurer(fonts, webFonts);
     }
 }
