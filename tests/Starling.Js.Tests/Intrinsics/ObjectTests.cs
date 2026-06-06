@@ -254,6 +254,73 @@ public class ObjectTests
     }
 
     [TestMethod]
+    public void Object_literal_proto_object_sets_prototype_without_own_property()
+    {
+        var r = Eval(@"
+            var proto = { inherited: 7 };
+            var o = { __proto__: proto };
+            (Object.getPrototypeOf(o) === proto) + ','
+                + o.inherited + ','
+                + Object.prototype.hasOwnProperty.call(o, '__proto__');");
+
+        r.AsString.Should().Be("true,7,false");
+    }
+
+    [TestMethod]
+    public void Object_literal_proto_null_sets_null_prototype()
+    {
+        var r = Eval(@"
+            var o = { __proto__: null };
+            (Object.getPrototypeOf(o) === null) + ','
+                + Object.prototype.hasOwnProperty.call(o, '__proto__');");
+
+        r.AsString.Should().Be("true,false");
+    }
+
+    [TestMethod]
+    public void Object_literal_proto_primitive_is_ignored()
+    {
+        var r = Eval(@"
+            var o = { __proto__: 1 };
+            (Object.getPrototypeOf(o) === Object.prototype) + ','
+                + Object.prototype.hasOwnProperty.call(o, '__proto__');");
+
+        r.AsString.Should().Be("true,false");
+    }
+
+    [TestMethod]
+    public void Object_literal_computed_proto_is_data_property()
+    {
+        var r = Eval(@"
+            var proto = {};
+            var own = {};
+            var o = { __proto__: proto, ['__proto__']: own };
+            (Object.getPrototypeOf(o) === proto) + ','
+                + Object.prototype.hasOwnProperty.call(o, '__proto__') + ','
+                + (o.__proto__ === own);");
+
+        r.AsString.Should().Be("true,true,true");
+    }
+
+    [TestMethod]
+    public void Object_literal_proto_does_not_call_inherited_setter()
+    {
+        var r = Eval(@"
+            var called = 0;
+            Object.defineProperty(Object.prototype, '__proto__', {
+                set: function() { called++; },
+                configurable: true
+            });
+            var proto = {};
+            var o = { __proto__: proto };
+            called + ','
+                + (Object.getPrototypeOf(o) === proto) + ','
+                + Object.prototype.hasOwnProperty.call(o, '__proto__');");
+
+        r.AsString.Should().Be("0,true,false");
+    }
+
+    [TestMethod]
     public void getOwnPropertyNames_includes_non_enumerable_keys()
     {
         // for/while loops aren't compiled yet (wp:M3-03). Probe length and

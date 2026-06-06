@@ -174,6 +174,7 @@ public enum Opcode : byte
     // invoke an inherited/own setter). Stack: [obj, value] → [obj].
     DefineDataProperty,   // [u16 nameIdx]
     DefineDataComputed,   // stack: [obj, key, value] → [obj]
+    SetObjectPrototype,   // stack: [obj, value] → [obj] — object literal { __proto__: value }
 
     // ----- Calls -----
     Call,           // [u8 argc] callee + args on stack; this=Undefined
