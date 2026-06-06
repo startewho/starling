@@ -3761,6 +3761,29 @@ public sealed partial class JsCompiler
             return;
         }
         EmitExpression(m.Object);
+        if (m.Optional)
+        {
+            _b.Emit(Opcode.Dup);                  // [obj, obj]
+            var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one
+            _b.Emit(Opcode.Pop);                  // []
+            _b.Emit(Opcode.LoadUndefined);        // [undefined]
+            var done = _b.EmitJump(Opcode.Jump);
+            _b.PatchJump(notNullish);             // [obj]
+            if (m.Computed)
+            {
+                EmitExpression(m.Property);
+                RecordPos(m);
+                _b.Emit(Opcode.LoadComputed);
+            }
+            else
+            {
+                var optionalName = ((Identifier)m.Property).Name;
+                RecordPos(m);
+                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant(optionalName));
+            }
+            _b.PatchJump(done);
+            return;
+        }
         if (m.Computed)
         {
             EmitExpression(m.Property);

@@ -2,6 +2,7 @@ using AwesomeAssertions;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
+using Starling.Spec;
 namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
@@ -516,6 +517,50 @@ public class JsOperatorsGapTests
             try { left & right; } catch (e) { name = e.name; }
             log + ',' + name;
         ").AsString.Should().Be("L,TypeError");
+    }
+
+    // -----------------------------------------------------------------
+    //                    nullish property references
+    // -----------------------------------------------------------------
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-property-accessors", "13.3.2")]
+    [SpecFact]
+    public void Property_load_from_nullish_base_throws_type_error()
+    {
+        ((Action)(() => Eval("null.x;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("undefined.x;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-property-accessors", "13.3.3")]
+    [SpecFact]
+    public void Computed_property_load_from_nullish_base_throws_type_error()
+    {
+        ((Action)(() => Eval("null['x'];"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("undefined['x'];"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators-runtime-semantics-evaluation", "13.15.2")]
+    [SpecFact]
+    public void Property_store_to_nullish_base_throws_type_error_in_sloppy_mode()
+    {
+        ((Action)(() => Eval("var x = null; x.p = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("var x; x.p = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators-runtime-semantics-evaluation", "13.15.2")]
+    [SpecFact]
+    public void Computed_property_store_to_nullish_base_throws_type_error_in_sloppy_mode()
+    {
+        ((Action)(() => Eval("var x = null; x['p'] = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("var x; x['p'] = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
     }
 
     // -----------------------------------------------------------------
