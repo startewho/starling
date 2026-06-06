@@ -130,10 +130,9 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         LayoutRect viewport,
         float scale,
         bool opaqueBackground,
-        GpuPaintDeviceContext context)
+        GpuPaintDevice device)
     {
         ArgumentNullException.ThrowIfNull(list);
-        ArgumentNullException.ThrowIfNull(context);
 
         if (!_useWebGpu)
         {
@@ -170,12 +169,12 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         {
             using (StarlingTelemetry.Span("paint", "raster.context_init"))
             {
-                context.ThrowIfDisposed();
+                ImageSharpGpuContext.GetOrCreate(device).ThrowIfDisposed();
             }
 
             using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
             {
-                target = context.CreateRenderTarget(WebGPUTextureFormat.Rgba8Unorm, width, height);
+                target = ImageSharpGpuContext.GetOrCreate(device).CreateRenderTarget(WebGPUTextureFormat.Rgba8Unorm, width, height);
             }
 
             using var pendingImageSources = new DisposableBag();

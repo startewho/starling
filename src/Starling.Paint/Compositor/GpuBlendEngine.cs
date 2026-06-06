@@ -42,7 +42,6 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private PipelineLayout* _pipelineLayout;
     private ShaderModule* _shader;
     private readonly Dictionary<(TextureFormat Format, TextureAlphaMode AlphaMode), nint> _pipelines = new();
-    private GpuPaintDeviceContext? _imageSharpContext;
 
     // Per-layer GPU textures, keyed by slice content hash. Resident across frames
     // so an unchanged layer never re-uploads.
@@ -415,14 +414,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
     }
 
-    internal GpuPaintDeviceContext ImageSharpContext
-    {
-        get
-        {
-            _imageSharpContext ??= new GpuPaintDeviceContext((nint)Device, (nint)Queue);
-            return _imageSharpContext;
-        }
-    }
+    internal GpuPaintDevice GpuDevice => new((nint)Device, (nint)Queue);
 
     /// <summary>Lazily builds the blend pipeline for a target format and texture alpha mode.</summary>
     private RenderPipeline* PipelineFor(TextureFormat format, TextureAlphaMode alphaMode = TextureAlphaMode.Premultiplied)
@@ -895,12 +887,8 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }
         if (_pipelineLayout != null) { Api.PipelineLayoutRelease(_pipelineLayout); _pipelineLayout = null; }
         if (_bindLayout != null) { Api.BindGroupLayoutRelease(_bindLayout); _bindLayout = null; }
-        if (_imageSharpContext is not null)
-        {
-            _imageSharpContext.Dispose();
-            _imageSharpContext = null;
-            ImageSharpWebGpuDeviceStateCache.TryDispose((nint)Device);
-        }
+        ImageSharpGpuContext.DisposeForDevice((nint)Device);
+        ImageSharpWebGpuDeviceStateCache.TryDispose((nint)Device);
         if (Queue != null) Api.QueueRelease(Queue);
         if (Device != null) Api.DeviceRelease(Device);
     }
