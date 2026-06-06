@@ -2,6 +2,7 @@
 
 using System.Reflection;
 using SixLabors.ImageSharp.Drawing.Processing.Backends;
+using Starling.Paint.Backend;
 
 namespace Starling.Paint.Interop;
 
@@ -24,6 +25,8 @@ internal static class ImageSharpWebGpuDeviceStateCache
 
     internal static bool TryDispose(nint deviceHandle)
     {
+        // Also tear down the adapter's cached WebGPU device context for this device.
+        ImageSharpGpuContext.DisposeForDevice(deviceHandle);
         if (deviceHandle == 0 || CacheHooks.Value is not { } hooks)
         {
             return false;
