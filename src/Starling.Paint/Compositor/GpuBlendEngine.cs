@@ -887,7 +887,8 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }
         if (_pipelineLayout != null) { Api.PipelineLayoutRelease(_pipelineLayout); _pipelineLayout = null; }
         if (_bindLayout != null) { Api.BindGroupLayoutRelease(_bindLayout); _bindLayout = null; }
-        ImageSharpGpuContext.DisposeForDevice((nint)Device);
+        // TryDispose also tears down the adapter's cached WebGPU device context,
+        // so the compositor never references the ImageSharp adapter type directly.
         ImageSharpWebGpuDeviceStateCache.TryDispose((nint)Device);
         if (Queue != null) Api.QueueRelease(Queue);
         if (Device != null) Api.DeviceRelease(Device);

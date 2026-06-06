@@ -53,7 +53,10 @@ internal sealed class ImageSharpGpuContext : IDisposable
         _context = ContextConstructor.Invoke([deviceHandle, queueHandle]);
     }
 
-    /// <summary>The cached context for <paramref name="device"/>, created on first use.</summary>
+    /// <summary>The cached context for <paramref name="device"/>, created on first use.
+    /// Keyed by device handle; <see cref="DisposeForDevice"/> must run on device
+    /// teardown (it does, via the engine's dispose) so a reused handle never hits a
+    /// stale context.</summary>
     public static ImageSharpGpuContext GetOrCreate(GpuPaintDevice device)
         => ByDevice.GetOrAdd(device.Device, static (_, d) => new ImageSharpGpuContext(d.Device, d.Queue), device);
 
