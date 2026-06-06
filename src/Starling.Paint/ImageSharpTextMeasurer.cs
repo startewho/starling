@@ -95,6 +95,10 @@ public sealed class ImageSharpTextMeasurer : ITextMeasurer, IDisposable
         for (var i = 0; i < metrics.Length; i++)
         {
             var gm = metrics[i];
+            // ImageSharp.Drawing's public API does not expose the OpenType
+            // glyph index (GlyphMetrics.GlyphId is internal), so the codepoint
+            // is carried as a stand-in. See ShapedGlyph for why this is fine:
+            // glyph ids are not portable across shaping engines anyway.
             glyphs[i] = new ShapedGlyph((uint)gm.CodePoint.Value, pen, 0f);
             pen += gm.Advance.Width;
         }
