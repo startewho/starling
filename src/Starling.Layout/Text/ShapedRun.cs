@@ -40,6 +40,15 @@ public abstract class ShapedRun
     public double Advance { get; }
 
     /// <summary>
+    /// Whether the paint backend can reuse this run's pre-shaped data to draw at
+    /// <paramref name="fontSize"/> without re-shaping. The backend asks the run
+    /// instead of pattern-matching its concrete type, so a non-ImageSharp run
+    /// (e.g. <see cref="GlyphShapedRun"/>) is handled without a down-cast. Default
+    /// false — a run that carries no renderer-ready payload forces the slow path.
+    /// </summary>
+    public virtual bool CanReuseAtSize(double fontSize) => false;
+
+    /// <summary>
     /// Carve a sub-run out of an already-shaped run. Used by inline layout to
     /// shape a whole text run once and then split the result per-word for the
     /// existing per-fragment data structures (hit-testing, alignment, line
