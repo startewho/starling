@@ -208,10 +208,54 @@ public readonly struct JsValue : IEquatable<JsValue>
         if (double.IsPositiveInfinity(d)) return "Infinity";
         if (double.IsNegativeInfinity(d)) return "-Infinity";
         if (d == 0) return "0";
-        // Integer fast path.
-        if (d == Math.Truncate(d) && Math.Abs(d) < 1e21)
-            return ((long)d).ToString(CultureInfo.InvariantCulture);
-        return d.ToString("R", CultureInfo.InvariantCulture);
+
+        var sign = string.Empty;
+        if (d < 0)
+        {
+            sign = "-";
+            d = -d;
+        }
+
+        // Fast path for small integers that fit without exponent rewriting.
+        if (d == Math.Truncate(d) && d <= long.MaxValue)
+            return sign + ((long)d).ToString(CultureInfo.InvariantCulture);
+
+        var raw = d.ToString("R", CultureInfo.InvariantCulture);
+        var exponentPos = raw.IndexOf('E');
+        if (exponentPos < 0) exponentPos = raw.IndexOf('e');
+        if (exponentPos < 0) return sign + raw;
+
+        return sign + FormatEcmaScientific(raw, exponentPos);
+    }
+
+    private static string FormatEcmaScientific(string raw, int exponentPos)
+    {
+        var mantissa = raw[..exponentPos];
+        var exponent = int.Parse(raw[(exponentPos + 1)..],
+            NumberStyles.AllowLeadingSign,
+            CultureInfo.InvariantCulture);
+        var dot = mantissa.IndexOf('.');
+        var digits = dot < 0
+            ? mantissa
+            : mantissa[..dot] + mantissa[(dot + 1)..];
+        var decimalPoint = exponent + 1;
+
+        if (decimalPoint is > 0 and <= 21)
+        {
+            if (digits.Length <= decimalPoint)
+                return digits + new string('0', decimalPoint - digits.Length);
+            return digits[..decimalPoint] + "." + digits[decimalPoint..];
+        }
+
+        if (decimalPoint is <= 0 and > -6)
+            return "0." + new string('0', -decimalPoint) + digits;
+
+        var exponentText = exponent >= 0
+            ? "+" + exponent.ToString(CultureInfo.InvariantCulture)
+            : exponent.ToString(CultureInfo.InvariantCulture);
+        return digits.Length == 1
+            ? digits + "e" + exponentText
+            : digits[0] + "." + digits[1..] + "e" + exponentText;
     }
 
     /// <summary>Strict equality per §7.2.16 (no coercion).</summary>

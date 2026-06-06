@@ -89,6 +89,29 @@ public class NumberTests
     }
 
     [TestMethod]
+    public void Number_to_string_uses_ecmascript_exponent_thresholds()
+    {
+        Eval("String(1e55);").AsString.Should().Be("1e+55");
+        Eval("String(1e-6);").AsString.Should().Be("0.000001");
+        Eval("String(1e-7);").AsString.Should().Be("1e-7");
+        Eval("String(1e20);").AsString.Should().Be("100000000000000000000");
+        Eval("String(1e21);").AsString.Should().Be("1e+21");
+    }
+
+    [TestMethod]
+    public void Computed_numeric_property_keys_use_ecmascript_number_strings()
+    {
+        var r = Eval(@"
+            var o = {
+                [1e55]: 'big',
+                [0.000001]: 'small'
+            };
+            o['1e+55'] + ',' + o['0.000001'];");
+
+        r.AsString.Should().Be("big,small");
+    }
+
+    [TestMethod]
     public void Number_coercion_overflow_from_numeric_and_string_literals()
     {
         Eval("Number(1e1000);").AsNumber.Should().Be(double.PositiveInfinity);
