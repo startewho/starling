@@ -76,8 +76,10 @@ public sealed class NeutralSeamTests
         if (t.Name.StartsWith("ImageSharp", StringComparison.Ordinal)) return false;
         if (t.Name.StartsWith('<')) return false; // compiler-generated
         return t.Namespace == "Starling.Paint.DisplayList"
-            || (t.Namespace == "Starling.Paint.Backend"
-                && (t.IsInterface || t.Name is "GpuPaintTexture" or "GpuPaintDeviceContext"))
+            || (t.Namespace == "Starling.Paint.Backend" && !t.IsNested
+                && (t.IsInterface
+                    || t.Name.StartsWith("GpuPaint", StringComparison.Ordinal)
+                    || t.Name == "PaintTextureFormat"))
             || (t.Namespace == "Starling.Paint.Compositor" && t.IsInterface);
     }
 
