@@ -84,6 +84,22 @@ Source: <https://github.com/html5lib/html5lib-tests>
 
 License: MIT.
 
+## resvg Test Suite
+
+Path: `testdata/spec/resvg/`
+
+Source: <https://github.com/linebender/resvg-test-suite>
+
+License: MIT, Copyright (c) 2018 Reizner Evgeniy. See
+`testdata/spec/resvg/LICENSE`.
+
+A vendored snapshot of the resvg project's SVG conformance corpus (1,679 `.svg`
+files; the upstream reference PNGs are not vendored). Starling's SVG decode
+tests run each file through the managed SVG rasterizer. With deep thanks to the
+resvg authors for their excellent work building and openly sharing what is one
+of the best static-SVG test suites available. resvg itself lives at
+<https://github.com/linebender/resvg>.
+
 ## Web Platform Tests Encoding Fixtures
 
 Path: `testdata/wpt/encoding/`
