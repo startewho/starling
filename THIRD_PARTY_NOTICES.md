@@ -31,6 +31,26 @@ apply to your use.
 The current paint path directly references these packages. Building Starling
 requires a valid Six Labors license key. The repo does not ship that key.
 
+## Jint JavaScript Engine
+
+Packages:
+
+- `Jint` — BSD 2-Clause License, Copyright (c) 2013 Sebastien Ros
+- `Acornima` — BSD 3-Clause License, Copyright (c) Adam Simon
+
+Sources:
+
+- <https://github.com/sebastienros/jint>
+- <https://github.com/adams85/acornima>
+
+License: BSD-2-Clause (Jint) and BSD-3-Clause (Acornima). Both permit binary
+redistribution provided the copyright notice, license conditions, and
+disclaimer are reproduced. Full texts: see `third-party-licenses/`.
+
+The optional Jint JS backend (`src/Starling.Bindings.Jint`, selected via
+`STARLING_JS_ENGINE=jint`) references these packages. Acornima is Jint's only
+dependency. Both ship in any build that includes that backend.
+
 ## Geist Fonts
 
 Path: `src/Starling.Gui/Assets/Fonts/`
