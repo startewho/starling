@@ -16,6 +16,7 @@ public sealed class JsStringObject : JsObject
 
     public JsStringObject(JsObject? prototype, string text) : base(prototype)
     {
+        DisableInlineCache();
         Text = text;
     }
 

@@ -41,6 +41,7 @@ public sealed class JsProxy : JsObject
         ArgumentNullException.ThrowIfNull(realm);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(handler);
+        DisableInlineCache();
         _realm = realm;
         Target = target;
         Handler = handler;

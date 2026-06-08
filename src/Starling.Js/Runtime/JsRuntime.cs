@@ -75,26 +75,50 @@ public sealed class JsRuntime
         SymbolCtor.Install(Realm);
         IteratorIntrinsics.Install(Realm); // B3-2 — depends on SymbolCtor for @@iterator.
         GeneratorIntrinsics.Install(Realm); // B1b-2c — depends on IteratorIntrinsics for %IteratorPrototype%.
-        MapCtor.Install(Realm);            // B3-3 — depends on B3-2 iterator protocol.
-        SetCtor.Install(Realm);
-        WeakMapCtor.Install(Realm);
-        WeakSetCtor.Install(Realm);
-        WeakRefCtor.Install(Realm);                          // B4-6
-        FinalizationRegistryCtor.Install(Realm, this);       // B4-6
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Map", () => MapCtor.Install(Realm));            // B3-3 — depends on B3-2 iterator protocol (lazy).
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Set", () => SetCtor.Install(Realm));
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("WeakMap", () => WeakMapCtor.Install(Realm));
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("WeakSet", () => WeakSetCtor.Install(Realm));
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("WeakRef", () => WeakRefCtor.Install(Realm));                          // B4-6 (lazy)
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("FinalizationRegistry", () => FinalizationRegistryCtor.Install(Realm, this)); // B4-6 — installer captures the runtime (lazy).
         Globals.Install(Realm);
-        MathObj.Install(Realm);
-        JsonObj.Install(Realm);
-        ArrayBufferCtor.Install(Realm);
-        DataViewCtor.Install(Realm);
-        TypedArrayCtors.Install(Realm);
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Math", () => MathObj.Install(Realm));
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("JSON", () => JsonObj.Install(Realm));
+        // ArrayBuffer / DataView / every typed array share ONE materialize thunk
+        // (typed arrays need ArrayBuffer; DataView views a buffer). Reserving
+        // every cluster name against the same delegate means touching any one
+        // installs all three groups, and the cluster-sibling sweep in
+        // JsGlobalObject.Materialize clears the rest from the registry.
+        {
+            var g = (JsGlobalObject)Realm.GlobalObject;
+            Action installBuffers = () =>
+            {
+                ArrayBufferCtor.Install(Realm);
+                DataViewCtor.Install(Realm);
+                TypedArrayCtors.Install(Realm);
+            };
+            g.ReserveLazyGlobal("ArrayBuffer", installBuffers);
+            g.ReserveLazyGlobal("DataView", installBuffers);
+            g.ReserveLazyGlobal("Int8Array", installBuffers);
+            g.ReserveLazyGlobal("Uint8Array", installBuffers);
+            g.ReserveLazyGlobal("Uint8ClampedArray", installBuffers);
+            g.ReserveLazyGlobal("Int16Array", installBuffers);
+            g.ReserveLazyGlobal("Uint16Array", installBuffers);
+            g.ReserveLazyGlobal("Int32Array", installBuffers);
+            g.ReserveLazyGlobal("Uint32Array", installBuffers);
+            g.ReserveLazyGlobal("Float32Array", installBuffers);
+            g.ReserveLazyGlobal("Float64Array", installBuffers);
+            g.ReserveLazyGlobal("BigInt64Array", installBuffers);
+            g.ReserveLazyGlobal("BigUint64Array", installBuffers);
+        }
         ConsoleObj.Install(Realm);
         PromiseCtor.Install(Realm); // B3-4 — depends on Object/Function/Error protos.
         RegExpCtor.Install(Realm);  // B4-1 — depends on Function/Error/Array protos.
-        DateCtor.Install(Realm);    // B4-2 — depends on Function.prototype only.
-        IntlObj.Install(Realm);     // Intl-lite bundle compatibility surface.
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Date", () => DateCtor.Install(Realm)); // B4-2 — depends on Function.prototype only (lazy).
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Intl", () => IntlObj.Install(Realm)); // Intl-lite bundle compatibility surface (lazy).
         BigIntCtor.Install(Realm);  // B4-3 — depends on Function.prototype only.
-        ProxyCtor.Install(Realm);   // B4-4 — depends on Function.prototype only.
-        ReflectObj.Install(Realm);  // B4-4 — depends on Symbol (for @@toStringTag).
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Proxy", () => ProxyCtor.Install(Realm));   // B4-4 — depends on Function.prototype only (lazy).
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Reflect", () => ReflectObj.Install(Realm)); // B4-4 — depends on Symbol (for @@toStringTag) (lazy).
         Global.Set("globalThis", JsValue.Object(Global));
         Global.Set("undefined", JsValue.Undefined);
         Global.Set("NaN", JsValue.NaN);
