@@ -20,11 +20,18 @@ public static class AbstractOperations
     {
         if (input.Kind != JsValueKind.Object) return input;
         var obj = input.AsObject;
-        var exotic = obj.Get(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive);
-        if (IsCallable(exotic))
+        var exotic = Get(vm, obj, JsPropertyKey.Symbol(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive));
+        if (!exotic.IsUndefined && !exotic.IsNull)
         {
+            if (!IsCallable(exotic))
+                throw new JsThrow(vm is not null
+                    ? vm.Realm.NewTypeError("@@toPrimitive must be callable")
+                    : JsValue.String("@@toPrimitive must be callable"));
             var r = Call(vm, exotic, input, new[] { JsValue.String(hint) });
             if (r.Kind != JsValueKind.Object) return r;
+            throw new JsThrow(vm is not null
+                ? vm.Realm.NewTypeError("@@toPrimitive must return a primitive value")
+                : JsValue.String("@@toPrimitive must return a primitive value"));
         }
         // §13.4.10 OrdinaryToPrimitive: try toString/valueOf in hint order.
         // Use Get (chain-walking) + Call so BOTH native (e.g.
@@ -113,6 +120,8 @@ public static class AbstractOperations
         // throws "VM required"). Covers compound-assignment / ++ / -- / unary.
         var prim = ToPrimitive(realm.ActiveVm, value, "number");
         if (prim.IsBigInt) return prim;
+        if (prim.IsSymbol)
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
         return JsValue.Number(JsValue.ToNumber(prim));
     }
 
@@ -165,6 +174,14 @@ public static class AbstractOperations
     public static JsValue Get(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver = default)
     {
         if (receiver.IsUndefined) receiver = JsValue.Object(obj);
+        return GetCore(vm, obj, key, receiver);
+    }
+
+    public static JsValue GetWithReceiver(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver)
+        => GetCore(vm, obj, key, receiver);
+
+    private static JsValue GetCore(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver)
+    {
         // §10.5.8: Proxy exotic objects route property reads through the [[Get]]
         // internal method (which consults the `get` trap). Done at the AO entry
         // so every call site picks it up — the VM and intrinsics all call here
@@ -219,6 +236,14 @@ public static class AbstractOperations
     public static bool Set(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver = default)
     {
         if (receiver.IsUndefined) receiver = JsValue.Object(obj);
+        return SetCore(vm, obj, key, value, receiver);
+    }
+
+    public static bool SetWithReceiver(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver)
+        => SetCore(vm, obj, key, value, receiver);
+
+    private static bool SetCore(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver)
+    {
         // §10.5.9: Proxy exotic objects route writes through the [[Set]] internal
         // method (which consults the `set` trap). See note on Get above.
         if (obj is JsProxy proxy)
@@ -262,7 +287,8 @@ public static class AbstractOperations
         // For the common case (receiver === obj) this is identical to the old
         // behavior; for super[...] = v / Reflect.set the property is created on
         // the receiver rather than the prototype that was walked.
-        var target = receiver.IsObject ? receiver.AsObject : obj;
+        if (!receiver.IsObject) return false;
+        var target = receiver.AsObject;
         if (target.HasOwn(key))
         {
             var existing = target.GetOwnPropertyDescriptor(key);

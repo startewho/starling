@@ -35,18 +35,22 @@ public sealed class JsModuleNamespace : JsObject
     /// <summary>The exported names sorted by code unit (Array.prototype.sort
     /// default order), per §10.4.6.10 step 4. Cached so [[OwnPropertyKeys]] is a
     /// stable, ordered view.</summary>
-    private readonly List<string> _sortedNames;
+    private readonly List<string> _sortedNames = new();
 
     /// <summary>§10.4.6 — a module namespace object has no [[Prototype]] and is
     /// not extensible from creation; build it that way. Internal because
     /// <see cref="Cell"/> (the live-binding box) is engine-internal.</summary>
-    internal JsModuleNamespace(IReadOnlyDictionary<string, Cell> exports)
+    internal JsModuleNamespace(Dictionary<string, Cell> exports)
         : base(prototype: null)
     {
-        _exports = new Dictionary<string, Cell>(exports, StringComparer.Ordinal);
-        _sortedNames = new List<string>(_exports.Keys);
-        // Array.prototype.sort's default comparator orders by UTF-16 code unit,
-        // which is exactly an ordinal string comparison.
+        _exports = exports;
+        RefreshExportNames();
+    }
+
+    internal void RefreshExportNames()
+    {
+        _sortedNames.Clear();
+        _sortedNames.AddRange(_exports.Keys);
         _sortedNames.Sort(string.CompareOrdinal);
     }
 

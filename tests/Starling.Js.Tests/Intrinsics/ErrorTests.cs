@@ -151,6 +151,19 @@ public class ErrorTests
         Eval("(new TypeError()).toString();").AsString.Should().Be("TypeError");
     }
 
+    [TestMethod]
+    public void Error_stack_is_inherited_accessor_on_prototype()
+    {
+        var r = Eval(@"
+            Error().hasOwnProperty('stack') + ','
+                + Error.prototype.hasOwnProperty('stack') + ','
+                + (typeof Object.getOwnPropertyDescriptor(Error.prototype, 'stack').get) + ','
+                + (typeof Error().stack);
+        ");
+
+        r.AsString.Should().Be("false,true,function,string");
+    }
+
     // ---------------------------------------------------------- cause
 
     [TestMethod]

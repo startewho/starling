@@ -240,7 +240,16 @@ public static class NumberCtor
         var p = ToDigits(new[] { precisionValue }, 0);
         if (p < 1 || p > 100) throw new JsThrow(realm.NewRangeError("toPrecision precision out of range"));
         if (double.IsNaN(n) || double.IsInfinity(n)) return JsValue.String(JsValue.ToStringValue(JsValue.Number(n)));
-        return JsValue.String(NormalizeExponent(n.ToString("G" + p.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture)));
+        if (n == 0)
+            return JsValue.String(p == 1 ? "0" : "0." + new string('0', p - 1));
+
+        var exponent = (int)Math.Floor(Math.Log10(Math.Abs(n)));
+        if (exponent >= p || exponent < -6)
+            return JsValue.String(ToExponential(n, JsValue.Number(p - 1), realm));
+
+        var fractionDigits = Math.Max(0, p - exponent - 1);
+        return JsValue.String(n.ToString("F" + fractionDigits.ToString(CultureInfo.InvariantCulture),
+            CultureInfo.InvariantCulture));
     }
 
     private static string ToExponential(double n, JsValue digitsValue, JsRealm realm)

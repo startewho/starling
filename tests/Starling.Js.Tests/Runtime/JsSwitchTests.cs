@@ -227,6 +227,26 @@ public class JsSwitchTests
         ").AsNumber.Should().Be(42);
     }
 
+    [SpecFact]
+    public void Switch_case_block_allows_distinct_const_bindings_in_different_clauses()
+    {
+        Eval(@"
+            var switchVal = 1;
+            function getCoffee() { return 'coffee'; }
+            function myFunc() {
+                switch (switchVal) {
+                    case 0:
+                        const text = getCoffee();
+                        return text;
+                    case 1:
+                        const line = getCoffee();
+                        return line;
+                }
+            }
+            myFunc();
+        ").AsString.Should().Be("coffee");
+    }
+
     // -----------------------------------------------------------------------
     // Helper
     // -----------------------------------------------------------------------

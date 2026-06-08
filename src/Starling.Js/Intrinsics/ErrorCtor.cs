@@ -68,7 +68,7 @@ public static class ErrorCtor
         }, isConstructor: true);
 
         WireConstructor(realm, ctor, proto, "Error", parentCtor: null);
-        PopulatePrototype(proto, "Error");
+        PopulatePrototype(realm, proto, "Error");
 
         realm.GlobalObject.DefineOwnProperty("Error",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -91,7 +91,7 @@ public static class ErrorCtor
         }, isConstructor: true);
 
         WireConstructor(realm, ctor, proto, name, parentCtor);
-        PopulatePrototype(proto, name);
+        PopulatePrototype(realm, proto, name);
 
         realm.GlobalObject.DefineOwnProperty(name,
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -133,7 +133,7 @@ public static class ErrorCtor
         }, isConstructor: true);
 
         WireConstructor(realm, ctor, proto, "AggregateError", parentCtor);
-        PopulatePrototype(proto, "AggregateError");
+        PopulatePrototype(realm, proto, "AggregateError");
 
         realm.GlobalObject.DefineOwnProperty("AggregateError",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -175,7 +175,7 @@ public static class ErrorCtor
 
     /// <summary>Populate an Error-family prototype with <c>name</c>,
     /// <c>message</c>, and a shared-shape <c>toString</c>.</summary>
-    private static void PopulatePrototype(JsObject proto, string name)
+    private static void PopulatePrototype(JsRealm realm, JsObject proto, string name)
     {
         proto.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(name),
@@ -194,6 +194,10 @@ public static class ErrorCtor
             toStringFn.DefineOwnProperty("length",
                 PropertyDescriptor.Data(JsValue.Number(0), writable: false, enumerable: false, configurable: true));
             proto.DefineOwnProperty("toString", PropertyDescriptor.BuiltinMethod(JsValue.Object(toStringFn)));
+            var stackGetter = new JsNativeFunction(realm, "get stack", 0,
+                (thisV, _) => ToStringImpl(thisV), isConstructor: false);
+            proto.DefineOwnProperty("stack",
+                PropertyDescriptor.Accessor(stackGetter, null, enumerable: false, configurable: true));
         }
     }
 

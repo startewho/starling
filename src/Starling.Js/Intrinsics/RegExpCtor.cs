@@ -28,11 +28,8 @@ public static class RegExpCtor
 
         IntrinsicHelpers.DefineMethod(realm, proto, "exec", 1, (thisV, args) => Exec(realm, thisV, args));
         IntrinsicHelpers.DefineMethod(realm, proto, "test", 1, (thisV, args) => Test(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0, (thisV, _) =>
-        {
-            var re = RequireRegExp(realm, thisV);
-            return JsValue.String(re.ToString());
-        });
+        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0,
+            (thisV, _) => RegExpToString(realm, thisV));
 
         // Flag getters
         DefineFlagGetter(realm, proto, "global", RegexFlags.Global);
@@ -117,6 +114,17 @@ public static class RegExpCtor
     // ------------------------------------------------------------------
     //                       prototype.exec / test
     // ------------------------------------------------------------------
+    private static JsValue RegExpToString(JsRealm realm, JsValue thisV)
+    {
+        if (!thisV.IsObject)
+            throw new JsThrow(realm.NewTypeError("RegExp.prototype.toString called on non-object"));
+
+        var obj = thisV.AsObject;
+        var pattern = JsValue.ToStringValue(AbstractOperations.Get(realm.ActiveVm, obj, "source"));
+        var flags = JsValue.ToStringValue(AbstractOperations.Get(realm.ActiveVm, obj, "flags"));
+        return JsValue.String("/" + pattern + "/" + flags);
+    }
+
     internal static JsValue Exec(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var re = RequireRegExp(realm, thisV);
