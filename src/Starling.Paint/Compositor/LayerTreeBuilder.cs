@@ -77,7 +77,7 @@ internal sealed class LayerTreeBuilder
         ArgumentNullException.ThrowIfNull(root);
         // The root's parent content origin is the document origin (0,0). The
         // box's own Frame.X/Y is folded in by BuildLayerSlice.
-        return BuildLayer(root, parentOriginX: 0, parentOriginY: 0);
+        return BuildLayer(root, parentOriginX: 0, parentOriginY: 0, inheritedClip: null);
     }
 
     /// <summary>
@@ -86,7 +86,7 @@ internal sealed class LayerTreeBuilder
     /// box that contains <paramref name="layerBox"/> — the same origin the flat
     /// builder's <c>Visit</c> would have received for it.
     /// </summary>
-    private CompositorLayer BuildLayer(Box layerBox, double parentOriginX, double parentOriginY)
+    private CompositorLayer BuildLayer(Box layerBox, double parentOriginX, double parentOriginY, Rect? inheritedClip)
     {
         var frameX = parentOriginX + layerBox.Frame.X;
         var frameY = parentOriginY + layerBox.Frame.Y;
@@ -111,16 +111,23 @@ internal sealed class LayerTreeBuilder
         var bounds = UnionBounds(slice);
 
         var opacity = EffectiveOpacity(layerBox);
-        var clip = EffectiveClip(layerBox, frameX, frameY);
+        // This layer's own overflow clip, combined with the overflow clips of any
+        // non-layer boxes between it and its parent layer (inheritedClip). A
+        // promoted descendant of an `overflow:hidden` card must stay clipped to the
+        // card even though the card itself is not a layer — otherwise the promoted
+        // slice escapes the card on composite (and on hover refresh).
+        var clip = IntersectClip(inheritedClip, EffectiveClip(layerBox, frameX, frameY));
 
         // Descendant layer roots whose nearest enclosing layer is THIS one
         // become our child layers. They are found by descending into our
         // children's content boxes and stopping the descent at each layer root.
+        // Their inherited clip starts empty: this layer's own clip is propagated to
+        // them at composite time (CollectOps intersects ancestorClip with layer.Clip).
         var children = new List<(CompositorLayer Layer, int? ZIndex, int Order)>();
         var contentOriginX = frameX + layerBox.Border.Left + layerBox.Padding.Left;
         var contentOriginY = frameY + layerBox.Border.Top + layerBox.Padding.Top;
         foreach (var child in layerBox.Children)
-            CollectChildLayers(child, contentOriginX, contentOriginY, children);
+            CollectChildLayers(child, contentOriginX, contentOriginY, children, inheritedClip: null);
 
         // CSS-Position-3 §9 painting order: negative z-index below, then
         // auto/0 in tree order, then positive z-index — a stable sort by the
@@ -140,7 +147,8 @@ internal sealed class LayerTreeBuilder
 
         return new CompositorLayer(slice, bounds, transform ?? Matrix2D.Identity, opacity, clip, ordered,
             contentHash: contentHash, layerId: _layerIdFor?.Invoke(layerBox) ?? 0,
-            sourceBox: layerBox, originParentX: parentOriginX, originParentY: parentOriginY);
+            sourceBox: layerBox, originParentX: parentOriginX, originParentY: parentOriginY,
+            zIndex: ZIndexOf(layerBox) ?? 0, inheritedClip: inheritedClip);
     }
 
     /// <summary>
@@ -170,7 +178,7 @@ internal sealed class LayerTreeBuilder
         // An animating layer root is rebuilt in full (slice, transform, opacity,
         // hash, and its own subtree) so the fresh animation sample takes effect.
         if (node.SourceBox is { } box && (_isAnimatingLayerRoot?.Invoke(box) ?? false))
-            return BuildLayer(box, node.OriginParentX, node.OriginParentY);
+            return BuildLayer(box, node.OriginParentX, node.OriginParentY, node.InheritedClip);
 
         // Static node: reuse its slice/hash unchanged, but recurse so an animating
         // descendant layer still refreshes.
@@ -201,21 +209,39 @@ internal sealed class LayerTreeBuilder
     /// children, so a layer root nested several plain boxes deep still attaches
     /// to the correct ancestor layer.
     /// </summary>
-    private void CollectChildLayers(Box box, double parentOriginX, double parentOriginY, List<(CompositorLayer, int?, int)> sink)
+    private void CollectChildLayers(Box box, double parentOriginX, double parentOriginY,
+        List<(CompositorLayer, int?, int)> sink, Rect? inheritedClip)
     {
+        var frameX = parentOriginX + box.Frame.X;
+        var frameY = parentOriginY + box.Frame.Y;
+
         if (IsLayerRoot(box))
         {
-            var layer = BuildLayer(box, parentOriginX, parentOriginY);
+            var layer = BuildLayer(box, parentOriginX, parentOriginY, inheritedClip);
             sink.Add((layer, ZIndexOf(box), sink.Count));
             return; // The nested layer owns everything below it.
         }
 
-        var frameX = parentOriginX + box.Frame.X;
-        var frameY = parentOriginY + box.Frame.Y;
+        // A non-layer box with `overflow:hidden` clips its subtree. Carry that clip
+        // down so a promoted descendant layer inherits it (the clip lives only in
+        // this slice's PushClip/PopClip, which a separate child layer never sees).
+        var childInheritedClip = IntersectClip(inheritedClip, EffectiveClip(box, frameX, frameY));
         var contentOriginX = frameX + box.Border.Left + box.Padding.Left;
         var contentOriginY = frameY + box.Border.Top + box.Padding.Top;
         foreach (var child in box.Children)
-            CollectChildLayers(child, contentOriginX, contentOriginY, sink);
+            CollectChildLayers(child, contentOriginX, contentOriginY, sink, childInheritedClip);
+    }
+
+    /// <summary>Intersects two page-space clip rects; null means "no clip".</summary>
+    private static Rect? IntersectClip(Rect? a, Rect? b)
+    {
+        if (a is null) return b;
+        if (b is null) return a;
+        var x = Math.Max(a.Value.X, b.Value.X);
+        var y = Math.Max(a.Value.Y, b.Value.Y);
+        var right = Math.Min(a.Value.X + a.Value.Width, b.Value.X + b.Value.Width);
+        var bottom = Math.Min(a.Value.Y + a.Value.Height, b.Value.Y + b.Value.Height);
+        return new Rect(x, y, Math.Max(0, right - x), Math.Max(0, bottom - y));
     }
 
     private static Rect UnionBounds(PaintList slice)

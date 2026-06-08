@@ -238,6 +238,25 @@ internal sealed class StarlingScriptSession : IScriptSession
             return true;
         }
 
+        // "Run the update intersection observations steps" (IO spec §3.2.2)
+        // modelled as a pump front: deliver any queued IntersectionObserver
+        // notifications off the layout snapshot. Callbacks can enqueue more work
+        // (class toggles, microtasks), picked up on the next iteration.
+        //
+        // This front sits ABOVE the rAF front on purpose: a self-rescheduling
+        // requestAnimationFrame loop keeps PendingAnimationFrameCount > 0 forever,
+        // so if the IO front were below it RunPending would never run during the
+        // navigation settle, HasPending would stay true, and the rAF-frame-budget
+        // early-exit (gated on OnlyAnimationFramePending) would never fire — the
+        // settle would burn its full wall-clock cap at full CPU. Draining IO first
+        // lets the bucket state converge, after which HasPending goes false and the
+        // rAF front settles normally.
+        if (Observers.IntersectionObserverBinding.HasPending(_runtime))
+        {
+            Observers.IntersectionObserverBinding.RunPending(_runtime);
+            return true;
+        }
+
         if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
         {
             _loop.AdvanceBy(SimulatedStepMs);
@@ -250,16 +269,6 @@ internal sealed class StarlingScriptSession : IScriptSession
             // can enqueue more work (chained loaders) or kick more microtasks,
             // observed on the next PumpOnce iteration.
             _dynamicRunner.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
-            return true;
-        }
-
-        // "Run the update intersection observations steps" (IO spec §3.2.2)
-        // modelled as a pump front: deliver any queued IntersectionObserver
-        // notifications off the layout snapshot. Callbacks can enqueue more work
-        // (class toggles, microtasks), picked up on the next iteration.
-        if (Observers.IntersectionObserverBinding.HasPending(_runtime))
-        {
-            Observers.IntersectionObserverBinding.RunPending(_runtime);
             return true;
         }
 

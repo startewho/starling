@@ -33,7 +33,9 @@ internal sealed class CompositorLayer
         long layerId = 0,
         Box? sourceBox = null,
         double originParentX = 0,
-        double originParentY = 0)
+        double originParentY = 0,
+        int zIndex = 0,
+        Rect? inheritedClip = null)
     {
         Items = items;
         Bounds = bounds;
@@ -46,7 +48,26 @@ internal sealed class CompositorLayer
         SourceBox = sourceBox;
         OriginParentX = originParentX;
         OriginParentY = originParentY;
+        ZIndex = zIndex;
+        InheritedClip = inheritedClip;
     }
+
+    /// <summary>
+    /// Accumulated <c>overflow:hidden</c> clip of the non-layer boxes between this
+    /// layer and its parent layer (page coords), already folded into <see cref="Clip"/>.
+    /// Stored so <see cref="LayerTreeBuilder.RefreshAnimating"/> can rebuild this
+    /// layer in isolation without losing an ancestor card's clip — otherwise a
+    /// hover-animated, clipped descendant would escape the clip on its refresh frame.
+    /// </summary>
+    public Rect? InheritedClip { get; }
+
+    /// <summary>
+    /// The layer's own effective z-index (CSS-Position-3 §9), with <c>auto</c>
+    /// treated as 0. The compositor paints a layer with a negative z-index
+    /// <em>behind</em> its parent layer's own slice; non-negative layers paint
+    /// over it. Sibling paint order is already resolved into <see cref="Children"/>.
+    /// </summary>
+    public int ZIndex { get; }
 
     /// <summary>
     /// The layout box this layer was built from (the layer-root box), or null for
@@ -71,7 +92,7 @@ internal sealed class CompositorLayer
     /// layer's own slice.</summary>
     public CompositorLayer WithChildren(IReadOnlyList<CompositorLayer> children)
         => new(Items, Bounds, Transform, Opacity, Clip, children, ContentHash, LayerId,
-            SourceBox, OriginParentX, OriginParentY);
+            SourceBox, OriginParentX, OriginParentY, ZIndex, InheritedClip);
 
     /// <summary>Page-coord union of the painted items in this layer's slice.</summary>
     public Rect Bounds { get; }
