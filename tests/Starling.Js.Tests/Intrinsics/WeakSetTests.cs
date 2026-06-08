@@ -17,6 +17,20 @@ public class WeakSetTests
     }
 
     [TestMethod]
+    public void WeakSet_called_without_new_throws()
+    {
+        Eval(@"
+            var ok = false;
+            try {
+                var s = new WeakSet();
+                WeakSet.call(s, []);
+            } catch (e) {
+                ok = e instanceof TypeError && e.message === ""Constructor WeakSet requires 'new'"";
+            }
+            ok;").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Add_and_has_for_object_key()
     {
         Eval(@"
@@ -24,6 +38,56 @@ public class WeakSetTests
             var k = {};
             s.add(k);
             s.has(k);").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Constructor_iterable_initialization_calls_observable_add_method()
+    {
+        var r = Eval(@"
+            var key = {};
+            var calls = 0;
+            class W extends WeakSet {
+                add(v) {
+                    calls++;
+                    return WeakSet.prototype.add.call(this, v);
+                }
+            }
+            var w = new W([key]);
+            calls + ';' + w.has(key);");
+
+        r.AsString.Should().Be("1;true");
+    }
+
+    [TestMethod]
+    public void Constructor_closes_iterator_when_add_method_throws()
+    {
+        var r = Eval(@"
+            var key = {};
+            var closed = false;
+            var index = 0;
+            var iterable = {
+                [Symbol.iterator]: function() {
+                    return {
+                        next: function() {
+                            index++;
+                            return index === 1
+                                ? { done: false, value: key }
+                                : { done: true };
+                        },
+                        return: function() {
+                            closed = true;
+                            return {};
+                        }
+                    };
+                }
+            };
+            class W extends WeakSet {
+                add() { throw new TypeError('stop'); }
+            }
+            try { new W(iterable); } catch (e) {}
+            closed;");
+
+        r.AsBool.Should().BeTrue();
     }
 
     [TestMethod]

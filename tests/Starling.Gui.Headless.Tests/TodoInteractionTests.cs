@@ -5,8 +5,8 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using Starling.Common.Diagnostics;
 using Starling.Engine;
 using Starling.Gui.Controls;
 using Starling.Gui.Theme;
@@ -48,7 +48,7 @@ public class TodoInteractionTests
         CountItems(list).Should().Be(0, "the list starts empty");
 
         using var panel = new WebviewPanel(
-            new ThemeManager(), NoopDiagnostics.Instance, _ => { }, (_, _) => { },
+            new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)));
         var window = new Window { Content = panel, Width = 800, Height = 600 };
         window.Show();

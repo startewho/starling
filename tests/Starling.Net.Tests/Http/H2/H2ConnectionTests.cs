@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
 using Starling.Net.Http;
 using Starling.Net.Http.H2;
 using Starling.Net.Http.H2.Hpack;
@@ -29,7 +28,7 @@ public class H2ConnectionTests
 
         var serverTask = RunServerAsync(serverStream, cts.Token);
         await using var conn = await H2Connection.StartAsync(
-            new FakeH2Transport(clientStream, Origin), Origin, NoopDiagnostics.Instance, null, cts.Token);
+            new FakeH2Transport(clientStream, Origin), Origin, null, null, cts.Token);
 
         var url = UrlParser.Parse("https://example.com/hello").Value;
         var result = await conn.SendAsync(HttpRequest.Get(url), url, cts.Token);
@@ -52,7 +51,7 @@ public class H2ConnectionTests
 
         var serverTask = RunServerAsync(serverStream, cts.Token);
         await using var conn = await H2Connection.StartAsync(
-            new FakeH2Transport(clientStream, Origin), Origin, NoopDiagnostics.Instance, null, cts.Token);
+            new FakeH2Transport(clientStream, Origin), Origin, null, null, cts.Token);
 
         // Fire several requests without awaiting; the connection must keep each
         // response matched to its own stream.
@@ -94,7 +93,7 @@ public class H2ConnectionTests
         }, cts.Token);
 
         await using var conn = await H2Connection.StartAsync(
-            new FakeH2Transport(clientStream, Origin), Origin, NoopDiagnostics.Instance, null, cts.Token);
+            new FakeH2Transport(clientStream, Origin), Origin, null, null, cts.Token);
 
         var url = UrlParser.Parse("https://example.com/x").Value;
         var result = await conn.SendAsync(HttpRequest.Get(url), url, cts.Token);

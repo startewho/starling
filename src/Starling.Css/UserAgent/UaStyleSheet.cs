@@ -43,7 +43,11 @@ public static class UaStyleSheet
         body {
           margin: 8px;
           color: black;
-          background-color: white;
+          /* No background-color: per the HTML UA stylesheet the body is
+             transparent. The white page comes from the canvas (the viewport
+             clear), not from body. Painting body white here covered any
+             background set on the root element (e.g. a site's dark theme on
+             <html>), which is wrong. */
           font-family: serif;
           font-size: 16px;
         }

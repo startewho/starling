@@ -33,7 +33,6 @@ public sealed class HtmlTreeBuilder
     private readonly Document _document = new();
     private readonly StackOfOpenElements _openElements = new();
     private readonly StringBuilder _pendingText = new();
-    private readonly IDiagnostics _diag;
     private readonly CountingParseErrorSink? _errorCounter;
     private readonly bool _scriptingEnabled;
 
@@ -43,6 +42,13 @@ public sealed class HtmlTreeBuilder
     private InsertionMode _originalMode = InsertionMode.Initial;
     private int _tokenCount;
 
+    // §13.2.4.4 "stack of template insertion modes". We don't model the full
+    // "in template" mode; instead each open <template> saves the mode it
+    // interrupted, restored when its end tag pops it. Template content itself is
+    // parsed in <see cref="InsertionMode.InBody"/> and redirected into the
+    // template's content fragment by <see cref="InsertionTarget"/>.
+    private readonly Stack<InsertionMode> _templateInsertionModes = new();
+
     /// <summary>
     /// Non-null when this builder is running the HTML fragment parsing algorithm
     /// (§13.4). The fragment's parsing context element steers initial tokenizer
@@ -51,19 +57,18 @@ public sealed class HtmlTreeBuilder
     /// </summary>
     private readonly Element? _fragmentContext;
 
-    public HtmlTreeBuilder(HtmlTokenizer tokenizer, IDiagnostics? diagnostics = null,
+    public HtmlTreeBuilder(HtmlTokenizer tokenizer,
         CountingParseErrorSink? errorCounter = null, bool scriptingEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(tokenizer);
         _tokenizer = tokenizer;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
         _errorCounter = errorCounter;
         _scriptingEnabled = scriptingEnabled;
     }
 
-    private HtmlTreeBuilder(HtmlTokenizer tokenizer, Element fragmentContext, IDiagnostics? diagnostics,
+    private HtmlTreeBuilder(HtmlTokenizer tokenizer, Element fragmentContext,
         CountingParseErrorSink? errorCounter)
-        : this(tokenizer, diagnostics, errorCounter)
+        : this(tokenizer, errorCounter)
     {
         _fragmentContext = fragmentContext;
     }
@@ -72,7 +77,6 @@ public sealed class HtmlTreeBuilder
     /// Runs tree construction over <paramref name="html"/>.
     /// </summary>
     /// <param name="html">The HTML source to parse.</param>
-    /// <param name="diagnostics">Optional diagnostics sink for spans/counters.</param>
     /// <param name="scriptingEnabled">
     /// WHATWG HTML §13.2 "scripting flag". When <c>true</c> (the engine, which
     /// runs JS) a <c>&lt;noscript&gt;</c> start tag in the "in head" insertion
@@ -82,16 +86,14 @@ public sealed class HtmlTreeBuilder
     /// which assumes scripting disabled) the legacy element-parsing behavior is
     /// preserved.
     /// </param>
-    public static Document Parse(string html, IDiagnostics? diagnostics = null,
-        bool scriptingEnabled = false)
+    public static Document Parse(string html, bool scriptingEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(html);
-        var diag = diagnostics ?? NoopDiagnostics.Instance;
         var errorCounter = new CountingParseErrorSink();
         var tokenizer = new HtmlTokenizer(errorCounter);
         tokenizer.Feed(html);
         tokenizer.EndOfInput();
-        var builder = new HtmlTreeBuilder(tokenizer, diag, errorCounter, scriptingEnabled);
+        var builder = new HtmlTreeBuilder(tokenizer, errorCounter, scriptingEnabled);
         return builder.Run();
     }
 
@@ -103,13 +105,12 @@ public sealed class HtmlTreeBuilder
     /// document). The context element itself is not added to the output.
     /// </summary>
     public static DocumentFragment ParseFragment(string markup, Element contextElement,
-        Document ownerDocument, IDiagnostics? diagnostics = null)
+        Document ownerDocument)
     {
         ArgumentNullException.ThrowIfNull(markup);
         ArgumentNullException.ThrowIfNull(contextElement);
         ArgumentNullException.ThrowIfNull(ownerDocument);
 
-        var diag = diagnostics ?? NoopDiagnostics.Instance;
         var errorCounter = new CountingParseErrorSink();
         var tokenizer = new HtmlTokenizer(errorCounter);
         // §13.4 step 4: set the tokenizer's state per the context element so RCDATA
@@ -118,13 +119,13 @@ public sealed class HtmlTreeBuilder
         tokenizer.Feed(markup);
         tokenizer.EndOfInput();
 
-        var builder = new HtmlTreeBuilder(tokenizer, contextElement, diag, errorCounter);
+        var builder = new HtmlTreeBuilder(tokenizer, contextElement, errorCounter);
         return builder.RunFragment(ownerDocument);
     }
 
     private DocumentFragment RunFragment(Document ownerDocument)
     {
-        using var _ = _diag.Span("html", "parse-fragment");
+        using var _ = StarlingTelemetry.Span("html", "parse-fragment");
 
         // §13.4 steps 5-7: create a synthetic <html> root, push it as the only
         // open element, and reset the insertion mode appropriately for the
@@ -209,7 +210,7 @@ public sealed class HtmlTreeBuilder
 
     public Document Run()
     {
-        using var _ = _diag.Span("html", "parse");
+        using var _ = StarlingTelemetry.Span("html", "parse");
         try
         {
             while (_tokenizer.ReadToken() is { } token)
@@ -223,9 +224,9 @@ public sealed class HtmlTreeBuilder
             var errorCount = _errorCounter?.Count ?? 0;
             Activity.Current?.SetTag("html.tokens", _tokenCount);
             Activity.Current?.SetTag("html.parse_errors", errorCount);
-            _diag.Counter("html.parses", 1);
+            StarlingTelemetry.Counter("html.parses", 1);
             if (errorCount > 0)
-                _diag.Counter("html.parse_errors", errorCount);
+                StarlingTelemetry.Counter("html.parse_errors", errorCount);
             return _document;
         }
         catch (Exception ex)
@@ -275,8 +276,35 @@ public sealed class HtmlTreeBuilder
         return element;
     }
 
+    /// <summary>§13.2.6.4.4 "in head" — &lt;template&gt; start tag. Insert and
+    /// keep the element open so its children are redirected into its content
+    /// fragment, and remember the mode to restore on the matching end tag.</summary>
+    private void StartTemplate(StartTagToken token)
+    {
+        InsertElement(token);
+        _templateInsertionModes.Push(_mode);
+        _mode = InsertionMode.InBody;
+    }
+
+    /// <summary>§13.2.6.4.4 "in head" — &lt;/template&gt; end tag. Pop the open
+    /// template (with any still-open descendants) and restore the saved mode.</summary>
+    private void EndTemplate()
+    {
+        if (!_openElements.HasInScope("template")) return; // parse error: ignore.
+        GenerateImpliedEndTags();
+        _openElements.PopUntilNamed("template");
+        if (_templateInsertionModes.Count > 0)
+            _mode = _templateInsertionModes.Pop();
+    }
+
     private Node InsertionTarget()
-        => _openElements.IsEmpty ? _document : _openElements.Current;
+    {
+        if (_openElements.IsEmpty) return _document;
+        var current = _openElements.Current;
+        // §13.2.6.1 "appropriate place for inserting a node": when the target is
+        // a <template>, nodes go into its content fragment, not the element.
+        return current is HtmlTemplateElement template ? template.Content : current;
+    }
 
     private void InsertText(string data)
     {
@@ -450,17 +478,14 @@ public sealed class HtmlTreeBuilder
                 _openElements.Pop(); // Void element.
                 return;
             case StartTagToken start when start.Name == "template":
-                // The "in template" insertion mode and a template's separate content
-                // document are not modelled (see the class remarks). Insert the
-                // element and pop it so the token is CONSUMED. Without a case here,
-                // "after head" delegates <template> to "in head" (the list below),
-                // "in head" fell through to its "anything else" tail — switch back
-                // to "after head" and reprocess — and the two modes bounced on the
-                // same token forever (a stack overflow on any page with a
-                // <template>). Its contents are not modelled, so they parse as
-                // ordinary following content rather than an inert fragment.
-                InsertElement(start);
-                _openElements.Pop();
+                // §13.2.6.4.4 "in head" — <template> start tag. Insert it, keep it
+                // open, and collect its children into the content fragment (see
+                // StartTemplate / InsertionTarget). AfterHead and InBody both route
+                // their <template> start tags here.
+                StartTemplate(start);
+                return;
+            case EndTagToken end when end.Name == "template":
+                EndTemplate();
                 return;
             case StartTagToken start when start.Name == "title":
                 InsertElement(start);
@@ -492,26 +517,6 @@ public sealed class HtmlTreeBuilder
                 _originalMode = _mode;
                 _mode = InsertionMode.Text;
                 _tokenizer.SetState(TokenizerState.ScriptData);
-                return;
-            case StartTagToken start when start.Name == "template":
-                // §13.2.6.4.4 "in head" — <template> start tag. The spec inserts
-                // the element, switches to "in template" insertion mode, and
-                // parses children as template content. We don't model the "in
-                // template" mode yet (see InsertionMode.cs), so we insert the
-                // template and immediately pop it off the stack of open elements
-                // — children of <template> end up parsed in normal flow, which
-                // is incorrect but non-crashing. Without this case the parser
-                // loops between InHead ↔ AfterHead, because AfterHead forwards
-                // <template> start tags here per §13.2.6.4.5 and InHead's
-                // "anything else" path puts the token right back into AfterHead.
-                InsertElement(start);
-                _openElements.Pop();
-                return;
-            case EndTagToken end when end.Name == "template":
-                // Matching simplification: the start tag was already popped, so
-                // swallow the end tag rather than walking the open-elements
-                // stack. Falling through to the "anything else" path here would
-                // pop the head element instead, breaking subsequent parsing.
                 return;
             case EndTagToken end when end.Name == "head":
                 _openElements.Pop();
@@ -547,7 +552,7 @@ public sealed class HtmlTreeBuilder
                 return;
             case StartTagToken start when start.Name is "base" or "basefont" or "bgsound"
                                                        or "link" or "meta" or "noframes"
-                                                       or "script" or "style" or "template"
+                                                       or "script" or "style"
                                                        or "title":
                 // Push head back onto the stack temporarily so InHead inserts there, then pop.
                 if (_headElement is not null) _openElements.Push(_headElement);
@@ -558,6 +563,15 @@ public sealed class HtmlTreeBuilder
                     while (!_openElements.IsEmpty && _openElements.Current == _headElement)
                         _openElements.Pop();
                 }
+                return;
+            // <template> stays open to collect content, so it must NOT use the
+            // push-head/pop-head dance above (that would leave <head> on the
+            // stack under the open template). Insert it into <html> directly.
+            case StartTagToken { Name: "template" } start:
+                StartTemplate(start);
+                return;
+            case EndTagToken { Name: "template" }:
+                EndTemplate();
                 return;
             case EndTagToken end when end.Name is "body" or "html" or "br": break;
             case EndTagToken: return;
@@ -588,8 +602,15 @@ public sealed class HtmlTreeBuilder
                 return;
             case StartTagToken start when start.Name is "base" or "basefont" or "bgsound"
                                                        or "link" or "meta" or "noframes"
-                                                       or "script" or "style" or "title":
+                                                       or "script" or "style" or "template"
+                                                       or "title":
+                // §13.2.6.4.7 "in body" routes these (template included) through
+                // "in head"; HandleInHead's <template> case opens the content
+                // fragment and saves InBody to restore on </template>.
                 HandleInHead(start);
+                return;
+            case EndTagToken { Name: "template" }:
+                EndTemplate();
                 return;
             case StartTagToken start when start.Name == "body":
                 MergeAttributesInto(_bodyElement, start);

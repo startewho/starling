@@ -22,7 +22,12 @@ internal static class Program
             if (ui >= 0 && ui + 1 < args.Length)
                 startUrl = args[ui + 1];
 
-            using var browser = new NativeBrowserWindow(maxFrames, startUrl);
+            string? wasmIslandUrl = null;
+            var wi = Array.IndexOf(args, "--wasm-island-url");
+            if (wi >= 0 && wi + 1 < args.Length)
+                wasmIslandUrl = args[wi + 1];
+
+            using var browser = new NativeBrowserWindow(maxFrames, startUrl, wasmIslandUrl);
             return browser.Run();
         }
 

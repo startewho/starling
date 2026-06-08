@@ -6,90 +6,86 @@ using Starling.Paint.Backend;
 namespace Starling.Paint.Compositor;
 
 /// <summary>
-/// Presents the layer-composite blend straight to a window's wgpu swapchain — no
-/// readback, no re-upload (the zero-copy half of the
-/// wp:M12-13-gpu-composite-blend pipeline). A native shell creates one of these
-/// from its window via <see cref="CreateForWindow"/>, calls <see cref="Configure"/>
-/// when the window resizes, and the compositor blends each frame's layers
-/// directly into the surface's current texture and presents it.
+/// Owns a WebGPU surface for a native window and presents compositor frames to
+/// it. This path keeps layer textures on the GPU and draws the final frame into
+/// the surface texture. It does not read pixels back to the CPU.
 /// </summary>
 /// <remarks>
-/// Shares the reusable <see cref="GpuBlendEngine"/> with the offscreen
-/// <see cref="GpuLayerCompositor"/> — same device-resident layer-texture cache,
-/// same alpha-over blend — but renders into the surface texture and calls
-/// <c>SurfacePresent</c> instead of copying to a buffer and mapping it. Changed
-/// layer tiles render into GPU textures on this presenter device and are adopted
-/// by the cache, so the surface path does not need GPU-to-CPU tile readback.
+/// This presenter uses the same <see cref="GpuBlendEngine"/> as the offscreen
+/// <see cref="GpuLayerCompositor"/>. Changed layer tiles are drawn into textures
+/// on this device and then adopted by the cache. <see cref="PresentOps"/> records
+/// the blend pass, draws GPU overlay layers, and presents the current surface
+/// texture.
 /// </remarks>
 public sealed unsafe class GpuSurfacePresenter : IDisposable
 {
     private readonly GpuBlendEngine _engine;
+    private readonly GpuOverlayRenderer _overlays;
     private readonly Surface* _surface;
     private readonly TextureFormat _format;
-    private readonly IDiagnostics _diag;
     private readonly object _gate = new();
     private int _width, _height;
     private bool _configured;
 
-    private GpuSurfacePresenter(GpuBlendEngine engine, Surface* surface, TextureFormat format, IDiagnostics? diagnostics)
+    private GpuSurfacePresenter(GpuBlendEngine engine, Surface* surface, TextureFormat format)
     {
         _engine = engine;
+        _overlays = new GpuOverlayRenderer(engine);
         _surface = surface;
         _format = format;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
     }
 
     /// <summary>
-    /// Builds a surface-compatible GPU device for <paramref name="window"/> and a
-    /// presenter bound to its swapchain. Returns <c>null</c> when no GPU adapter is
-    /// available. <paramref name="window"/> is the shell's window (a Silk.NET
-    /// <c>IWindow</c> implements <see cref="INativeWindowSource"/>).
+    /// Creates a presenter for a Silk.NET native window. Returns <c>null</c> when
+    /// WebGPU cannot create a surface or find an adapter. The window must provide
+    /// native handles through <see cref="INativeWindowSource"/>.
     /// </summary>
-    public static GpuSurfacePresenter? CreateForWindow(INativeWindowSource window, IDiagnostics? diagnostics = null)
+    public static GpuSurfacePresenter? CreateForWindow(INativeWindowSource window)
     {
         ArgumentNullException.ThrowIfNull(window);
         var engine = GpuBlendEngine.CreateForSurface(window, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
     /// <summary>
-    /// Builds a surface-compatible GPU device bound to a host-owned
-    /// <c>CAMetalLayer</c> (the Avalonia page surface's click-through child-view
-    /// layer) and a presenter for its swapchain. Returns <c>null</c> when no GPU
-    /// adapter is available or <paramref name="caMetalLayer"/> is zero. macOS only.
+    /// Creates a presenter for a host-owned <c>CAMetalLayer</c>. This is used by
+    /// the macOS child view that hosts the page surface. Returns <c>null</c> when
+    /// the layer is zero or WebGPU cannot create a surface.
     /// </summary>
-    public static GpuSurfacePresenter? CreateForMetalLayer(nint caMetalLayer, IDiagnostics? diagnostics = null)
+    public static GpuSurfacePresenter? CreateForMetalLayer(nint caMetalLayer)
     {
         if (caMetalLayer == 0) return null;
         var engine = GpuBlendEngine.CreateForMetalLayer(caMetalLayer, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
-    public static GpuSurfacePresenter? CreateForWindowsHwnd(
-        nint hwnd,
-        nint hinstance,
-        IDiagnostics? diagnostics = null)
+    /// <summary>
+    /// Creates a presenter for a Windows window handle. Returns <c>null</c> when
+    /// <paramref name="hwnd"/> is zero or WebGPU cannot create a surface.
+    /// </summary>
+    public static GpuSurfacePresenter? CreateForWindowsHwnd(nint hwnd, nint hinstance)
     {
         if (hwnd == 0) return null;
         var engine = GpuBlendEngine.CreateForWindowsHwnd(hwnd, hinstance, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
-    public static GpuSurfacePresenter? CreateForXlibWindow(
-        nint display,
-        ulong window,
-        IDiagnostics? diagnostics = null)
+    /// <summary>
+    /// Creates a presenter for an Xlib window. Returns <c>null</c> when the
+    /// display or window handle is zero, or when WebGPU cannot create a surface.
+    /// </summary>
+    public static GpuSurfacePresenter? CreateForXlibWindow(nint display, ulong window)
     {
         if (display == 0 || window == 0) return null;
         var engine = GpuBlendEngine.CreateForXlibWindow(display, window, out var surface, out var format);
         if (engine is null || surface == 0) return null;
-        return new GpuSurfacePresenter(engine, (Surface*)surface, format, diagnostics);
+        return new GpuSurfacePresenter(engine, (Surface*)surface, format);
     }
 
-    /// <summary>The swapchain colour format wgpu chose for this surface.</summary>
+    /// <summary>The color format used by this surface.</summary>
     public TextureFormat Format => _format;
 
     internal bool HasResidentTexture(long contentHash, int width, int height)
@@ -100,7 +96,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         }
     }
 
-    internal GpuPaintDeviceContext ImageSharpContext => _engine.ImageSharpContext;
+    internal GpuPaintDevice GpuDevice => _engine.GpuDevice;
 
     internal void AdoptTexture(long contentHash, GpuPaintTexture texture)
     {
@@ -111,8 +107,9 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     }
 
     /// <summary>
-    /// Configures (or reconfigures) the swapchain for a device-pixel size. Call
-    /// once after creation and again on every window/framebuffer resize.
+    /// Sets the surface size in device pixels. Call after creation and when the
+    /// framebuffer size changes. <see cref="PresentOps"/> also reconfigures when
+    /// its size does not match the current surface.
     /// </summary>
     public void Configure(int width, int height)
     {
@@ -142,13 +139,17 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     }
 
     /// <summary>
-    /// Blends <paramref name="ops"/> into the surface's current texture and
-    /// presents it. The render target is <paramref name="width"/>×<paramref
-    /// name="height"/> device pixels (must match the last <see cref="Configure"/>).
-    /// Returns <c>true</c> after a successful present. Surface and GPU failures
-    /// throw; a GPU session must not fall back to a CPU frame.
+    /// Draws <paramref name="ops"/> into the current surface texture, then
+    /// presents it. <paramref name="width"/> and <paramref name="height"/> are
+    /// device pixels. Returns <c>true</c> after the frame is submitted and
+    /// presented. Surface and GPU errors throw because this path should not return
+    /// a CPU fallback frame.
     /// </summary>
-    internal bool PresentOps(int width, int height, IReadOnlyList<LayerBlend> ops)
+    internal bool PresentOps(
+        int width,
+        int height,
+        IReadOnlyList<LayerBlend> ops,
+        IReadOnlyList<GpuOverlayLayer>? overlayLayers = null)
     {
         if (width <= 0 || height <= 0)
         {
@@ -167,7 +168,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
             // ~1s). Wrapped in its own span so a present stall is attributed here
             // rather than vanishing into gui.render's self-time.
             SurfaceTexture st = default;
-            using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentAcquireOp))
+            using (StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.PresentAcquireOp))
                 api.SurfaceGetCurrentTexture(_surface, ref st);
             if (st.Status != SurfaceGetCurrentTextureStatus.Success)
             {
@@ -189,7 +190,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
             CommandBuffer* cmd = null;
             try
             {
-                using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentEncodeOp))
+                using (StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.PresentEncodeOp))
                 {
                     _engine.BeginFrame();
                     _engine.UploadLayerTextures(ops);
@@ -223,6 +224,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                     }
 
                     _engine.RecordBlend(pass, ops, _format, vertexCount, width, height);
+                    _overlays.Record(pass, overlayLayers, width, height, _format);
 
                     api.RenderPassEncoderEnd(pass);
 
@@ -235,7 +237,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                     api.QueueSubmit(_engine.Queue, 1, &cmd);
                 }
 
-                using (_diag.Span(RenderMetrics.PaintArea, RenderMetrics.PresentSwapOp))
+                using (StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.PresentSwapOp))
                     api.SurfacePresent(_surface);
 
                 _engine.EvictStale();
@@ -273,6 +275,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         lock (_gate)
         {
             _engine.Api.SurfaceRelease(_surface);
+            _overlays.Dispose();
             _engine.Dispose();
         }
     }

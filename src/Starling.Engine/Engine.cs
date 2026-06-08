@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using SixLabors.ImageSharp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common;
 using Starling.Common.Diagnostics;
 using Starling.Common.Encoding;
@@ -33,7 +35,8 @@ public sealed class StarlingEngine
 {
     private const int MaxRedirects = 10;
 
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Painter _painter;
     private readonly Func<StarlingHttpClient> _httpFactory;
 
@@ -48,6 +51,10 @@ public sealed class StarlingEngine
     // OnAnimationsCascaded's match-by-name.
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Starling.Layout.Box.Box, object> _primedTrees = new();
 
+    // Dedicated logger for JS console output — DevTools and the MCP query tool
+    // filter on the exact category "Starling.engine.js".
+    private readonly ILogger _jsConsoleLog;
+
     static StarlingEngine()
     {
         // Register the .NET base class library CodePages provider once so WHATWG legacy
@@ -57,22 +64,24 @@ public sealed class StarlingEngine
         System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
 
-    public StarlingEngine(IDiagnostics? diagnostics = null, Painter? painter = null,
+    public StarlingEngine(ILoggerFactory? loggerFactory = null, Painter? painter = null,
         Func<StarlingHttpClient>? httpFactory = null)
     {
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _painter = painter ?? new Painter(diag: _diag);
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<StarlingEngine>();
+        _jsConsoleLog = _loggerFactory.CreateLogger("Starling.engine.js");
+        _painter = painter ?? new Painter(loggerFactory: _loggerFactory);
         // Default factory: share one CookieJar across every client this engine
         // creates (main document fetch + per-session XHR/fetch + images/fonts) so
         // Set-Cookie from one request is carried to the next. Real sites gate
         // content on session cookies set during a token/auth handshake (e.g.
         // McMaster's tokenauthorization.aspx → ProdPageWebPart.aspx), which 403s
-        // without the cookie. Also forward diagnostics so net spans/logs surface.
+        // without the cookie. Also forward logger so net spans/logs surface.
         var sharedCookies = new Starling.Net.Http.Cookies.CookieJar();
         _httpFactory = httpFactory ?? (() => new StarlingHttpClient(new StarlingHttpClientOptions
         {
             CookieJar = sharedCookies,
-            Diagnostics = _diag,
+            LoggerFactory = _loggerFactory,
         }));
     }
 
@@ -92,14 +101,14 @@ public sealed class StarlingEngine
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(outputPath);
 
-        _diag.Counter("engine.page_load", 1);
-        using var _ = _diag.Span("engine", $"render {url} -> {outputPath}");
+        StarlingTelemetry.Counter("engine.page_load", 1);
+        using var _ = StarlingTelemetry.Span("engine", $"render {url} -> {outputPath}");
         Activity.Current?.SetTag("http.url", url);
         Activity.Current?.SetTag("viewport.w", options.Viewport.Width);
         Activity.Current?.SetTag("viewport.h", options.Viewport.Height);
         Activity.Current?.SetTag("font_size", options.FontSize);
         Activity.Current?.SetTag("output.path", outputPath);
-        var roz = new RozRuntime(options.Roz, _diag);
+        var roz = new RozRuntime(options.Roz, _loggerFactory);
         if (roz.Checkpoint("start") is { } startErr)
             return Fail(startErr);
 
@@ -122,7 +131,7 @@ public sealed class StarlingEngine
                 var path = u.ToFileSystemPath();
                 if (!File.Exists(path))
                     return Fail($"File not found: {path}");
-                using (_diag.Span("engine", "read_file"))
+                using (StarlingTelemetry.Span("engine", "read_file"))
                 {
                     html = File.ReadAllText(path);
                     Activity.Current?.SetTag("file.path", path);
@@ -132,7 +141,7 @@ public sealed class StarlingEngine
             else if (u.IsHttp || u.IsHttps)
             {
                 Result<(string Html, StarlingUrl FinalUrl, Starling.Net.Http.ConnectionSecurity? Security), RenderError> fetched;
-                using (_diag.Span("engine", "fetch_html"))
+                using (StarlingTelemetry.Span("engine", "fetch_html"))
                 {
                     fetched = await FetchHtmlAsync(u, http, ct).ConfigureAwait(false);
                 }
@@ -155,23 +164,28 @@ public sealed class StarlingEngine
             return Fail(ex.Message);
         }
 
+        // Install the selected HTML parser backend (Starling by default, or
+        // AngleSharp when STARLING_HTML_PARSER=anglesharp) before the first
+        // parse. Idempotent, so the progressive-paint path below can repeat it.
+        HtmlBackendSelector.EnsureInstalled();
+
         Document doc;
-        using (_diag.Span("engine", "parse_html"))
+        using (StarlingTelemetry.Span("engine", "parse_html"))
         {
             Activity.Current?.SetTag("html.bytes", html.Length);
             // The engine runs page JavaScript, so HTML parsing uses the
             // scripting flag ENABLED (WHATWG HTML §13.2). This makes
             // <noscript> contents inert raw text instead of parsed elements.
-            doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
+            doc = Html.HtmlParser.Parse(html, scriptingEnabled: true);
         }
         if (roz.Checkpoint("post_parse_html") is { } parseErr)
             return Fail(parseErr);
         if (roz.CheckDomBudget(doc, "post_parse_html") is { } parseDomErr)
             return Fail(parseDomErr);
 
-        using var images = new ImageFetcher(_diag, http);
-        using var stylesheets = new StylesheetFetcher(_diag, http);
-        using var scripts = new ScriptFetcher(_diag, http);
+        using var images = new ImageFetcher(_loggerFactory, http);
+        using var stylesheets = new StylesheetFetcher(_loggerFactory, http);
+        using var scripts = new ScriptFetcher(_loggerFactory, http);
 
         // Start downloading external scripts now, concurrently with the
         // stylesheet/image fetch below (and the font fetch that follows).
@@ -185,7 +199,7 @@ public sealed class StarlingEngine
         var scriptsFetch = scripts.FetchAllAsync(doc, baseUrl: u, ct);
 
         using var webFonts = new FontFaceRegistry();
-        using var fontFaceFetcher = new FontFaceFetcher(_diag, http);
+        using var fontFaceFetcher = new FontFaceFetcher(_loggerFactory, http);
 
         // Fonts are declared by @font-face in the author stylesheets, so the font
         // fetch depends on the stylesheets being downloaded + parsed — but not on
@@ -195,13 +209,13 @@ public sealed class StarlingEngine
         async Task FetchSheetsThenFontsAsync()
         {
             await stylesheets.FetchAllAsync(doc, baseUrl: u, ct).ConfigureAwait(false);
-            using (_diag.Span("engine", "fetch_fonts"))
+            using (StarlingTelemetry.Span("engine", "fetch_fonts"))
                 await fontFaceFetcher
                     .FetchAllAsync(EnumerateAuthorSheets(doc, u, stylesheets), webFonts, ct)
                     .ConfigureAwait(false);
         }
 
-        using (_diag.Span("engine", "fetch_resources"))
+        using (StarlingTelemetry.Span("engine", "fetch_resources"))
         {
             await Task.WhenAll(
                 images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
@@ -229,7 +243,7 @@ public sealed class StarlingEngine
             // The script downloads were kicked off above and have been running
             // concurrently with the stylesheet/font fetch; await their
             // completion now, before any script executes.
-            using (_diag.Span("engine", "fetch_scripts"))
+            using (StarlingTelemetry.Span("engine", "fetch_scripts"))
             {
                 await scriptsFetch.ConfigureAwait(false);
             }
@@ -250,7 +264,7 @@ public sealed class StarlingEngine
                 // delegate so it is recorded only when layout truly happens.
                 (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Relayout(string? trigger)
                 {
-                    using (_diag.Span("engine", "prelayout_for_js"))
+                    using (StarlingTelemetry.Span("engine", "prelayout_for_js"))
                     {
                         // The trigger names the JS read that forced this
                         // layout (offsetWidth / getBoundingClientRect / etc.).
@@ -264,7 +278,7 @@ public sealed class StarlingEngine
                             // by list_trace_structured_logs, and a forced
                             // prelayout is a notable event (~200 ms per
                             // occurrence on a real page) worth Info severity.
-                            _diag.Log(DiagLevel.Info, "engine", $"prelayout trigger: {trigger}");
+                            StarlingEngineLog.PrelayoutTrigger(_log, trigger);
                         }
                         var sw = System.Diagnostics.Stopwatch.StartNew();
                         var result = _painter.LayoutDocumentWithStyle(
@@ -274,8 +288,7 @@ public sealed class StarlingEngine
                         // Surface wall time alongside the trigger so the
                         // structured-logs view shows where forced-reflow time
                         // is going without needing to click the trace.
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"prelayout done ({trigger ?? "<no-trigger>"}): {sw.ElapsedMilliseconds} ms");
+                        StarlingEngineLog.PrelayoutDone(_log, trigger ?? "<no-trigger>", sw.ElapsedMilliseconds);
                         return result;
                     }
                 }
@@ -289,12 +302,11 @@ public sealed class StarlingEngine
                         options.PreferredColorScheme);
                 jsLayoutHost = new BoxLayoutHost(doc, Relayout, BuildCascadeOnly);
 
-                using (_diag.Span("engine", "run_scripts"))
+                using (StarlingTelemetry.Span("engine", "run_scripts"))
                 {
                     await RunScriptsAsync(doc, u, scripts, jsLayoutHost, viewport, ct).ConfigureAwait(false);
                 }
-                _diag.Log(DiagLevel.Trace, "engine",
-                    $"  layout host: relayouts={jsLayoutHost.RelayoutCount}, cached reads={jsLayoutHost.FreshHits}");
+                StarlingEngineLog.LayoutHostStats(_log, jsLayoutHost.RelayoutCount, jsLayoutHost.FreshHits);
                 // Surface which attribute names drove the mutation-version bumps
                 // so we can decide where layout-irrelevance heuristics would pay.
                 if (doc.AttributeMutationCounts.Count > 0)
@@ -308,7 +320,7 @@ public sealed class StarlingEngine
                         if (sb.Length > 0) sb.Append(", ");
                         sb.Append($"{kv.Key}={kv.Value}");
                     }
-                    _diag.Log(DiagLevel.Trace, "engine", $"  attr mutations: {sb}");
+                    StarlingEngineLog.AttrMutations(_log, sb.ToString());
                 }
 
                 // Snapshot how many images/stylesheets were loaded before the
@@ -322,7 +334,7 @@ public sealed class StarlingEngine
                 // re-run the resource fetch so the post-script DOM is
                 // fully loaded before paint. URL dedupe makes the second
                 // pass cheap for unchanged content.
-                using (_diag.Span("engine", "fetch_resources_post_js"))
+                using (StarlingTelemetry.Span("engine", "fetch_resources_post_js"))
                 {
                     await Task.WhenAll(
                         images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
@@ -345,7 +357,7 @@ public sealed class StarlingEngine
 
         // Prefetch CSS-referenced background-image url()s now so the paint
         // pipeline can resolve them synchronously when emitting display items.
-        using (_diag.Span("engine", "fetch_backgrounds"))
+        using (StarlingTelemetry.Span("engine", "fetch_backgrounds"))
         {
             await images
                 .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
@@ -381,11 +393,11 @@ public sealed class StarlingEngine
             && doc.LayoutInvalidationVersion == host.LaidOutVersion;
 
         Starling.Common.Image.RenderedBitmap bitmap;
-        using (_diag.Span("engine", "render_document"))
+        using (StarlingTelemetry.Span("engine", "render_document"))
         {
             if (canReuse)
             {
-                _diag.Counter("engine.render.reused_prelayout", 1);
+                StarlingTelemetry.Counter("engine.render.reused_prelayout", 1);
                 var (reuseRoot, _) = jsLayoutHost!.Materialized;
                 bitmap = _painter.PaintLaidOut(reuseRoot, renderViewport, images, webFonts);
             }
@@ -410,7 +422,7 @@ public sealed class StarlingEngine
         {
             try
             {
-                using (_diag.Span("engine", "save_png"))
+                using (StarlingTelemetry.Span("engine", "save_png"))
                 {
                     EnsureOutputDirectory(outputPath);
                     // PNG encode stays via ImageSharp for now: wrap the
@@ -428,8 +440,7 @@ public sealed class StarlingEngine
             if (roz.Checkpoint("post_save_png") is { } saveErr)
                 return Fail(saveErr);
 
-            _diag.Log(DiagLevel.Info, "engine",
-                $"Wrote {outputPath} ({bitmap.Width}x{bitmap.Height}, text length={displayText.Length}).");
+            StarlingEngineLog.RenderComplete(_log, outputPath, bitmap.Width, bitmap.Height, displayText.Length);
 
             return Result<RenderOutcome, RenderError>.Ok(
                 new RenderOutcome(outputPath, bitmap.Width, bitmap.Height, displayText));
@@ -441,8 +452,8 @@ public sealed class StarlingEngine
 
         Result<RenderOutcome, RenderError> Fail(string message)
         {
-            _diag.Counter("engine.page_load.failed", 1);
-            _diag.Log(DiagLevel.Error, "engine", message);
+            StarlingTelemetry.Counter("engine.page_load.failed", 1);
+            StarlingEngineLog.RenderFailed(_log, message);
             return Result<RenderOutcome, RenderError>.Err(new RenderError(message));
         }
     }
@@ -476,8 +487,8 @@ public sealed class StarlingEngine
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(options);
 
-        _diag.Counter("engine.page_layout", 1);
-        using var _ = _diag.Span("engine", $"layout {url}");
+        StarlingTelemetry.Counter("engine.page_layout", 1);
+        using var _ = StarlingTelemetry.Span("engine", $"layout {url}");
         Activity.Current?.SetTag("http.url", url);
         Activity.Current?.SetTag("viewport.w", options.Viewport.Width);
         Activity.Current?.SetTag("viewport.h", options.Viewport.Height);
@@ -529,8 +540,7 @@ public sealed class StarlingEngine
                     // Use the post-redirect URL as the base for relative resource
                     // resolution. See FetchHtmlAsync docstring.
                     u = fetched.Value.FinalUrl;
-                    _diag.Log(DiagLevel.Info, "engine",
-                        $"phase: fetch_html@{pageSw.ElapsedMilliseconds}ms ({html.Length} bytes)");
+                    StarlingEngineLog.PhaseTimestamp(_log, "fetch_html", pageSw.ElapsedMilliseconds, html.Length);
                 }
                 else
                 {
@@ -544,16 +554,17 @@ public sealed class StarlingEngine
 
             // Scripting flag ENABLED — the engine executes page JS, so <noscript>
             // contents must parse as inert raw text (WHATWG HTML §13.2.6.4.4).
-            var doc = Html.HtmlParser.Parse(html, _diag, scriptingEnabled: true);
-            _diag.Log(DiagLevel.Info, "engine", $"phase: html_parsed@{pageSw.ElapsedMilliseconds}ms");
+            HtmlBackendSelector.EnsureInstalled();
+            var doc = Html.HtmlParser.Parse(html, scriptingEnabled: true);
+            StarlingEngineLog.PhaseDone(_log, "html_parsed", pageSw.ElapsedMilliseconds);
 
             // Page resources outlive this method — the caller's LaidOutPage owns
             // and disposes them (and, when minted here, the http client). On any
             // path that doesn't return Ok we dispose here so callers don't have
             // to. Once progressive first paint hands a page to the caller, the
             // displayed page owns these resources — the catch must not free them.
-            var images = new ImageFetcher(_diag, http);
-            var stylesheets = new StylesheetFetcher(_diag, http);
+            var images = new ImageFetcher(_loggerFactory, http);
+            var stylesheets = new StylesheetFetcher(_loggerFactory, http);
             var webFonts = new FontFaceRegistry();
             var resourcesHandedToPage = false;
 
@@ -561,7 +572,7 @@ public sealed class StarlingEngine
             // mode (the deferred phase reads its scripts and the dynamic runner
             // fetches through it), so it can't be a single `using`. Dispose it
             // idempotently once the deferred phase finishes (or on the way out).
-            var scripts = new ScriptFetcher(_diag, http);
+            var scripts = new ScriptFetcher(_loggerFactory, http);
             var scriptsDisposed = false;
             void DisposeScripts()
             {
@@ -587,7 +598,7 @@ public sealed class StarlingEngine
                 // the images — chain the font fetch onto the stylesheet fetch and
                 // run it alongside the image fetch so web fonts start as soon as
                 // the sheets land. (Mirrors RenderAsync.)
-                using (var fontFaceFetcher = new FontFaceFetcher(_diag, http))
+                using (var fontFaceFetcher = new FontFaceFetcher(_loggerFactory, http))
                 {
                     async Task FetchSheetsThenFontsAsync()
                     {
@@ -603,8 +614,7 @@ public sealed class StarlingEngine
                             scriptsFetch,
                             FetchSheetsThenFontsAsync()
                         ).ConfigureAwait(false);
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"phase: render_blocking_resources@{pageSw.ElapsedMilliseconds}ms");
+                        StarlingEngineLog.PhaseDone(_log, "render_blocking_resources", pageSw.ElapsedMilliseconds);
                     }
                     else
                     {
@@ -613,223 +623,222 @@ public sealed class StarlingEngine
                             images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
                             FetchSheetsThenFontsAsync()
                         ).ConfigureAwait(false);
-                        _diag.Log(DiagLevel.Info, "engine", $"phase: subresources@{pageSw.ElapsedMilliseconds}ms");
-                        _diag.Log(DiagLevel.Info, "engine", $"phase: scripts_fetched@{pageSw.ElapsedMilliseconds}ms");
+                        StarlingEngineLog.PhaseDone(_log, "subresources", pageSw.ElapsedMilliseconds);
+                        StarlingEngineLog.PhaseDone(_log, "scripts_fetched", pageSw.ElapsedMilliseconds);
                     }
 
                     var viewport = new LayoutSize(options.Viewport.Width, options.Viewport.Height);
 
-                // Lazy pre-script layout — see RenderAsync for rationale. The
-                // trigger string identifies which JS read forced the layout
-                // (offsetWidth / getBoundingClientRect / getComputedStyle:foo)
-                // and is attached as a tag on the emitted span so the trace
-                // identifies the culprit script's read without needing a dump.
-                (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Prelayout(string? trigger)
-                {
-                    using (_diag.Span("engine", "prelayout_for_js"))
+                    // Lazy pre-script layout — see RenderAsync for rationale. The
+                    // trigger string identifies which JS read forced the layout
+                    // (offsetWidth / getBoundingClientRect / getComputedStyle:foo)
+                    // and is attached as a tag on the emitted span so the trace
+                    // identifies the culprit script's read without needing a dump.
+                    (Starling.Layout.Box.BlockBox Root, Starling.Css.Cascade.StyleEngine Style) Prelayout(string? trigger)
                     {
-                        if (trigger is not null)
+                        using (StarlingTelemetry.Span("engine", "prelayout_for_js"))
                         {
-                            System.Diagnostics.Activity.Current?.SetTag("layout.trigger", trigger);
-                            // Also emit as a log so the Aspire structured-logs
-                            // API surfaces it — span attributes aren't returned
-                            // by list_trace_structured_logs, and a forced
-                            // prelayout is a notable event (~200 ms per
-                            // occurrence on a real page) worth Info severity.
-                            _diag.Log(DiagLevel.Info, "engine", $"prelayout trigger: {trigger}");
+                            if (trigger is not null)
+                            {
+                                System.Diagnostics.Activity.Current?.SetTag("layout.trigger", trigger);
+                                // Also emit as a log so the Aspire structured-logs
+                                // API surfaces it — span attributes aren't returned
+                                // by list_trace_structured_logs, and a forced
+                                // prelayout is a notable event (~200 ms per
+                                // occurrence on a real page) worth Info severity.
+                                StarlingEngineLog.PrelayoutTrigger(_log, trigger);
+                            }
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            var result = _painter.LayoutDocumentWithStyle(
+                                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                colorScheme: options.PreferredColorScheme, ct: ct);
+                            sw.Stop();
+                            // Surface wall time alongside the trigger so the
+                            // structured-logs view shows where forced-reflow time
+                            // is going without needing to click the trace.
+                            StarlingEngineLog.PrelayoutDone(_log, trigger ?? "<no-trigger>", sw.ElapsedMilliseconds);
+                            return result;
                         }
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        var result = _painter.LayoutDocumentWithStyle(
-                            doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
-                        sw.Stop();
-                        // Surface wall time alongside the trigger so the
-                        // structured-logs view shows where forced-reflow time
-                        // is going without needing to click the trace.
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"prelayout done ({trigger ?? "<no-trigger>"}): {sw.ElapsedMilliseconds} ms");
-                        return result;
                     }
-                }
 
-                // Cheap cascade-only path for getComputedStyle reads on
-                // purely-cascaded properties — see RenderAsync.
-                Starling.Css.Cascade.StyleEngine BuildCascadeOnly()
-                    => _painter.BuildStyleEngine(
-                        doc, viewport, options.FontSize, stylesheets.Resolve,
-                        options.PreferredColorScheme);
+                    // Cheap cascade-only path for getComputedStyle reads on
+                    // purely-cascaded properties — see RenderAsync.
+                    Starling.Css.Cascade.StyleEngine BuildCascadeOnly()
+                        => _painter.BuildStyleEngine(
+                            doc, viewport, options.FontSize, stylesheets.Resolve,
+                            options.PreferredColorScheme);
 
-                // Re-fetch resources a script run injected (new <img> / <link>),
-                // plus CSS background images, before laying out for paint.
-                async Task FetchInjectedAndBackgroundsAsync()
-                {
-                    await Task.WhenAll(
-                        images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
-                        stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
-                    ).ConfigureAwait(false);
-                    await images
-                        .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
-                        .ConfigureAwait(false);
-                }
-
-                // Lay out the current DOM for paint and build the owning page.
-                // Only hand the client to the page when we own it; a shared
-                // session client outlives the page and is disposed by the caller.
-                // When <paramref name="reuseHost"/> already holds a layout that
-                // matches the current mutation version (script forced a
-                // prelayout AND nothing has mutated since), reuse it — saves
-                // ~200 ms on real pages by skipping the third full layout pass.
-                LaidOutPage BuildPage(BoxLayoutHost? reuseHost = null)
-                {
-                    Starling.Layout.Box.BlockBox root;
-                    Starling.Css.Cascade.StyleEngine style;
-                    if (reuseHost is { HasLayout: true } h
-                        && h.LaidOutVersion == doc.LayoutInvalidationVersion)
+                    // Re-fetch resources a script run injected (new <img> / <link>),
+                    // plus CSS background images, before laying out for paint.
+                    async Task FetchInjectedAndBackgroundsAsync()
                     {
-                        (root, style) = h.Materialized;
-                    }
-                    else
-                    {
-                        (root, style) = _painter.LayoutDocumentWithStyle(
-                            doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
-                    }
-                    return new LaidOutPage(
-                        root, doc, style, viewport, url, ExtractTitle(doc), images, stylesheets, webFonts,
-                        options.FontSize, security, ownsHttp ? http : null);
-                }
-
-                // ---- Progressive path: run only render-blocking scripts, paint,
-                // then settle deferred (async) scripts and reflow only if they
-                // changed the DOM. Used by the interactive shell. ----
-                if (onFirstPaint is not null && hasScripts)
-                {
-                    var progressiveHost = new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly);
-                    var session = BeginScripts(doc, u, scripts, progressiveHost, viewport, ct);
-                    var sessionEnded = false;
-                    void EndSessionOnce() { if (!sessionEnded) { sessionEnded = true; EndScripts(session); } }
-                    try
-                    {
-                        using (var critSpan = _diag.Span("engine", "run_scripts.critical"))
-                        {
-                            Activity.Current?.SetTag("script.count", scripts.Scripts.Count);
-                            Activity.Current?.SetTag("script.module_count", scripts.ModuleScripts.Count);
-                            var critSw = System.Diagnostics.Stopwatch.StartNew();
-                            RunCriticalScripts(session, deferAsync: true, includeParserDeferred: false, ct);
-                            critSw.Stop();
-                            _diag.Log(DiagLevel.Info, "engine",
-                                $"run_scripts.critical: {critSw.ElapsedMilliseconds} ms ({scripts.Scripts.Count} classic + {scripts.ModuleScripts.Count} module); " +
-                                $"layout-host: relayouts={progressiveHost.RelayoutCount}, cached-reads={progressiveHost.FreshHits}, cascade-only={progressiveHost.CascadeOnlyHits}");
-                        }
-
-                        // First paint: lay out the post-critical DOM and hand it to
-                        // the caller. From here the displayed page owns the shared
-                        // resources + http client, so the catch must not free them.
-                        var injSw = System.Diagnostics.Stopwatch.StartNew();
-                        await FetchSheetsThenFontsAsync().ConfigureAwait(false);
-                        injSw.Stop();
-                        var paintSw = System.Diagnostics.Stopwatch.StartNew();
-                        // Reuse the JS layout host's materialized layout if its
-                        // mutation version still matches — avoids a third full
-                        // layout pass when scripts already triggered one.
-                        var page1 = BuildPage(progressiveHost);
-                        paintSw.Stop();
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"post-critical: fetch_styles_fonts={injSw.ElapsedMilliseconds}ms, build_page={paintSw.ElapsedMilliseconds}ms" +
-                            $" (reused_host_layout={(progressiveHost.HasLayout && progressiveHost.LaidOutVersion == doc.LayoutInvalidationVersion)})");
-                        httpHandedToPage = ownsHttp;
-                        resourcesHandedToPage = true;
-
-                        var versionAtPaint = doc.MutationVersion;
-                        var imagesAtPaint = images.LoadedCount;
-                        var sheetsAtPaint = stylesheets.LoadedCount;
-                        onFirstPaint(page1);
-
-                        var deferredFetchSw = System.Diagnostics.Stopwatch.StartNew();
                         await Task.WhenAll(
-                            scripts.FetchDeferredAsync(doc, baseUrl: u, ct),
-                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct)
+                            images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct),
+                            stylesheets.FetchAllAsync(doc, baseUrl: u, ct)
                         ).ConfigureAwait(false);
                         await images
                             .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
                             .ConfigureAwait(false);
-                        _diag.Log(DiagLevel.Info, "engine",
-                            $"phase: deferred_resources@{pageSw.ElapsedMilliseconds}ms ({deferredFetchSw.ElapsedMilliseconds}ms)");
-
-                        // Deferred scripts settle here, after first paint.
-                        using (_diag.Span("engine", "run_scripts.deferred"))
-                            await RunDeferredScriptsAsync(session, deferAsync: true, runParserDeferred: true, ct).ConfigureAwait(false);
-
-                        // Keep the realm LIVE past load: instead of tearing the
-                        // session down, hand it to the returned page as a
-                        // PageScripting so the shell can dispatch DOM events and
-                        // pump timers/rAF/fetch interactively. The page owns it
-                        // now (disposes the JS http client + fetcher + DOM hooks),
-                        // so we do NOT EndScripts/DisposeScripts on this path. All
-                        // fallible work runs first; the hand-off (which flips the
-                        // teardown guards) happens last so any throw before it
-                        // still tears the session down via the catch.
-                        LaidOutPage HandOff(LaidOutPage page)
-                        {
-                            var live = new PageScripting(
-                                session.Session, session.Http, session.Fetcher, doc);
-                            sessionEnded = true;  // page.Dispose() tears the session down now
-                            scriptsDisposed = true;
-                            page.AttachScripting(live);
-                            return page;
-                        }
-
-                        // Common case (analytics/beacons): deferred work touched no
-                        // DOM and no late layout-affecting resources arrived, so
-                        // page1 is still correct — return it (now live).
-                        if (doc.MutationVersion == versionAtPaint
-                            && images.LoadedCount == imagesAtPaint
-                            && stylesheets.LoadedCount == sheetsAtPaint)
-                            return Result<LaidOutPage, RenderError>.Ok(HandOff(page1));
-
-                        // Deferred scripts mutated the DOM or late resources
-                        // arrived: re-fetch what they injected and reflow into a
-                        // successor. Relayout transfers page1's shared resources
-                        // to it and marks page1 inert, so the caller can dispose
-                        // page1 safely.
-                        await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
-                        var (root2, style2) = _painter.LayoutDocumentWithStyle(
-                            doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
-                        return Result<LaidOutPage, RenderError>.Ok(HandOff(page1.Relayout(root2, style2, viewport)));
                     }
-                    catch
+
+                    // Lay out the current DOM for paint and build the owning page.
+                    // Only hand the client to the page when we own it; a shared
+                    // session client outlives the page and is disposed by the caller.
+                    // When <paramref name="reuseHost"/> already holds a layout that
+                    // matches the current mutation version (script forced a
+                    // prelayout AND nothing has mutated since), reuse it — saves
+                    // ~200 ms on real pages by skipping the third full layout pass.
+                    LaidOutPage BuildPage(BoxLayoutHost? reuseHost = null)
                     {
-                        // After first paint the caller owns the resources; only
-                        // tear the session/fetcher down and propagate (the outer
-                        // catch skips resource disposal via resourcesHandedToPage).
-                        EndSessionOnce();
-                        DisposeScripts();
-                        throw;
+                        Starling.Layout.Box.BlockBox root;
+                        Starling.Css.Cascade.StyleEngine style;
+                        if (reuseHost is { HasLayout: true } h
+                            && h.LaidOutVersion == doc.LayoutInvalidationVersion)
+                        {
+                            (root, style) = h.Materialized;
+                        }
+                        else
+                        {
+                            (root, style) = _painter.LayoutDocumentWithStyle(
+                                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                colorScheme: options.PreferredColorScheme, ct: ct);
+                        }
+                        return new LaidOutPage(
+                            root, doc, style, viewport, url, ExtractTitle(doc), images, stylesheets, webFonts,
+                            options.FontSize, security, ownsHttp ? http : null);
                     }
-                }
 
-                // ---- Non-progressive path: run everything before painting the
-                // single returned page (snapshot semantics / no callback). ----
-                if (hasScripts)
-                {
-                    await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly), viewport, ct).ConfigureAwait(false);
-                    DisposeScripts();
-                    await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
-                }
-                else
-                {
-                    DisposeScripts();
-                    await images
-                        .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
-                        .ConfigureAwait(false);
-                }
+                    // ---- Progressive path: run only render-blocking scripts, paint,
+                    // then settle deferred (async) scripts and reflow only if they
+                    // changed the DOM. Used by the interactive shell. ----
+                    if (onFirstPaint is not null && hasScripts)
+                    {
+                        var progressiveHost = new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly);
+                        var session = BeginScripts(doc, u, scripts, progressiveHost, viewport, ct);
+                        var sessionEnded = false;
+                        void EndSessionOnce() { if (!sessionEnded) { sessionEnded = true; EndScripts(session); } }
+                        try
+                        {
+                            using (var critSpan = StarlingTelemetry.Span("engine", "run_scripts.critical"))
+                            {
+                                Activity.Current?.SetTag("script.count", scripts.Scripts.Count);
+                                Activity.Current?.SetTag("script.module_count", scripts.ModuleScripts.Count);
+                                var critSw = System.Diagnostics.Stopwatch.StartNew();
+                                RunCriticalScripts(session, deferAsync: true, includeParserDeferred: false, ct);
+                                critSw.Stop();
+                                StarlingEngineLog.CriticalScriptsDone(_log, critSw.ElapsedMilliseconds,
+                                    scripts.Scripts.Count, scripts.ModuleScripts.Count,
+                                    progressiveHost.RelayoutCount, progressiveHost.FreshHits,
+                                    progressiveHost.CascadeOnlyHits);
+                            }
 
-                var page = BuildPage();
-                httpHandedToPage = ownsHttp;
-                resourcesHandedToPage = true;
-                return Result<LaidOutPage, RenderError>.Ok(page);
-            }
+                            // First paint: lay out the post-critical DOM and hand it to
+                            // the caller. From here the displayed page owns the shared
+                            // resources + http client, so the catch must not free them.
+                            var injSw = System.Diagnostics.Stopwatch.StartNew();
+                            await FetchSheetsThenFontsAsync().ConfigureAwait(false);
+                            injSw.Stop();
+                            var paintSw = System.Diagnostics.Stopwatch.StartNew();
+                            // Reuse the JS layout host's materialized layout if its
+                            // mutation version still matches — avoids a third full
+                            // layout pass when scripts already triggered one.
+                            var page1 = BuildPage(progressiveHost);
+                            paintSw.Stop();
+                            StarlingEngineLog.PostCriticalTiming(_log, injSw.ElapsedMilliseconds,
+                                paintSw.ElapsedMilliseconds,
+                                progressiveHost.HasLayout && progressiveHost.LaidOutVersion == doc.LayoutInvalidationVersion);
+                            httpHandedToPage = ownsHttp;
+                            resourcesHandedToPage = true;
+
+                            var versionAtPaint = doc.MutationVersion;
+                            var imagesAtPaint = images.LoadedCount;
+                            var sheetsAtPaint = stylesheets.LoadedCount;
+                            onFirstPaint(page1);
+
+                            var deferredFetchSw = System.Diagnostics.Stopwatch.StartNew();
+                            await Task.WhenAll(
+                                scripts.FetchDeferredAsync(doc, baseUrl: u, ct),
+                                images.FetchAllAsync(doc, baseUrl: u, options.Viewport.Width, options.FontSize, ct)
+                            ).ConfigureAwait(false);
+                            await images
+                                .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
+                                .ConfigureAwait(false);
+                            StarlingEngineLog.PhaseElapsed(_log, "deferred_resources", pageSw.ElapsedMilliseconds, deferredFetchSw.ElapsedMilliseconds);
+
+                            // Deferred scripts settle here, after first paint.
+                            using (StarlingTelemetry.Span("engine", "run_scripts.deferred"))
+                                await RunDeferredScriptsAsync(session, deferAsync: true, runParserDeferred: true, ct).ConfigureAwait(false);
+
+                            // Keep the realm LIVE past load: instead of tearing the
+                            // session down, hand it to the returned page as a
+                            // PageScripting so the shell can dispatch DOM events and
+                            // pump timers/rAF/fetch interactively. The page owns it
+                            // now (disposes the JS http client + fetcher + DOM hooks),
+                            // so we do NOT EndScripts/DisposeScripts on this path. All
+                            // fallible work runs first; the hand-off (which flips the
+                            // teardown guards) happens last so any throw before it
+                            // still tears the session down via the catch.
+                            LaidOutPage HandOff(LaidOutPage page)
+                            {
+                                var live = new PageScripting(
+                                    session.Session, session.Http, session.Fetcher, doc);
+                                sessionEnded = true;  // page.Dispose() tears the session down now
+                                scriptsDisposed = true;
+                                page.AttachScripting(live);
+                                return page;
+                            }
+
+                            // Common case (analytics/beacons): deferred work touched no
+                            // DOM and no late layout-affecting resources arrived, so
+                            // page1 is still correct — return it (now live).
+                            if (doc.MutationVersion == versionAtPaint
+                                && images.LoadedCount == imagesAtPaint
+                                && stylesheets.LoadedCount == sheetsAtPaint)
+                                return Result<LaidOutPage, RenderError>.Ok(HandOff(page1));
+
+                            // Deferred scripts mutated the DOM or late resources
+                            // arrived: re-fetch what they injected and reflow into a
+                            // successor. Relayout transfers page1's shared resources
+                            // to it and marks page1 inert, so the caller can dispose
+                            // page1 safely.
+                            await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
+                            var (root2, style2) = _painter.LayoutDocumentWithStyle(
+                                doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
+                                colorScheme: options.PreferredColorScheme, ct: ct);
+                            return Result<LaidOutPage, RenderError>.Ok(HandOff(page1.Relayout(root2, style2, viewport)));
+                        }
+                        catch
+                        {
+                            // After first paint the caller owns the resources; only
+                            // tear the session/fetcher down and propagate (the outer
+                            // catch skips resource disposal via resourcesHandedToPage).
+                            EndSessionOnce();
+                            DisposeScripts();
+                            throw;
+                        }
+                    }
+
+                    // ---- Non-progressive path: run everything before painting the
+                    // single returned page (snapshot semantics / no callback). ----
+                    if (hasScripts)
+                    {
+                        await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly), viewport, ct).ConfigureAwait(false);
+                        DisposeScripts();
+                        await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        DisposeScripts();
+                        await images
+                            .FetchBackgroundsAsync(EnumerateAuthorSheets(doc, u, stylesheets), u, ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    var page = BuildPage();
+                    httpHandedToPage = ownsHttp;
+                    resourcesHandedToPage = true;
+                    return Result<LaidOutPage, RenderError>.Ok(page);
+                }
             }
             catch
             {
@@ -874,8 +883,8 @@ public sealed class StarlingEngine
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(options);
 
-        _diag.Counter("engine.page_relayout", 1);
-        using var _ = _diag.Span("engine", $"relayout {page.Url}");
+        StarlingTelemetry.Counter("engine.page_relayout", 1);
+        using var _ = StarlingTelemetry.Span("engine", $"relayout {page.Url}");
         Activity.Current?.SetTag("viewport.w", options.Viewport.Width);
         Activity.Current?.SetTag("viewport.h", options.Viewport.Height);
 
@@ -893,7 +902,7 @@ public sealed class StarlingEngine
             ViewportWidthPx = viewport.Width,
             ViewportHeightPx = viewport.Height,
         };
-        var session = page.GetOrCreateLayoutSession(_diag);
+        var session = page.GetOrCreateLayoutSession(_loggerFactory);
         var incRoot = _painter.LayoutDocumentIncremental(session, page.Document, viewport, page.WebFonts);
         return page.Relayout(incRoot, page.Style, viewport);
     }
@@ -1028,7 +1037,7 @@ public sealed class StarlingEngine
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(outputPath);
 
-        using var _ = _diag.Span("engine", $"capture_png {page.Url} -> {outputPath}");
+        using var _ = StarlingTelemetry.Span("engine", $"capture_png {page.Url} -> {outputPath}");
 
         var height = fullPage
             ? Math.Clamp(Math.Ceiling(page.DocumentHeight), page.Viewport.Height, 30000)
@@ -1054,7 +1063,7 @@ public sealed class StarlingEngine
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(outputPath);
 
-        using var _ = _diag.Span("engine", $"capture_png.gpu {page.Url} -> {outputPath}");
+        using var _ = StarlingTelemetry.Span("engine", $"capture_png.gpu {page.Url} -> {outputPath}");
         using var renderer = CreateCompositedRenderer(page);
         using var bitmap = RenderFrameGpu(page, nowMs, renderer, fullPage);
 
@@ -1167,7 +1176,7 @@ public sealed class StarlingEngine
         // preserves the historical ordering — async classic scripts run before
         // DOMContentLoaded). The interactive path splits the phases around first
         // paint via the Begin/RunCritical/RunDeferred/End primitives below.
-        using var span = _diag.Span("engine", "run_scripts");
+        using var span = StarlingTelemetry.Span("engine", "run_scripts");
         Activity.Current?.SetTag("script.count", scriptFetcher.Scripts.Count);
         Activity.Current?.SetTag("script.module_count", scriptFetcher.ModuleScripts.Count);
 
@@ -1228,7 +1237,7 @@ public sealed class StarlingEngine
             Fetcher: (url, token) => scriptFetcher.FetchSourceAsync(url, token),
             Http: http,
             LayoutHost: layoutHost,
-            Diag: _diag)
+            LoggerFactory: _loggerFactory)
         {
             // Register element.animate() animations straight into the document's
             // persistent AnimationEngine (held by its timeline), so they outlive
@@ -1254,22 +1263,22 @@ public sealed class StarlingEngine
             Http = http,
         };
 
-        // Route the backend console through diagnostics, preserving the page's
-        // console level so DevTools' ConsolePanel can colour errors red and its
-        // level-filter pills match. The in-memory sink is opened down to Debug
-        // for this category in AddStarlingTelemetry so console.debug isn't
-        // dropped by the default Information floor; console.trace folds into
-        // Debug (no trace pill).
+        // Route the backend console through the dedicated JS console logger,
+        // preserving the page's console level so DevTools' ConsolePanel can
+        // colour errors red and its level-filter pills match. The in-memory
+        // sink is opened down to Debug for this category in AddStarlingTelemetry
+        // so console.debug isn't dropped by the default Information floor;
+        // console.trace folds into Debug (no trace pill).
         inner.ConsoleSink = (level, message) =>
         {
-            var diagLevel = level switch
+            var logLevel = level switch
             {
-                ConsoleLevel.Error => DiagLevel.Error,
-                ConsoleLevel.Warn => DiagLevel.Warn,
-                ConsoleLevel.Debug or ConsoleLevel.Trace => DiagLevel.Debug,
-                _ => DiagLevel.Info,
+                ConsoleLevel.Error => LogLevel.Error,
+                ConsoleLevel.Warn => LogLevel.Warning,
+                ConsoleLevel.Debug or ConsoleLevel.Trace => LogLevel.Debug,
+                _ => LogLevel.Information,
             };
-            _diag.Log(diagLevel, "engine.js", $"[{level}] {message}");
+            _jsConsoleLog.Log(logLevel, "[{Level}] {Message}", level, message);
             if (level == ConsoleLevel.Error) session.ConsoleErrors++;
         };
 
@@ -1357,8 +1366,8 @@ public sealed class StarlingEngine
         var tFireLoad = sw.ElapsedMilliseconds;
         await PumpToQuiescenceAsync(s, ct).ConfigureAwait(false);
 
-        _diag.Log(DiagLevel.Info, "engine",
-            $"deferred.summary: parser={tParserDeferred}ms async={tAsync - tParserDeferred}ms pump1={tPump1 - tAsync}ms fireLoad={tFireLoad - tPump1}ms pump2={sw.ElapsedMilliseconds - tFireLoad}ms total={sw.ElapsedMilliseconds}ms");
+        StarlingEngineLog.DeferredSummary(_log, tParserDeferred, tAsync - tParserDeferred,
+            tPump1 - tAsync, tFireLoad - tPump1, sw.ElapsedMilliseconds - tFireLoad, sw.ElapsedMilliseconds);
     }
 
     /// <summary>
@@ -1376,7 +1385,7 @@ public sealed class StarlingEngine
 
         if (s.ConsoleErrors > 0)
         {
-            _diag.Counter("engine.script.console_errors", s.ConsoleErrors);
+            StarlingTelemetry.Counter("engine.script.console_errors", s.ConsoleErrors);
             Activity.Current?.SetTag("script.console_errors", s.ConsoleErrors);
         }
     }
@@ -1439,17 +1448,17 @@ public sealed class StarlingEngine
         try
         {
             s.Session.RunClassicScript(script.Source, label);
-            _diag.Counter("engine.script.ok", 1);
+            StarlingTelemetry.Counter("engine.script.ok", 1);
         }
         catch (ScriptThrow ex)
         {
-            _diag.Counter("engine.script.failed", 1);
-            _diag.Log(DiagLevel.Warn, "engine.js", $"Uncaught script error ({label}): {ex.Message}");
+            StarlingTelemetry.Counter("engine.script.failed", 1);
+            StarlingEngineLog.UncaughtScriptError(_jsConsoleLog, label, ex.Message);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _diag.Counter("engine.script.failed", 1);
-            _diag.Log(DiagLevel.Warn, "engine.js", $"Script compile/run failure ({label}): {ex.Message}");
+            StarlingTelemetry.Counter("engine.script.failed", 1);
+            StarlingEngineLog.ScriptRunFailure(_jsConsoleLog, label, ex.Message);
         }
     }
 
@@ -1483,17 +1492,17 @@ public sealed class StarlingEngine
             try
             {
                 s.Session.RunModuleScriptAsync(moduleUrl, script.Source, ct).GetAwaiter().GetResult();
-                _diag.Counter("engine.module.ok", 1);
+                StarlingTelemetry.Counter("engine.module.ok", 1);
             }
             catch (ScriptThrow ex)
             {
-                _diag.Counter("engine.module.failed", 1);
-                _diag.Log(DiagLevel.Warn, "engine.js", $"Uncaught module error ({label}): {ex.Message}");
+                StarlingTelemetry.Counter("engine.module.failed", 1);
+                StarlingEngineLog.UncaughtModuleError(_jsConsoleLog, label, ex.Message);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _diag.Counter("engine.module.failed", 1);
-                _diag.Log(DiagLevel.Warn, "engine.js", $"Module compile/run failure ({label}): {ex.Message}");
+                StarlingTelemetry.Counter("engine.module.failed", 1);
+                StarlingEngineLog.ModuleRunFailure(_jsConsoleLog, label, ex.Message);
             }
         }
     }
@@ -1548,8 +1557,7 @@ public sealed class StarlingEngine
             var rafOnly = s.Session.OnlyAnimationFramePending;
             if (rafOnly && rafFrames >= RafFrameBudget)
             {
-                _diag.Log(DiagLevel.Info, "engine",
-                    $"pump.settle: {wall.ElapsedMilliseconds}ms wall, {iters} iters, {rafFrames} rAF frames, exit=rafBudget");
+                StarlingEngineLog.PumpSettled(_log, wall.ElapsedMilliseconds, iters, rafFrames, "rafBudget");
                 return;
             }
             if (rafOnly)
@@ -1563,20 +1571,25 @@ public sealed class StarlingEngine
                 continue;
             }
 
+            if (s.Session.HasPendingHostAsyncWork)
+            {
+                idle.Restart();
+                await Task.Delay(20, ct).ConfigureAwait(false);
+                continue;
+            }
+
             // Nothing pending in-process. Give off-thread fetch/XHR completions
             // a slot to enqueue resolve jobs; exit once the idle window elapses
             // with no new work observed.
             if (idle.ElapsedMilliseconds >= IdleMs)
             {
-                _diag.Log(DiagLevel.Info, "engine",
-                    $"pump.settle: {wall.ElapsedMilliseconds}ms wall, {iters} iters, {rafFrames} rAF frames, exit=quiescent");
+                StarlingEngineLog.PumpSettled(_log, wall.ElapsedMilliseconds, iters, rafFrames, "quiescent");
                 return;
             }
             await Task.Delay(20, ct).ConfigureAwait(false);
         }
 
-        _diag.Log(DiagLevel.Warn, "engine",
-            $"pump.settle: {wall.ElapsedMilliseconds}ms wall, {iters} iters, {rafFrames} rAF frames, exit=cap (rendering current DOM)");
+        StarlingEngineLog.PumpCapExceeded(_log, wall.ElapsedMilliseconds, iters, rafFrames);
     }
 
     /// <summary>
@@ -1594,7 +1607,7 @@ public sealed class StarlingEngine
         {
             var source = styleElement.TextContent;
             if (string.IsNullOrWhiteSpace(source)) continue;
-            yield return (CssParser.ParseStyleSheet(source, StyleOrigin.Author, _diag), docUrl);
+            yield return (CssParser.ParseStyleSheet(source, StyleOrigin.Author), docUrl);
         }
         foreach (var entry in stylesheets.EnumerateLoaded())
             yield return (entry.Sheet, entry.BaseUrl);
@@ -1617,8 +1630,9 @@ public sealed class StarlingEngine
             Directory.CreateDirectory(dir);
     }
 
-    private sealed class RozRuntime(RenderRozOptions options, IDiagnostics diag)
+    private sealed class RozRuntime(RenderRozOptions options, ILoggerFactory loggerFactory)
     {
+        private readonly ILogger _log = loggerFactory.CreateLogger("Starling.engine.roz");
         private readonly Stopwatch _wall = Stopwatch.StartNew();
 
         public string? Checkpoint(string stage)
@@ -1627,8 +1641,8 @@ public sealed class StarlingEngine
                 _wall.ElapsedMilliseconds > maxWallMs)
             {
                 var msg = $"Roz limit exceeded ({stage}): render time {_wall.ElapsedMilliseconds}ms > {maxWallMs}ms.";
-                diag.Counter("engine.roz.time_limit", 1);
-                diag.Log(DiagLevel.Error, "engine.roz", msg);
+                StarlingTelemetry.Counter("engine.roz.time_limit", 1);
+                RozRuntimeLog.LimitExceeded(_log, msg);
                 return msg;
             }
 
@@ -1638,8 +1652,8 @@ public sealed class StarlingEngine
                 managed > maxManagedBytes)
             {
                 var msg = $"Roz limit exceeded ({stage}): managed heap {managed} bytes > {maxManagedBytes} bytes.";
-                diag.Counter("engine.roz.managed_limit", 1);
-                diag.Log(DiagLevel.Error, "engine.roz", msg);
+                StarlingTelemetry.Counter("engine.roz.managed_limit", 1);
+                RozRuntimeLog.LimitExceeded(_log, msg);
                 return msg;
             }
 
@@ -1649,8 +1663,8 @@ public sealed class StarlingEngine
                 workingSet > maxWorkingBytes)
             {
                 var msg = $"Roz limit exceeded ({stage}): working set {workingSet} bytes > {maxWorkingBytes} bytes.";
-                diag.Counter("engine.roz.working_set_limit", 1);
-                diag.Log(DiagLevel.Error, "engine.roz", msg);
+                StarlingTelemetry.Counter("engine.roz.working_set_limit", 1);
+                RozRuntimeLog.LimitExceeded(_log, msg);
                 return msg;
             }
 
@@ -1674,16 +1688,16 @@ public sealed class StarlingEngine
                 if (maxDepth is int depthLimit && depthLimit > 0 && depth > depthLimit)
                 {
                     var msg = $"Roz limit exceeded ({stage}): DOM depth {depth} > {depthLimit}.";
-                    diag.Counter("engine.roz.dom_depth_limit", 1);
-                    diag.Log(DiagLevel.Error, "engine.roz", msg);
+                    StarlingTelemetry.Counter("engine.roz.dom_depth_limit", 1);
+                    RozRuntimeLog.LimitExceeded(_log, msg);
                     return msg;
                 }
 
                 if (maxNodes is int nodeLimit && nodeLimit > 0 && visited > nodeLimit)
                 {
                     var msg = $"Roz limit exceeded ({stage}): DOM nodes {visited} > {nodeLimit}.";
-                    diag.Counter("engine.roz.dom_nodes_limit", 1);
-                    diag.Log(DiagLevel.Error, "engine.roz", msg);
+                    StarlingTelemetry.Counter("engine.roz.dom_nodes_limit", 1);
+                    RozRuntimeLog.LimitExceeded(_log, msg);
                     return msg;
                 }
 
@@ -2006,3 +2020,73 @@ public sealed record RenderRozOptions
 public sealed record RenderOutcome(string OutputPath, int Width, int Height, string DisplayText);
 
 public sealed record RenderError(string Message);
+
+internal static partial class StarlingEngineLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "prelayout trigger: {Trigger}")]
+    public static partial void PrelayoutTrigger(ILogger logger, string trigger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "prelayout done ({Trigger}): {ElapsedMs} ms")]
+    public static partial void PrelayoutDone(ILogger logger, string trigger, long elapsedMs);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "  layout host: relayouts={Relayouts}, cached reads={FreshHits}")]
+    public static partial void LayoutHostStats(ILogger logger, long relayouts, long freshHits);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "  attr mutations: {Mutations}")]
+    public static partial void AttrMutations(ILogger logger, string mutations);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Wrote {OutputPath} ({Width}x{Height}, text length={TextLength}).")]
+    public static partial void RenderComplete(ILogger logger, string outputPath, int width, int height, int textLength);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Message}")]
+    public static partial void RenderFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "phase: {Phase}@{ElapsedMs}ms ({Bytes} bytes)")]
+    public static partial void PhaseTimestamp(ILogger logger, string phase, long elapsedMs, int bytes);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "phase: {Phase}@{ElapsedMs}ms")]
+    public static partial void PhaseDone(ILogger logger, string phase, long elapsedMs);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "phase: {Phase}@{PageElapsedMs}ms ({PhaseElapsedMs}ms)")]
+    public static partial void PhaseElapsed(ILogger logger, string phase, long pageElapsedMs, long phaseElapsedMs);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "run_scripts.critical: {ElapsedMs} ms ({ClassicCount} classic + {ModuleCount} module); " +
+                  "layout-host: relayouts={Relayouts}, cached-reads={FreshHits}, cascade-only={CascadeOnlyHits}")]
+    public static partial void CriticalScriptsDone(ILogger logger, long elapsedMs, int classicCount, int moduleCount,
+        long relayouts, long freshHits, long cascadeOnlyHits);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "post-critical: fetch_styles_fonts={FetchMs}ms, build_page={BuildMs}ms (reused_host_layout={ReusedHost})")]
+    public static partial void PostCriticalTiming(ILogger logger, long fetchMs, long buildMs, bool reusedHost);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "deferred.summary: parser={ParserMs}ms async={AsyncMs}ms pump1={Pump1Ms}ms fireLoad={FireLoadMs}ms pump2={Pump2Ms}ms total={TotalMs}ms")]
+    public static partial void DeferredSummary(ILogger logger, long parserMs, long asyncMs, long pump1Ms, long fireLoadMs, long pump2Ms, long totalMs);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught script error ({Label}): {Message}")]
+    public static partial void UncaughtScriptError(ILogger logger, string label, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Script compile/run failure ({Label}): {Message}")]
+    public static partial void ScriptRunFailure(ILogger logger, string label, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught module error ({Label}): {Message}")]
+    public static partial void UncaughtModuleError(ILogger logger, string label, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Module compile/run failure ({Label}): {Message}")]
+    public static partial void ModuleRunFailure(ILogger logger, string label, string message);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "pump.settle: {WallMs}ms wall, {Iters} iters, {RafFrames} rAF frames, exit={Exit}")]
+    public static partial void PumpSettled(ILogger logger, long wallMs, int iters, int rafFrames, string exit);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "pump.settle: {WallMs}ms wall, {Iters} iters, {RafFrames} rAF frames, exit=cap (rendering current DOM)")]
+    public static partial void PumpCapExceeded(ILogger logger, long wallMs, int iters, int rafFrames);
+}
+
+internal static partial class RozRuntimeLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Message}")]
+    public static partial void LimitExceeded(ILogger logger, string message);
+}

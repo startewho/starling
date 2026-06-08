@@ -23,6 +23,35 @@ internal static class CssomBinding
     // <style>/<link rel=stylesheet> elements in tree order.
     private static readonly ConditionalWeakTable<Document, List<CssomStyleSheet>> SheetsPerDocument = new();
 
+    // Per-<style>-element CSSOM sheet, re-parsed when the element's text changes.
+    // HTMLStyleElement.sheet (CSSOM §6.5) returns the associated CSSStyleSheet.
+    private sealed class StyleElementSheet { public string Source = ""; public CssomStyleSheet? Sheet; }
+    private static readonly ConditionalWeakTable<Element, StyleElementSheet> SheetPerStyleElement = new();
+
+    /// <summary>HTMLStyleElement.sheet / HTMLLinkElement.sheet accessor body
+    /// (CSSOM §6.5). Builds a live CSSStyleSheet from the element's current text
+    /// content. The CSSOM sheet is cached and only re-parsed when the source text
+    /// changes, so CSSOM mutations (selectorText / setProperty) round-trip while a
+    /// test holds the same sheet, yet edits to the element's text are picked up.</summary>
+    public static JsValue StyleElementSheetAccessor(JsRealm realm, JsValue thisV)
+    {
+        var el = DomWrappers.UnwrapElement(thisV);
+        if (el is null) return JsValue.Null;
+        // Only <style> elements carry inline CSS text. <link> external sheets have
+        // no source available in this binding context.
+        if (!el.LocalName.Equals("style", StringComparison.OrdinalIgnoreCase))
+            return JsValue.Null;
+        var source = el.TextContent ?? string.Empty;
+        var entry = SheetPerStyleElement.GetValue(el, static _ => new StyleElementSheet());
+        if (entry.Sheet is null || !string.Equals(entry.Source, source, StringComparison.Ordinal))
+        {
+            var parsed = CssParser.ParseStyleSheet(source, StyleOrigin.Author);
+            entry.Sheet = new CssomStyleSheet(parsed);
+            entry.Source = source;
+        }
+        return JsValue.Object(BuildStyleSheet(realm, entry.Sheet));
+    }
+
     /// <summary>document.styleSheets accessor body.</summary>
     public static JsValue StyleSheetsAccessor(JsRealm realm, JsValue thisV)
     {
@@ -100,7 +129,7 @@ internal static class CssomBinding
         {
             var ruleObj = rules[i] is { } styleRule
                 ? JsValue.Object(BuildStyleRule(realm, styleRule))
-                : JsValue.Object(BuildAtRulePlaceholder(realm));
+                : JsValue.Object(BuildAtRulePlaceholder(realm, sheet.AtRuleNameAt(i)));
             obj.DefineOwnProperty(i.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 PropertyDescriptor.Data(ruleObj, writable: false, enumerable: true, configurable: true));
         }
@@ -113,7 +142,7 @@ internal static class CssomBinding
             if (idx < 0 || idx >= rules.Count) return JsValue.Null;
             return rules[idx] is { } r
                 ? JsValue.Object(BuildStyleRule(realm, r))
-                : JsValue.Object(BuildAtRulePlaceholder(realm));
+                : JsValue.Object(BuildAtRulePlaceholder(realm, sheet.AtRuleNameAt(idx)));
         }, length: 1);
         return obj;
     }
@@ -122,17 +151,36 @@ internal static class CssomBinding
     /// CSSOM model keeps as an opaque placeholder. Exposes a read-only
     /// <c>style</c> (an empty declaration) so @font-face rules can accept
     /// <c>setProperty("unicode-range", …)</c> calls from tests.</summary>
-    private static JsObject BuildAtRulePlaceholder(JsRealm realm)
+    private static JsObject BuildAtRulePlaceholder(JsRealm realm, string? atRuleName)
     {
         var obj = new JsObject(realm.ObjectPrototype);
         var emptyBlock = new Starling.Css.Cssom.CssomDeclarationBlock();
-        // type = 5 = CSSFontFaceRule (most common at-rule placeholder).
-        EventTargetBinding.DefineAccessor(realm, obj, "type", (_, _) => JsValue.Number(5));
+        // Map the at-rule keyword to the legacy CSSRule.type constant
+        // (CSSOM §6.4). Unknown / missing → 5 (CSSFontFaceRule) as before.
+        var type = AtRuleTypeConstant(atRuleName);
+        EventTargetBinding.DefineAccessor(realm, obj, "type", (_, _) => JsValue.Number(type));
         EventTargetBinding.DefineAccessor(realm, obj, "cssText", (_, _) => JsValue.String(""));
         EventTargetBinding.DefineAccessor(realm, obj, "style",
             (_, _) => JsValue.Object(BuildDeclaration(realm, emptyBlock)));
         return obj;
     }
+
+    /// <summary>Map a lowercased at-rule keyword to its legacy <c>CSSRule.type</c>
+    /// constant (CSSOM §6.4 "the CSSRule interface").</summary>
+    private static int AtRuleTypeConstant(string? name) => name switch
+    {
+        "charset" => 2,
+        "import" => 3,
+        "media" => 4,
+        "font-face" => 5,
+        "page" => 6,
+        "keyframes" or "-webkit-keyframes" => 7,
+        "namespace" => 10,
+        "counter-style" => 11,
+        "supports" => 12,
+        "font-feature-values" => 14,
+        _ => 5,
+    };
 
     private static JsObject BuildStyleRule(JsRealm realm, CssomStyleRule rule)
     {

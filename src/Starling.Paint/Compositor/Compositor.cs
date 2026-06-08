@@ -21,7 +21,6 @@ namespace Starling.Paint.Compositor;
 internal sealed class Compositor
 {
     private readonly IPaintBackend _backend;
-    private readonly IDiagnostics _diag;
     // Session-scoped per-layer tile cache. Supplied by the host so tiles
     // persist across frames; one-shot renders / tests get a private grid so they still
     // tile (and stay self-contained) without cross-frame reuse.
@@ -34,12 +33,11 @@ internal sealed class Compositor
     private int _frameTileHits;
     private int _frameTileMisses;
 
-    public Compositor(IPaintBackend backend, IDiagnostics? diagnostics = null, TileGrid? tileGrid = null)
+    public Compositor(IPaintBackend backend, TileGrid? tileGrid = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         _backend = backend;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
-        _tileGrid = tileGrid ?? new TileGrid(_diag);
+        _tileGrid = tileGrid ?? new TileGrid();
     }
 
     /// <summary>
@@ -50,57 +48,6 @@ internal sealed class Compositor
     internal bool DisableFastBlit { get; init; }
 
     internal bool DisableGpuBlend { get; init; }
-
-    // /// <summary>
-    // /// Renders <paramref name="root"/> (the layer tree's root) into a bitmap
-    // /// sized to <paramref name="viewport"/> at <paramref name="scale"/>. Each
-    // /// layer's picture cache is keyed by its own slice content hash
-    // /// (<see cref="CompositorLayer.ContentHash"/>, LTF-02), so a layer whose
-    // /// content is unchanged serves from cache — even across a relayout that bumped
-    // /// the global page version — while a layer whose slice actually changed
-    // /// re-rasters alone, leaving its siblings untouched.
-    // /// </summary>
-    // public RenderedBitmap Render(CompositorLayer root, LayoutRect viewport, float scale)
-    // {
-    //     ArgumentNullException.ThrowIfNull(root);
-    //     if (viewport.Width <= 0 || viewport.Height <= 0)
-    //         throw new ArgumentException("Viewport must have positive dimensions.", nameof(viewport));
-    //     if (!(scale > 0f))
-    //         throw new ArgumentException("Scale must be positive.", nameof(scale));
-    //
-    //     var width = (int)Math.Ceiling(viewport.Width * scale);
-    //     var height = (int)Math.Ceiling(viewport.Height * scale);
-    //
-    //     // Per-frame phase span (low frequency — one per present) the daemon can
-    //     // correlate with CPU/RAM; the readback path is the Avalonia default.
-    //     using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
-    //
-    //     // The output base is opaque white — the page background the flat path
-    //     // also establishes. Every layer paints over a transparent canvas, so
-    //     // unpainted regions of a layer leave the base (or lower layers) showing.
-    //     _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
-    //     var output = new byte[checked(width * height * 4)];
-    //     FillWhite(output);
-    //
-    //     // Walk the tree once into a flat, paint-ordered list of blend ops, each
-    //     // carrying the layer bitmap plus the geometry (localToDevice, clipDev,
-    //     // opacity) computed in one place. The CPU and GPU paths consume the same
-    //     // ops, so they blend identical geometry.
-    //     var ops = new List<LayerBlend>();
-    //     CollectOps(root, ops, viewport, scale,
-    //         ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
-    //         surfacePresenter: null);
-    //
-    //     if (ops.Count > 0)
-    //     {
-    //         var gpu = GpuLayerCompositor.Shared
-    //             ?? throw new InvalidOperationException("WebGPU composite blend is unavailable for the selected paint backend.");
-    //         gpu.Composite(output, width, height, ops);
-    //     }
-    //
-    //     EmitTileFrameMetrics();
-    //     return new RenderedBitmap(width, height, output);
-    // }
 
     public RenderedBitmap Render(CompositorLayer root, LayoutRect viewport, float scale)
     {
@@ -113,8 +60,8 @@ internal sealed class Compositor
         var width = (int)Math.Ceiling(viewport.Width * scale);
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
-        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
-        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        using var composite = StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        StarlingTelemetry.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
         var output = new byte[checked(width * height * 4)];
         FillWhite(output);
 
@@ -146,7 +93,7 @@ internal sealed class Compositor
         CompositorLayer root,
         LayoutRect viewport,
         float scale,
-        IReadOnlyList<SurfaceOverlayRect>? overlays = null)
+        IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         if (viewport.Width <= 0 || viewport.Height <= 0)
@@ -160,8 +107,8 @@ internal sealed class Compositor
         var width = (int)Math.Ceiling(viewport.Width * scale);
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
-        using var composite = _diag.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
-        _diag.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
+        using var composite = StarlingTelemetry.Span(RenderMetrics.PaintArea, RenderMetrics.CompositeOp);
+        StarlingTelemetry.Gauge(RenderMetrics.CompositeOutputAllocBytes, (double)width * height * 4);
         var output = new byte[checked(width * height * 4)];
         FillWhite(output);
 
@@ -169,22 +116,23 @@ internal sealed class Compositor
         CollectOps(root, ops, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
             textureCache: gpu);
-        if (overlays is { Count: > 0 })
-        {
-            AppendOverlayOps(ops, viewport, scale, overlays);
-        }
+        var gpuOverlayLayers = BuildGpuOverlayLayers(viewport, scale, drawingOverlays);
 
-        if (ops.Count > 0)
+        if (ops.Count > 0 || gpuOverlayLayers is { Count: > 0 })
         {
-            gpu.Composite(output, width, height, ops);
+            gpu.Composite(output, width, height, ops, gpuOverlayLayers);
         }
 
         EmitTileFrameMetrics();
         return new RenderedBitmap(width, height, output);
     }
 
-    public bool RenderToSurface(CompositorLayer root, LayoutRect viewport, float scale, GpuSurfacePresenter presenter,
-        IReadOnlyList<SurfaceOverlayRect>? overlays = null)
+    public bool RenderToSurface(
+        CompositorLayer root,
+        LayoutRect viewport,
+        float scale,
+        GpuSurfacePresenter presenter,
+        IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -197,57 +145,62 @@ internal sealed class Compositor
         var height = (int)Math.Ceiling(viewport.Height * scale);
 
         var ops = new List<LayerBlend>();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         var textureCache = new SurfaceTextureCache(presenter);
         CollectOps(root, ops, viewport, scale,
             ancestorTransform: Matrix2D.Identity, ancestorOpacity: 1f, ancestorClip: null,
             textureCache: textureCache);
-        var tRaster = sw.ElapsedMilliseconds;
 
-        // Overlays (caret, selection, find flash) blend on top of the page as
-        // solid-colour quads. Appended last so they draw over every page layer.
-        if (overlays is { Count: > 0 })
-            AppendOverlayOps(ops, viewport, scale, overlays);
+        var gpuOverlayLayers = BuildGpuOverlayLayers(viewport, scale, drawingOverlays);
 
-        var presented = presenter.PresentOps(width, height, ops);
+        var presented = presenter.PresentOps(width, height, ops, gpuOverlayLayers);
         if (!presented)
             throw new InvalidOperationException("GPU surface presenter did not present the frame.");
 
         EmitTileFrameMetrics();
-        if (sw.ElapsedMilliseconds > 100)
-            _diag.Log(DiagLevel.Info, "paint",
-                $"renderToSurface.cold: collectOps(raster)={tRaster}ms presentOps(gpu)={sw.ElapsedMilliseconds - tRaster}ms ops={ops.Count}");
         return presented;
     }
 
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, RenderedBitmap> _overlaySwatches = new();
-
-    private static void AppendOverlayOps(
-        List<LayerBlend> ops, LayoutRect viewport, float scale, IReadOnlyList<SurfaceOverlayRect> overlays)
+    private static List<GpuOverlayLayer>? BuildGpuOverlayLayers(
+        LayoutRect viewport,
+        float scale,
+        IReadOnlyList<SurfaceOverlayLayer>? overlays)
     {
-        var s = (double)scale;
-        // Same page-to-device map the layer ops use, so overlays align with page content.
-        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
-        foreach (var o in overlays)
+        if (overlays is not { Count: > 0 })
         {
-            if (o.W <= 0 || o.H <= 0 || o.A == 0) continue;
-            var packed = ((uint)o.R << 24) | ((uint)o.G << 16) | ((uint)o.B << 8) | o.A;
-            var swatch = _overlaySwatches.GetOrAdd(packed, static p =>
-                new RenderedBitmap(1, 1, new[] { (byte)(p >> 24), (byte)(p >> 16), (byte)(p >> 8), (byte)p }));
-            // The 1x1 swatch's local space is the unit square. Map it onto the
-            // overlay's page rect, then to device.
-            var localToDevice = pageToDevice
-                .Multiply(Matrix2D.Translate(o.X, o.Y))
-                .Multiply(Matrix2D.Scale(o.W, o.H));
-            ops.Add(LayerBlend.Bitmap(swatch, OverlayContentHash(packed), localToDevice, 1f, clipDevice: null));
+            return null;
         }
-    }
 
-    // Tag overlay content hashes into a high range so a swatch never collides with a
-    // real layer's slice hash (which would make the engine evict + re-upload both).
-    private static long OverlayContentHash(uint packedRgba)
-        => unchecked((long)(0xC0FFEE0000000000UL | packedRgba));
+        var s = (double)scale;
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        List<GpuOverlayLayer>? layers = null;
+        foreach (var overlay in overlays)
+        {
+            if (overlay.Scene.Width <= 0 ||
+                overlay.Scene.Height <= 0 ||
+                overlay.Opacity <= 0 ||
+                overlay.Scene.Commands.Count == 0)
+            {
+                continue;
+            }
+
+            var sceneToDevice = pageToDevice.Multiply(overlay.SceneToPage);
+            var clipDevice = overlay.ClipPage is { } clip
+                ? new Rect(
+                    (clip.X - viewport.X) * s,
+                    (clip.Y - viewport.Y) * s,
+                    clip.Width * s,
+                    clip.Height * s)
+                : (Rect?)null;
+            (layers ??= []).Add(new GpuOverlayLayer(
+                overlay.Scene,
+                sceneToDevice,
+                Math.Clamp(overlay.Opacity, 0f, 1f),
+                clipDevice));
+        }
+
+        return layers;
+    }
 
     /// <summary>
     /// Appends one layer tree's blend ops into a shared list for a surface frame
@@ -425,10 +378,6 @@ internal sealed class Compositor
 
                 var key = new TileKey(layer.LayerId, col, row, scale);
                 var opHash = TileOpHash(tileHash, col, row);
-                // TileGrid.TryGetTile already emits paint.tile.cache_hit/cache_miss;
-                // here we only tally per-frame for the miss-ratio + rasters-per-frame
-                // signals it doesn't produce (a Compositor is one frame, so these
-                // instance fields are this frame's totals).
                 var tileLocalToDevice = pageToDevice.Multiply(effectiveTransform)
                     .Multiply(Matrix2D.Translate(tilePageX, tilePageY).Multiply(Matrix2D.Scale(1d / s, 1d / s)));
 
@@ -475,7 +424,6 @@ internal sealed class Compositor
         if (_tileGrid.TryGetResidentTile(key, tileHash, out var resident)
             && textureCache.HasResidentTexture(opHash, resident.Width, resident.Height))
         {
-            _diag.Counter(RenderMetrics.TileCacheHit, 1);
             _frameTileHits++;
             ops.Add(LayerBlend.ResidentTexture(
                 resident.Width,
@@ -487,7 +435,6 @@ internal sealed class Compositor
             return;
         }
 
-        _diag.Counter(RenderMetrics.TileCacheMiss, 1);
         _frameTileMisses++;
         if (_backend is not IGpuTexturePaintBackend gpuBackend)
         {
@@ -502,7 +449,7 @@ internal sealed class Compositor
                 tileRectPage,
                 scale,
                 opaqueBackground: false,
-                textureCache.ImageSharpContext);
+                textureCache.GpuDevice);
 
             textureCache.AdoptTexture(opHash, texture);
             _tileGrid.PutResidentTile(key, tileHash, texture.Width, texture.Height);
@@ -526,7 +473,7 @@ internal sealed class Compositor
         public bool HasResidentTexture(long contentHash, int width, int height)
             => presenter.HasResidentTexture(contentHash, width, height);
 
-        public GpuPaintDeviceContext ImageSharpContext => presenter.ImageSharpContext;
+        public GpuPaintDevice GpuDevice => presenter.GpuDevice;
 
         public void AdoptTexture(long contentHash, GpuPaintTexture texture)
             => presenter.AdoptTexture(contentHash, texture);
@@ -548,8 +495,8 @@ internal sealed class Compositor
     {
         var total = _frameTileHits + _frameTileMisses;
         if (total == 0) return;
-        _diag.Gauge(RenderMetrics.TileMissRatio, (double)_frameTileMisses / total);
-        _diag.Counter(RenderMetrics.TileRastersPerFrame, _frameTileMisses);
+        StarlingTelemetry.Gauge(RenderMetrics.TileMissRatio, (double)_frameTileMisses / total);
+        StarlingTelemetry.Counter(RenderMetrics.TileRastersPerFrame, _frameTileMisses);
     }
 
     // A layer spanning this many tiles or fewer renders all of them (no viewport cull) —

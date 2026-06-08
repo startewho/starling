@@ -25,6 +25,37 @@ public class ProxyTests
     }
 
     [TestMethod]
+    public void Proxy_toString_uses_target_or_handler_get_trap()
+    {
+        Eval(@"
+            var targetWithToString = { toString: function() { return 'target'; } };
+            new Proxy(targetWithToString, {}).toString();
+        ").AsString.Should().Be("target");
+
+        Eval(@"
+            var handler = {
+                get: function(target, prop, receiver) {
+                    return prop === 'toString'
+                        ? function() { return 'handler'; }
+                        : Reflect.get(target, prop, receiver);
+                }
+            };
+            new Proxy({ toString: function() { return 'target'; } }, handler).toString();
+        ").AsString.Should().Be("handler");
+
+        Eval(@"
+            var handler = {
+                get: function(target, prop, receiver) {
+                    return prop === 'toString'
+                        ? function() { return 'handler'; }
+                        : Reflect.get(target, prop, receiver);
+                }
+            };
+            '' + new Proxy({}, handler);
+        ").AsString.Should().Be("handler");
+    }
+
+    [TestMethod]
     public void Set_trap_observes_side_effects_and_signals_success()
     {
         Eval(@"
@@ -179,6 +210,56 @@ public class ProxyTests
             });
             Reflect.defineProperty(p, 'x', { value: 1 });
         ").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Object_defineProperty_descriptor_proxy_gets_fields_in_spec_order_before_throw()
+    {
+        var r = Eval(@"
+            (function() {
+            var get = [];
+            var p = new Proxy({
+                enumerable: true,
+                configurable: true,
+                value: true,
+                writable: true,
+                get: function() {},
+                set: function() {}
+            }, {
+                get: function(o, k) {
+                    get.push(k);
+                    return o[k];
+                }
+            });
+            var result = 'did not fail';
+            try {
+                Object.defineProperty({}, 'foo', p);
+            } catch (e) {
+                result = get.join(',');
+            }
+            return result;
+            })();");
+
+        r.AsString.Should().Be("enumerable,configurable,value,writable,get,set");
+    }
+
+    [TestMethod]
+    public void Object_defineProperties_proxy_gets_descriptor_values()
+    {
+        var r = Eval(@"
+            (function() {
+            var get = [];
+            var p = new Proxy({ foo: {}, bar: {} }, {
+                get: function(o, k) {
+                    get.push(k);
+                    return o[k];
+                }
+            });
+            Object.defineProperties({}, p);
+            return get.join(',');
+            })();");
+
+        r.AsString.Should().Be("foo,bar");
     }
 
     [TestMethod]

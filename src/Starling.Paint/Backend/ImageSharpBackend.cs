@@ -13,6 +13,7 @@ using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Css.Values;
+using Starling.Paint.Gradients;
 using Starling.Layout.Text;
 using Starling.Paint.DisplayList;
 using Starling.Paint.Interop;
@@ -49,27 +50,26 @@ namespace Starling.Paint.Backend;
 /// the first registered family when nothing matches.
 /// </para>
 /// </remarks>
-internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
+internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 {
-    private readonly IResampler _resampler = KnownResamplers.NearestNeighbor;
+    private readonly IResampler _resampler = KnownResamplers.Bicubic;
     private readonly FontResolver _fonts;
     private readonly FontFaceRegistry? _webFonts;
-    private readonly IDiagnostics _diag;
     private readonly bool _useWebGpu;
     private readonly FontCollection _fontCollection;
     private readonly ConcurrentDictionary<FontCacheKey, Font> _fontCache = new();
     private readonly BoxShadowRasterCache _boxShadowCache;
+    private readonly ConicLayerCache _conicCache = new();
     private static readonly Lazy<WebGPUEnvironmentError> _webGpuAvailability = new(WebGPUEnvironment.ProbeAvailability);
 
-    public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, IDiagnostics? diagnostics = null, bool useWebGpu = false)
+    public ImageSharpBackend(FontResolver fonts, FontFaceRegistry? webFonts, bool useWebGpu = false)
     {
         ArgumentNullException.ThrowIfNull(fonts);
         _fonts = fonts;
         _webFonts = webFonts;
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
         _useWebGpu = useWebGpu;
         _fontCollection = ImageSharpFontLookup.LoadCollection(webFonts);
-        _boxShadowCache = new BoxShadowRasterCache(_diag);
+        _boxShadowCache = new BoxShadowRasterCache();
     }
 
     public string Name => _useWebGpu ? "imagesharp-webgpu" : "imagesharp";
@@ -130,10 +130,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         LayoutRect viewport,
         float scale,
         bool opaqueBackground,
-        GpuPaintDeviceContext context)
+        GpuPaintDevice device)
     {
         ArgumentNullException.ThrowIfNull(list);
-        ArgumentNullException.ThrowIfNull(context);
 
         if (!_useWebGpu)
         {
@@ -168,20 +167,20 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         WebGPURenderTarget? target = null;
         try
         {
-            using (_diag.Span("paint", "raster.context_init"))
+            using (StarlingTelemetry.Span("paint", "raster.context_init"))
             {
-                context.ThrowIfDisposed();
+                ImageSharpGpuContext.GetOrCreate(device).ThrowIfDisposed();
             }
 
-            using (_diag.Span("paint", "raster.surface_alloc"))
+            using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
             {
-                target = context.CreateRenderTarget(WebGPUTextureFormat.Rgba8Unorm, width, height);
+                target = ImageSharpGpuContext.GetOrCreate(device).CreateRenderTarget(WebGPUTextureFormat.Rgba8Unorm, width, height);
             }
 
             using var pendingImageSources = new DisposableBag();
 
             DrawingCanvas canvas;
-            using (_diag.Span("paint", "raster.command_record"))
+            using (StarlingTelemetry.Span("paint", "raster.command_record"))
             {
                 canvas = target.CreateCanvas();
                 using (canvas)
@@ -191,9 +190,15 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 }
             }
 
-            var texture = new GpuPaintTexture(target);
+            var owned = new ImageSharpGpuTexture(target);
             target = null;
-            return texture;
+            return new GpuPaintTexture(
+                owned.TextureHandle,
+                owned.TextureViewHandle,
+                owned.Width,
+                owned.Height,
+                PaintTextureFormat.Rgba8Unorm,
+                owned);
         }
         finally
         {
@@ -242,14 +247,14 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
     private RenderedBitmap RenderCpu(PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool opaqueBackground = true)
     {
-        using (_diag.Span("paint", "raster.context_init"))
+        using (StarlingTelemetry.Span("paint", "raster.context_init"))
         {
             // ImageSharp has no persistent CPU context; the span is kept so
             // the diagnostics trace shape stays stable for tooling.
         }
 
         Image<Rgba32> image;
-        using (_diag.Span("paint", "raster.surface_alloc"))
+        using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
             image = new Image<Rgba32>(width, height, opaqueBackground ? new Rgba32(255, 255, 255, 255) : new Rgba32(0, 0, 0, 0));
 
         using (image)
@@ -261,7 +266,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             // Stage them in a bag that is disposed after rasterization/readback.
             using var pendingImageSources = new DisposableBag();
 
-            using (_diag.Span("paint", "raster.command_record"))
+            using (StarlingTelemetry.Span("paint", "raster.command_record"))
             {
                 // The CPU image is allocated pre-filled with the background color, so
                 // the replay must not clear it again (clearWhite: false). ImageSharp
@@ -272,7 +277,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             }
 
             byte[] pixels;
-            using (_diag.Span("paint", "raster.readback"))
+            using (StarlingTelemetry.Span("paint", "raster.readback"))
             {
                 pixels = new byte[checked(width * height * 4)];
                 image.CopyPixelDataTo(pixels);
@@ -292,7 +297,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         EnsureWebGpuAvailable();
 
         WebGPURenderTarget target;
-        using (_diag.Span("paint", "raster.context_init"))
+        using (StarlingTelemetry.Span("paint", "raster.context_init"))
             target = new WebGPURenderTarget(width, height);
 
         using (target)
@@ -300,11 +305,11 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             using var pendingImageSources = new DisposableBag();
 
             DrawingCanvas canvas;
-            using (_diag.Span("paint", "raster.surface_alloc"))
+            using (StarlingTelemetry.Span("paint", "raster.surface_alloc"))
                 canvas = target.CreateCanvas();
 
             using (canvas)
-            using (_diag.Span("paint", "raster.command_record"))
+            using (StarlingTelemetry.Span("paint", "raster.command_record"))
                 // Flush seals queued commands into the canvas timeline so the GPU
                 // pipeline executes before ReadbackImage samples the texture.
                 // Without it, readback races the (un)submitted command buffer and
@@ -313,7 +318,7 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                     clearWhite: opaqueBackground, pendingImageSources, flush: true);
 
             byte[] pixels;
-            using (_diag.Span("paint", "raster.readback"))
+            using (StarlingTelemetry.Span("paint", "raster.readback"))
             {
                 using var image = target.ReadbackImage<Rgba32>();
                 pixels = new byte[checked(width * height * 4)];
@@ -335,7 +340,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     /// </summary>
     private void ReplayList(DrawingCanvas canvas, PaintList list, int width, int height, float scale, Matrix2D viewportTransform, bool clearWhite, DisposableBag pendingImageSources, bool flush)
     {
-        Activity.Current?.SetTag("raster.items", list.Items.Count);
         if (clearWhite)
         {
             canvas.Clear(Brushes.Solid(Color.White), new Rectangle(0, 0, width, height));
@@ -346,25 +350,19 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         canvas.Save(new DrawingOptions { Transform = ToCanvasMatrix(viewportTransform, scale) });
 
         var target = new LayoutRect(0, 0, width / scale, height / scale);
-        var stats = new RasterStats();
-        // replay_items isolates the display-list walk (recording + TextBlock build)
-        // from the pixel work, matching the CPU/GPU span split.
-        using (_diag.Span("paint", "raster.replay_items"))
+        var items = list.Items;
+        // Use index-based loop so PushMask can jump past its matching PopMask.
+        var idx = 0;
+        while (idx < items.Count)
         {
-            foreach (var item in list.Items)
-            {
-                var start = Stopwatch.GetTimestamp();
-                Apply(canvas, item, scale, pendingImageSources, transforms, stats, target);
-                stats.Record(item, Stopwatch.GetTimestamp() - start);
-            }
+            idx = ApplyAt(canvas, items, idx, scale, pendingImageSources, transforms, target);
         }
 
         canvas.Restore();
-        stats.Emit(Activity.Current);
 
         if (flush)
         {
-            using (_diag.Span("paint", "raster.flush"))
+            using (StarlingTelemetry.Span("paint", "raster.flush"))
             {
                 canvas.Flush();
             }
@@ -372,10 +370,158 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     }
 
     /// <summary>
+    /// Applies item at <paramref name="idx"/> to <paramref name="canvas"/> and
+    /// returns the next index to process. For most items this is idx+1; for
+    /// <see cref="PushMask"/> it is the index past the matching
+    /// <see cref="PopMask"/> (the bracketed items are composited internally).
+    /// </summary>
+    private int ApplyAt(DrawingCanvas canvas, IReadOnlyList<DisplayItem> items, int idx, float scale,
+        DisposableBag pendingImageSources, Stack<Matrix2D> transforms, LayoutRect target)
+    {
+        var item = items[idx];
+
+        if (item is PushMask pushMask)
+        {
+            // Find the matching PopMask (balanced nesting handles nested masks).
+            var depth = 1;
+            var end = idx + 1;
+            while (end < items.Count && depth > 0)
+            {
+                if (items[end] is PushMask) depth++;
+                else if (items[end] is PopMask) depth--;
+                end++;
+            }
+            // end now points past the PopMask (or at items.Count if unbalanced).
+            // Render the bracketed slice into an offscreen layer, apply mask, blit.
+            ApplyMaskGroup(canvas, items, idx + 1, end - 1, pushMask, scale, pendingImageSources, transforms, target);
+            return end;
+        }
+
+        Apply(canvas, item, scale, pendingImageSources, transforms, target);
+        return idx + 1;
+    }
+
+    /// <summary>
+    /// Renders display-list items from <paramref name="start"/> to
+    /// <paramref name="end"/> (exclusive) into a transparent offscreen layer at
+    /// the current viewport resolution, applies the mask from
+    /// <paramref name="pushMask"/>, and blits the result through the current
+    /// canvas transform. This implements CSS Masking 1 §5 whole-element
+    /// compositing.
+    /// </summary>
+    private void ApplyMaskGroup(DrawingCanvas canvas, IReadOnlyList<DisplayItem> items, int start, int end,
+        PushMask pushMask, float scale, DisposableBag pendingImageSources, Stack<Matrix2D> transforms, LayoutRect target)
+    {
+        var bounds = pushMask.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        var px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+        var py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+        if ((long)px * py > 64L * 1024 * 1024) return;
+
+        // Render the bracketed items into a transparent offscreen layer.
+        // The layer uses a local coordinate system where (bounds.X, bounds.Y) maps
+        // to device (0, 0); we achieve this by translating the existing viewport
+        // transform to shift the box origin to (0, 0) within the layer.
+        var layerOriginTranslate = Matrix2D.Translate(-bounds.X, -bounds.Y);
+        var layerViewportTransform = layerOriginTranslate.Multiply(transforms.Peek());
+
+        var contentLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(contentLayer);
+
+        contentLayer.Mutate(ctx => ctx.Paint(c =>
+        {
+            var layerTransforms = new Stack<Matrix2D>();
+            layerTransforms.Push(layerViewportTransform);
+            c.Save(new DrawingOptions { Transform = ToCanvasMatrix(layerViewportTransform, scale) });
+
+            var i = start;
+            while (i < end)
+            {
+                i = ApplyAt(c, items, i, scale, pendingImageSources, layerTransforms, target);
+            }
+
+            c.Restore();
+        }));
+
+        // Build the mask layer at the same device resolution.
+        var tileW = pushMask.MaskRenderWidth * scale;
+        var tileH = pushMask.MaskRenderHeight * scale;
+
+        if (tileW > 0 && tileH > 0 && (pushMask.Mask is not null || pushMask.MaskGradient is not null))
+        {
+            var device = new RectangleF(0, 0, px, py);
+            var maskLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+            pendingImageSources.Add(maskLayer);
+
+            if (pushMask.MaskGradient is { } maskGrad)
+            {
+                if (maskGrad.Kind == CssGradientKind.Conic)
+                {
+                    var cacheKey = new ConicCacheKey(maskGrad, px, py);
+                    if (_conicCache.TryGet(cacheKey, out var conicCached))
+                    {
+                        maskLayer.Mutate(ctx => ctx.DrawImage(conicCached, new Point(0, 0), 1f));
+                    }
+                    else
+                    {
+                        FillConicPixels(maskLayer, maskGrad);
+                        // Not added to the cache here because maskLayer is used as a
+                        // mask (will be read but not mutated after this point, so it is
+                        // safe to cache). However, the Put signature requires
+                        // pendingImageSources which we have.
+                        var masklayerCopy = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+                        pendingImageSources.Add(masklayerCopy);
+                        masklayerCopy.Mutate(ctx => ctx.DrawImage(maskLayer, new Point(0, 0), 1f));
+                        _conicCache.Put(cacheKey, masklayerCopy, pendingImageSources);
+                    }
+                }
+                else
+                {
+                    maskLayer.Mutate(ctx => ctx.Paint(c =>
+                    {
+                        var brush = BuildGradientBrush(maskGrad, device);
+                        if (brush is not null)
+                            c.Fill(brush, new RectanglePolygon(device));
+                    }));
+                }
+            }
+            else
+            {
+                var mask = pushMask.Mask!;
+                var maskSrc = Image.LoadPixelData<Rgba32>(mask.Pixels.Span, mask.Width, mask.Height);
+                pendingImageSources.Add(maskSrc);
+                var maskSrcRect = new Rectangle(0, 0, mask.Width, mask.Height);
+                maskLayer.Mutate(ctx => ctx.Paint(c =>
+                    TileMaskSource(c, maskSrc, maskSrcRect, tileW, tileH, px, py,
+                        pushMask.MaskOffsetX * scale, pushMask.MaskOffsetY * scale,
+                        pushMask.MaskRepeat)));
+            }
+
+            if (pushMask.Mode == MaskModeKind.Luminance)
+                MultiplyAlphaByLuminanceMask(contentLayer, maskLayer);
+            else
+                MultiplyAlphaByMask(contentLayer, maskLayer);
+        }
+
+        // Corner-radius clipping.
+        if (!pushMask.Radii.IsZero)
+        {
+            var deviceBounds = new LayoutRect(0, 0, px, py);
+            var scaledRadii = ScaleRadii(pushMask.Radii, scale);
+            var clipPath = BuildClipPath(deviceBounds, scaledRadii);
+            ApplyClipMask(contentLayer, clipPath);
+        }
+
+        // Blit the composited layer at the box origin through the canvas transform.
+        var destRect = new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height);
+        canvas.DrawImage(contentLayer, new Rectangle(0, 0, px, py), destRect, _resampler);
+    }
+
+    /// <summary>
     /// Applies the specified <paramref name="item"/> to the given <paramref name="canvas"/>
     /// at the provided <paramref name="scale"/> using the transformation stack <paramref name="transforms"/>.
-    /// Updates <paramref name="stats"/> with rasterization details and utilizes
-    /// <paramref name="pendingImageSources"/> for managing temporary image assets.
+    /// Uses <paramref name="pendingImageSources"/> for managing temporary image assets.
     /// The operation is confined to the designated <paramref name="target"/> layout bounds.
     /// </summary>
     /// <param name="canvas">The drawing surface on which the display item is applied.</param>
@@ -383,10 +529,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
     /// <param name="scale">The scaling factor to adjust for rendering resolution.</param>
     /// <param name="pendingImageSources">A collection of disposable image resources used during the rendering process.</param>
     /// <param name="transforms">A stack of transformation matrices applied to the display item.</param>
-    /// <param name="stats">An object gathering statistics about the rasterization process.</param>
     /// <param name="target">The layout bounds restricting the rendering area on the canvas.</param>
     private void Apply(DrawingCanvas canvas, DisplayItem item, float scale, DisposableBag pendingImageSources,
-        Stack<Matrix2D> transforms, RasterStats stats, LayoutRect target)
+        Stack<Matrix2D> transforms, LayoutRect target)
     {
         switch (item)
         {
@@ -398,16 +543,72 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                     Transform = ToCanvasMatrix(matrix, scale),
                 });
 
-                _diag.Counter("paint.push_transform", 1);
                 break;
             case DisplayList.PopTransform:
                 canvas.Restore();
                 transforms.Pop();
-                _diag.Counter("paint.pop_transform", 1);
+                break;
+            case PushClip pushClip:
+                {
+                    // The ImageSharp batcher's PrepareCommand does:
+                    //   path = path.Transform(drawingOptions.Transform)   // draw path → device px
+                    //   path = path.Clip(drawingOptions.ShapeOptions, clipPaths) // boolean op
+                    // So:
+                    // 1. The clip paths must be in device-pixel space (pre-transformed).
+                    // 2. ShapeOptions.BooleanOperation must be Intersection (not the default
+                    //    Difference) so the clip path RESTRICTS the draw area, not subtracts it.
+                    var currentMatrix = ToCanvasMatrix(transforms.Peek(), scale);
+                    // BooleanOperation.Intersection: keep only the part of the draw path that
+                    // falls inside the clip region.
+                    var clippingOptions = new DrawingOptions
+                    {
+                        Transform = currentMatrix,
+                        ShapeOptions = new ShapeOptions { BooleanOperation = BooleanOperation.Intersection },
+                    };
+                    if (pushClip.Bounds.Width > 0 && pushClip.Bounds.Height > 0)
+                    {
+                        var clipPath = BuildClipPath(pushClip.Bounds, pushClip.Radii)
+                            .Transform(currentMatrix);
+                        canvas.Save(clippingOptions, clipPath);
+                    }
+                    else
+                    {
+                        // Zero-size clip: nothing can paint through. Save a balanced state.
+                        canvas.Save(clippingOptions);
+                    }
+                }
+                break;
+            case DisplayList.PopClip:
+                canvas.Restore();
+                break;
+            case PushClipPath pushClipPath:
+                {
+                    // CSS Masking 1 §7 — clip-path basic shapes. Resolve the shape against
+                    // the element's reference box, build the IPath, transform it to device
+                    // pixel space, and push an Intersection clip onto the canvas stack.
+                    var currentMatrix = ToCanvasMatrix(transforms.Peek(), scale);
+                    var clippingOptions = new DrawingOptions
+                    {
+                        Transform = currentMatrix,
+                        ShapeOptions = new ShapeOptions { BooleanOperation = BooleanOperation.Intersection },
+                    };
+                    var shapePath = BuildBasicShapePath(pushClipPath.ClipPath, pushClipPath.ReferenceBox);
+                    if (shapePath is not null)
+                    {
+                        canvas.Save(clippingOptions, shapePath.Transform(currentMatrix));
+                    }
+                    else
+                    {
+                        // Degenerate or unsupported shape — save a balanced no-clip state.
+                        canvas.Save(clippingOptions);
+                    }
+                }
+                break;
+            case DisplayList.PopClipPath:
+                canvas.Restore();
                 break;
             case FillRect fill:
                 if (fill.Bounds.Width <= 0 || fill.Bounds.Height <= 0) return;
-                _diag.Counter("paint.fill_rect", 1);
                 var rectPath = fill.PixelAlignment == FillRectPixelAlignment.SnapToDevicePixels
                     ? ToSnappedLayoutRectPath(fill.Bounds, scale)
                     : ToRectPath(fill.Bounds);
@@ -415,7 +616,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 canvas.Fill(Brushes.Solid(ToColor(fill.Color)), rectPath);
                 break;
             case StrokeRect stroke:
-                _diag.Counter("paint.stroke_rect", 1);
                 {
                     var penWidth = (float)stroke.Width;
                     var pen = Pens.Solid(ToColor(stroke.Color), penWidth);
@@ -425,7 +625,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 break;
             case FillRoundedRect roundFill:
                 if (roundFill.Bounds.Width <= 0 || roundFill.Bounds.Height <= 0) return;
-                _diag.Counter("paint.fill_rounded_rect", 1);
                 {
                     var path = BuildRoundedRectPath(roundFill.Bounds, roundFill.Radii);
                     canvas.Fill(Brushes.Solid(ToColor(roundFill.Color)), path);
@@ -433,7 +632,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 break;
             case StrokeRoundedRect roundStroke:
                 if (roundStroke.Bounds.Width <= 0 || roundStroke.Bounds.Height <= 0 || roundStroke.Width <= 0) return;
-                _diag.Counter("paint.stroke_rounded_rect", 1);
                 {
                     var path = BuildRoundedRectPath(roundStroke.Bounds, roundStroke.Radii);
                     canvas.Draw(Pens.Solid(ToColor(roundStroke.Color), (float)roundStroke.Width), path);
@@ -441,101 +639,1168 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 break;
             case DrawBoxShadow shadow:
                 if (!BoxShadowIntersectsTarget(shadow, transforms.Peek(), target)) return;
-                _diag.Counter("paint.box_shadow", 1);
                 DrawBoxShadow(canvas, shadow, scale, pendingImageSources);
                 break;
             case DrawText text:
-                _diag.Counter("paint.draw_text", 1);
-                DrawText(canvas, text, stats);
+                DrawText(canvas, text);
                 break;
             case DrawTextShadow shadow:
-                _diag.Counter("paint.draw_text_shadow", 1);
-                DrawTextShadow(canvas, shadow, pendingImageSources, stats);
+                DrawTextShadow(canvas, shadow, pendingImageSources);
                 break;
             case DrawTextDecoration decoration:
-                _diag.Counter("paint.draw_text_decoration", 1);
-                DrawTextDecoration(canvas, decoration, stats);
+                DrawTextDecoration(canvas, decoration);
                 break;
             case DrawImage img:
-                _diag.Counter("paint.draw_image", 1);
                 DrawImage(canvas, img, pendingImageSources);
                 break;
             case FillGradient grad:
-                _diag.Counter("paint.fill_gradient", 1);
-                FillGradient(canvas, grad);
+                FillGradient(canvas, grad, scale, pendingImageSources);
+                break;
+            case FillBackgroundTextClip clip:
+                FillBackgroundTextClip(canvas, clip, scale, pendingImageSources);
+                break;
+            case FillMaskedBackground masked:
+                FillMaskedBackground(canvas, masked, scale, pendingImageSources);
+                break;
+            // PushMask / PopMask are processed by ApplyAt / ApplyMaskGroup.
+            // They should never arrive in the Apply dispatch (Apply is only called
+            // for non-mask items), but guard defensively.
+            case PushMask:
+            case PopMask:
                 break;
         }
     }
 
     /// <summary>
-    /// Rasterize a CSS Images 3 gradient by mapping its color stops onto an
-    /// ImageSharp.Drawing gradient brush sized to the fill box. Linear and
-    /// radial gradients (and their <c>repeating-</c> variants) are supported;
-    /// conic gradients have no ImageSharp brush and are filtered out before this
-    /// point, so they never reach the backend.
+    /// CSS Masking 1 §7 — resolve a <see cref="CssClipPath"/> to an ImageSharp
+    /// <see cref="IPath"/> in page-coordinate CSS px. The path is then transformed
+    /// to device pixels by the caller. Returns null when the shape is degenerate
+    /// (zero radius, no vertices, …) or the clip-path is none/url (url is
+    /// deferred; callers should not pass those cases here).
+    /// <para>
+    /// Reference box selection follows CSS Masking 1 §7 / CSS Shapes 1 §5:
+    /// <list type="bullet">
+    ///   <item>A geometry-box keyword present overrides the default.</item>
+    ///   <item>Default for a basic shape with no box keyword is <c>border-box</c>.</item>
+    ///   <item>A geometry-box keyword alone (no shape) clips to that box — built
+    ///         as a plain rectangle (rounded-rect not yet supported for box-only).</item>
+    /// </list>
+    /// The paint layer only has the element's border-box (<paramref name="refBox"/>),
+    /// so every geometry-box variant is mapped to border-box (padding-box / content-box
+    /// distinctions require the padding/border metrics which are not carried on the
+    /// display item — this is a known simplification for the initial implementation).
+    /// </para>
     /// </summary>
-    private void FillGradient(DrawingCanvas canvas, FillGradient item)
+    private static IPath? BuildBasicShapePath(CssClipPath clip, LayoutRect refBox)
+    {
+        if (clip.IsNone || clip.IsUrl) return null;
+
+        var bx = (float)refBox.X;
+        var by = (float)refBox.Y;
+        var bw = (float)refBox.Width;
+        var bh = (float)refBox.Height;
+
+        // Geometry-box only (no explicit shape) — clip to the (currently simplified
+        // to border-box) rectangle. Rounded corners per geometry-box are not yet
+        // resolved here (requires carrying the radii alongside the clip-path value).
+        if (clip.Shape is null)
+        {
+            if (bw <= 0 || bh <= 0) return null;
+            return new RectanglePolygon(bx, by, bw, bh);
+        }
+
+        return clip.Shape switch
+        {
+            CssCircleShape circle => BuildCirclePath(circle, bx, by, bw, bh),
+            CssEllipseShape ellipse => BuildEllipsePath(ellipse, bx, by, bw, bh),
+            CssInsetShape inset => BuildInsetPath(inset, bx, by, bw, bh),
+            CssPolygonShape polygon => BuildPolygonPath(polygon, bx, by, bw, bh),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Resolve a <see cref="CssLengthPercentage"/> against <paramref name="basis"/>
+    /// (the relevant dimension of the reference box in CSS px). Calc values are
+    /// approximated as zero (full calc evaluation is out of scope for the initial
+    /// implementation; a zero fallback means the clip degrades gracefully).
+    /// </summary>
+    private static float ResolveLengthPct(CssLengthPercentage lp, float basis)
+    {
+        if (lp.IsPercentage) return basis * (float)lp.Percentage / 100f;
+        if (lp.Length is { } l) return (float)Starling.Layout.Block.BlockLayout.ToPx(l);
+        return 0f; // calc() fallback
+    }
+
+    /// <summary>
+    /// circle( [radius]? [at position]? ) — CSS Shapes 1 §4.2.
+    /// Radius keywords: closest-side (default when omitted), farthest-side.
+    /// Position defaults to 50% 50%.
+    /// </summary>
+    private static EllipsePolygon? BuildCirclePath(CssCircleShape circle, float bx, float by, float bw, float bh)
+    {
+        if (bw <= 0 || bh <= 0) return null;
+        var cx = bx + ResolveLengthPct(circle.Position.X, bw);
+        var cy = by + ResolveLengthPct(circle.Position.Y, bh);
+
+        float radius;
+        if (circle.Radius is not null)
+        {
+            // Explicit length or percentage; percentage is relative to
+            // sqrt((w²+h²)/2) per CSS Shapes 1 §4.2, but we use the simpler
+            // "closest side from center" approximation when the reference is
+            // not a percentage — use the dimension as the basis when it is.
+            radius = ResolveLengthPct(circle.Radius, MathF.Sqrt((bw * bw + bh * bh) / 2f));
+        }
+        else
+        {
+            // Keyword or default: closest-side (default) or farthest-side.
+            var keyword = circle.RadiusKeyword ?? "closest-side";
+            radius = keyword.Equals("farthest-side", StringComparison.OrdinalIgnoreCase)
+                ? Math.Max(Math.Max(cx - bx, bx + bw - cx), Math.Max(cy - by, by + bh - cy))
+                : Math.Min(Math.Min(cx - bx, bx + bw - cx), Math.Min(cy - by, by + bh - cy));
+        }
+
+        if (radius <= 0) return null;
+        // ImageSharp EllipsePolygon is centered at (cx, cy) with half-axes rx, ry.
+        return new EllipsePolygon(cx, cy, radius, radius);
+    }
+
+    /// <summary>
+    /// ellipse( [rx ry]? [at position]? ) — CSS Shapes 1 §4.3.
+    /// Radius keywords: closest-side (default), farthest-side.
+    /// </summary>
+    private static EllipsePolygon? BuildEllipsePath(CssEllipseShape ellipse, float bx, float by, float bw, float bh)
+    {
+        if (bw <= 0 || bh <= 0) return null;
+        var cx = bx + ResolveLengthPct(ellipse.Position.X, bw);
+        var cy = by + ResolveLengthPct(ellipse.Position.Y, bh);
+
+        float rx = ResolveShapeRadius(ellipse.RadiusX, ellipse.RadiusXKeyword, cx - bx, bx + bw - cx);
+        float ry = ResolveShapeRadius(ellipse.RadiusY, ellipse.RadiusYKeyword, cy - by, by + bh - cy);
+
+        if (rx <= 0 || ry <= 0) return null;
+        return new EllipsePolygon(cx, cy, rx, ry);
+    }
+
+    /// <summary>
+    /// Resolve a single ellipse/circle axis radius from an explicit
+    /// <see cref="CssLengthPercentage"/> or a keyword, defaulting to closest-side.
+    /// </summary>
+    private static float ResolveShapeRadius(
+        CssLengthPercentage? lp,
+        string? keyword,
+        float distToNearEdge,
+        float distToFarEdge)
+    {
+        if (lp is not null) return ResolveLengthPct(lp, distToNearEdge + distToFarEdge);
+        var kw = keyword ?? "closest-side";
+        return kw.Equals("farthest-side", StringComparison.OrdinalIgnoreCase)
+            ? Math.Max(distToNearEdge, distToFarEdge)
+            : Math.Min(distToNearEdge, distToFarEdge);
+    }
+
+    /// <summary>
+    /// inset( top right bottom left [round border-radius]? ) — CSS Shapes 1 §4.1.
+    /// Offsets are from the reference-box edges inward. Optional round clause
+    /// adds per-corner radii.
+    /// </summary>
+    private static IPath? BuildInsetPath(CssInsetShape inset, float bx, float by, float bw, float bh)
+    {
+        if (bw <= 0 || bh <= 0) return null;
+        var top = ResolveLengthPct(inset.Top, bh);
+        var right = ResolveLengthPct(inset.Right, bw);
+        var bottom = ResolveLengthPct(inset.Bottom, bh);
+        var left = ResolveLengthPct(inset.Left, bw);
+
+        var x = bx + left;
+        var y = by + top;
+        var w = bw - left - right;
+        var h = bh - top - bottom;
+        if (w <= 0 || h <= 0) return null;
+
+        if (inset.Radii is null || inset.Radii.Count == 0)
+            return new RectanglePolygon(x, y, w, h);
+
+        // Map the parsed CssRadiusPair list (TL, TR, BR, BL) to CornerRadii.
+        // Per §4.1 the radii are also clamped to the inset box dimensions.
+        var pairs = inset.Radii;
+        var tlH = ResolveLengthPct(pairs[0].H, w); var tlV = ResolveLengthPct(pairs[0].V, h);
+        var trH = ResolveLengthPct(pairs[1].H, w); var trV = ResolveLengthPct(pairs[1].V, h);
+        var brH = ResolveLengthPct(pairs[2].H, w); var brV = ResolveLengthPct(pairs[2].V, h);
+        var blH = ResolveLengthPct(pairs[3].H, w); var blV = ResolveLengthPct(pairs[3].V, h);
+
+        var radii = new CornerRadii(tlH, tlV, trH, trV, brH, brV, blH, blV);
+        var insetBounds = new LayoutRect(x, y, w, h);
+        return radii.IsZero ? new RectanglePolygon(x, y, w, h) : BuildRoundedRectPath(insetBounds, radii);
+    }
+
+    /// <summary>
+    /// polygon( [fill-rule,]? vertex# ) — CSS Shapes 1 §4.4.
+    /// Vertices are resolved as percentages / lengths against the reference box.
+    /// ImageSharp's <see cref="Polygon"/> uses nonzero fill by default; for evenodd
+    /// we fall back to the same path (a known limitation — ImageSharp Drawing 3
+    /// does not expose per-fill-rule IPath construction; the fill rule is only
+    /// observable for self-intersecting polygons).
+    /// </summary>
+    private static Polygon? BuildPolygonPath(CssPolygonShape polygon, float bx, float by, float bw, float bh)
+    {
+        if (polygon.Vertices.Count < 3) return null;
+        var pts = new PointF[polygon.Vertices.Count];
+        for (var i = 0; i < polygon.Vertices.Count; i++)
+        {
+            var v = polygon.Vertices[i];
+            pts[i] = new PointF(bx + ResolveLengthPct(v.X, bw), by + ResolveLengthPct(v.Y, bh));
+        }
+        // Polygon closes the path automatically.
+        return new Polygon(pts);
+    }
+
+    /// <summary>
+    /// Rasterize a CSS Images 3/4 gradient sized to the fill box. Linear and
+    /// radial gradients (and their <c>repeating-</c> variants) map onto an
+    /// ImageSharp.Drawing gradient brush. ImageSharp has no conic/sweep brush,
+    /// so conic gradients are painted per-pixel into an offscreen layer and
+    /// blitted (see <see cref="FillConicGradient"/>). When the item carries
+    /// non-zero <see cref="FillGradient.Radii"/> the gradient is clipped to the
+    /// rounded rectangle (CSS Backgrounds 3 §5 border-radius).
+    /// </summary>
+    private void FillGradient(DrawingCanvas canvas, FillGradient item, float scale, DisposableBag pendingImageSources)
     {
         var bounds = item.Bounds;
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        if (item.Gradient.Kind == CssGradientKind.Conic)
+        {
+            FillConicGradient(canvas, item, scale, pendingImageSources);
+            return;
+        }
+
+        // Linear/radial gradient: use an ImageSharp brush for the fill, then clip to
+        // rounded corners via an offscreen layer when border-radius is non-zero.
+        if (!item.Radii.IsZero)
+        {
+            FillGradientRounded(canvas, item, scale, pendingImageSources);
+            return;
+        }
+
+        var brush = BuildGradientBrush(item.Gradient, ToRectF(bounds));
+        if (brush is null) return;
+        canvas.Fill(brush, ToRectPath(bounds));
+    }
+
+    /// <summary>
+    /// Paint a linear/radial gradient clipped to a rounded rectangle. Renders the
+    /// gradient into an offscreen layer, applies the rounded-rect clip mask
+    /// via <see cref="ApplyClipMask"/>, then blits the result at the box origin.
+    /// Used when <see cref="FillGradient.Radii"/> is non-zero.
+    /// </summary>
+    private void FillGradientRounded(DrawingCanvas canvas, FillGradient item, float scale, DisposableBag pendingImageSources)
+    {
+        var bounds = item.Bounds;
+        var px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+        var py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+        if ((long)px * py > 64L * 1024 * 1024) return;
+
+        var device = new RectangleF(0, 0, px, py);
+        var brush = BuildGradientBrush(item.Gradient, device);
+        if (brush is null) return;
+
+        var layer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(layer);
+
+        layer.Mutate(ctx => ctx.Paint(c =>
+            c.Fill(brush, new RectanglePolygon(device))));
+
+        // Clip the rasterized gradient to the rounded corners.
+        var deviceBounds = new LayoutRect(0, 0, px, py);
+        var scaledRadii = ScaleRadii(item.Radii, scale);
+        var clipPath = BuildClipPath(deviceBounds, scaledRadii);
+        ApplyClipMask(layer, clipPath);
+
+        var destRect = new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height);
+        canvas.DrawImage(layer, new Rectangle(0, 0, px, py), destRect, _resampler);
+    }
+
+    /// <summary>
+    /// Paint a CSS Images 4 conic (sweep) gradient. ImageSharp.Drawing has no
+    /// conic brush, so the gradient is rasterized per-pixel into a transparent
+    /// offscreen layer at device resolution, then blitted to the box through the
+    /// canvas transform (the same offscreen pattern <see cref="DrawBoxShadow"/>
+    /// and <see cref="FillBackgroundTextClip"/> use). The hue sweeps clockwise
+    /// from <c>from &lt;angle&gt;</c> (0deg = straight up) about the
+    /// <c>at &lt;position&gt;</c> center. The rasterized layer is cached by
+    /// (gradient identity, device width, height) so repeated frames reuse it
+    /// without re-rasterizing. When the item carries non-zero
+    /// <see cref="FillGradient.Radii"/> the layer is clipped to rounded corners.
+    /// </summary>
+    private void FillConicGradient(DrawingCanvas canvas, FillGradient item, float scale, DisposableBag pendingImageSources)
+    {
         var gradient = item.Gradient;
-        if (gradient.Stops.Count < 2) return;
+        if (gradient.Stops.Count(s => !s.IsHint) < 2) return;
+
+        var bounds = item.Bounds;
+        var pw = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+        var ph = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+        // Guard against pathological sizes that would allocate an enormous layer.
+        if ((long)pw * ph > 64L * 1024 * 1024) return;
+
+        // Use the cache for the raw (unclipped) conic layer.
+        var cacheKey = new ConicCacheKey(gradient, pw, ph);
+        if (!_conicCache.TryGet(cacheKey, out var layer))
+        {
+            layer = new Image<Rgba32>(pw, ph, new Rgba32(0, 0, 0, 0));
+            FillConicPixels(layer, gradient);
+            _conicCache.Put(cacheKey, layer, pendingImageSources);
+        }
+
+        // When there are rounded corners, we must not mutate the cached layer —
+        // blit it into a fresh layer, apply the clip, and blit that.
+        if (!item.Radii.IsZero)
+        {
+            var clipped = new Image<Rgba32>(pw, ph, new Rgba32(0, 0, 0, 0));
+            pendingImageSources.Add(clipped);
+            clipped.Mutate(ctx => ctx.DrawImage(layer, new Point(0, 0), 1f));
+            var deviceBounds = new LayoutRect(0, 0, pw, ph);
+            var scaledRadii = ScaleRadii(item.Radii, scale);
+            ApplyClipMask(clipped, BuildClipPath(deviceBounds, scaledRadii));
+            var destRect2 = new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height);
+            canvas.DrawImage(clipped, new Rectangle(0, 0, pw, ph), destRect2, _resampler);
+            return;
+        }
+
+        // DrawImage records the blit and samples the layer when the canvas
+        // timeline executes, so the layer must outlive this call — it is kept
+        // alive by the cache.
+        var destRect = new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height);
+        canvas.DrawImage(layer, new Rectangle(0, 0, pw, ph), destRect, _resampler);
+    }
+
+    /// <summary>
+    /// Rasterize a conic gradient across the whole of <paramref name="layer"/>
+    /// (which represents the fill box at device resolution). Shared by the plain
+    /// conic background fill and the masked-background path so both sweep the hue
+    /// identically.
+    /// <para>
+    /// Antialiasing: 2×2 jittered supersample per pixel. Each pixel takes four
+    /// quarter-pixel samples at offsets (±0.25, ±0.25) and averages them in
+    /// premultiplied space. This eliminates aliased hard edges at stop boundaries
+    /// and the seam at the origin angle. The cost is 4× the per-pixel work, which
+    /// is still negligible vs the per-frame layer allocation.
+    /// </para>
+    /// <para>
+    /// Color interpolation: honors <c>CssGradient.Interpolation</c> for the
+    /// conic per-pixel path. Oklab, OKLCh, HSL, HWB, Lab, LCH and all other
+    /// CSS Color 4 spaces are supported. Linear/radial gradients use the
+    /// ImageSharp brush and are documented as an sRGB fallback there.
+    /// </para>
+    /// <para>
+    /// Transition hints: <see cref="CssColorStop.IsHint"/> entries between two
+    /// real stops shift the interpolation midpoint by applying a power-curve per
+    /// CSS Images 4 §3.4.
+    /// </para>
+    /// </summary>
+    private static void FillConicPixels(Image<Rgba32> layer, CssGradient gradient)
+    {
+        var pw = layer.Width;
+        var ph = layer.Height;
+
+        // Stop ratios are fractions of one full turn; percentages and angle
+        // stops both resolve through ResolveStopRatios (line length is unused
+        // for percent/angle, so pass the nominal 360deg turn).
+        var ratios = ResolveStopRatios(gradient, 360.0);
+        var n = ratios.Length;
+
+        // Choose the color space to interpolate in.
+        var cs = gradient.Interpolation?.ColorSpace ?? GradientColorSpace.Srgb;
+        var hueMethod = gradient.Interpolation?.HueMethod ?? HueInterpolationMethod.Shorter;
+
+        // Precompute stop channels in the chosen interpolation space, stored as
+        // 4-component (ch0,ch1,ch2,alpha) doubles. For premultiplied spaces the
+        // color channels are pre-multiplied by alpha before interpolation.
+        var ch0 = new double[n];
+        var ch1 = new double[n];
+        var ch2 = new double[n];
+        var al = new double[n];
+
+        for (var i = 0; i < n; i++)
+        {
+            if (gradient.Stops[i].IsHint)
+            {
+                // Transition hint — channels are dummy; only the ratio matters.
+                continue;
+            }
+            var c = gradient.Stops[i].Color.ToSrgb();
+            var a = c.A / 255.0;
+            var r = c.R / 255.0;
+            var g = c.G / 255.0;
+            var b = c.B / 255.0;
+            al[i] = a;
+            (ch0[i], ch1[i], ch2[i]) = GradientInterpolation.SrgbToSpace(r, g, b, cs);
+            // Pre-multiply color channels by alpha for perceptually-correct blending.
+            // Hue channels in polar spaces are NOT premultiplied (they are angles).
+            if (!GradientInterpolation.IsPolarSpace(cs))
+            {
+                ch0[i] *= a;
+                ch1[i] *= a;
+                ch2[i] *= a;
+            }
+        }
+
+        // Build the hint adjacency table: for each stop index that is a hint,
+        // record its position ratio (already in ratios[]).
+        var hasHints = gradient.Stops.Any(s => s.IsHint);
+
+        var pos = gradient.Position ?? CssGradientPosition.Center;
+        var cx = pos.FractionX * pw;
+        var cy = pos.FractionY * ph;
+        var fromRad = (gradient.Line?.AngleDegrees ?? 0.0) * Math.PI / 180.0;
+        var repeating = gradient.Repeating;
+        var firstRatio = ratios[0];
+        var lastRatio = ratios[n - 1];
+        var period = lastRatio - firstRatio;
+
+        // 2×2 supersample offsets (quarter-pixel jitter grid).
+        const double A0 = -0.25, A1 = 0.25;
+
+        layer.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < ph; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                var baseY = y + 0.5 - cy;
+
+                for (var x = 0; x < pw; x++)
+                {
+                    var baseX = x + 0.5 - cx;
+
+                    // 2×2 supersample: accumulate 4 samples.
+                    double sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+                    for (var sy = 0; sy < 2; sy++)
+                    {
+                        var dy = baseY + (sy == 0 ? A0 : A1);
+                        for (var sx = 0; sx < 2; sx++)
+                        {
+                            var dx = baseX + (sx == 0 ? A0 : A1);
+                            var t = ComputeConicT(dx, dy, fromRad, repeating, firstRatio, lastRatio, period);
+                            var (sr, sg, sb, sa) = SampleStopsColor(t, ratios, ch0, ch1, ch2, al, cs, hueMethod, hasHints, gradient.Stops);
+                            sumR += sr; sumG += sg; sumB += sb; sumA += sa;
+                        }
+                    }
+                    // Average the 4 samples.
+                    row[x] = ToStraightAlpha(sumR * 0.25, sumG * 0.25, sumB * 0.25, sumA * 0.25, cs);
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// Compute the conic gradient turn fraction for position (dx, dy) relative
+    /// to the center. Applies the repeating/clamping logic from the spec.
+    /// </summary>
+    private static double ComputeConicT(double dx, double dy, double fromRad, bool repeating, double firstRatio, double lastRatio, double period)
+    {
+        var ang = Math.Atan2(dx, -dy) - fromRad;
+        var t = ang / (2.0 * Math.PI);
+        t -= Math.Floor(t); // normalize to [0,1)
+
+        if (repeating && period > 0)
+            t = firstRatio + (t - firstRatio - Math.Floor((t - firstRatio) / period) * period);
+        else if (t <= firstRatio)
+            t = firstRatio;
+        else if (t >= lastRatio)
+            t = lastRatio;
+        return t;
+    }
+
+    /// <summary>
+    /// Sample the gradient stops at fraction <paramref name="t"/>, interpolating
+    /// in the requested color space and applying transition hints. Returns
+    /// (ch0, ch1, ch2, alpha) in the working space (premultiplied for
+    /// non-polar spaces).
+    /// </summary>
+    private static (double ch0, double ch1, double ch2, double a) SampleStopsColor(
+        double t,
+        double[] ratios,
+        double[] ch0, double[] ch1, double[] ch2, double[] al,
+        GradientColorSpace cs,
+        HueInterpolationMethod hueMethod,
+        bool hasHints,
+        IReadOnlyList<CssColorStop> stops)
+    {
+        var n = ratios.Length;
+
+        // Find the high-side real stop index (skip hints for bracketing).
+        var hi = 1;
+        while (hi < n - 1 && ratios[hi] < t) hi++;
+        // Step hi past any hint to find the next real stop.
+        while (hi < n - 1 && stops[hi].IsHint) hi++;
+        var lo = hi - 1;
+        // Step lo back past any hint to the previous real stop.
+        while (lo > 0 && stops[lo].IsHint) lo--;
+
+        var span = ratios[hi] - ratios[lo];
+        var f = span > 0 ? (t - ratios[lo]) / span : 0.0;
+        f = Math.Clamp(f, 0.0, 1.0);
+
+        // CSS Images 4 §3.4 — apply transition hint curve if there is a hint
+        // between lo and hi.
+        if (hasHints)
+        {
+            for (var k = lo + 1; k < hi; k++)
+            {
+                if (!stops[k].IsHint) continue;
+                // The hint's normalized position within the [lo..hi] span.
+                var hintSpan = span > 0 ? (ratios[k] - ratios[lo]) / span : 0.5;
+                hintSpan = Math.Clamp(hintSpan, 0.0001, 0.9999);
+                // Apply the log-based power curve: f' = f^(log(0.5)/log(H)).
+                // This passes through (0,0), (H,0.5), (1,1).
+                var logH = Math.Log(hintSpan);
+                if (Math.Abs(logH) > 1e-10)
+                    f = Math.Pow(f, Math.Log(0.5) / logH);
+                break; // only one hint per interval
+            }
+        }
+
+        // Interpolate in the working space.
+        if (GradientInterpolation.IsPolarSpace(cs))
+        {
+            // Polar: interpolate the hue angle accounting for hue-interpolation-method,
+            // interpolate chroma/lightness linearly, average alpha.
+            var hLo = ch2[lo]; // hue in degrees
+            var hHi = ch2[hi];
+            var hInterp = GradientInterpolation.InterpolateHue(hLo, hHi, f, hueMethod);
+            var c0 = ch0[lo] + (ch0[hi] - ch0[lo]) * f; // L or similar
+            var c1 = ch1[lo] + (ch1[hi] - ch1[lo]) * f; // C or S
+            var a = al[lo] + (al[hi] - al[lo]) * f;
+            return (c0, c1, hInterp, a);
+        }
+        else
+        {
+            // Non-polar: premultiplied linear interpolation.
+            var c0 = ch0[lo] + (ch0[hi] - ch0[lo]) * f;
+            var c1 = ch1[lo] + (ch1[hi] - ch1[lo]) * f;
+            var c2 = ch2[lo] + (ch2[hi] - ch2[lo]) * f;
+            var a = al[lo] + (al[hi] - al[lo]) * f;
+            return (c0, c1, c2, a);
+        }
+    }
+
+    /// <summary>
+    /// Convert a straight-RGBA sRGB value (0..1 each) to the requested
+    /// interpolation color space. Returns (ch0, ch1, ch2) in that space.
+    /// </summary>
+    /// <summary>
+    /// Convert working-space (ch0, ch1, ch2, alpha) back to straight-alpha
+    /// <see cref="Rgba32"/>. The color channels are premultiplied going in
+    /// (for non-polar spaces), so un-premultiply before output.
+    /// </summary>
+    private static Rgba32 ToStraightAlpha(double c0, double c1, double c2, double a, GradientColorSpace cs)
+    {
+        double r, g, b;
+        if (GradientInterpolation.IsPolarSpace(cs))
+        {
+            // Polar: channels are (L, C/S, H) — not premultiplied.
+            (r, g, b) = GradientInterpolation.SpaceToSrgb(c0, c1, c2, cs);
+        }
+        else
+        {
+            // Un-premultiply.
+            if (a > 1e-6)
+            {
+                c0 /= a;
+                c1 /= a;
+                c2 /= a;
+            }
+            (r, g, b) = GradientInterpolation.SpaceToSrgb(c0, c1, c2, cs);
+        }
+        static byte Clamp255(double v) => (byte)Math.Clamp(Math.Round(v * 255.0), 0, 255);
+        return new Rgba32(Clamp255(r), Clamp255(g), Clamp255(b), (byte)Math.Clamp(Math.Round(a * 255.0), 0, 255));
+    }
+
+    /// <summary>
+    /// Sample a premultiplied color at turn fraction <paramref name="t"/> across
+    /// the resolved conic stops, returning a straight-alpha <see cref="Rgba32"/>.
+    /// Ratios are sorted non-decreasing; equal-position stops produce a hard
+    /// transition. Legacy path: only used when the calling code explicitly wants
+    /// sRGB premultiplied interpolation without the 2×2 AA path.
+    /// </summary>
+    private static Rgba32 SampleStops(double t, double[] ratios, double[] rp, double[] gp, double[] bp, double[] ap)
+    {
+        var n = ratios.Length;
+        var hi = 1;
+        while (hi < n - 1 && ratios[hi] < t) hi++;
+        var lo = hi - 1;
+
+        var span = ratios[hi] - ratios[lo];
+        var f = span > 0 ? (t - ratios[lo]) / span : 0.0;
+        f = Math.Clamp(f, 0.0, 1.0);
+
+        var a = ap[lo] + (ap[hi] - ap[lo]) * f;
+        var rPre = rp[lo] + (rp[hi] - rp[lo]) * f;
+        var gPre = gp[lo] + (gp[hi] - gp[lo]) * f;
+        var bPre = bp[lo] + (bp[hi] - bp[lo]) * f;
+
+        // Un-premultiply: rPre = R*A/255, so R = rPre*255/A.
+        byte r = 0, g = 0, b = 0;
+        if (a > 0)
+        {
+            r = ToByte(rPre * 255.0 / a);
+            g = ToByte(gPre * 255.0 / a);
+            b = ToByte(bPre * 255.0 / a);
+        }
+        return new Rgba32(r, g, b, ToByte(a));
+
+        static byte ToByte(double v) => (byte)Math.Clamp(Math.Round(v), 0, 255);
+    }
+
+    /// <summary>
+    /// Build the ImageSharp gradient brush for <paramref name="gradient"/> sized
+    /// to <paramref name="bounds"/> (CSS Images 3 §3). Returns null when the
+    /// gradient is degenerate (fewer than two stops, zero radius). Shared by the
+    /// plain <see cref="FillGradient"/> fill and the
+    /// <c>background-clip: text</c> path.
+    /// </summary>
+    private static Brush? BuildGradientBrush(CssGradient gradient, RectangleF bounds)
+    {
+        if (gradient.Stops.Count < 2) return null;
+        // Conic gradients have no ImageSharp brush; they are rasterized directly
+        // in FillConicGradient. Callers that can only use a brush (e.g.
+        // background-clip: text) get null and fall back to the solid color.
+        if (gradient.Kind == CssGradientKind.Conic) return null;
 
         var stops = ResolveColorStops(gradient, Math.Max(bounds.Width, bounds.Height));
-        if (stops.Length < 2) return;
+        if (stops.Length < 2) return null;
 
         var repetition = gradient.Repeating
             ? GradientRepetitionMode.Repeat
             : GradientRepetitionMode.None;
 
-        var x = (float)bounds.X;
-        var y = (float)bounds.Y;
-        var w = (float)bounds.Width;
-        var h = (float)bounds.Height;
-        var path = ToRectPath(bounds);
+        var x = bounds.X;
+        var y = bounds.Y;
+        var w = bounds.Width;
+        var h = bounds.Height;
 
-        Brush brush;
         if (gradient.Kind == CssGradientKind.Radial)
         {
             var pos = gradient.Position ?? CssGradientPosition.Center;
             var cx = x + (float)(pos.FractionX * w);
             var cy = y + (float)(pos.FractionY * h);
             var radius = RadialRadius(gradient, pos, w, h);
-            if (radius <= 0) return;
-            brush = new RadialGradientBrush(new PointF(cx, cy), radius, repetition, stops);
+            if (radius <= 0) return null;
+            return new RadialGradientBrush(new PointF(cx, cy), radius, repetition, stops);
+        }
+
+        // Linear: map the CSS gradient angle to two endpoints on the box.
+        // CSS measures angle clockwise from "to top" (0deg = up). The
+        // gradient line passes through the box center; endpoints sit where
+        // it meets the box edge, with the start offset so the full color
+        // range covers the projected box extent (CSS Images 3 §3.1).
+        var angleDeg = gradient.Line?.ToDegrees(w, h) ?? 180.0;
+        var rad = angleDeg * Math.PI / 180.0;
+        // Direction the gradient progresses (toward the end color).
+        var dx = Math.Sin(rad);
+        var dy = -Math.Cos(rad);
+        // Length of the projected gradient line: |w·sin| + |h·cos| keeps the
+        // 0%/100% stops anchored to the box corners for the cardinal cases.
+        var lineLen = Math.Abs(w * dx) + Math.Abs(h * dy);
+        var ccx = x + w / 2.0;
+        var ccy = y + h / 2.0;
+        var p0 = new PointF((float)(ccx - dx * lineLen / 2.0), (float)(ccy - dy * lineLen / 2.0));
+        var p1 = new PointF((float)(ccx + dx * lineLen / 2.0), (float)(ccy + dy * lineLen / 2.0));
+        return new LinearGradientBrush(p0, p1, repetition, stops);
+    }
+
+    /// <summary>
+    /// CSS Backgrounds 3 §3.8 — paint a box background clipped to its text
+    /// glyphs (<c>background-clip: text</c>). Renders the background (gradient or
+    /// solid color) into one offscreen layer and the element's glyphs (solid
+    /// white) into a second, then multiplies the background's alpha by the glyph
+    /// alpha so the background survives only inside the glyph shapes, and
+    /// composites the masked result onto the canvas. Follows the offscreen
+    /// pattern in <see cref="DrawTextShadow"/>.
+    /// <para>
+    /// Conic gradients: previously <see cref="BuildGradientBrush"/> returned null
+    /// for conic (no ImageSharp brush), causing a fallback to the solid text color.
+    /// The fix rasterizes the conic directly via <see cref="FillConicPixels"/> into
+    /// the fill layer (the same technique <see cref="FillMaskedBackground"/> uses).
+    /// </para>
+    /// </summary>
+    private void FillBackgroundTextClip(DrawingCanvas canvas, FillBackgroundTextClip clip, float scale, DisposableBag pendingImageSources)
+    {
+        var bounds = clip.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0 || clip.Glyphs.Count == 0) return;
+
+        // Render the offscreen layers at device resolution for crisp glyph
+        // edges; DrawImage blits them back through the canvas transform.
+        var px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+        var py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+        // Guard against pathological sizes that would allocate an enormous layer.
+        if ((long)px * py > 64L * 1024 * 1024) return;
+
+        var device = new RectangleF(0, 0, px, py);
+        var originX = (float)bounds.X;
+        var originY = (float)bounds.Y;
+        var scaleMatrix = Matrix4x4.CreateScale(scale, scale, 1f);
+
+        // Fill layer: paint the gradient or solid color at device resolution.
+        var fillLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(fillLayer);
+
+        if (clip.Gradient is { } gradient)
+        {
+            if (gradient.Kind == CssGradientKind.Conic)
+            {
+                // Conic has no ImageSharp brush; rasterize per-pixel into the fill
+                // layer (the same path FillMaskedBackground uses). The fill layer
+                // is already device-size, so FillConicPixels works directly.
+                var cacheKey = new ConicCacheKey(gradient, px, py);
+                if (_conicCache.TryGet(cacheKey, out var cached))
+                {
+                    // Blit cached layer into the fill layer.
+                    fillLayer.Mutate(ctx => ctx.DrawImage(cached, new Point(0, 0), 1f));
+                }
+                else
+                {
+                    FillConicPixels(fillLayer, gradient);
+                    // No cache store here — the fill layer will be mutated by the
+                    // text mask below, making it unsuitable for caching.
+                }
+            }
+            else
+            {
+                var layerBounds = new RectangleF(0, 0, (float)bounds.Width, (float)bounds.Height);
+                var brush = BuildGradientBrush(gradient, layerBounds);
+                if (brush is not null)
+                {
+                    fillLayer.Mutate(ctx => ctx.Paint(c =>
+                    {
+                        c.Save(new DrawingOptions { Transform = scaleMatrix });
+                        c.Fill(brush, new RectanglePolygon(layerBounds));
+                        c.Restore();
+                    }));
+                }
+                else if (clip.Color.A > 0)
+                {
+                    fillLayer.Mutate(ctx => ctx.Paint(c =>
+                        c.Fill(Brushes.Solid(ToColor(clip.Color)), new RectanglePolygon(device))));
+                }
+            }
         }
         else
         {
-            // Linear: map the CSS gradient angle to two endpoints on the box.
-            // CSS measures angle clockwise from "to top" (0deg = up). The
-            // gradient line passes through the box center; endpoints sit where
-            // it meets the box edge, with the start offset so the full color
-            // range covers the projected box extent (CSS Images 3 §3.1).
-            var angleDeg = gradient.Line?.ToDegrees(w, h) ?? 180.0;
-            var rad = angleDeg * Math.PI / 180.0;
-            // Direction the gradient progresses (toward the end color).
-            var dx = Math.Sin(rad);
-            var dy = -Math.Cos(rad);
-            // Length of the projected gradient line: |w·sin| + |h·cos| keeps the
-            // 0%/100% stops anchored to the box corners for the cardinal cases.
-            var lineLen = Math.Abs(w * dx) + Math.Abs(h * dy);
-            var ccx = x + w / 2.0;
-            var ccy = y + h / 2.0;
-            var p0 = new PointF((float)(ccx - dx * lineLen / 2.0), (float)(ccy - dy * lineLen / 2.0));
-            var p1 = new PointF((float)(ccx + dx * lineLen / 2.0), (float)(ccy + dy * lineLen / 2.0));
-            brush = new LinearGradientBrush(p0, p1, repetition, stops);
+            if (clip.Color.A == 0) return;
+            fillLayer.Mutate(ctx => ctx.Paint(c =>
+                c.Fill(Brushes.Solid(ToColor(clip.Color)), new RectanglePolygon(device))));
         }
 
-        canvas.Fill(brush, path);
+        // Glyph mask layer: render each text run in solid white at device resolution.
+        var maskLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(maskLayer);
+
+        var glyphBrush = Brushes.Solid(Color.White);
+        maskLayer.Mutate(ctx => ctx.Paint(c =>
+        {
+            c.Save(new DrawingOptions { Transform = scaleMatrix });
+            foreach (var run in clip.Glyphs)
+            {
+                if (string.IsNullOrEmpty(run.Text)) continue;
+                var spec = new FontSpec(run.FontFamilies, run.Bold, run.Italic);
+                var size = (float)run.FontSize;
+                var probe = FirstCodepoint(run.Text);
+                var font = ResolveFont(spec, probe, size);
+                var glyphX = (float)(run.X - bounds.X);
+                var glyphY = (float)(run.Y - bounds.Y);
+                var textBlock = run.Shaped is ImageSharpShapedRun shaped && shaped.CanReuseAtSize(size)
+                    ? shaped.TextBlock
+                    : new TextBlock(run.Text, new TextOptions(font));
+                c.DrawText(textBlock, new PointF(glyphX, glyphY), -1, glyphBrush, null);
+            }
+            c.Restore();
+        }));
+
+        MultiplyAlphaByMask(fillLayer, maskLayer);
+
+        // Composite the masked layer at the box origin. DrawImage applies the
+        // canvas transform (which includes `scale`), so map the device-pixel
+        // layer back to the CSS-px box rectangle.
+        var destRect = new RectangleF(originX, originY, (float)bounds.Width, (float)bounds.Height);
+        canvas.DrawImage(fillLayer, new Rectangle(0, 0, px, py), destRect, _resampler);
     }
+
+    /// <summary>
+    /// CSS Masking 1 §6 — paint a box background masked by a mask source
+    /// (<c>mask-image</c>). The background (conic/linear/radial gradient,
+    /// background image, or solid color) is rendered into one offscreen layer;
+    /// the mask source (raster image or CSS gradient) is tiled/sized/positioned
+    /// into a second; the background's alpha is multiplied by the resolved mask
+    /// value (alpha channel for <c>alpha</c>/<c>match-source</c>; linearised
+    /// luminance for <c>luminance</c>); the result is clipped to the box's
+    /// corner radii and blitted back through the canvas transform. Mirrors the
+    /// offscreen pattern in <see cref="FillBackgroundTextClip"/>.
+    /// </summary>
+    private void FillMaskedBackground(DrawingCanvas canvas, FillMaskedBackground item, float scale, DisposableBag pendingImageSources)
+    {
+        var bounds = item.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        // Must have exactly one mask source.
+        if (item.Mask is null && item.MaskGradient is null) return;
+
+        var px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+        var py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+        if ((long)px * py > 64L * 1024 * 1024) return;
+
+        var device = new RectangleF(0, 0, px, py);
+
+        // Background layer (device resolution). Paint the solid color first, then
+        // a background image, then a gradient on top — the same bottom-to-top
+        // order as `background`. The builder sets at most one of gradient/image,
+        // so this is layering-correct.
+        var fillLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(fillLayer);
+        fillLayer.Mutate(ctx => ctx.Paint(c =>
+        {
+            if (item.Color.A > 0)
+                c.Fill(Brushes.Solid(ToColor(item.Color)), new RectanglePolygon(device));
+
+            if (item.BackgroundImage is { Width: > 0, Height: > 0 } bg)
+            {
+                var bgSrc = Image.LoadPixelData<Rgba32>(bg.Pixels.Span, bg.Width, bg.Height);
+                pendingImageSources.Add(bgSrc);
+                c.DrawImage(bgSrc, new Rectangle(0, 0, bg.Width, bg.Height), device, _resampler);
+            }
+
+            if (item.Gradient is { } gradient)
+            {
+                if (gradient.Kind == CssGradientKind.Conic)
+                {
+                    // Conic has no ImageSharp brush; reuse the cache if available,
+                    // otherwise rasterize into a temp layer and composite it
+                    // (preserves transparent stops over the color/image beneath).
+                    var cacheKey = new ConicCacheKey(gradient, px, py);
+                    if (_conicCache.TryGet(cacheKey, out var conicCached))
+                    {
+                        c.DrawImage(conicCached, new Rectangle(0, 0, px, py), device, _resampler);
+                    }
+                    else
+                    {
+                        var conic = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+                        pendingImageSources.Add(conic);
+                        FillConicPixels(conic, gradient);
+                        _conicCache.Put(cacheKey, conic, pendingImageSources);
+                        c.DrawImage(conic, new Rectangle(0, 0, px, py), device, _resampler);
+                    }
+                }
+                else
+                {
+                    var brush = BuildGradientBrush(gradient, device);
+                    if (brush is not null)
+                        c.Fill(brush, new RectanglePolygon(device));
+                }
+            }
+        }));
+
+        // Mask layer (device resolution): render the mask source into it.
+        var tileW = item.MaskRenderWidth * scale;
+        var tileH = item.MaskRenderHeight * scale;
+        if (tileW <= 0 || tileH <= 0) return;
+
+        var maskLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(maskLayer);
+
+        if (item.MaskGradient is { } maskGrad)
+        {
+            // Gradient mask source — rasterize directly into maskLayer (no tiling;
+            // gradients are always sized to the mask area per CSS Masking 1 §6.5).
+            if (maskGrad.Kind == CssGradientKind.Conic)
+            {
+                FillConicPixels(maskLayer, maskGrad);
+            }
+            else
+            {
+                maskLayer.Mutate(ctx => ctx.Paint(c =>
+                {
+                    var brush = BuildGradientBrush(maskGrad, device);
+                    if (brush is not null)
+                        c.Fill(brush, new RectanglePolygon(device));
+                }));
+            }
+        }
+        else
+        {
+            // Raster mask source — tile/position into maskLayer.
+            var mask = item.Mask!;
+            var maskSrc = Image.LoadPixelData<Rgba32>(mask.Pixels.Span, mask.Width, mask.Height);
+            pendingImageSources.Add(maskSrc);
+            var maskSrcRect = new Rectangle(0, 0, mask.Width, mask.Height);
+
+            maskLayer.Mutate(ctx => ctx.Paint(c =>
+                TileMaskSource(c, maskSrc, maskSrcRect, tileW, tileH, px, py,
+                    item.MaskOffsetX * scale, item.MaskOffsetY * scale, item.MaskRepeat)));
+        }
+
+        // Apply mask: multiply fill alpha by the resolved mask channel.
+        // CSS Masking 1 §6.1: alpha uses alpha directly; luminance converts
+        // each pixel's linear luminance to the mask value (match-source == alpha
+        // for decoded raster images).
+        if (item.Mode == MaskModeKind.Luminance)
+            MultiplyAlphaByLuminanceMask(fillLayer, maskLayer);
+        else
+            MultiplyAlphaByMask(fillLayer, maskLayer);
+
+        // CSS Backgrounds 3 §5 — clip the masked result to the box's corner
+        // radii so descendants respect border-radius clipping.
+        if (!item.Radii.IsZero)
+        {
+            // The fill layer is in device-pixel space with origin at (0,0)
+            // representing the box top-left. Scale the bounds to device px.
+            var deviceBounds = new LayoutRect(0, 0, px, py);
+            var scaledRadii = ScaleRadii(item.Radii, scale);
+            var clipPath = BuildClipPath(deviceBounds, scaledRadii);
+
+            // Mask out pixels outside the rounded rect by zeroing alpha where
+            // the clip path does not contain the pixel centre.
+            ApplyClipMask(fillLayer, clipPath);
+        }
+
+        var destRect = new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height);
+        canvas.DrawImage(fillLayer, new Rectangle(0, 0, px, py), destRect, _resampler);
+    }
+
+    /// <summary>
+    /// Tiles a mask source image (<paramref name="src"/>) into the active
+    /// <paramref name="canvas"/> according to <paramref name="mode"/>. The source
+    /// rectangle is <paramref name="srcRect"/>; the rendered tile size is
+    /// (<paramref name="tileW"/>, <paramref name="tileH"/>); the canvas is
+    /// (<paramref name="canvasW"/> × <paramref name="canvasH"/>) device pixels.
+    /// Offsets are already in device pixels. Shared by
+    /// <see cref="FillMaskedBackground"/> and <see cref="ApplyMaskGroup"/>.
+    /// </summary>
+    private void TileMaskSource(DrawingCanvas canvas, Image<Rgba32> src, Rectangle srcRect,
+        double tileW, double tileH, int canvasW, int canvasH,
+        double offsetX, double offsetY, MaskRepeatMode mode)
+    {
+        switch (mode)
+        {
+            case MaskRepeatMode.NoRepeat:
+                {
+                    canvas.DrawImage(src, srcRect, new RectangleF((float)offsetX, (float)offsetY, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
+            case MaskRepeatMode.Space:
+                {
+                    // CSS Masking 1 §6.5 space: fit whole tiles, spread the leftover
+                    // evenly as gaps. If only 1 tile fits, paint it at offset = 0.
+                    var countX = Math.Max(1, (int)Math.Floor(canvasW / tileW));
+                    var countY = Math.Max(1, (int)Math.Floor(canvasH / tileH));
+                    var gapX = countX > 1 ? (canvasW - countX * tileW) / (countX - 1) : 0;
+                    var gapY = countY > 1 ? (canvasH - countY * tileH) / (countY - 1) : 0;
+                    for (var iy = 0; iy < countY; iy++)
+                        for (var ix = 0; ix < countX; ix++)
+                        {
+                            var tx = (float)(ix * (tileW + gapX));
+                            var ty = (float)(iy * (tileH + gapY));
+                            canvas.DrawImage(src, srcRect, new RectangleF(tx, ty, (float)tileW, (float)tileH), _resampler);
+                        }
+                    break;
+                }
+            case MaskRepeatMode.Round:
+                {
+                    // CSS Masking 1 §6.5 round: stretch tiles so an integer count
+                    // fills the box exactly; no gaps.
+                    var countX = Math.Max(1, (int)Math.Round(canvasW / tileW));
+                    var countY = Math.Max(1, (int)Math.Round(canvasH / tileH));
+                    var stretchW = (float)(canvasW / (double)countX);
+                    var stretchH = (float)(canvasH / (double)countY);
+                    for (var iy = 0; iy < countY; iy++)
+                        for (var ix = 0; ix < countX; ix++)
+                            canvas.DrawImage(src, srcRect, new RectangleF(ix * stretchW, iy * stretchH, stretchW, stretchH), _resampler);
+                    break;
+                }
+            case MaskRepeatMode.RepeatX:
+                {
+                    var dy = (float)offsetY;
+                    var tilesX = (long)Math.Ceiling(canvasW / tileW) + 2;
+                    if (tilesX > 1_000_000) break;
+                    var startX = offsetX % tileW;
+                    if (startX > 0) startX -= tileW;
+                    for (var tx = startX; tx < canvasW; tx += tileW)
+                        canvas.DrawImage(src, srcRect, new RectangleF((float)tx, dy, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
+            case MaskRepeatMode.RepeatY:
+                {
+                    var dx = (float)offsetX;
+                    var tilesY = (long)Math.Ceiling(canvasH / tileH) + 2;
+                    if (tilesY > 1_000_000) break;
+                    var startY = offsetY % tileH;
+                    if (startY > 0) startY -= tileH;
+                    for (var ty = startY; ty < canvasH; ty += tileH)
+                        canvas.DrawImage(src, srcRect, new RectangleF(dx, (float)ty, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
+            default: // Repeat
+                {
+                    var tilesX = (long)Math.Ceiling(canvasW / tileW) + 2;
+                    var tilesY = (long)Math.Ceiling(canvasH / tileH) + 2;
+                    if (tilesX * tilesY > 1_000_000) break;
+
+                    var startX = offsetX % tileW;
+                    if (startX > 0) startX -= tileW;
+                    var startY = offsetY % tileH;
+                    if (startY > 0) startY -= tileH;
+
+                    for (var ty = startY; ty < canvasH; ty += tileH)
+                        for (var tx = startX; tx < canvasW; tx += tileW)
+                            canvas.DrawImage(src, srcRect, new RectangleF((float)tx, (float)ty, (float)tileW, (float)tileH), _resampler);
+                    break;
+                }
+        }
+    }
+
+    /// <summary>
+    /// Multiply each pixel's alpha in <paramref name="target"/> by the alpha of
+    /// the matching pixel in <paramref name="mask"/> (both straight-alpha
+    /// Rgba32, identical dimensions). Used by <c>background-clip: text</c> to
+    /// keep the background paint only where a glyph was drawn, and by the default
+    /// (<c>alpha</c>/<c>match-source</c>) mask-mode path.
+    /// </summary>
+    private static void MultiplyAlphaByMask(Image<Rgba32> target, Image<Rgba32> mask)
+    {
+        var height = Math.Min(target.Height, mask.Height);
+        target.ProcessPixelRows(mask, (targetAccessor, maskAccessor) =>
+        {
+            for (var y = 0; y < height; y++)
+            {
+                var targetRow = targetAccessor.GetRowSpan(y);
+                var maskRow = maskAccessor.GetRowSpan(y);
+                var width = Math.Min(targetRow.Length, maskRow.Length);
+                for (var x = 0; x < width; x++)
+                {
+                    // mask alpha 0..255 scales the fill alpha; (a*m + 127)/255
+                    // rounds to nearest.
+                    var a = (targetRow[x].A * maskRow[x].A + 127) / 255;
+                    targetRow[x].A = (byte)a;
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// CSS Masking 1 §6.1 luminance masking: multiply each pixel's alpha in
+    /// <paramref name="target"/> by the linearised luminance of the matching
+    /// pixel in <paramref name="mask"/>. Luminance is computed as:
+    /// <c>L = 0.2126·R + 0.7152·G + 0.0722·B</c> (Rec 709 coefficients) after
+    /// gamma-decoding each sRGB channel with the standard piecewise expansion.
+    /// The alpha of the mask pixel is applied too (opaque white → 100% mask;
+    /// transparent → 0% mask), matching the CSS spec's "luminance × alpha"
+    /// product (CSS Masking 1 §6.1 step 3).
+    /// </summary>
+    private static void MultiplyAlphaByLuminanceMask(Image<Rgba32> target, Image<Rgba32> mask)
+    {
+        var height = Math.Min(target.Height, mask.Height);
+        target.ProcessPixelRows(mask, (targetAccessor, maskAccessor) =>
+        {
+            for (var y = 0; y < height; y++)
+            {
+                var targetRow = targetAccessor.GetRowSpan(y);
+                var maskRow = maskAccessor.GetRowSpan(y);
+                var width = Math.Min(targetRow.Length, maskRow.Length);
+                for (var x = 0; x < width; x++)
+                {
+                    var mp = maskRow[x];
+                    // CSS Masking 1 §6.1: luminanceMask = Luma(mask) × maskAlpha/255.
+                    // Luma uses Rec 709; sRGB gamma-decode with the standard piecewise.
+                    var mr = SrgbToLinear(mp.R);
+                    var mg = SrgbToLinear(mp.G);
+                    var mb = SrgbToLinear(mp.B);
+                    var luma = 0.2126 * mr + 0.7152 * mg + 0.0722 * mb; // 0..1
+                    // Combine luma with mask alpha.
+                    var maskVal = luma * mp.A / 255.0; // 0..1
+                    var a = (int)Math.Round(targetRow[x].A * maskVal);
+                    targetRow[x].A = (byte)Math.Clamp(a, 0, 255);
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// sRGB gamma-decode a byte channel value (0..255) to linear light (0..1)
+    /// using the IEC 61966-2-1 piecewise function. Used by luminance masking.
+    /// </summary>
+    private static double SrgbToLinear(byte v)
+    {
+        var c = v / 255.0;
+        return c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    /// <summary>
+    /// Clip the alpha channel of <paramref name="layer"/> to the shape described
+    /// by <paramref name="clipPath"/> by rasterising the path into a temporary
+    /// mask image and multiplying alphas. Used to apply border-radius clipping to
+    /// a device-resolution offscreen layer before blitting it to the canvas.
+    /// </summary>
+    private static void ApplyClipMask(Image<Rgba32> layer, IPath clipPath)
+    {
+        // Rasterize the clip path into a temporary mask at the same resolution:
+        // fill the clip shape with solid white so alpha=255 inside, alpha=0 outside.
+        var w = layer.Width;
+        var h = layer.Height;
+        using var clipMask = new Image<Rgba32>(w, h, new Rgba32(0, 0, 0, 0));
+        clipMask.Mutate(ctx => ctx.Paint(c =>
+            c.Fill(Brushes.Solid(Color.White), clipPath)));
+
+        // Multiply the layer's alpha by the clip mask's alpha channel.
+        MultiplyAlphaByMask(layer, clipMask);
+    }
+
+    /// <summary>
+    /// Scale a <see cref="CornerRadii"/> by the device pixel ratio
+    /// <paramref name="scale"/> so the radii match the offscreen layer
+    /// which is sized in device pixels, not CSS px.
+    /// </summary>
+    private static CornerRadii ScaleRadii(CornerRadii r, float scale)
+        => new(
+            r.TopLeftX * scale, r.TopLeftY * scale,
+            r.TopRightX * scale, r.TopRightY * scale,
+            r.BottomRightX * scale, r.BottomRightY * scale,
+            r.BottomLeftX * scale, r.BottomLeftY * scale);
 
     /// <summary>
     /// Resolve a gradient's color stops into ImageSharp <see cref="ColorStop"/>s
     /// with monotonically increasing ratios in 0..1. Stops without an explicit
     /// position are evenly distributed between their neighbors per CSS Images 3
-    /// §3.4.3.
+    /// §3.4.3. Transition hint entries (<see cref="CssColorStop.IsHint"/>) are
+    /// skipped — they carry no color and are handled by the conic per-pixel path.
+    /// For the linear/radial brush path the hint skew is not applied (sRGB fallback
+    /// for hint midpoint curve; stop positions are still correct).
     /// </summary>
     private static ColorStop[] ResolveColorStops(CssGradient gradient, double lineLengthPx)
+    {
+        var ratios = ResolveStopRatios(gradient, lineLengthPx);
+        var src = gradient.Stops;
+        var realCount = src.Count(s => !s.IsHint);
+        var result = new ColorStop[realCount];
+        var ri = 0;
+        for (var i = 0; i < src.Count; i++)
+        {
+            if (src[i].IsHint) continue;
+            var c = src[i].Color.ToSrgb();
+            result[ri++] = new ColorStop((float)ratios[i], Color.FromPixel(new Rgba32(c.R, c.G, c.B, c.A)));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Resolve a gradient's color-stop positions into monotonically
+    /// non-decreasing ratios in 0..1. Stops without an explicit position are
+    /// evenly distributed between their neighbors per CSS Images 3 §3.4.3. The
+    /// conic rasterizer reuses this so its stops follow the same distribution
+    /// rules as the linear/radial brushes. Transition hints (which always carry a
+    /// position) are resolved alongside real stops — the SampleStopsColor path
+    /// uses the hint index to apply the curve, not skip the entry.
+    /// </summary>
+    private static double[] ResolveStopRatios(CssGradient gradient, double lineLengthPx)
     {
         var src = gradient.Stops;
         var ratios = new double?[src.Count];
@@ -545,9 +1810,15 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
                 ratios[i] = Math.Clamp(p.ResolveFraction(lineLengthPx), 0.0, 1.0);
         }
 
-        // First/last default to 0 / 1.
-        ratios[0] ??= 0.0;
-        ratios[^1] ??= 1.0;
+        // For first/last defaults, skip hints (first/last real stops default to 0/1).
+        var firstReal = -1;
+        var lastReal = -1;
+        for (var i = 0; i < src.Count; i++)
+        {
+            if (!src[i].IsHint) { if (firstReal < 0) firstReal = i; lastReal = i; }
+        }
+        if (firstReal >= 0) ratios[firstReal] ??= 0.0;
+        if (lastReal >= 0) ratios[lastReal] ??= 1.0;
 
         // Enforce non-decreasing positions (CSS Images 3: a stop's position is
         // clamped to be >= the previous stop's).
@@ -563,15 +1834,15 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         }
 
         // Interpolate runs of null positions evenly between their bracketing
-        // known stops.
+        // known stops (handles unpositioned real stops; hints always have positions).
         var idx = 0;
         while (idx < ratios.Length)
         {
             if (ratios[idx] is not null) { idx++; continue; }
-            var startKnown = idx - 1;            // always >= 0 because [0] is set
+            var startKnown = idx - 1;            // always >= 0 because [firstReal] is set
             var end = idx;
             while (end < ratios.Length && ratios[end] is null) end++;
-            var endKnown = end;                  // ratios[end] is set (last is set)
+            var endKnown = end;                  // ratios[end] is set (lastReal is set)
             var startVal = ratios[startKnown]!.Value;
             var endVal = ratios[endKnown]!.Value;
             var gap = endKnown - startKnown;
@@ -580,12 +1851,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             idx = end;
         }
 
-        var result = new ColorStop[src.Count];
+        var result = new double[src.Count];
         for (var i = 0; i < src.Count; i++)
-        {
-            var c = src[i].Color.ToSrgb();
-            result[i] = new ColorStop((float)ratios[i]!.Value, Color.FromPixel(new Rgba32(c.R, c.G, c.B, c.A)));
-        }
+            result[i] = ratios[i]!.Value;
         return result;
     }
 
@@ -619,15 +1887,14 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         };
     }
 
-    private void DrawText(DrawingCanvas canvas, DrawText text, RasterStats stats)
+    private void DrawText(DrawingCanvas canvas, DrawText text)
     {
         if (string.IsNullOrEmpty(text.Text)) return;
-        stats.TextChars += text.Text.Length;
 
         var spec = FontSpecFromDrawText(text);
         var size = (float)text.FontSize;
         var probe = FirstCodepoint(text.Text);
-        var font = ResolveFont(spec, probe, size, stats);
+        var font = ResolveFont(spec, probe, size);
         var color = ToColor(text.Color);
 
         var originX = (float)text.X;
@@ -639,15 +1906,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         // here — re-shaping the run, the cost the postmortem suspected. Track
         // both so the trace shows the reuse ratio for text-heavy pages.
         TextBlock textBlock;
-        if (text.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size)
+        if (text.Shaped is ImageSharpShapedRun shaped && shaped.CanReuseAtSize(size))
         {
             textBlock = shaped.TextBlock;
-            stats.ShapedReused++;
         }
         else
         {
             textBlock = new TextBlock(text.Text, new TextOptions(font));
-            stats.ShapedRebuilt++;
         }
 
         canvas.DrawText(textBlock, new PointF(originX, originY), -1, brush, null);
@@ -655,13 +1920,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
     // ---- CSS Text Decoration 3 (wp:M5-css-15) ----
 
-    private void DrawTextDecoration(DrawingCanvas canvas, DrawTextDecoration d, RasterStats stats)
+    private void DrawTextDecoration(DrawingCanvas canvas, DrawTextDecoration d)
     {
         if (d.Width <= 0 || d.Lines == TextDecorationLines.None) return;
 
         var spec = new FontSpec(d.FontFamilies, d.Bold, d.Italic);
         var size = (float)d.FontSize;
-        var font = ResolveFont(spec, probeCodepoint: 'x', size, stats);
+        var font = ResolveFont(spec, probeCodepoint: 'x', size);
         var fm = font.FontMetrics;
         var unitsScale = fm.UnitsPerEm > 0 ? size / (float)fm.UnitsPerEm : size / 1000f;
 
@@ -770,14 +2035,14 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         return pb.Build();
     }
 
-    private void DrawTextShadow(DrawingCanvas canvas, DrawTextShadow s, DisposableBag pendingImageSources, RasterStats stats)
+    private void DrawTextShadow(DrawingCanvas canvas, DrawTextShadow s, DisposableBag pendingImageSources)
     {
         if (string.IsNullOrEmpty(s.Text)) return;
 
         var spec = new FontSpec(s.FontFamilies, s.Bold, s.Italic);
         var size = (float)s.FontSize;
         var probe = FirstCodepoint(s.Text);
-        var font = ResolveFont(spec, probe, size, stats);
+        var font = ResolveFont(spec, probe, size);
         var color = ToColor(s.Color);
         var brush = Brushes.Solid(color);
 
@@ -785,15 +2050,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var originY = (float)(s.Y + s.OffsetY);
 
         TextBlock textBlock;
-        if (s.Shaped is ImageSharpShapedRun shaped && shaped.Font.Size == size)
+        if (s.Shaped is ImageSharpShapedRun shaped && shaped.CanReuseAtSize(size))
         {
             textBlock = shaped.TextBlock;
-            stats.ShapedReused++;
         }
         else
         {
             textBlock = new TextBlock(s.Text, new TextOptions(font));
-            stats.ShapedRebuilt++;
         }
 
         if (s.Blur <= 0)
@@ -826,17 +2089,11 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         // This offscreen glyph render + Gaussian blur is a full nested
         // rasterization that the lazy outer command_record span never sees;
         // its own span makes shadow-heavy pages attributable.
-        using (_diag.Span("paint", "raster.text_shadow_blur"))
-        {
-            Activity.Current?.SetTag("raster.text_shadow.width", width);
-            Activity.Current?.SetTag("raster.text_shadow.height", height);
-            Activity.Current?.SetTag("raster.text_shadow.blur", s.Blur);
-            // The display-list DrawText origin (s.X, s.Y) is the top of the line box;
-            // render the glyph run at (pad, pad) inside the layer so it matches.
-            glyphLayer.Mutate(ctx => ctx.Paint(c =>
-                c.DrawText(new TextBlock(s.Text, new TextOptions(font)), new PointF(pad, pad), -1, brush, null)));
-            glyphLayer.Mutate(ctx => ctx.GaussianBlur((float)s.Blur));
-        }
+        // The display-list DrawText origin (s.X, s.Y) is the top of the line box;
+        // render the glyph run at (pad, pad) inside the layer so it matches.
+        glyphLayer.Mutate(ctx => ctx.Paint(c =>
+            c.DrawText(new TextBlock(s.Text, new TextOptions(font)), new PointF(pad, pad), -1, brush, null)));
+        glyphLayer.Mutate(ctx => ctx.GaussianBlur((float)s.Blur));
 
         // Composite at the offset origin minus the padding we added.
         var destRect = new RectangleF(originX - pad, originY - pad, width, height);
@@ -892,23 +2149,13 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         return 0;
     }
 
-    private Font ResolveFont(FontSpec spec, int probeCodepoint, float size, RasterStats? stats = null)
+    private Font ResolveFont(FontSpec spec, int probeCodepoint, float size)
     {
         var key = new FontCacheKey(spec, size, probeCodepoint);
         if (_fontCache.TryGetValue(key, out var cached))
             return cached;
 
-        // Cache miss: CreateFont resolves the family against the collection,
-        // expensive and cold-start-heavy. Attribute the build to the render so
-        // the trace separates cold font work from steady-state draw_text cost.
-        var start = Stopwatch.GetTimestamp();
         var font = _fontCache.GetOrAdd(key, k => CreateFont(k.Spec, k.Size));
-        if (stats is not null)
-        {
-            stats.FontCacheMiss++;
-            stats.AddFontCreate(Stopwatch.GetTimestamp() - start);
-        }
-        _diag.Counter("paint.font.cache_miss", 1);
         return font;
     }
 
@@ -953,6 +2200,20 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
 
     // Magic constant for approximating a 90° elliptical arc with a cubic Bézier.
     private const float ArcBezierK = 0.5522847498f;
+
+    /// <summary>
+    /// Builds the clip path for a CSS overflow clip. When <paramref name="radii"/>
+    /// is non-zero, returns a rounded-rectangle path (CSS Overflow 3 §2.4 —
+    /// border-radius clips descendants). When the radii are all zero, returns a
+    /// plain axis-aligned rectangle. This helper is the shared entry point for
+    /// masking, gradient, and clipping agents — use it instead of calling
+    /// <see cref="BuildRoundedRectPath"/> directly when the caller wants the
+    /// correct plain-rect shortcut for the zero-radius case.
+    /// </summary>
+    /// <param name="bounds">The clip region in CSS px (page coordinates).</param>
+    /// <param name="radii">The corner radii; pass <see cref="CornerRadii.None"/> for a plain rect.</param>
+    internal static IPath BuildClipPath(LayoutRect bounds, CornerRadii radii)
+        => radii.IsZero ? ToRectPath(bounds) : BuildRoundedRectPath(bounds, radii);
 
     /// <summary>
     /// Builds a closed rounded-rectangle path for <paramref name="bounds"/> with
@@ -1056,15 +2317,9 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         var shape = BuildRoundedRectPath(silhouette, grown);
 
         var shadowImage = new Image<Rgba32>(geometry.ImageWidth, geometry.ImageHeight, new Rgba32(0, 0, 0, 0));
-        using (_diag.Span("paint", "raster.box_shadow_blur"))
-        {
-            Activity.Current?.SetTag("raster.box_shadow.width", geometry.ImageWidth);
-            Activity.Current?.SetTag("raster.box_shadow.height", geometry.ImageHeight);
-            Activity.Current?.SetTag("raster.box_shadow.blur", Math.Max(0, shadow.Blur));
-            shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
-            if (shadow.Blur > 0)
-                shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
-        }
+        shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
+        if (shadow.Blur > 0)
+            shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
 
         return shadowImage;
     }
@@ -1110,36 +2365,6 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
         int ImageHeight,
         LayoutRect Destination);
 
-    private readonly record struct BoxShadowCacheKey(
-        int ImageWidth,
-        int ImageHeight,
-        double SilhouetteWidth,
-        double SilhouetteHeight,
-        int Margin,
-        double Blur,
-        double Spread,
-        CornerRadii Radii,
-        byte R,
-        byte G,
-        byte B,
-        byte A)
-    {
-        public static BoxShadowCacheKey From(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
-            => new(
-                geometry.ImageWidth,
-                geometry.ImageHeight,
-                geometry.SilhouetteWidth,
-                geometry.SilhouetteHeight,
-                geometry.Margin,
-                Math.Max(0, shadow.Blur),
-                shadow.Spread,
-                shadow.Radii,
-                shadow.Color.R,
-                shadow.Color.G,
-                shadow.Color.B,
-                shadow.Color.A);
-    }
-
     private static LayoutRect TransformedAabb(LayoutRect r, Matrix2D m)
     {
         if (m.IsIdentity) return r;
@@ -1167,188 +2392,15 @@ internal sealed class ImageSharpBackend : IPaintBackend, IGpuTexturePaintBackend
             G(r.BottomLeftX, by), G(r.BottomLeftY, by));
     }
 
-    /// <summary>
-    /// Per-render rasterization timing/quality counters accumulated during the
-    /// display-list replay and emitted as tags on the <c>raster.command_record</c>
-    /// span. The per-type <see cref="Record"/> timings cover <em>recording</em>
-    /// time only (the <see cref="Apply"/> dispatch, including paint-time
-    /// TextBlock builds); ImageSharp rasterizes lazily at scope unwind, so the
-    /// pixel-fill cost is <c>command_record − replay_items</c>, not any single
-    /// bucket here.
-    /// </summary>
-    private sealed class RasterStats
-    {
-        private long _fillRect, _strokeRect, _fillRounded, _strokeRounded;
-        private long _boxShadow, _text, _textShadow, _textDecoration;
-        private long _image, _gradient, _transform, _fontCreate;
-
-        public int TextChars;
-        public int ShapedReused;
-        public int ShapedRebuilt;
-        public int FontCacheMiss;
-
-        public void Record(DisplayItem item, long ticks)
-        {
-            // Qualify with DisplayList.* because several record names (DrawText,
-            // DrawImage, FillGradient, …) collide with method names on the
-            // enclosing backend, which would otherwise bind as constant patterns.
-            switch (item)
-            {
-                case DisplayList.FillRect: _fillRect += ticks; break;
-                case DisplayList.StrokeRect: _strokeRect += ticks; break;
-                case DisplayList.FillRoundedRect: _fillRounded += ticks; break;
-                case DisplayList.StrokeRoundedRect: _strokeRounded += ticks; break;
-                case DisplayList.DrawBoxShadow: _boxShadow += ticks; break;
-                case DisplayList.DrawText: _text += ticks; break;
-                case DisplayList.DrawTextShadow: _textShadow += ticks; break;
-                case DisplayList.DrawTextDecoration: _textDecoration += ticks; break;
-                case DisplayList.DrawImage: _image += ticks; break;
-                case DisplayList.FillGradient: _gradient += ticks; break;
-                case DisplayList.PushTransform:
-                case DisplayList.PopTransform: _transform += ticks; break;
-            }
-        }
-
-        public void AddFontCreate(long ticks) => _fontCreate += ticks;
-
-        public void Emit(Activity? activity)
-        {
-            if (activity is null) return;
-            static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
-            activity.SetTag("raster.time.fill_rect_ms", Ms(_fillRect));
-            activity.SetTag("raster.time.stroke_rect_ms", Ms(_strokeRect));
-            activity.SetTag("raster.time.fill_rounded_rect_ms", Ms(_fillRounded));
-            activity.SetTag("raster.time.stroke_rounded_rect_ms", Ms(_strokeRounded));
-            activity.SetTag("raster.time.box_shadow_ms", Ms(_boxShadow));
-            activity.SetTag("raster.time.draw_text_ms", Ms(_text));
-            activity.SetTag("raster.time.text_shadow_ms", Ms(_textShadow));
-            activity.SetTag("raster.time.text_decoration_ms", Ms(_textDecoration));
-            activity.SetTag("raster.time.draw_image_ms", Ms(_image));
-            activity.SetTag("raster.time.gradient_ms", Ms(_gradient));
-            activity.SetTag("raster.time.transform_ms", Ms(_transform));
-            activity.SetTag("raster.time.font_create_ms", Ms(_fontCreate));
-            activity.SetTag("raster.text.chars", TextChars);
-            activity.SetTag("raster.text.shaped_reused", ShapedReused);
-            activity.SetTag("raster.text.shaped_rebuilt", ShapedRebuilt);
-            activity.SetTag("raster.font.cache_miss", FontCacheMiss);
-        }
-    }
-
-    private sealed class DisposableBag : IDisposable
-    {
-        private readonly List<IDisposable> _items = [];
-
-        public void Add(IDisposable item)
-            => _items.Add(item);
-
-        public void Dispose()
-        {
-            foreach (var item in _items)
-                item.Dispose();
-        }
-    }
-
-    private sealed class BoxShadowRasterCache(IDiagnostics diag) : IDisposable
-    {
-        private const long DefaultBudgetBytes = 64L * 1024 * 1024;
-
-        private readonly object _gate = new();
-        private readonly long _maxBytes = ReadBudgetEnv();
-        private readonly Dictionary<BoxShadowCacheKey, LinkedListNode<Entry>> _map = new();
-        private readonly LinkedList<Entry> _lru = new();
-        private long _bytes;
-
-        private static long ReadBudgetEnv()
-        {
-            var raw = Environment.GetEnvironmentVariable("STARLING_BOX_SHADOW_CACHE_BYTES");
-            return long.TryParse(raw, out var value) && value > 0 ? value : DefaultBudgetBytes;
-        }
-
-        public bool TryGet(BoxShadowCacheKey key, out Image<Rgba32> image)
-        {
-            lock (_gate)
-            {
-                if (_map.TryGetValue(key, out var node))
-                {
-                    _lru.Remove(node);
-                    _lru.AddFirst(node);
-                    image = node.Value.Image;
-                    diag.Counter("paint.box_shadow.cache_hit", 1);
-                    return true;
-                }
-            }
-
-            image = null!;
-            diag.Counter("paint.box_shadow.cache_miss", 1);
-            return false;
-        }
-
-        public bool Put(BoxShadowCacheKey key, Image<Rgba32> image, DisposableBag deferredDisposals)
-        {
-            var bytes = checked((long)image.Width * image.Height * 4);
-            if (bytes > _maxBytes)
-            {
-                deferredDisposals.Add(image);
-                diag.Counter("paint.box_shadow.cache_oversize", 1);
-                return false;
-            }
-
-            lock (_gate)
-            {
-                if (_map.TryGetValue(key, out var existing))
-                {
-                    Remove(existing, deferredDisposals);
-                }
-
-                var node = _lru.AddFirst(new Entry(key, image, bytes));
-                _map[key] = node;
-                _bytes += bytes;
-                EvictToBudget(deferredDisposals);
-                diag.Gauge("paint.box_shadow.cache_bytes", _bytes);
-                return true;
-            }
-        }
-
-        private void EvictToBudget(DisposableBag deferredDisposals)
-        {
-            while (_bytes > _maxBytes && _lru.Last is { } last)
-            {
-                Remove(last, deferredDisposals);
-                diag.Counter("paint.box_shadow.cache_evict", 1);
-            }
-        }
-
-        private void Remove(LinkedListNode<Entry> node, DisposableBag deferredDisposals)
-        {
-            _lru.Remove(node);
-            _map.Remove(node.Value.Key);
-            _bytes -= node.Value.Bytes;
-            deferredDisposals.Add(node.Value.Image);
-        }
-
-        public void Dispose()
-        {
-            lock (_gate)
-            {
-                foreach (var entry in _lru)
-                    entry.Image.Dispose();
-
-                _lru.Clear();
-                _map.Clear();
-                _bytes = 0;
-            }
-        }
-
-        private sealed record Entry(BoxShadowCacheKey Key, Image<Rgba32> Image, long Bytes);
-    }
-
     public void Dispose()
     {
         // FontCollection has no Dispose. Clear cached Font entries so a
         // long-lived host releases per-spec lookup results.
         _boxShadowCache.Dispose();
+        _conicCache.Dispose();
         _fontCache.Clear();
         _ = _fonts;
         _ = _webFonts;
     }
+
 }

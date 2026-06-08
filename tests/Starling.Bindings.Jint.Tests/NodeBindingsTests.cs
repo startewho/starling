@@ -1,6 +1,6 @@
 using AwesomeAssertions;
 using Jint;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Html;
 using Starling.Loop;
@@ -31,6 +31,20 @@ public sealed class NodeBindingsTests
         engine.Evaluate("document.querySelector('.lead').textContent").AsString().Should().Be("hello");
         engine.Evaluate("document.querySelectorAll('#main p').length").AsNumber().Should().Be(2);
         engine.Evaluate("document.getElementById('main').id").AsString().Should().Be("main");
+    }
+
+    [TestMethod]
+    public void Template_content_exposes_parsed_fragment_not_children()
+    {
+        var (engine, _) = NewSession("<body><template id='t'><div>hi</div></template></body>");
+        // content is a DocumentFragment (nodeType 11) holding the parsed markup.
+        engine.Evaluate("document.querySelector('#t').content.nodeType").AsNumber().Should().Be(11);
+        engine.Evaluate("document.querySelector('#t').content.firstChild.tagName").AsString().Should().Be("DIV");
+        engine.Evaluate("document.querySelector('#t').content.firstChild.textContent").AsString().Should().Be("hi");
+        // The <div> is template content, not a normal child of the element.
+        engine.Evaluate("document.querySelector('#t').childNodes.length").AsNumber().Should().Be(0);
+        // Non-template elements have no content.
+        engine.Evaluate("document.body.content").IsNull().Should().BeTrue();
     }
 
     [TestMethod]
@@ -182,7 +196,7 @@ public sealed class NodeBindingsTests
             document: doc,
             baseUrl: baseUrl,
             http: http,
-            diag: NoopDiagnostics.Instance,
+            loggerFactory: NullLoggerFactory.Instance,
             loop: new WebEventLoop(),
             layoutHost: null,
             fetch: (_, _) => System.Threading.Tasks.Task.FromResult<string?>(null));

@@ -1,6 +1,6 @@
 using Jint.Native;
 using Jint.Runtime;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Starling.Bindings.Jint;
 
@@ -25,9 +25,8 @@ namespace Starling.Bindings.Jint;
 /// (<c>engine.Advanced.ProcessTasks()</c>) so reactions queued from inside the
 /// timer settle before control returns to the loop.</item>
 /// <item><b>Error routing.</b> A throwing handler is reported to
-/// <see cref="JintBackendContext.Diag"/> at warn level (mirroring the console
-/// error route the Starling backend uses); the loop keeps running so later
-/// timers still fire.</item>
+/// logged at warn level (mirroring the console error route the Starling backend uses);
+/// the loop keeps running so later timers still fire.</item>
 /// </list>
 /// <c>setImmediate</c>/<c>clearImmediate</c> are a Node-flavoured convenience
 /// scheduled as 0ms timers on the same loop (HTML has no setImmediate, but real
@@ -196,6 +195,7 @@ internal static class TimersBinding
 
     private static void InvokeHandler(JintBackendContext ctx, JsValue handler, JsValue[] args)
     {
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         try
         {
             ctx.Engine.Invoke(handler, JsValue.Undefined, args);
@@ -203,12 +203,11 @@ internal static class TimersBinding
         }
         catch (JavaScriptException ex)
         {
-            ctx.Diag.Log(DiagLevel.Warn, "engine.js",
-                $"Uncaught (in timer) {JintInterop.DescribeError(ex.Error, ex.Message)}");
+            TimersBindingLog.UncaughtInTimer(jsLog, JintInterop.DescribeError(ex.Error, ex.Message));
         }
         catch (Exception ex)
         {
-            ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Uncaught (in timer) {ex.Message}");
+            TimersBindingLog.UncaughtInTimer(jsLog, ex.Message);
         }
     }
 
@@ -216,4 +215,10 @@ internal static class TimersBinding
     {
         public int CurrentTimerId { get; init; }
     }
+}
+
+internal static partial class TimersBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught (in timer) {Detail}")]
+    public static partial void UncaughtInTimer(ILogger logger, string detail);
 }

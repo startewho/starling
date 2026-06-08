@@ -9,12 +9,11 @@ namespace Starling.Js.Parse;
 /// strict-only restrictions (e.g. <c>arguments.caller</c>), tracked as a
 /// known divergence in <c>tasks/M3/google-com-handoff.md</c>.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     /// <summary>Set while parsing inside a class body so private-name
     /// references can be validated as declared. Each frame represents one
     /// (possibly nested) class scope.</summary>
-    private readonly Stack<HashSet<string>> _classPrivateScopes = new();
 
     /// <summary>§12.7.2 — the canonical (escape-decoded) name of a
     /// PrivateIdentifier token. The lexer stores the decoded <c>#name</c> in the
@@ -27,7 +26,6 @@ public sealed partial class JsParser
     /// <summary>Tracks whether the parser is currently inside a derived
     /// class's constructor body so <c>super(...)</c> calls can be
     /// distinguished from <c>super.x()</c> member calls.</summary>
-    private int _derivedConstructorDepth;
 
     /// <summary>Parse a class declaration statement. The keyword
     /// <c>class</c> is the current token.</summary>
@@ -139,7 +137,6 @@ public sealed partial class JsParser
         public bool GetStatic, SetStatic;
     }
 
-    private readonly Stack<Dictionary<string, PrivateDecl>> _privateDeclStack = new();
 
     /// <summary>§15.7.1 ClassElementName early errors. Rejects a
     /// <c>static</c> element named <c>"prototype"</c> (string or identifier key),
@@ -220,7 +217,7 @@ public sealed partial class JsParser
         // method named "static"; `static {` is a static block; `static name`
         // is a static member.
         bool isStatic = false;
-        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "static")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.TextEquals("static"))
         {
             var peek = _lex.Peek();
             // `static` followed by `(` or `=` or `;` is a regular member named "static".
@@ -270,7 +267,7 @@ public sealed partial class JsParser
         // `async` is contextual: a method modifier only when followed (same
         // line) by a method-name start; otherwise it is a member named "async".
         bool isGenerator = false, isAsync = false;
-        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.Lexeme == "async")
+        if (_current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape && _current.TextEquals("async"))
         {
             var peek = _lex.Peek();
             if (!peek.PrecededByLineTerminator && IsMethodNameStartAfterModifier(peek.Kind))
@@ -286,7 +283,7 @@ public sealed partial class JsParser
         MethodKind methodKind = MethodKind.Method;
         if (!isAsync && !isGenerator
             && _current.Kind == JsTokenKind.Identifier && !_current.ContainsEscape
-            && (_current.Lexeme == "get" || _current.Lexeme == "set"))
+            && (_current.TextEquals("get") || _current.TextEquals("set")))
         {
             var peek = _lex.Peek();
             // `get name(...)` is an accessor; `get(...)` is a method named "get".
@@ -296,7 +293,7 @@ public sealed partial class JsParser
                 && peek.Kind != JsTokenKind.RBrace
                 && peek.Kind != JsTokenKind.Comma)
             {
-                methodKind = _current.Lexeme == "get" ? MethodKind.Get : MethodKind.Set;
+                methodKind = _current.TextEquals("get") ? MethodKind.Get : MethodKind.Set;
                 Advance();
             }
         }
@@ -416,7 +413,8 @@ public sealed partial class JsParser
 
         var method = new MethodDefinition(key, methodKind, isStatic, computed,
             parameters, body, memberStart, endPos,
-            Generator: isGenerator, Async: isAsync, Strict: true);
+            Generator: isGenerator, Async: isAsync, Strict: true,
+            SourceText: SourceSlice(memberStart, endPos));
         if (isCtor)
         {
             if (existingCtor is not null)
@@ -500,7 +498,6 @@ public sealed partial class JsParser
     /// <summary>Depth counter set by the parser while it walks a class
     /// declaration / expression that has an <c>extends</c> clause. Used
     /// to enable <c>super(...)</c> parsing inside that scope.</summary>
-    private int _baseClassContextDepth;
 
     /// <summary>Parse a <c>super</c> primary — must be followed by <c>.x</c>,
     /// <c>[expr]</c>, or <c>(args)</c>.</summary>

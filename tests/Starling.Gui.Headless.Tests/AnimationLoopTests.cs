@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
@@ -7,6 +7,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Engine;
 using Starling.Gui.Controls;
@@ -40,7 +41,7 @@ public class AnimationLoopTests
         var (engine, page) = await LoadInteractiveAsync(html);
 
         using var panel = new WebviewPanel(
-            new ThemeManager(), NoopDiagnostics.Instance, _ => { }, (_, _) => { },
+            new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)),
             prepareAnimationFrame: engine.PrepareAnimationFrame,
             hasActiveAnimations: engine.HasActiveAnimations);
@@ -79,7 +80,7 @@ public class AnimationLoopTests
         var (engine, page) = await LoadInteractiveAsync(html);
 
         using var panel = new WebviewPanel(
-            new ThemeManager(), NoopDiagnostics.Instance, _ => { }, (_, _) => { },
+            new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)),
             prepareAnimationFrame: engine.PrepareAnimationFrame,
             hasActiveAnimations: engine.HasActiveAnimations);
@@ -123,9 +124,9 @@ public class AnimationLoopTests
             """;
         var (engine, page) = await LoadInteractiveAsync(html);
 
-        var diag = new RecordingDiagnostics();
+        using var metrics = new MetricRecorder();
         using var panel = new WebviewPanel(
-            new ThemeManager(), diag, _ => { }, (_, _) => { },
+            new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)),
             prepareAnimationFrame: engine.PrepareAnimationFrame,
             hasActiveAnimations: engine.HasActiveAnimations);
@@ -139,11 +140,11 @@ public class AnimationLoopTests
         // serve their content from cache — proof the clock-free layer-tree path
         // ran (the flat path's clock-keyed version would miss every frame).
         var near = PixelAtFrame(engine, panel, page, nowMs: 0, x: 40, y: 40);
-        var hitsAfterSeed = diag.CountOf("paint.tile.cache_hit");
+        var hitsAfterSeed = metrics.CountOf("paint.tile.cache_hit");
         _ = PixelAtFrame(engine, panel, page, nowMs: 600, x: 40, y: 40);
         var farLeft = PixelAtFrame(engine, panel, page, nowMs: 999, x: 40, y: 40);
 
-        diag.CountOf("paint.tile.cache_hit").Should().BeGreaterThan(hitsAfterSeed,
+        metrics.CountOf("paint.tile.cache_hit").Should().BeGreaterThan(hitsAfterSeed,
             "the transform-only frame re-blits each layer's content from cache");
 
         // x=40 starts inside the red box (translateX≈0). Red is rgb(255,0,0), so
@@ -210,25 +211,27 @@ public class AnimationLoopTests
         return (engine, result.Value);
     }
 
-    /// <summary>Counts diagnostic counters so a test can assert cache hits.</summary>
-    private sealed class RecordingDiagnostics : IDiagnostics
+    /// <summary>Listens to StarlingTelemetry.Meter and accumulates counter values
+    /// so a test can assert cache-hit deltas.</summary>
+    private sealed class MetricRecorder : IDisposable
     {
-        private readonly ConcurrentDictionary<string, double> _counters = new();
+        private readonly MeterListener _l = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _v = new();
 
-        public double CountOf(string name) => _counters.TryGetValue(name, out var v) ? v : 0d;
-
-        public void Counter(string name, double value)
-            => _counters.AddOrUpdate(name, value, (_, prev) => prev + value);
-
-        public IDisposable Span(string area, string operation) => NoopSpan.Instance;
-        public void Log(DiagLevel level, string area, string message) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
+        public MetricRecorder()
         {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
+            _l.InstrumentPublished = (inst, lst) =>
+            { if (inst.Meter.Name == StarlingTelemetry.SourceName) lst.EnableMeasurementEvents(inst); };
+            _l.SetMeasurementEventCallback<double>((inst, m, t, s) => Add(inst.Name, m));
+            _l.SetMeasurementEventCallback<long>((inst, m, t, s) => Add(inst.Name, m));
+            _l.Start();
         }
+
+        private void Add(string n, double m)
+            => _v.AddOrUpdate(n, m, (_, p) => p + m);
+
+        public double CountOf(string name) => _v.TryGetValue(name, out var x) ? x : 0d;
+
+        public void Dispose() => _l.Dispose();
     }
 }

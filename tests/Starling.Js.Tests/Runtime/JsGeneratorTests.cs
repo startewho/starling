@@ -68,6 +68,59 @@ public class JsGeneratorTests
     }
 
     [TestMethod]
+    public void Generator_yield_in_for_update_expression_runs_each_iteration()
+    {
+        var r = Eval(@"
+            function* foo() {
+                for (var i = 0; i < 5; yield i++) {}
+            }
+            var str = '';
+            for (var val of foo()) str += val;
+            str;
+        ");
+
+        r.AsString.Should().Be("01234");
+    }
+
+    [TestMethod]
+    public void For_of_ignores_generator_return_value()
+    {
+        Eval(@"
+            function* foo() {
+                yield 'a';
+                return 'b';
+            }
+            var str = '';
+            for (var val of foo()) str += val;
+            str;
+        ").AsString.Should().Be("a");
+
+        Eval(@"
+            function* foo() {
+                return 'a';
+            }
+            var str = '';
+            for (var val of foo()) str += val;
+            str;
+        ").AsString.Should().Be("");
+    }
+
+    [TestMethod]
+    public void Generator_yields_undefined_as_visible_value()
+    {
+        var r = Eval(@"
+            function* foo() {
+                yield undefined;
+            }
+            var str = '';
+            for (var val of foo()) str += val;
+            str;
+        ");
+
+        r.AsString.Should().Be("undefined");
+    }
+
+    [TestMethod]
     public void Generator_is_its_own_iterator_via_symbol_iterator()
     {
         var r = Eval(@"
@@ -104,6 +157,136 @@ public class JsGeneratorTests
             '' + a.value + ',' + b.value + '/' + b.done + ',' + c.value + '/' + c.done
         ");
         r.AsString.Should().Be("1,fin/true,undefined/true");
+    }
+
+    [TestMethod]
+    public void Generator_resumes_with_values_sent_after_each_yield()
+    {
+        var r = Eval(@"
+            function* counter(value) {
+                while (true) {
+                    const step = yield value++;
+                    if (step) value += step;
+                }
+            }
+            var it = counter(0);
+            it.next().value + ',' +
+                it.next().value + ',' +
+                it.next().value + ',' +
+                it.next().value + ',' +
+                it.next(10).value + ',' +
+                it.next().value + ',' +
+                it.next(10).value;
+        ");
+
+        r.AsString.Should().Be("0,1,2,3,14,15,26");
+    }
+
+    [TestMethod]
+    public void Generator_fibonacci_can_destructure_and_reset_from_next_value()
+    {
+        var r = Eval(@"
+            function* fibonacci() {
+                let current = 0;
+                let next = 1;
+                while (true) {
+                    const reset = yield current;
+                    [current, next] = [next, next + current];
+                    if (reset) {
+                        current = 0;
+                        next = 1;
+                    }
+                }
+            }
+            var sequence = fibonacci();
+            sequence.next().value + ',' +
+                sequence.next().value + ',' +
+                sequence.next().value + ',' +
+                sequence.next().value + ',' +
+                sequence.next().value + ',' +
+                sequence.next().value + ',' +
+                sequence.next().value + ',' +
+                sequence.next(true).value + ',' +
+                sequence.next().value + ',' +
+                sequence.next().value;
+        ");
+
+        r.AsString.Should().Be("0,1,1,2,3,5,8,0,1,1");
+    }
+
+    [TestMethod]
+    public void Generator_resume_does_not_reevaluate_binary_left_operand()
+    {
+        var r = Eval(@"
+            function* gen() {
+                let d = 0;
+                const sum = (++d) + (yield 10);
+                return [d, sum];
+            }
+            var g = gen();
+            g.next();
+            JSON.stringify(g.next(5).value);
+        ");
+
+        r.AsString.Should().Be("[1,6]");
+    }
+
+    [TestMethod]
+    public void Generator_resume_does_not_reevaluate_call_arguments_before_yield()
+    {
+        var r = Eval(@"
+            function* gen() {
+                let i = 0;
+                const foo = (a, b, c) => [a, b, c];
+                const result = foo(++i, ++i, yield ++i);
+                return [result, i];
+            }
+            var g = gen();
+            g.next();
+            JSON.stringify(g.next('done').value);
+        ");
+
+        r.AsString.Should().Be("[[1,2,\"done\"],3]");
+    }
+
+    [TestMethod]
+    public void Generator_resume_preserves_switch_lexical_binding_after_yield()
+    {
+        var r = Eval(@"
+            function* gen() {
+                switch (1) {
+                    case 1:
+                        let x = 1;
+                        yield;
+                        return x;
+                    default:
+                        return 0;
+                }
+            }
+            var g = gen();
+            g.next();
+            g.next().value;
+        ");
+
+        r.AsNumber.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void Generator_resume_does_not_reiterate_one_shot_spread_iterator()
+    {
+        var r = Eval(@"
+            function* inner() { yield 'a'; yield 'b'; yield 'c'; }
+            function* outer() {
+                const g = inner();
+                const result = [...g, yield 'wait'];
+                return result;
+            }
+            var o = outer();
+            o.next();
+            JSON.stringify(o.next('d').value);
+        ");
+
+        r.AsString.Should().Be("[\"a\",\"b\",\"c\",\"d\"]");
     }
 
     [TestMethod]

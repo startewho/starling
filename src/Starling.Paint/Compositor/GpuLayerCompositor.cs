@@ -8,14 +8,9 @@ using WgpuBuffer = Silk.NET.WebGPU.Buffer;
 namespace Starling.Paint.Compositor;
 
 /// <summary>
-/// One layer ready to blend into the viewport: the layer's own bitmap (over a
-/// transparent canvas), the content-hash key that lets the GPU keep its texture
-/// resident across frames, the affine map from a layer-bitmap pixel to an output
-/// device pixel, the effective opacity, and an optional device-space clip rect.
-/// The <see cref="Compositor"/> builds these once and hands them to either the
-/// CPU blend loop, the offscreen <see cref="GpuLayerCompositor"/>, or the
-/// on-screen <see cref="GpuSurfacePresenter"/>, so every path shares the exact
-/// same geometry.
+/// Describes one layer that is ready to blend. It stores the layer texture key,
+/// size, transform, opacity, and optional device-space clip. It may also carry
+/// fresh bitmap pixels when the texture cache needs new content.
 /// </summary>
 internal readonly struct LayerBlend
 {
@@ -45,7 +40,7 @@ internal readonly struct LayerBlend
         ClipDevice = clipDevice;
     }
 
-    public RenderedBitmap? Local { get; }
+    private RenderedBitmap? Local { get; }
 
     public int Width { get; }
 
@@ -82,16 +77,11 @@ internal readonly struct LayerBlend
 }
 
 /// <summary>
-/// Blends a list of cached layer bitmaps into an offscreen texture on the GPU and
-/// reads the result back to a CPU bitmap (wp:M12-13-gpu-composite-blend). Each
-/// layer uploads to a wgpu texture once, keyed by its slice content hash, and
-/// stays resident across frames. The blend is alpha-over in premultiplied space,
-/// which reproduces the CPU <see cref="Compositor"/>'s <c>AlphaOver</c> math (the
-/// framebuffer base is opaque white, so premultiplied and straight alpha agree on
-/// readback). The reusable device + pipeline + texture cache live in
-/// <see cref="GpuBlendEngine"/>; this class adds the offscreen render target and
-/// the GPU→CPU readback. The on-screen, readback-free sibling is
-/// <see cref="GpuSurfacePresenter"/>.
+/// Blends cached layer textures into an offscreen GPU target, then reads the
+/// result into a CPU bitmap. Layer textures stay resident across frames and are
+/// keyed by content hash. <see cref="GpuBlendEngine"/> owns the shared device,
+/// pipeline, and texture cache. This class owns the offscreen target and the
+/// readback buffer.
 /// </summary>
 internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDisposable
 {
@@ -101,7 +91,8 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
     internal static GpuLayerCompositor? Shared => _shared.Value;
 
     private readonly GpuBlendEngine _engine;
-    private readonly object _gate = new();
+    private readonly GpuOverlayRenderer _overlays;
+    private readonly Lock _gate = new();
 
     // Offscreen render target (Rgba8Unorm so readback bytes are straight RGBA) +
     // readback buffer, recreated when the viewport size changes.
@@ -111,14 +102,17 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
     private WgpuBuffer* _readback;
     private nuint _readbackSize;
 
-    private GpuLayerCompositor(GpuBlendEngine engine) => _engine = engine;
+    private GpuLayerCompositor(GpuBlendEngine engine)
+    {
+        _engine = engine;
+        _overlays = new GpuOverlayRenderer(engine);
+    }
 
     /// <summary>
-    /// Probes for a GPU adapter and builds the device once. Returns <c>null</c> on
-    /// any failure. WebGPU sessions treat that as a render failure; tests can skip
-    /// when the host has no adapter.
+    /// Creates the shared offscreen compositor. Returns <c>null</c> when WebGPU
+    /// cannot create a device. Tests can skip GPU checks in that case.
     /// </summary>
-    internal static GpuLayerCompositor? TryCreate()
+    private static GpuLayerCompositor? TryCreate()
     {
         var engine = GpuBlendEngine.CreateOffscreen();
         return engine is null ? null : new GpuLayerCompositor(engine);
@@ -132,7 +126,7 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         }
     }
 
-    public GpuPaintDeviceContext ImageSharpContext => _engine.ImageSharpContext;
+    public GpuPaintDevice GpuDevice => _engine.GpuDevice;
 
     public void AdoptTexture(long contentHash, GpuPaintTexture texture)
     {
@@ -143,12 +137,17 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
     }
 
     /// <summary>
-    /// Blends <paramref name="ops"/> into <paramref name="output"/> (a
-    /// width×height straight-alpha RGBA8 buffer pre-filled opaque white) on the
-    /// GPU. GPU failures are render failures; callers do not fall back to the CPU
-    /// blend for a WebGPU session.
+    /// Blends <paramref name="ops"/> into <paramref name="output"/> on the GPU.
+    /// The output buffer is RGBA pixels and should already be filled with opaque
+    /// white. GPU errors throw because a WebGPU render should not fall back to the
+    /// CPU blend path.
     /// </summary>
-    public void Composite(byte[] output, int width, int height, IReadOnlyList<LayerBlend> ops)
+    public void Composite(
+        byte[] output,
+        int width,
+        int height,
+        IReadOnlyList<LayerBlend> ops,
+        IReadOnlyList<GpuOverlayLayer>? overlayLayers = null)
     {
         if (width <= 0 || height <= 0)
         {
@@ -162,7 +161,7 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
             EnsureTarget(width, height);
             _engine.UploadLayerTextures(ops);
             var vertexCount = _engine.BuildAndUploadVertices(ops, width, height);
-            RenderPass(width, height, ops, vertexCount);
+            RenderPass(width, height, ops, vertexCount, overlayLayers);
             Readback(output, width, height);
             _engine.EvictStale();
         }
@@ -197,7 +196,12 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         _readback = api.DeviceCreateBuffer(_engine.Device, in bufDesc);
     }
 
-    private void RenderPass(int width, int height, IReadOnlyList<LayerBlend> ops, uint vertexCount)
+    private void RenderPass(
+        int width,
+        int height,
+        IReadOnlyList<LayerBlend> ops,
+        uint vertexCount,
+        IReadOnlyList<GpuOverlayLayer>? overlayLayers)
     {
         var api = _engine.Api;
         var encoder = api.DeviceCreateCommandEncoder(_engine.Device, (CommandEncoderDescriptor*)null);
@@ -215,6 +219,7 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         var pass = api.CommandEncoderBeginRenderPass(encoder, in passDesc);
 
         _engine.RecordBlend(pass, ops, TextureFormat.Rgba8Unorm, vertexCount, width, height);
+        _overlays.Record(pass, overlayLayers, width, height, TextureFormat.Rgba8Unorm);
 
         api.RenderPassEncoderEnd(pass);
 
@@ -281,6 +286,7 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
             if (_readback != null) { api.BufferRelease(_readback); _readback = null; }
             if (_outView != null) { api.TextureViewRelease(_outView); _outView = null; }
             if (_outTex != null) { api.TextureRelease(_outTex); _outTex = null; }
+            _overlays.Dispose();
             _engine.Dispose();
         }
     }

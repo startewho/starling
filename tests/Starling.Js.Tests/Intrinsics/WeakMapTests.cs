@@ -17,6 +17,20 @@ public class WeakMapTests
     }
 
     [TestMethod]
+    public void WeakMap_called_without_new_throws()
+    {
+        Eval(@"
+            var ok = false;
+            try {
+                var m = new WeakMap();
+                WeakMap.call(m, []);
+            } catch (e) {
+                ok = e instanceof TypeError && e.message === ""Constructor WeakMap requires 'new'"";
+            }
+            ok;").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Set_get_with_object_key()
     {
         Eval(@"
@@ -24,6 +38,56 @@ public class WeakMapTests
             var k = {};
             m.set(k, 7);
             m.get(k);").AsNumber.Should().Be(7);
+    }
+
+    [TestMethod]
+    public void Constructor_iterable_initialization_calls_observable_set_method()
+    {
+        var r = Eval(@"
+            var key = {};
+            var calls = [];
+            class W extends WeakMap {
+                set(k, v) {
+                    calls.push(v);
+                    return WeakMap.prototype.set.call(this, k, v);
+                }
+            }
+            var w = new W([[key, 7]]);
+            calls.join('|') + ';' + w.get(key);");
+
+        r.AsString.Should().Be("7;7");
+    }
+
+    [TestMethod]
+    public void Constructor_closes_iterator_when_set_method_throws()
+    {
+        var r = Eval(@"
+            var key = {};
+            var closed = false;
+            var index = 0;
+            var iterable = {
+                [Symbol.iterator]: function() {
+                    return {
+                        next: function() {
+                            index++;
+                            return index === 1
+                                ? { done: false, value: [key, 7] }
+                                : { done: true };
+                        },
+                        return: function() {
+                            closed = true;
+                            return {};
+                        }
+                    };
+                }
+            };
+            class W extends WeakMap {
+                set() { throw new TypeError('stop'); }
+            }
+            try { new W(iterable); } catch (e) {}
+            closed;");
+
+        r.AsBool.Should().BeTrue();
     }
 
     [TestMethod]

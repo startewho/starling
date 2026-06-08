@@ -16,9 +16,9 @@ namespace Starling.Js.Runtime;
 public sealed class JsRuntime
 {
     // Shared ActivitySource with the rest of the engine subsystems
-    // (OtelDiagnostics.SourceName = "Starling.Engine"). Telemetry listeners
+    // (StarlingTelemetry.SourceName = "Starling.Engine"). Telemetry listeners
     // pick spans up by name match — duplicating the constant here avoids a
-    // Starling.Telemetry reference from Starling.Js.
+    // Starling.Common reference from Starling.Js just for the name.
     private static readonly ActivitySource RuntimeActivitySource = new("Starling.Engine");
 
     public JsRealm Realm { get; }

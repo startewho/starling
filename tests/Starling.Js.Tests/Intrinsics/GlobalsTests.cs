@@ -40,6 +40,38 @@ public class GlobalsTests
     }
 
     [TestMethod]
+    public void Global_escape_matches_legacy_annex_b_encoding()
+    {
+        Eval("escape('');").AsString.Should().Be("");
+        Eval("escape('\\u0100\\u0101\\u0102');").AsString.Should().Be("%u0100%u0101%u0102");
+        Eval("escape('\\uD834\\uDF06');").AsString.Should().Be("%uD834%uDF06");
+        Eval("escape('\\x00\\x01\\x02\\x03');").AsString.Should().Be("%00%01%02%03");
+        Eval("escape(',');").AsString.Should().Be("%2C");
+        Eval("escape(':;<=>?');").AsString.Should().Be("%3A%3B%3C%3D%3E%3F");
+        Eval("escape('`');").AsString.Should().Be("%60");
+        Eval("escape('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./');").AsString
+            .Should().Be("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./");
+    }
+
+    [TestMethod]
+    public void Global_unescape_matches_legacy_annex_b_decoding()
+    {
+        Eval("unescape('');").AsString.Should().Be("");
+        Eval("unescape('%40');").AsString.Should().Be("@");
+        Eval("unescape('%40_');").AsString.Should().Be("@_");
+        Eval("unescape('%40%40');").AsString.Should().Be("@@");
+        Eval("unescape('%u0040');").AsString.Should().Be("@");
+        Eval("unescape('%u0040%u0040');").AsString.Should().Be("@@");
+        Eval("unescape('%U0000');").AsString.Should().Be("%U0000");
+        Eval("unescape('%u00');").AsString.Should().Be("%u00");
+        Eval("unescape('%0G0');").AsString.Should().Be("%0G0");
+        Eval("unescape('%');").AsString.Should().Be("%");
+        Eval("unescape('%0');").AsString.Should().Be("%0");
+        Eval("unescape('%2A');").AsString.Should().Be("*");
+        Eval("unescape('%uFFFF');").AsString.Should().Be("\uffff");
+    }
+
+    [TestMethod]
     public void EncodeURI_preserves_reserved_but_component_encodes_them()
     {
         Eval("encodeURI('https://x.test/a b/c?x=1&y=2#h');").AsString.Should().Be("https://x.test/a%20b/c?x=1&y=2#h");

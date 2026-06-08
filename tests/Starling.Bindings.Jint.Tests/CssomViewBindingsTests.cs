@@ -1,6 +1,6 @@
 using AwesomeAssertions;
 using Jint;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Html;
 using Starling.Loop;
 using Starling.Spec;
@@ -28,7 +28,7 @@ public sealed class CssomViewBindingsTests
             document: doc,
             baseUrl: baseUrl,
             http: new Starling.Net.StarlingHttpClient(),
-            diag: NoopDiagnostics.Instance,
+            loggerFactory: NullLoggerFactory.Instance,
             loop: new WebEventLoop(),
             layoutHost: null,
             fetch: (_, _) => System.Threading.Tasks.Task.FromResult<string?>(null));

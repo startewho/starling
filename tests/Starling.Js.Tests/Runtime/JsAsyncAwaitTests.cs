@@ -33,6 +33,37 @@ public class JsAsyncAwaitTests
     }
 
     [TestMethod]
+    public void Await_resolves_primitive_value()
+    {
+        var (runtime, _) = Eval(@"
+            (async function() { return await '1'; })()
+                .then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("1");
+    }
+
+    [TestMethod]
+    public void Async_function_arguments_are_not_reused_between_functions()
+    {
+        var (runtime, _) = Eval(@"
+            async function method() {
+              return arguments[0] + ':' + String(arguments[1]);
+            }
+
+            async function other() {
+              return arguments[0] + ':' + String(arguments[1]);
+            }
+
+            method(42, undefined).then(function(v) { globalThis.a = v; });
+            other(10, undefined).then(function(v) { globalThis.b = v; });
+        ");
+
+        (runtime.GetGlobal("a").AsString + "|" + runtime.GetGlobal("b").AsString)
+            .Should().Be("42:undefined|10:undefined");
+    }
+
+    [TestMethod]
     public void Sequential_awaits_add_correctly()
     {
         var (runtime, _) = Eval(@"
@@ -57,6 +88,81 @@ public class JsAsyncAwaitTests
             f().then(function(v) { globalThis.r = v });
         ");
         runtime.GetGlobal("r").AsString.Should().Be("caught bad");
+    }
+
+    [TestMethod]
+    public void Await_inside_catch_preserves_binding_and_does_not_rerun_try()
+    {
+        var (runtime, _) = Eval(@"
+            async function f() {
+                var tries = 0;
+                try {
+                    tries++;
+                    await Promise.reject(42);
+                } catch (e) {
+                    await Promise.resolve();
+                    return tries + ':' + e;
+                }
+            }
+            f().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("1:42");
+    }
+
+    [TestMethod]
+    public void Catch_binding_does_not_leak_after_await_inside_catch()
+    {
+        var (runtime, _) = Eval(@"
+            async function f() {
+                try {
+                    throw 1;
+                } catch (e) {
+                    await Promise.resolve();
+                }
+
+                try {
+                    return e;
+                } catch (err) {
+                    return err.name;
+                }
+            }
+            f().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("ReferenceError");
+    }
+
+    [TestMethod]
+    public void Awaited_finally_preserves_catch_return_and_throw_completions()
+    {
+        var (runtime, _) = Eval(@"
+            async function returns() {
+                try {
+                    throw 1;
+                } catch {
+                    await Promise.resolve();
+                    return 2;
+                } finally {
+                    await Promise.resolve();
+                }
+            }
+            async function throws() {
+                try {
+                    throw 1;
+                } catch {
+                    await Promise.resolve();
+                    throw 4;
+                } finally {
+                    await Promise.resolve();
+                }
+            }
+            returns().then(function(v) { globalThis.returned = v; });
+            throws().catch(function(e) { globalThis.thrown = e; });
+        ");
+
+        runtime.GetGlobal("returned").AsNumber.Should().Be(2);
+        runtime.GetGlobal("thrown").AsNumber.Should().Be(4);
     }
 
     [TestMethod]
@@ -122,6 +228,75 @@ public class JsAsyncAwaitTests
             f().then(function(v) { globalThis.r = v });
         ");
         runtime.GetGlobal("r").AsString.Should().Be("ok");
+    }
+
+    [TestMethod]
+    public void Await_resume_does_not_reevaluate_control_flow_tests()
+    {
+        var (runtime, _) = Eval(@"
+            async function run() {
+                var tests = 0;
+                var whileTests = 0;
+                var switchTests = 0;
+                var ifResult = 0;
+                if (++tests === 1) {
+                    await Promise.resolve();
+                    ifResult = tests;
+                }
+                while (++whileTests <= 1) {
+                    await Promise.resolve();
+                    break;
+                }
+                switch (++switchTests) {
+                    case 1:
+                        await Promise.resolve();
+                        break;
+                    default:
+                        switchTests = 99;
+                }
+                return ifResult + ':' + whileTests + ':' + switchTests;
+            }
+            run().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("1:1:1");
+    }
+
+    [TestMethod]
+    public void Await_resume_preserves_expression_left_operands_and_call_arguments()
+    {
+        var (runtime, _) = Eval(@"
+            async function run() {
+                var d = 0;
+                var sum = (++d) + (await Promise.resolve(10));
+                var i = 0;
+                var foo = function(a, b, c) { return [a, b, c]; };
+                var call = foo(++i, ++i, await Promise.resolve(++i));
+                return JSON.stringify({ d: d, sum: sum, call: call, i: i });
+            }
+            run().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("{\"d\":1,\"sum\":11,\"call\":[1,2,3],\"i\":3}");
+    }
+
+    [TestMethod]
+    public void Await_resume_preserves_spread_iterators_and_literal_progress()
+    {
+        var (runtime, _) = Eval(@"
+            async function run() {
+                function* gen() { yield 'a'; yield 'b'; yield 'c'; }
+                var g = gen();
+                var arr = [...g, await Promise.resolve('d')];
+                var i = 0;
+                var obj = { a: ++i, b: ++i, c: await Promise.resolve(++i) };
+                var text = `${++i}-${await Promise.resolve('x')}-${++i}`;
+                return JSON.stringify({ arr: arr, obj: obj, text: text, i: i });
+            }
+            run().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("{\"arr\":[\"a\",\"b\",\"c\",\"d\"],\"obj\":{\"a\":1,\"b\":2,\"c\":3},\"text\":\"4-x-5\",\"i\":5}");
     }
 
     [TestMethod]

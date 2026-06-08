@@ -292,6 +292,48 @@ public class JsLogicalAssignmentTests
         Eval("var a; var b; a ??= b ??= 5; a + ',' + b").AsString.Should().Be("5,5");
     }
 
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators", "13.15.2")]
+    [SpecFact]
+    public void LogicalAssign_identifier_named_evaluation()
+    {
+        Eval(@"
+            var f; f ||= function(){};
+            var a = true; a &&= () => {};
+            var C = null; C ??= class {};
+            f.name + ',' + a.name + ',' + C.name;
+        ").AsString.Should().Be("f,a,C");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators", "13.15.2")]
+    [SpecFact]
+    public void LogicalAssign_member_named_evaluation()
+    {
+        Eval(@"
+            var o = {};
+            o.value ||= function(){};
+            o.arrow = true;
+            o.arrow &&= () => {};
+            o.klass = null;
+            o.klass ??= class {};
+            o.value.name + ',' + o.arrow.name + ',' + o.klass.name;
+        ").AsString.Should().Be("value,arrow,klass");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators", "13.15.2")]
+    [SpecFact]
+    public void LogicalAssign_computed_member_named_evaluation()
+    {
+        Eval(@"
+            var o = {};
+            o['value'] ||= function(){};
+            o['arrow'] = true;
+            o['arrow'] &&= () => {};
+            o['klass'] = null;
+            o['klass'] ??= class {};
+            o.value.name + ',' + o.arrow.name + ',' + o.klass.name;
+        ").AsString.Should().Be("value,arrow,klass");
+    }
+
     // -----------------------------------------------------------------
     //  Closure / upvalue target write-back
     // -----------------------------------------------------------------

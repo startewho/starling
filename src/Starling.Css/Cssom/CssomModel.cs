@@ -154,7 +154,27 @@ public sealed class CssomDeclarationBlock
     }
 
     private static string ComponentValuesToText(IReadOnlyList<CssComponentValue> values)
-        => string.Concat(values.Select(ComponentValueText));
+    {
+        // Top-level declaration values lose interior whitespace during parsing
+        // (the parser collapses whitespace for non-custom properties). Re-insert a
+        // single space between adjacent top-level component values so multi-token
+        // values such as `1px solid black` round-trip; Canonicalize then normalizes
+        // comma spacing. Whitespace inside functions/blocks is preserved verbatim.
+        var sb = new StringBuilder();
+        for (var i = 0; i < values.Count; i++)
+        {
+            var v = values[i];
+            if (v is CssTokenValue { Token.Type: Tokenizer.CssTokenType.Whitespace })
+            {
+                sb.Append(' ');
+                continue;
+            }
+            if (sb.Length > 0 && sb[^1] != ' ')
+                sb.Append(' ');
+            sb.Append(ComponentValueText(v));
+        }
+        return sb.ToString();
+    }
 
     private static string ComponentValueText(CssComponentValue value) => value switch
     {
@@ -273,6 +293,7 @@ public sealed class CssomStyleRule
 public sealed class CssomStyleSheet
 {
     private readonly List<CssomStyleRule?> _rules = new();
+    private readonly List<string?> _atRuleNames = new();
 
     public CssomStyleSheet(StyleSheet parsed)
     {
@@ -284,18 +305,28 @@ public sealed class CssomStyleSheet
                 var selectorText = SerializeSelectorPrelude(sr.Prelude);
                 var block = new CssomDeclarationBlock(sr.Declarations);
                 _rules.Add(new CssomStyleRule(selectorText, block));
+                _atRuleNames.Add(null);
             }
             else
             {
                 // At-rule etc. — kept as a placeholder so cssRules indices match
-                // the parsed rule order. Not exposed as a CSSStyleRule.
+                // the parsed rule order. Not exposed as a CSSStyleRule, but we keep
+                // the at-rule keyword (e.g. "media", "page") so the binding can
+                // report the correct CSSRule.type (CSSOM §6.4 the CSSRule interface).
                 _rules.Add(null);
+                _atRuleNames.Add(rule is AtRule at ? at.Name?.ToLowerInvariant() : null);
             }
         }
     }
 
     /// <summary>The style rules, including null placeholders for non-style rules.</summary>
     public IReadOnlyList<CssomStyleRule?> Rules => _rules;
+
+    /// <summary>The lowercased at-rule keyword at <paramref name="index"/> when the
+    /// rule there is a non-style at-rule (e.g. "media", "page", "font-face",
+    /// "namespace", "import", "keyframes", "supports"); otherwise null.</summary>
+    public string? AtRuleNameAt(int index) =>
+        index >= 0 && index < _atRuleNames.Count ? _atRuleNames[index] : null;
 
     private static string SerializeSelectorPrelude(IReadOnlyList<CssComponentValue> prelude)
     {

@@ -2,7 +2,8 @@ using System.Collections.Concurrent;
 using Jint;
 using Jint.Native;
 using Jint.Runtime;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Js.Hosting;
 using Starling.Loop;
@@ -30,6 +31,9 @@ internal sealed class JintScriptSession : IScriptSession
     private readonly WebEventLoop _loop;
     private readonly JintDynamicScriptRunner _dynamicRunner;
     private readonly StarlingJintModuleLoader _moduleLoader;
+    // Dedicated logger for JS page console.* output. Category must stay exactly
+    // "Starling.engine.js" — the in-memory DevTools sink and MCP query tool filter on it.
+    private readonly ILogger _jsConsoleLog;
     private bool _disposed;
 
     // Live-phase (post-load) wall-clock baseline: the simulated-clock value at
@@ -82,7 +86,7 @@ internal sealed class JintScriptSession : IScriptSession
             document: options.Document,
             baseUrl: options.BaseUrl,
             http: options.Http,
-            diag: options.Diag,
+            loggerFactory: options.LoggerFactory,
             loop: _loop,
             layoutHost: options.LayoutHost,
             fetch: options.Fetcher.Invoke)
@@ -90,6 +94,9 @@ internal sealed class JintScriptSession : IScriptSession
             ViewportWidth = options.ViewportWidth,
             ViewportHeight = options.ViewportHeight,
         };
+
+        _jsConsoleLog = (options.LoggerFactory ?? NullLoggerFactory.Instance)
+            .CreateLogger("Starling.engine.js");
 
         // Install the cross-thread "post to JS thread" hook BEFORE the binding
         // families so fetch/XHR/dynamic-script work can capture it. Calls are
@@ -100,7 +107,7 @@ internal sealed class JintScriptSession : IScriptSession
         // through the session's fetch delegate and runs on the JS thread via the
         // post queue.
         _dynamicRunner = new JintDynamicScriptRunner(
-            options.Diag, options.BaseUrl,
+            options.LoggerFactory ?? NullLoggerFactory.Instance, options.BaseUrl,
             (url, token) => options.Fetcher(url, token),
             RunClassicScript, Post);
 
@@ -233,6 +240,8 @@ internal sealed class JintScriptSession : IScriptSession
         && !_dynamicRunner.HasPending
         && _loop.PendingAnimationFrameCount > 0;
 
+    public bool HasPendingHostAsyncWork => false;
+
     /// <summary>Drain every callback the post queue holds <i>now</i>, on the JS
     /// thread. A drained callback may enqueue further work; that lands on a later
     /// PumpOnce. Returns true if any callback ran.</summary>
@@ -252,7 +261,7 @@ internal sealed class JintScriptSession : IScriptSession
             }
             catch (Exception ex)
             {
-                _ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Posted callback threw: {ex.Message}");
+                JintScriptSessionLog.PostedCallbackThrew(_jsConsoleLog, ex.Message);
             }
         }
         return ran;
@@ -284,7 +293,7 @@ internal sealed class JintScriptSession : IScriptSession
         }
         catch (ScriptThrow ex)
         {
-            _ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Injected script error: {ex.Message}");
+            JintScriptSessionLog.InjectedScriptError(_jsConsoleLog, ex.Message);
         }
     }
 
@@ -314,7 +323,7 @@ internal sealed class JintScriptSession : IScriptSession
         }
         catch (Exception ex)
         {
-            _ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"Event '{evt.Type}' handler threw: {ex.Message}");
+            JintScriptSessionLog.EventHandlerThrew(_jsConsoleLog, evt.Type, ex.Message);
         }
         return _ctx.Document.MutationVersion != before;
     }
@@ -381,7 +390,7 @@ internal sealed class JintScriptSession : IScriptSession
         }
         catch (Exception ex)
         {
-            _ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"'{type}' handler threw: {ex.Message}");
+            JintScriptSessionLog.DocumentEventHandlerThrew(_jsConsoleLog, type, ex.Message);
         }
     }
 
@@ -402,7 +411,7 @@ internal sealed class JintScriptSession : IScriptSession
         }
         catch (Exception ex)
         {
-            _ctx.Diag.Log(DiagLevel.Warn, "engine.js", $"'{type}' handler threw: {ex.Message}");
+            JintScriptSessionLog.DocumentEventHandlerThrew(_jsConsoleLog, type, ex.Message);
         }
     }
 
@@ -450,4 +459,19 @@ public sealed class JintScriptEngineFactory : IScriptEngineFactory
 
     public IScriptSession CreateSession(ScriptSessionOptions options)
         => new JintScriptSession(options);
+}
+
+internal static partial class JintScriptSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Posted callback threw: {Message}")]
+    public static partial void PostedCallbackThrew(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Injected script error: {Message}")]
+    public static partial void InjectedScriptError(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Event '{EventType}' handler threw: {Message}")]
+    public static partial void EventHandlerThrew(ILogger logger, string eventType, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "'{EventType}' handler threw: {Message}")]
+    public static partial void DocumentEventHandlerThrew(ILogger logger, string eventType, string message);
 }

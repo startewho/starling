@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -38,8 +40,11 @@ internal sealed class StarlingScriptSession : IScriptSession
     private readonly Document _document;
     private readonly StarlingUrl _baseUrl;
     private readonly ScriptFetcherDelegate _fetcher;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly StarlingDynamicScriptRunner _dynamicRunner;
+    private readonly StarlingModuleHost _moduleHost;
+    private readonly ModuleLoader _moduleLoader;
     private bool _disposed;
 
     // Live-phase (post-load) wall-clock baseline: the simulated-clock value at
@@ -56,7 +61,8 @@ internal sealed class StarlingScriptSession : IScriptSession
         _document = options.Document;
         _baseUrl = options.BaseUrl;
         _fetcher = options.Fetcher;
-        _diag = options.Diag;
+        _loggerFactory = options.LoggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<StarlingScriptSession>();
         _loop = new WebEventLoop();
 
         _runtime = new JsRuntime();
@@ -94,9 +100,12 @@ internal sealed class StarlingScriptSession : IScriptSession
         // the NodeConnected hook so the hook can route script-inserted async /
         // external scripts to it.
         _dynamicRunner = new StarlingDynamicScriptRunner(
-            _diag, _runtime, _baseUrl,
+            _loggerFactory, _runtime, _baseUrl,
             (url, token) => _fetcher(url, token));
         ScriptSrcHook.Register(_runtime.Realm, _dynamicRunner.OnSrcSet);
+
+        _moduleHost = new StarlingModuleHost(_baseUrl, (url, token) => _fetcher(url, token), options.AbortToken);
+        _moduleLoader = new ModuleLoader(_runtime, _moduleHost);
     }
 
     public Action<ConsoleLevel, string> ConsoleSink
@@ -113,7 +122,7 @@ internal sealed class StarlingScriptSession : IScriptSession
         // Per-script span so `STARLING_DIAG_TRACE=1` reveals which inline tag
         // or external URL is responsible for the run_scripts wall time. The
         // label is the source url (or "<inline>") set by the engine.
-        using var _ = _diag.Span("js", $"run {label} ({source.Length} chars)");
+        using var _ = StarlingTelemetry.Span("js", $"run {label} ({source.Length} chars)");
         // STARLING_DIAG_DUMP_SCRIPTS=<dir> writes every classic script to that
         // directory so the source of a slow inline can be inspected without
         // re-fetching the page. Numbered so order matches the trace stream.
@@ -128,145 +137,24 @@ internal sealed class StarlingScriptSession : IScriptSession
                     System.IO.Path.Combine(dumpDir, $"script-{seq:D3}.js"),
                     "// label: " + label + "\n" + source);
             }
-            catch (IOException) { /* dumping is best-effort */ }
+            catch (IOException ex)
+            {
+                // dumping is best-effort
+                StarlingScriptSessionLog.ScriptDumpFailed(_log, ex, dumpDir);
+            }
         }
         try
         {
             Starling.Js.Bytecode.Chunk chunk;
-            using (_diag.Span("js", "parse+compile"))
+            using (StarlingTelemetry.Span("js", "parse+compile"))
             {
                 var program = new JsParser(source).ParseProgram();
-                chunk = JsCompiler.Compile(program);
+                chunk = JsCompiler.Compile(program, label);
             }
-            var boxesBefore = _runtime.Realm.StringBoxCount;
-            var boxCharsBefore = _runtime.Realm.StringBoxCharsTotal;
-            var boxBucketsBefore = new long[Starling.Js.Runtime.JsRealm.BoxBucketCount];
-            for (var i = 0; i < boxBucketsBefore.Length; i++)
-                boxBucketsBefore[i] = _runtime.Realm.StringBoxSizeBuckets[i];
-            var nativeStatsBefore = new System.Collections.Generic.Dictionary<string, (long Count, long Ticks)>();
-            foreach (var kv in Starling.Js.Runtime.AbstractOperations.NativeCallStats)
-                nativeStatsBefore[kv.Key] = kv.Value;
-            var nativeSelfBefore = new System.Collections.Generic.Dictionary<string, long>();
-            foreach (var kv in Starling.Js.Runtime.AbstractOperations.NativeCallSelfTicks)
-                nativeSelfBefore[kv.Key] = kv.Value;
-            var outliersBefore = Starling.Js.Runtime.AbstractOperations.NativeCallOutliers.Count;
             var vm = new JsVm(_runtime);
-            try
+            using (StarlingTelemetry.Span("js", "execute"))
             {
-                using (_diag.Span("js", "execute"))
-                {
-                    vm.Run(chunk);
-                }
-            }
-            finally
-            {
-                // Log per-script counters even if execution threw — partial
-                // bytecode mix on a script that throws halfway is still useful.
-                var boxes = _runtime.Realm.StringBoxCount - boxesBefore;
-                var boxChars = _runtime.Realm.StringBoxCharsTotal - boxCharsBefore;
-                if (boxes > 0)
-                {
-                    _diag.Log(DiagLevel.Trace, "js",
-                        $"  boxed strings: {boxes} ({boxChars} chars total, avg {boxChars / boxes})");
-                    // Histogram disambiguates the avg: with the lazy
-                    // JsStringObject the box itself is O(1) regardless of
-                    // length, but a hot loop hitting one massive source string
-                    // with .charCodeAt/.match still re-boxes per call. The
-                    // bucket spread tells us "one fat string, many touches"
-                    // vs "many medium strings."
-                    var buckets = new System.Text.StringBuilder();
-                    var bucketTotal = 0L;
-                    for (var i = 0; i < Starling.Js.Runtime.JsRealm.BoxBucketCount; i++)
-                    {
-                        var d = _runtime.Realm.StringBoxSizeBuckets[i] - boxBucketsBefore[i];
-                        if (d == 0) continue;
-                        if (buckets.Length > 0) buckets.Append(", ");
-                        buckets.Append($"{Starling.Js.Runtime.JsRealm.BoxBucketLabels[i]}={d}");
-                        bucketTotal += d;
-                    }
-                    if (bucketTotal > 0)
-                        _diag.Log(DiagLevel.Trace, "js", $"    box sizes: {buckets}");
-                }
-                long totalOps = 0;
-                for (var i = 0; i < vm.OpcodeCounts.Length; i++) totalOps += vm.OpcodeCounts[i];
-                if (totalOps > 0)
-                {
-                    var top = new (string Name, long Count)[vm.OpcodeCounts.Length];
-                    for (var i = 0; i < vm.OpcodeCounts.Length; i++)
-                        top[i] = (((Starling.Js.Bytecode.Opcode)i).ToString(), vm.OpcodeCounts[i]);
-                    Array.Sort(top, (a, b) => b.Count.CompareTo(a.Count));
-                    var topStrs = new System.Text.StringBuilder();
-                    for (var i = 0; i < 5 && top[i].Count > 0; i++)
-                    {
-                        if (i > 0) topStrs.Append(", ");
-                        topStrs.Append($"{top[i].Name}={top[i].Count}");
-                    }
-                    _diag.Log(DiagLevel.Trace, "js", $"  bytecode: {totalOps} ops; top5: {topStrs}");
-                }
-                // Native-intrinsic time per script: subtract pre-snapshot from
-                // current, report any function that took > 1 ms total during
-                // this execute. Tells us which DOM/binding intrinsic a slow
-                // script actually spends its wall time in. Self ticks =
-                // inclusive minus time charged to nested CallNative frames,
-                // so a high-inclusive / low-self dispatcher (call/apply/
-                // forEach) is clearly attributable to its inner work, not
-                // its own body.
-                var deltas = new System.Collections.Generic.List<(string Name, long Count, long Incl, long Self)>();
-                foreach (var kv in Starling.Js.Runtime.AbstractOperations.NativeCallStats)
-                {
-                    (long Count, long Ticks) prev = nativeStatsBefore.TryGetValue(kv.Key, out var p) ? p : (0L, 0L);
-                    var dc = kv.Value.Count - prev.Count;
-                    var dt = kv.Value.Ticks - prev.Ticks;
-                    if (dc <= 0) continue;
-                    var selfPrev = nativeSelfBefore.TryGetValue(kv.Key, out var sp) ? sp : 0L;
-                    var selfNow = Starling.Js.Runtime.AbstractOperations.NativeCallSelfTicks
-                        .TryGetValue(kv.Key, out var sn) ? sn : 0L;
-                    deltas.Add((kv.Key, dc, dt, selfNow - selfPrev));
-                }
-                deltas.Sort((a, b) => b.Incl.CompareTo(a.Incl));
-                var ticksPerMs = System.Diagnostics.Stopwatch.Frequency / 1000.0;
-                var hot = new System.Text.StringBuilder();
-                int shown = 0;
-                foreach (var (n, c, incl, self) in deltas)
-                {
-                    var inclMs = incl / ticksPerMs;
-                    if (inclMs < 1.0) break;
-                    var selfMs = self / ticksPerMs;
-                    if (shown++ > 0) hot.Append(", ");
-                    // Format: name=incl/self ms/calls. When incl≈self the
-                    // function's own body is the cost; when incl>>self it
-                    // was a dispatcher.
-                    hot.Append($"{n}={inclMs:F0}/{selfMs:F0}ms/{c}");
-                    if (shown >= 8) break;
-                }
-                if (hot.Length > 0)
-                    _diag.Log(DiagLevel.Trace, "js", $"  native: {hot} (incl/self ms/calls)");
-
-                // Single-call outliers — any individual CallNative invocation
-                // that crossed the threshold. Pulls every entry the script
-                // added since the snapshot index; reports the top-N by ticks.
-                var outliers = new System.Collections.Generic.List<(string Name, long Ticks)>();
-                {
-                    var snapshot = Starling.Js.Runtime.AbstractOperations.NativeCallOutliers.ToArray();
-                    var addedSince = Math.Max(0, snapshot.Length - outliersBefore);
-                    // The queue may have been trimmed FIFO since the snapshot —
-                    // any tail entries newer than the index count.
-                    for (var i = snapshot.Length - addedSince; i < snapshot.Length; i++)
-                        outliers.Add(snapshot[i]);
-                }
-                if (outliers.Count > 0)
-                {
-                    outliers.Sort((a, b) => b.Ticks.CompareTo(a.Ticks));
-                    var ob = new System.Text.StringBuilder();
-                    var top = Math.Min(outliers.Count, 5);
-                    for (var i = 0; i < top; i++)
-                    {
-                        if (i > 0) ob.Append(", ");
-                        ob.Append($"{outliers[i].Name}={outliers[i].Ticks / ticksPerMs:F0}ms");
-                    }
-                    _diag.Log(DiagLevel.Trace, "js",
-                        $"  native outliers (>5ms each, top {top} of {outliers.Count}): {ob}");
-                }
+                vm.Run(chunk);
             }
         }
         catch (JsThrow ex)
@@ -281,9 +169,6 @@ internal sealed class StarlingScriptSession : IScriptSession
         ArgumentNullException.ThrowIfNull(source);
         ct.ThrowIfCancellationRequested();
 
-        var host = new StarlingModuleHost(_baseUrl, (u, token) => _fetcher(u, token), ct);
-        var loader = new ModuleLoader(_runtime, host);
-
         // Entry modules with a real URL load from that URL; an inline module
         // (url == baseUrl with source provided) is registered under a synthetic
         // key so its imports resolve against the document base.
@@ -296,13 +181,13 @@ internal sealed class StarlingScriptSession : IScriptSession
             {
                 if (isInline)
                 {
-                    var key = host.RegisterInlineModule(source);
-                    loader.LoadAndEvaluate(key);
+                    var key = _moduleHost.RegisterInlineModule(source);
+                    _moduleLoader.LoadAndEvaluate(key);
                 }
                 else
                 {
-                    host.PrimeSource(url.ToString(), source);
-                    loader.LoadAndEvaluate(url.ToString());
+                    _moduleHost.PrimeSource(url.ToString(), source);
+                    _moduleLoader.LoadAndEvaluate(url.ToString());
                 }
             }
             catch (JsThrow ex)
@@ -369,7 +254,10 @@ internal sealed class StarlingScriptSession : IScriptSession
         _runtime.Realm.Microtasks.PendingCount == 0
         && _loop.PendingTimerCount == 0
         && !_dynamicRunner.HasPending
+        && !HasPendingHostAsyncWork
         && _loop.PendingAnimationFrameCount > 0;
+
+    public bool HasPendingHostAsyncWork => FetchBinding.HasPendingFetches(_runtime);
 
     public void OnScriptElementConnected(Node scriptEl)
     {
@@ -397,8 +285,8 @@ internal sealed class StarlingScriptSession : IScriptSession
         }
         catch (ScriptThrow ex)
         {
-            _diag.Counter("engine.script.failed", 1);
-            _diag.Log(DiagLevel.Warn, "engine.js", $"Injected script error ({label}): {ex.Message}");
+            StarlingTelemetry.Counter("engine.script.failed", 1);
+            StarlingScriptSessionLog.InjectedScriptError(_log, ex, label);
         }
     }
 
@@ -475,7 +363,11 @@ internal sealed class StarlingScriptSession : IScriptSession
                     return string.IsNullOrEmpty(m) ? n : $"{n}: {m}";
                 }
             }
-            catch { /* fall through to generic stringification */ }
+            catch (Exception ex)
+            {
+                // fall through to generic stringification
+                StarlingScriptSessionLog.DescribeThrowFailed(NullLogger<StarlingScriptSession>.Instance, ex);
+            }
         }
         return JsValue.ToStringValue(v);
     }
@@ -505,4 +397,16 @@ public sealed class StarlingScriptEngineFactory : IScriptEngineFactory
 
     public IScriptSession CreateSession(ScriptSessionOptions options)
         => new StarlingScriptSession(options);
+}
+
+internal static partial class StarlingScriptSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "script dump to '{DumpDir}' failed (best-effort, ignored)")]
+    public static partial void ScriptDumpFailed(ILogger logger, Exception ex, string dumpDir);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "injected script error in {Label}")]
+    public static partial void InjectedScriptError(ILogger logger, Exception ex, string label);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "failed to extract name/message from thrown JS object (falling back to ToString)")]
+    public static partial void DescribeThrowFailed(ILogger logger, Exception ex);
 }

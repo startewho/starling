@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AngleSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Starling.Html\Starling.Html.csproj" />
+    <ProjectReference Include="..\Starling.Dom\Starling.Dom.csproj" />
+  </ItemGroup>
+</Project>

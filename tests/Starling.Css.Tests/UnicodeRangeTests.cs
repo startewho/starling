@@ -26,6 +26,35 @@ public sealed class UnicodeRangeTests
     }
 
     [TestMethod]
+    public void Parses_google_fonts_latin_subset_range()
+    {
+        // Regression: the range separator '-' in "U+0000-00FF" was swallowed
+        // when the end value carries hex letters — "-00FF" tokenizes as a
+        // Dimension whose number rounds to -0, which stringified as "0",
+        // dropping the '-'. The whole range collapsed to the single codepoint
+        // U+00FF, so Basic Latin (incl. 'A') was excluded and every Google
+        // Fonts subset face got dropped → web fonts silently fell back to serif.
+        // This is the exact unicode-range Google serves for Inter's latin subset.
+        var sheet = CssParser.ParseStyleSheet("""
+            @font-face {
+                font-family: "Inter";
+                src: url("inter-latin.woff2");
+                unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2122;
+            }
+            """);
+        var rule = FontFaceParser.ParseAll(sheet).Should().ContainSingle().Subject;
+        var r = rule.UnicodeRange!;
+        r.Contains('A').Should().BeTrue("Basic Latin (U+0000-00FF) must survive parsing");
+        r.Contains(0x00).Should().BeTrue();
+        r.Contains(0xFF).Should().BeTrue();
+        r.Contains(0x0131).Should().BeTrue();   // ı
+        r.Contains(0x0152).Should().BeTrue();   // Œ
+        r.Contains(0x0153).Should().BeTrue();   // œ
+        r.Contains(0x2122).Should().BeTrue();   // ™
+        r.Contains(0x0100).Should().BeFalse();  // outside the declared ranges
+    }
+
+    [TestMethod]
     public void Parses_range_list()
     {
         var sheet = CssParser.ParseStyleSheet("""

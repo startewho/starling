@@ -1,5 +1,5 @@
 using AwesomeAssertions;
-using SixLabors.ImageSharp;
+using Starling.Css.Values;
 using Starling.Common.Image;
 using Starling.Paint.Svg;
 using Starling.Spec;
@@ -110,7 +110,7 @@ public sealed class SvgImageDecoderTests
         using var img = SvgImageDecoder.DecodeText(
             "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' " +
             "fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='8'/></svg>",
-            currentColor: Color.FromPixel(new SixLabors.ImageSharp.PixelFormats.Rgba32(0, 128, 255, 255)));
+            currentColor: CssColor.FromSrgb(0 / 255.0, 128 / 255.0, 255 / 255.0, 1.0));
 
         // The ring is drawn in the supplied blue, not the default black.
         CountWhere(img, p => p.A > 0 && p.B > 150 && p.R < 80).Should().BeGreaterThan(0);
@@ -161,7 +161,7 @@ public sealed class SvgImageDecoderTests
         // currentColor resolves to the supplied color (cyan-ish).
         using var cur = SvgImageDecoder.DecodeText(
             "<svg width='10' height='10' viewBox='0 0 10 10'><rect width='10' height='10' fill='currentColor'/></svg>",
-            currentColor: Color.FromPixel(new SixLabors.ImageSharp.PixelFormats.Rgba32(0, 200, 200, 255)));
+            currentColor: CssColor.FromSrgb(0 / 255.0, 200 / 255.0, 200 / 255.0, 1.0));
         var px = PixelAt(cur, 5, 5);
         px.G.Should().BeGreaterThan(150);
         px.B.Should().BeGreaterThan(150);
@@ -337,5 +337,71 @@ public sealed class SvgImageDecoderTests
             "<svg width='8' height='5' viewBox='0 0 8 5'><rect width='8' height='5' fill='red'/></svg>");
         // Invariant: length == width*height*4, no row padding.
         img.Pixels.Length.Should().Be(8 * 5 * 4);
+    }
+
+    // --- <pattern> paint servers + percentage geometry ----------------------
+
+    [Spec("svg11", SvgUrl, section: "pservers.html#Patterns")]
+    [SpecFact]
+    public void Rect_width_height_percent_resolves_against_viewport()
+    {
+        // `width='100%'` must fill the 40x40 viewport, not collapse to 0.
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='40' height='40' viewBox='0 0 40 40'>" +
+            "<rect width='100%' height='100%' fill='red'/></svg>");
+        PixelAt(img, 2, 2).R.Should().BeGreaterThan(200);
+        PixelAt(img, 38, 38).R.Should().BeGreaterThan(200);
+    }
+
+    [Spec("svg11", SvgUrl, section: "pservers.html#Patterns")]
+    [SpecFact]
+    public void Pattern_fill_tiles_across_the_shape()
+    {
+        // A 20x20 tile with a red square in its top-left 10x10 quadrant, tiled
+        // (userSpaceOnUse) across a 40x40 rect → red in each tile's top-left
+        // quadrant, transparent in the rest. Proves both reference resolution
+        // and tiling beyond the first tile.
+        const string Svg =
+            "<svg width='40' height='40' viewBox='0 0 40 40'>" +
+            "<defs><pattern id='p' patternUnits='userSpaceOnUse' width='20' height='20'>" +
+            "<rect x='0' y='0' width='10' height='10' fill='red'/></pattern></defs>" +
+            "<rect width='100%' height='100%' fill='url(#p)'/></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+
+        // First tile (0..20): red in 0..10, clear in 10..20.
+        PixelAt(img, 5, 5).R.Should().BeGreaterThan(200);
+        PixelAt(img, 5, 5).A.Should().BeGreaterThan(200);
+        PixelAt(img, 15, 15).A.Should().Be(0);
+        // Second tile (20..40): the pattern repeated → red again at 25,25.
+        PixelAt(img, 25, 25).R.Should().BeGreaterThan(200);
+        PixelAt(img, 35, 35).A.Should().Be(0);
+    }
+
+    [Spec("svg11", SvgUrl, section: "pservers.html#Patterns")]
+    [SpecFact]
+    public void Pattern_with_unresolved_reference_paints_nothing()
+    {
+        // fill="url(#missing)" with no such paint server → no fill (not black).
+        using var img = SvgImageDecoder.DecodeText(
+            "<svg width='20' height='20' viewBox='0 0 20 20'>" +
+            "<rect width='100%' height='100%' fill='url(#missing)'/></svg>");
+        AnyNonTransparent(img).Should().BeFalse();
+    }
+
+    [Spec("svg11", SvgUrl, section: "pservers.html#Patterns")]
+    [SpecFact]
+    public void Pattern_renders_stroked_content()
+    {
+        // The angular.dev-style mask: a rotated stroked line inside the tile.
+        // It must produce visible (non-transparent) pixels.
+        const string Svg =
+            "<svg width='72' height='72' viewBox='0 0 72 72'>" +
+            "<defs><pattern id='p' patternUnits='userSpaceOnUse' width='72' height='72'>" +
+            "<g transform='translate(36 36) rotate(-60)'>" +
+            "<line x1='-10' y1='0' x2='10' y2='0' stroke='black' stroke-width='3' stroke-linecap='round'/>" +
+            "</g></pattern></defs>" +
+            "<rect width='100%' height='100%' fill='url(#p)'/></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+        AnyNonTransparent(img).Should().BeTrue("the rotated line in the pattern tile must paint");
     }
 }

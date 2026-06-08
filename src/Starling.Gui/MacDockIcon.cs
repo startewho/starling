@@ -2,8 +2,16 @@
 
 using System.Runtime.InteropServices;
 using Avalonia.Platform;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Starling.Gui;
+
+internal static partial class MacDockIconLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "macOS Dock icon setup failed")]
+    public static partial void SetupFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// Sets the macOS Dock icon for project launches that do not run from a .app
@@ -13,8 +21,16 @@ internal static class MacDockIcon
 {
     private static readonly Uri IconUri = new("avares://Starling.Gui/Assets/icon_1024.png");
 
-    public static void Apply()
+    // Static class — logger sourced from NullLoggerFactory at startup; the host
+    // integrator may replace it by calling Apply(ILoggerFactory) before startup.
+    private static ILogger _log =
+        NullLoggerFactory.Instance.CreateLogger(typeof(MacDockIcon));
+
+    public static void Apply(ILoggerFactory? loggerFactory = null)
     {
+        if (loggerFactory is not null)
+            _log = loggerFactory.CreateLogger(typeof(MacDockIcon));
+
         if (!OperatingSystem.IsMacOS())
             return;
 
@@ -62,9 +78,10 @@ internal static class MacDockIcon
                 pinned.Free();
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Best effort only. A Dock icon failure must not block startup.
+            MacDockIconLog.SetupFailed(_log, ex);
         }
     }
 

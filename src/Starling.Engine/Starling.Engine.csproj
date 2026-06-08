@@ -10,6 +10,11 @@
     <InternalsVisibleTo Include="Starling.Gui" />
   </ItemGroup>
   <ItemGroup>
+    <!-- AddStarlingEngine(IServiceCollection) registers the engine's shared
+         services (Painter, StarlingEngine, BrowserSession) for hosts that use DI. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Pure-managed legacy single-byte / CJK encodings (Rule-0 clean).
          NU1510: .NET 10 ships an in-box copy of this assembly, but the
          encoding provider must still be registered explicitly at startup
@@ -22,6 +27,10 @@
     <ProjectReference Include="..\Starling.Url\Starling.Url.csproj" />
     <ProjectReference Include="..\Starling.Net\Starling.Net.csproj" />
     <ProjectReference Include="..\Starling.Html\Starling.Html.csproj" />
+    <!-- Opt-in AngleSharp HTML-parser backend (STARLING_HTML_PARSER=anglesharp).
+         The engine is the only project that references it; HtmlBackendSelector
+         installs it. Remove this line + the selector arm to delete AngleSharp. -->
+    <ProjectReference Include="..\Starling.Html.AngleSharp\Starling.Html.AngleSharp.csproj" />
     <ProjectReference Include="..\Starling.Dom\Starling.Dom.csproj" />
     <ProjectReference Include="..\Starling.Css\Starling.Css.csproj" />
     <ProjectReference Include="..\Starling.Layout\Starling.Layout.csproj" />
@@ -30,5 +39,9 @@
     <ProjectReference Include="..\Starling.Bindings.Jint\Starling.Bindings.Jint.csproj" />
     <ProjectReference Include="..\Starling.Js\Starling.Js.csproj" />
     <ProjectReference Include="..\Starling.Js.Hosting\Starling.Js.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->
+    <InternalsVisibleTo Include="Starling.Shell.Native" />
   </ItemGroup>
 </Project>

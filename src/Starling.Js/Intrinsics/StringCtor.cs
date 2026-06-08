@@ -96,6 +96,10 @@ public static class StringCtor
             new IntrinsicHelpers.BulkMember("toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
             new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
         });
+        stringProto.DefineOwnProperty("trimLeft",
+            PropertyDescriptor.BuiltinMethod(stringProto.Get("trimStart")));
+        stringProto.DefineOwnProperty("trimRight",
+            PropertyDescriptor.BuiltinMethod(stringProto.Get("trimEnd")));
 
         // §22.1.3.34 String.prototype[@@iterator] — walks the string by
         // Unicode code points (not UTF-16 code units), e.g.

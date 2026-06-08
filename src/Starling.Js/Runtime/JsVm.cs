@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Js.Bytecode;
 using Starling.Js.Intrinsics;
 using Starling.RegExp;
@@ -26,6 +28,7 @@ namespace Starling.Js.Runtime;
 public sealed class JsVm
 {
     private readonly JsRuntime _runtime;
+    private readonly ILogger _log;
     private const int MaxStack = 1024;
 
     /// <summary>Maximum nested JS call depth before a <c>RangeError</c> is
@@ -68,17 +71,13 @@ public sealed class JsVm
         if (pool.Count < ArgPoolDepth) pool.Push(args);
     }
 
-    public JsVm(JsRuntime runtime)
+    private static string NullishLabel(JsValue value) => value.IsNull ? "null" : "undefined";
+
+    public JsVm(JsRuntime runtime, ILogger<JsVm>? log = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _log = log ?? NullLogger<JsVm>.Instance;
     }
-
-    /// <summary>Per-opcode dispatch counts for this VM. Indexed by
-    /// <see cref="Opcode"/> byte value. Incremented once per dispatched
-    /// instruction inside <see cref="RunInner"/>; surfaced by the script
-    /// session's <c>js: execute</c> trace span so we can see which ops a slow
-    /// script burns time on without rebuilding the interpreter.</summary>
-    public readonly long[] OpcodeCounts = new long[256];
 
     /// <summary>The realm this VM dispatches against.</summary>
     public JsRealm Realm => _runtime.Realm;
@@ -642,7 +641,6 @@ public sealed class JsVm
             try
             {
                 var op = (Opcode)code[ip++];
-                OpcodeCounts[(byte)op]++;
                 switch (op)
                 {
                     case Opcode.Halt:
@@ -1192,14 +1190,26 @@ public sealed class JsVm
                         }
 
                     // ----- Comparison -----
-                    case Opcode.Eq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(JsValue.AbstractEquals(a, b))); break; }
-                    case Opcode.NEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(!JsValue.AbstractEquals(a, b))); break; }
+                    case Opcode.Eq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(AbstractEquals(a, b))); break; }
+                    case Opcode.NEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(!AbstractEquals(a, b))); break; }
                     case Opcode.StrictEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(JsValue.StrictEquals(a, b))); break; }
                     case Opcode.StrictNEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(!JsValue.StrictEquals(a, b))); break; }
-                    case Opcode.Lt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(a, b))); break; }
-                    case Opcode.LtEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(a, b) || JsValue.AbstractEquals(a, b))); break; }
-                    case Opcode.Gt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(b, a))); break; }
-                    case Opcode.GtEq: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(LessThan(b, a) || JsValue.AbstractEquals(a, b))); break; }
+                    case Opcode.Lt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(RelationalLessThan(a, b, leftFirst: true) == true)); break; }
+                    case Opcode.LtEq:
+                        {
+                            var b = Pop(); var a = Pop();
+                            var r = RelationalLessThan(b, a, leftFirst: false);
+                            Push(JsValue.Boolean(r == false));
+                            break;
+                        }
+                    case Opcode.Gt: { var b = Pop(); var a = Pop(); Push(JsValue.Boolean(RelationalLessThan(b, a, leftFirst: false) == true)); break; }
+                    case Opcode.GtEq:
+                        {
+                            var b = Pop(); var a = Pop();
+                            var r = RelationalLessThan(a, b, leftFirst: true);
+                            Push(JsValue.Boolean(r == false));
+                            break;
+                        }
 
                     // ----- Logical / typeof -----
                     case Opcode.Not: Push(JsValue.Boolean(!JsValue.ToBoolean(Pop()))); break;
@@ -1270,7 +1280,8 @@ public sealed class JsVm
                                 break;
                             }
                             if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
-                            else Push(JsValue.Undefined);
+                            else throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot read properties of " + NullishLabel(obj) + " (reading '" + name + "')"));
                             break;
                         }
                     case Opcode.StoreProperty:
@@ -1340,11 +1351,11 @@ public sealed class JsVm
                                     throw new JsThrow(_runtime.Realm.NewTypeError(
                                         "Cannot assign to read-only property '" + name + "'"));
                             }
-                            else if (frameStrict && obj.IsNullish)
+                            else if (obj.IsNullish)
                             {
                                 // §13.15.2 PutValue on a nullish base is always a TypeError.
                                 throw new JsThrow(_runtime.Realm.NewTypeError(
-                                    "Cannot set property '" + name + "' of " + JsValue.ToStringValue(obj)));
+                                    "Cannot set property '" + name + "' of " + NullishLabel(obj)));
                             }
                             Push(value);
                             break;
@@ -1356,7 +1367,8 @@ public sealed class JsVm
                             var propertyKey = AbstractOperations.ToPropertyKey(this, key);
                             if (obj.IsObject) Push(AbstractOperations.Get(this, obj.AsObject, propertyKey));
                             else if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), propertyKey, obj));
-                            else Push(JsValue.Undefined);
+                            else throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot read properties of " + NullishLabel(obj) + " (reading '" + propertyKey + "')"));
                             break;
                         }
                     case Opcode.ResolveComputedKey:
@@ -1381,9 +1393,12 @@ public sealed class JsVm
                             var value = Pop();
                             var key = Pop();
                             var obj = Pop();
+                            var pk = AbstractOperations.ToPropertyKey(this, key);
+                            if (obj.IsNullish)
+                                throw new JsThrow(_runtime.Realm.NewTypeError(
+                                    "Cannot set property '" + pk + "' of " + NullishLabel(obj)));
                             if (obj.IsObject)
                             {
-                                var pk = AbstractOperations.ToPropertyKey(this, key);
                                 var ok = AbstractOperations.Set(this, obj.AsObject, pk, value);
                                 if (!ok && frameStrict)
                                     throw new JsThrow(_runtime.Realm.NewTypeError(
@@ -1440,6 +1455,17 @@ public sealed class JsVm
                             var obj = Pop();
                             obj.AsObject.DefineOwnProperty(AbstractOperations.ToPropertyKey(this, key),
                                 PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+                            Push(obj);
+                            break;
+                        }
+                    case Opcode.SetObjectPrototype:
+                        {
+                            var value = Pop();
+                            var obj = Pop();
+                            if (value.IsObject)
+                                obj.AsObject.SetPrototypeOf(value.AsObject);
+                            else if (value.IsNull)
+                                obj.AsObject.SetPrototypeOf(null);
                             Push(obj);
                             break;
                         }
@@ -1901,19 +1927,17 @@ public sealed class JsVm
                             // on the current `name` still being "" (so a named expression
                             // or a non-function value is never clobbered).
                             var nameIdx = ReadU16();
+                            StampInferredFunctionName(Peek(), (string)constants[nameIdx]!);
+                            break;
+                        }
+                    case Opcode.SetFunctionNameComputed:
+                        {
                             var target = Peek();
-                            if (target.IsObject && target.AsObject is JsFunction nfn)
-                            {
-                                var cur = nfn.GetOwnPropertyDescriptor("name");
-                                var isAnon = cur is null
-                                    || (cur.Value.IsData && cur.Value.Value.IsString && cur.Value.Value.AsString.Length == 0);
-                                if (isAnon)
-                                {
-                                    var nm = (string)constants[nameIdx]!;
-                                    nfn.DefineOwnProperty("name",
-                                        PropertyDescriptor.Data(JsValue.String(nm), writable: false, enumerable: false, configurable: true));
-                                }
-                            }
+                            var keyValue = stack[sp - 2];
+                            var key = keyValue.IsSymbol
+                                ? JsPropertyKey.Symbol(keyValue.AsSymbol)
+                                : JsPropertyKey.String(JsValue.ToStringValue(keyValue));
+                            StampInferredFunctionName(target, FunctionNameFromPropertyKey(key));
                             break;
                         }
 
@@ -2951,9 +2975,20 @@ public sealed class JsVm
                             JsValue baseClassValue = JsValue.Undefined;
                             if (template.HasExtends) baseClassValue = Pop();
 
+                            // §15.7.14 — the inner class-name binding (a named
+                            // class expression's `Inner` cell) must hold the
+                            // constructor BEFORE static field initializers run, so
+                            // `static x = new Inner()` resolves the class by name.
+                            // The cell lives in this frame's captured locals; pass
+                            // it through so BuildClassRuntime can set it at the
+                            // right moment.
+                            Cell? selfNameCell = null;
+                            if (template.SelfNameSlot >= 0)
+                                selfNameCell = (Cell)locals[template.SelfNameSlot].AsObject;
+
                             var classCtor = BuildClassRuntime(template, baseClassValue,
                                 ctorUps, methodUpvalues, fieldUpvalues, staticBlockUpvalues,
-                                methodComputedKeys, fieldComputedKeys);
+                                methodComputedKeys, fieldComputedKeys, selfNameCell);
                             Push(classCtor);
                             break;
                         }
@@ -3266,15 +3301,15 @@ public sealed class JsVm
     {
         JsValue ret;
         try { ret = AbstractOperations.GetMethod(this, innerIter, "return"); }
-        catch { return; }
+        catch (Exception ex) { JsVmLog.AsyncIteratorCloseGetMethodFailed(_log, ex); return; }
         if (ret.IsUndefined || ret.IsNull) return;
         JsValue result;
         try { result = AbstractOperations.Call(this, ret, innerIter, Array.Empty<JsValue>()); }
-        catch { return; }
+        catch (Exception ex) { JsVmLog.AsyncIteratorCloseCallFailed(_log, ex); return; }
         // Await the close result; swallow any rejection so the original throw
         // (the missing-throw-method TypeError) wins per §7.4.11.
         try { AwaitOnWorker(suspension, result); }
-        catch (JsThrow) { /* original completion already throwing */ }
+        catch (JsThrow ex) { JsVmLog.AsyncIteratorCloseAwaitRejected(_log, ex); /* original completion already throwing */ }
     }
 
     /// <summary>§14.15 — divert a return through any enclosing finalizer.</summary>
@@ -3415,46 +3450,83 @@ public sealed class JsVm
         return false;
     }
 
-    /// <summary>Less-than per §7.2.13. Returns false for NaN comparisons
-    /// per the spec. Cross-type BigInt/Number compares numerically with care
-    /// for non-integer doubles per §6.1.6.1.13.</summary>
-    private static bool LessThan(JsValue a, JsValue b)
+    /// <summary>§7.2.15 IsLooselyEqual with VM-aware object-to-primitive
+    /// coercion. The value-only helper cannot call user JS methods.</summary>
+    private bool AbstractEquals(JsValue a, JsValue b)
+    {
+        if (a.Kind == b.Kind) return JsValue.StrictEquals(a, b);
+        if (a.IsNullish && b.IsNullish) return true;
+        if (a.IsBoolean) return AbstractEquals(JsValue.Number(a.AsBool ? 1 : 0), b);
+        if (b.IsBoolean) return AbstractEquals(a, JsValue.Number(b.AsBool ? 1 : 0));
+        if (a.IsObject && IsPrimitiveComparableToObject(b))
+            return AbstractEquals(AbstractOperations.ToPrimitive(this, a), b);
+        if (b.IsObject && IsPrimitiveComparableToObject(a))
+            return AbstractEquals(a, AbstractOperations.ToPrimitive(this, b));
+        return JsValue.AbstractEquals(a, b);
+    }
+
+    private static bool IsPrimitiveComparableToObject(JsValue value)
+        => value.IsString || value.IsNumber || value.IsBigInt || value.IsSymbol;
+
+    /// <summary>§7.2.14 IsLessThan. Returns <c>null</c> for the spec's
+    /// undefined result (NaN, invalid StringToBigInt), which makes <c>&lt;=</c>
+    /// and <c>&gt;=</c> reject instead of becoming simple negations.</summary>
+    private bool? RelationalLessThan(JsValue x, JsValue y, bool leftFirst)
+    {
+        JsValue px;
+        JsValue py;
+        if (leftFirst)
+        {
+            px = AbstractOperations.ToPrimitive(this, x, "number");
+            py = AbstractOperations.ToPrimitive(this, y, "number");
+        }
+        else
+        {
+            py = AbstractOperations.ToPrimitive(this, y, "number");
+            px = AbstractOperations.ToPrimitive(this, x, "number");
+        }
+
+        return LessThanPrimitives(px, py);
+    }
+
+    /// <summary>Primitive less-than after §7.2.14's ToPrimitive steps.
+    /// Cross-type BigInt/Number compares numerically with care for non-integer
+    /// doubles per §6.1.6.1.13.</summary>
+    private bool? LessThanPrimitives(JsValue a, JsValue b)
     {
         if (a.IsString && b.IsString)
             return string.CompareOrdinal(a.AsString, b.AsString) < 0;
-        if (a.IsBigInt && b.IsBigInt) return BigIntOps.LessThan(a.AsBigInt, b.AsBigInt);
-        if (a.IsBigInt && b.IsNumber) return BigIntLessThanNumber(a.AsBigInt, b.AsNumber);
-        if (a.IsNumber && b.IsBigInt) return NumberLessThanBigInt(a.AsNumber, b.AsBigInt);
         if (a.IsBigInt && b.IsString)
         {
-            // §7.2.14: parse the string as a BigInt; if it fails (non-integer
-            // or NaN) the comparison is undefined → returns false.
-            if (!System.Numerics.BigInteger.TryParse(b.AsString.Trim(),
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var rhs))
-                return false;
+            if (!JsValue.TryStringToBigInt(b.AsString, out var rhs))
+                return null;
             return a.AsBigInt < rhs;
         }
         if (a.IsString && b.IsBigInt)
         {
-            if (!System.Numerics.BigInteger.TryParse(a.AsString.Trim(),
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var lhs))
-                return false;
+            if (!JsValue.TryStringToBigInt(a.AsString, out var lhs))
+                return null;
             return lhs < b.AsBigInt;
         }
-        var ad = JsValue.ToNumber(a);
-        var bd = JsValue.ToNumber(b);
-        if (double.IsNaN(ad) || double.IsNaN(bd)) return false;
+
+        a = AbstractOperations.ToNumeric(_runtime.Realm, a);
+        b = AbstractOperations.ToNumeric(_runtime.Realm, b);
+        if (a.IsBigInt && b.IsBigInt) return BigIntOps.LessThan(a.AsBigInt, b.AsBigInt);
+        if (a.IsBigInt && b.IsNumber) return BigIntLessThanNumber(a.AsBigInt, b.AsNumber);
+        if (a.IsNumber && b.IsBigInt) return NumberLessThanBigInt(a.AsNumber, b.AsBigInt);
+
+        var ad = a.AsNumber;
+        var bd = b.AsNumber;
+        if (double.IsNaN(ad) || double.IsNaN(bd)) return null;
         return ad < bd;
     }
 
     /// <summary>BigInt &lt; Number per §6.1.6.1.13. NaN → false; infinities
     /// compare sign-wise; finite non-integers compare against the BigInt by
     /// flooring the double on the BigInt's side.</summary>
-    private static bool BigIntLessThanNumber(System.Numerics.BigInteger a, double n)
+    private static bool? BigIntLessThanNumber(System.Numerics.BigInteger a, double n)
     {
-        if (double.IsNaN(n)) return false;
+        if (double.IsNaN(n)) return null;
         if (double.IsPositiveInfinity(n)) return true;
         if (double.IsNegativeInfinity(n)) return false;
         // Compare exactly when the double is an integer; otherwise compare to
@@ -3465,9 +3537,9 @@ public sealed class JsVm
         return a <= floor;
     }
 
-    private static bool NumberLessThanBigInt(double n, System.Numerics.BigInteger b)
+    private static bool? NumberLessThanBigInt(double n, System.Numerics.BigInteger b)
     {
-        if (double.IsNaN(n)) return false;
+        if (double.IsNaN(n)) return null;
         if (double.IsPositiveInfinity(n)) return false;
         if (double.IsNegativeInfinity(n)) return true;
         if (n == Math.Truncate(n)) return new System.Numerics.BigInteger(n) < b;
@@ -3480,8 +3552,9 @@ public sealed class JsVm
     {
         var d = JsValue.ToNumber(v);
         if (double.IsNaN(d) || double.IsInfinity(d) || d == 0) return 0;
-        var i = (long)Math.Truncate(d);
-        return (int)(i & 0xFFFFFFFF);
+        var i = Math.Truncate(d);
+        var mod = i - Math.Floor(i / 4294967296.0) * 4294967296.0;
+        return unchecked((int)(uint)mod);
     }
 
     /// <summary>§13.6 ApplyStringOrNumericBinaryOperator step 1 (and ToNumeric
@@ -3498,7 +3571,7 @@ public sealed class JsVm
     /// object operand coerces identically whether written as <c>a * b</c> or
     /// <c>a *= b</c>. (<c>+</c> already runs ToPrimitive in <see cref="JsAdd"/>.)</summary>
     private JsValue ToNumericOperand(JsValue v)
-        => v.IsObject ? AbstractOperations.ToPrimitive(this, v, "number") : v;
+        => AbstractOperations.ToNumeric(_runtime.Realm, v);
 
 
     /// <summary>B1b-2a — build a class constructor at <c>BuildClass</c>-opcode
@@ -3513,7 +3586,8 @@ public sealed class JsVm
         JsValue[][] fieldUpvalues,
         JsValue[][] staticBlockUpvalues,
         JsValue[] methodComputedKeys,
-        JsValue[] fieldComputedKeys)
+        JsValue[] fieldComputedKeys,
+        Cell? selfNameCell = null)
     {
         var realm = _runtime.Realm;
         JsObject? parentCtor = null;
@@ -3631,6 +3705,17 @@ public sealed class JsVm
         if (template.BindNameToGlobal && template.Name.Length > 0)
             AbstractOperations.Set(this, realm.GlobalObject, template.Name,
                 JsValue.Object(ctorInstance), JsValue.Object(realm.GlobalObject));
+
+        // §15.7.14 — for a named class expression, initialize the inner
+        // class-name binding to the constructor here, BEFORE static field
+        // initializers and static blocks run. Static elements (and instance
+        // method/field closures) capture this same Cell as an upvalue, so the
+        // store makes `new Inner()` / `Inner.x` resolve during static init.
+        // The compiler also re-stores the value after BuildClass returns (for
+        // closures formed later); both writes target the same cell, so this is
+        // idempotent.
+        if (selfNameCell is not null)
+            selfNameCell.Value = JsValue.Object(ctorInstance);
 
         // Static fields + static blocks: run in interleaved declaration order
         // per ES2022. Field thunks and static-block thunks both invoked with
@@ -3863,9 +3948,7 @@ public sealed class JsVm
     /// Getters/setters prefix "get "/"set ".</summary>
     private static void StampMethodName(JsFunction fn, JsPropertyKey key, Starling.Js.Bytecode.ClassMethodKind kind)
     {
-        string baseName = key.IsSymbol
-            ? (key.AsSymbol.Description is { } d ? "[" + d + "]" : "")
-            : key.AsString;
+        string baseName = FunctionNameFromPropertyKey(key);
         string prefix = kind switch
         {
             Starling.Js.Bytecode.ClassMethodKind.Get => "get ",
@@ -3874,6 +3957,22 @@ public sealed class JsVm
         };
         fn.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(prefix + baseName), writable: false, enumerable: false, configurable: true));
+    }
+
+    private static string FunctionNameFromPropertyKey(JsPropertyKey key)
+        => key.IsSymbol
+            ? (key.AsSymbol.Description is { } d ? "[" + d + "]" : "")
+            : key.AsString;
+
+    private static void StampInferredFunctionName(JsValue target, string name)
+    {
+        if (!target.IsObject || target.AsObject is not JsFunction fn) return;
+        var cur = fn.GetOwnPropertyDescriptor("name");
+        var isAnon = cur is null
+            || (cur.Value.IsData && cur.Value.Value.IsString && cur.Value.Value.AsString.Length == 0);
+        if (!isAnon) return;
+        fn.DefineOwnProperty("name",
+            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
     }
 
     /// <summary>wp:M3-04f — a zero-arg thunk that simply returns
@@ -4451,4 +4550,19 @@ internal struct TryFrame
     /// the number of additional enclosing try-frames still to unwind (and run
     /// finalizers for) before reaching the target.</summary>
     public int PendingUnwindRemaining;
+}
+
+internal static partial class JsVmLog
+{
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "async iterator close: GetMethod('return') threw; abandoning close")]
+    public static partial void AsyncIteratorCloseGetMethodFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "async iterator close: invoking 'return' threw; abandoning close")]
+    public static partial void AsyncIteratorCloseCallFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug,
+        Message = "async iterator close: awaiting 'return' result rejected; original completion wins")]
+    public static partial void AsyncIteratorCloseAwaitRejected(ILogger logger, Exception ex);
 }

@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using AwesomeAssertions;
-using Starling.Common.Diagnostics;
 using Starling.Common.Image;
 using Starling.Css.Cascade;
 using Starling.Html;
@@ -109,31 +107,29 @@ public sealed class CompositorTests
             "</body>";
 
         var root = Layout(html, W, H);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var diag = new RecordingDiagnostics();
+        using var backend = new CountingBackend();
 
         // Build the tree ONCE so the layers persist across renders; the session tile
         // grid (and stable per-layer ids) is what carries reuse across frames now.
-        // Each 50×50 div is one tile, so per-layer hit counts match the layer counts.
-        var tiles = new TileGrid(diag);
-        var tree = new LayerTreeBuilder(styleOverride: null, images: null, diagnostics: diag,
+        var tiles = new TileGrid();
+        var tree = new LayerTreeBuilder(styleOverride: null, images: null,
             layerIdFor: tiles.LayerIdFor).Build(root);
-        var compositor = new CompositorEngine(backend, diag, tiles);
+        var compositor = new CompositorEngine(backend, tileGrid: tiles);
 
-        // First render seeds each layer's tiles (no prior content → no HIT).
+        // First render seeds each layer's tiles.
         using (compositor.Render(tree, new LayoutRect(0, 0, W, H), scale)) { }
-        diag.CountOf("paint.tile.cache_hit").Should().Be(0, "nothing is cached before the first render");
+        var rendersAfterFirst = backend.RenderCalls;
+        rendersAfterFirst.Should().BeGreaterThan(0, "the first render must raster the layer tiles");
 
         // Second render of the SAME (unchanged) content: each promoted layer's tile
-        // serves from cache (HIT) instead of re-rasterizing. Two promoted divs → two
-        // tile HITs.
+        // serves from cache instead of re-rasterizing.
         using (compositor.Render(tree, new LayoutRect(0, 0, W, H), scale)) { }
-        diag.CountOf("paint.tile.cache_hit").Should().Be(2,
-            "both untouched promoted layers re-blit their tile from cache on the unchanged second render");
+        backend.RenderCalls.Should().Be(rendersAfterFirst,
+            "untouched promoted layers re-blit their tiles from cache on the unchanged second render");
 
         // A third unchanged render keeps hitting — the tile cache persists across frames.
         using (compositor.Render(tree, new LayoutRect(0, 0, W, H), scale)) { }
-        diag.CountOf("paint.tile.cache_hit").Should().Be(4,
+        backend.RenderCalls.Should().Be(rendersAfterFirst,
             "the tile cache keeps serving unchanged layers across frames");
     }
 
@@ -157,31 +153,31 @@ public sealed class CompositorTests
             $"<div id=box style=\"{baseStyle}transform:rotate(10deg)\"></div></body>");
         var style = new StyleEngine();
         var engine = new LayoutEngine(style, DefaultTextMeasurer.Instance);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var diag = new RecordingDiagnostics();
-        var tiles = new TileGrid(diag);
-        var compositor = new CompositorEngine(backend, diag, tiles);
+        using var backend = new CountingBackend();
+        var tiles = new TileGrid();
+        var compositor = new CompositorEngine(backend, tileGrid: tiles);
 
         var root1 = engine.LayoutDocument(doc, new Size(W, H));
         FindByElement(root1, doc.GetElementById("box")!)!.Hints
             .Should().NotBe(Starling.Layout.Compositor.LayerHint.None, "a transformed div is its own layer");
-        var tree1 = new LayerTreeBuilder(null, null, diag, layerIdFor: tiles.LayerIdFor).Build(root1);
+        var tree1 = new LayerTreeBuilder(null, null, layerIdFor: tiles.LayerIdFor).Build(root1);
         byte[] first;
         using (var r1 = compositor.Render(tree1, new LayoutRect(0, 0, W, H), scale))
             first = (byte[])r1.Rgba.Clone();
-        diag.CountOf("paint.tile.cache_hit").Should().Be(0, "nothing is cached before the first render");
+        var rendersAfterFirst = backend.RenderCalls;
+        rendersAfterFirst.Should().BeGreaterThan(0, "the first render must raster the layer tiles");
 
         // Change only the rotation — a composite-time property. Re-lay-out so the
         // new transform reaches the box style, then rebuild against the SAME tile grid.
         doc.GetElementById("box")!.SetAttribute("style", baseStyle + "transform:rotate(70deg)");
         var root2 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree2 = new LayerTreeBuilder(null, null, diag, layerIdFor: tiles.LayerIdFor).Build(root2);
+        var tree2 = new LayerTreeBuilder(null, null, layerIdFor: tiles.LayerIdFor).Build(root2);
         byte[] second;
         using (var r2 = compositor.Render(tree2, new LayoutRect(0, 0, W, H), scale))
             second = (byte[])r2.Rgba.Clone();
 
-        diag.CountOf("paint.tile.cache_hit").Should().Be(2,
-            "the rotating layer's tile (and the page background tile) re-blit from cache; only the composite transform changed");
+        backend.RenderCalls.Should().Be(rendersAfterFirst,
+            "the rotating layer content re-blits from cache; only the composite transform changed");
         second.SequenceEqual(first).Should().BeFalse("the new rotation must change the composited output");
     }
 
@@ -204,31 +200,29 @@ public sealed class CompositorTests
 
         var doc = HtmlParser.Parse(html);
         var engine = new LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var diag = new RecordingDiagnostics();
-        var tiles = new TileGrid(diag);
-        var compositor = new CompositorEngine(backend, diag, tiles);
+        using var backend = new CountingBackend();
+        var tiles = new TileGrid();
+        var compositor = new CompositorEngine(backend, tileGrid: tiles);
 
         var root1 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree1 = new LayerTreeBuilder(null, null, diag, layerIdFor: tiles.LayerIdFor).Build(root1);
+        var tree1 = new LayerTreeBuilder(null, null, layerIdFor: tiles.LayerIdFor).Build(root1);
         byte[] first;
         using (var r1 = compositor.Render(tree1, new LayoutRect(0, 0, W, H), scale))
             first = (byte[])r1.Rgba.Clone();
-        diag.CountOf("paint.tile.cache_hit").Should().Be(0, "nothing is cached before the first render");
+        var rendersAfterFirst = backend.RenderCalls;
+        rendersAfterFirst.Should().BeGreaterThan(0, "the first render must raster the layer tiles");
 
         // Animate opacity only — no layout-affecting change. Re-lay-out so the new
         // opacity reaches the box style, then rebuild the tree against the SAME tile grid.
         doc.GetElementById("fade")!.SetAttribute(
             "style", "opacity:0.4;position:absolute;left:10px;top:10px;width:80px;height:80px;background-color:#cc2222");
         var root2 = engine.LayoutDocument(doc, new Size(W, H));
-        var tree2 = new LayerTreeBuilder(null, null, diag, layerIdFor: tiles.LayerIdFor).Build(root2);
+        var tree2 = new LayerTreeBuilder(null, null, layerIdFor: tiles.LayerIdFor).Build(root2);
         byte[] second;
         using (var r2 = compositor.Render(tree2, new LayoutRect(0, 0, W, H), scale))
             second = (byte[])r2.Rgba.Clone();
 
-        // Both layers (root + the promoted div) re-blit their tile from cache:
-        // the slice content didn't change, only the composite-time opacity did.
-        diag.CountOf("paint.tile.cache_hit").Should().Be(2,
+        backend.RenderCalls.Should().Be(rendersAfterFirst,
             "the layer content is reused from cache; only the composite-time opacity changed");
         // ...and the composited result actually changed (the div is more transparent).
         second.SequenceEqual(first).Should().BeFalse("the new opacity must change the composited output");
@@ -242,18 +236,17 @@ public sealed class CompositorTests
         const float scale = 1f;
         var html = "<body style=\"margin:0\"><div style=\"width:240px;height:50000px;background-color:#3366cc\"></div></body>";
         var root = Layout(html, 240, 800);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var diag = new RecordingDiagnostics();
-        var tiles = new TileGrid(diag);
-        var tree = new LayerTreeBuilder(diagnostics: diag, layerIdFor: tiles.LayerIdFor).Build(root);
-        var compositor = new CompositorEngine(backend, diag, tiles);
+        using var backend = new CountingBackend();
+        var tiles = new TileGrid();
+        var tree = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root);
+        var compositor = new CompositorEngine(backend, tileGrid: tiles);
 
         using (compositor.Render(tree, new LayoutRect(0, 0, 240, 800), scale)) { }
 
         var bound = ((240 / TileGrid.TileWidthDevice) + 2) * ((800 / TileGrid.TileHeightDevice) + 2);
-        diag.CountOf("paint.tile.cache_miss").Should().BeLessThanOrEqualTo(bound,
+        backend.RenderCalls.Should().BeLessThanOrEqualTo(bound,
             "tiles painted are bounded by the viewport + a one-tile ring");
-        diag.CountOf("paint.tile.cache_miss").Should().BeLessThan(20,
+        backend.RenderCalls.Should().BeLessThan(20,
             "NOT proportional to the ~98-tile full layer height (50000px / 512)");
     }
 
@@ -265,22 +258,21 @@ public sealed class CompositorTests
         const float scale = 1f;
         var html = "<body style=\"margin:0\"><div style=\"width:240px;height:50000px;background-color:#3366cc\"></div></body>";
         var root = Layout(html, 240, 800);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var diag = new RecordingDiagnostics();
-        var tiles = new TileGrid(diag);
-        var tree = new LayerTreeBuilder(diagnostics: diag, layerIdFor: tiles.LayerIdFor).Build(root);
-        var compositor = new CompositorEngine(backend, diag, tiles);
+        using var backend = new CountingBackend();
+        var tiles = new TileGrid();
+        var tree = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root);
+        var compositor = new CompositorEngine(backend, tileGrid: tiles);
 
         using (compositor.Render(tree, new LayoutRect(0, 0, 240, 800), scale)) { }
-        var missFirst = diag.CountOf("paint.tile.cache_miss");
-        var hitsFirst = diag.CountOf("paint.tile.cache_hit");
+        var rendersFirst = backend.RenderCalls;
 
         // Scroll down exactly one tile row (TileHeightDevice px at scale 1).
         using (compositor.Render(tree, new LayoutRect(0, TileGrid.TileHeightDevice, 240, 800), scale)) { }
+        var newRenders = backend.RenderCalls - rendersFirst;
 
-        (diag.CountOf("paint.tile.cache_hit") - hitsFirst).Should().BeGreaterThan(0,
+        newRenders.Should().BeLessThan(rendersFirst,
             "the overlapping rows re-blit from cache after a one-row scroll");
-        (diag.CountOf("paint.tile.cache_miss") - missFirst).Should().BeLessThanOrEqualTo(3,
+        newRenders.Should().BeLessThanOrEqualTo(3,
             "only the newly-exposed row (one column + ring) re-rasters");
     }
 
@@ -292,24 +284,25 @@ public sealed class CompositorTests
         return null;
     }
 
-    private sealed class RecordingDiagnostics : IDiagnostics
+    private sealed class CountingBackend : IPaintBackend
     {
-        private readonly ConcurrentDictionary<string, double> _counters = new();
+        private readonly ImageSharpBackend _inner = new(FontResolver.Default, webFonts: null);
 
-        public double CountOf(string name) => _counters.TryGetValue(name, out var v) ? v : 0d;
+        public int RenderCalls { get; private set; }
+        public string Name => _inner.Name;
 
-        public void Counter(string name, double value)
-            => _counters.AddOrUpdate(name, value, (_, prev) => prev + value);
-
-        public IDisposable Span(string area, string operation) => NoopSpan.Instance;
-        public void Log(DiagLevel level, string area, string message) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
+        public RenderedBitmap Render(PaintList list, LayoutRect viewport, float scale = 1.0f)
         {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
+            RenderCalls++;
+            return _inner.Render(list, viewport, scale);
         }
+
+        public RenderedBitmap Render(PaintList list, LayoutRect viewport, float scale, bool opaqueBackground)
+        {
+            RenderCalls++;
+            return _inner.Render(list, viewport, scale, opaqueBackground);
+        }
+
+        public void Dispose() => _inner.Dispose();
     }
 }

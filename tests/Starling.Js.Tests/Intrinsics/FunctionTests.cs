@@ -2,6 +2,7 @@ using AwesomeAssertions;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
+using Starling.Spec;
 namespace Starling.Js.Tests.Intrinsics;
 
 /// <summary>
@@ -102,6 +103,38 @@ public class FunctionTests
     }
 
     [TestMethod]
+    public void Function_bind_combines_bound_arguments_before_call_arguments()
+    {
+        var r = Run(@"
+            var testFunc = function(a, b, c) {
+                return a + ', ' + b + ', ' + c + ', ' + JSON.stringify(arguments);
+            };
+            testFunc.bind('anything')('a', 1, 'a');
+        ");
+
+        r.AsString.Should().Be("a, 1, a, {\"0\":\"a\",\"1\":1,\"2\":\"a\"}");
+    }
+
+    [TestMethod]
+    public void Arrow_function_is_extensible()
+    {
+        var r = Run(@"
+            var a = () => null;
+            Object.defineProperty(a, 'hello', { enumerable: true, get: () => 'world' });
+            a.foo = 'bar';
+            a.hello + ',' + a.foo;
+        ");
+
+        r.AsString.Should().Be("world,bar");
+    }
+
+    [TestMethod]
+    public void Anonymous_arrow_function_has_own_name_property()
+    {
+        Run("(()=>{}).hasOwnProperty('name');").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Bound_function_inherits_bind_so_chain_works()
     {
         // Prototype chain proof: every bound function must itself respond
@@ -125,6 +158,22 @@ public class FunctionTests
             b2();
         ");
         r.AsNumber.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void Bound_function_can_be_used_as_property_getter()
+    {
+        var r = Run(@"
+            var holder = {
+                x: 42,
+                getter: function() { return this.x; }
+            };
+            var target = {};
+            Object.defineProperty(target, 'prop', { get: holder.getter.bind(holder) });
+            target.prop;
+        ");
+
+        r.AsNumber.Should().Be(42);
     }
 
     [TestMethod]
@@ -182,16 +231,30 @@ public class FunctionTests
         r.AsString.Should().Contain("[native code]");
     }
 
-    [TestMethod]
-    public void Function_prototype_toString_user_function_yields_function_name_shape()
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-function.prototype.tostring", "20.2.3.5 Function.prototype.toString")]
+    public void Function_prototype_toString_user_function_preserves_source_text()
     {
         var r = Run(@"
-            function greet() {}
+            function greet(a, b) { return a + b; }
             greet.toString();
         ");
-        // Sniffers regex `function <name>(...) { ... }` — our placeholder
-        // matches that shape.
-        r.AsString.Should().StartWith("function greet(");
+        r.AsString.Should().Contain("function greet(a, b)");
+        r.AsString.Should().Contain("return a + b;");
+    }
+
+    [SpecFact]
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-function.prototype.tostring", "20.2.3.5 Function.prototype.toString")]
+    public void Function_prototype_toString_exposes_import_stub_metadata()
+    {
+        var r = Run(@"
+            function _schedule_background_exec() {
+                return {runtime_idx:6};//schedule_background_exec
+            }
+            var text = _schedule_background_exec.toString();
+            text.indexOf('runtime_idx') !== -1 && _schedule_background_exec().runtime_idx === 6;
+        ");
+        r.AsBool.Should().BeTrue();
     }
 
     [TestMethod]

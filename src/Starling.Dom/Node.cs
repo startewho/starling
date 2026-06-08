@@ -71,17 +71,52 @@ public abstract class Node : EventTarget
 
         if (child is DocumentFragment fragment)
         {
-            var next = fragment.FirstChild;
-            while (next is not null)
-            {
-                var current = next;
-                next = current.NextSibling;
-                InsertBefore(current, referenceChild);
-            }
+            // DOM §4.2.3 "insert": all of the fragment's children move into this
+            // node and are reported in a SINGLE childList record whose addedNodes
+            // is the whole moved set. Snapshot first — linking unlinks each node
+            // from the fragment as we go.
+            var moved = new List<Node>();
+            for (var n = fragment.FirstChild; n is not null; n = n.NextSibling)
+                moved.Add(n);
+            if (moved.Count == 0)
+                return fragment;
+            // DOM §4.2.3: empty the fragment with the suppress-observers flag set,
+            // so the per-child removal from the fragment queues no record — the
+            // single insertion record below covers the whole move.
+            foreach (var node in moved)
+                LinkChild(node, referenceChild, suppressRemoveRecord: true);
+            // Capture the inserted range's siblings before any re-entrant
+            // NotifyConnected can mutate the tree, then fire one record.
+            var fragPrev = moved[0].PreviousSibling;
+            var fragNext = moved[^1].NextSibling;
+            (OwnerDocument ?? this as Document)?.ChildListMutated?.Invoke(
+                this, moved, null, fragPrev, fragNext);
+            foreach (var node in moved)
+                NotifyConnected(node);
             return fragment;
         }
 
-        child.RemoveFromParent();
+        LinkChild(child, referenceChild, suppressRemoveRecord: false);
+        // Capture sibling positions and queue the childList MutationRecord BEFORE
+        // NotifyConnected. NotifyConnected can run host hooks (e.g. execute an
+        // injected <script>) that re-enter and mutate the tree, which would leave
+        // child.PreviousSibling/NextSibling stale by the time the record is built.
+        var insertedPrev = child.PreviousSibling;
+        var insertedNext = child.NextSibling;
+        (OwnerDocument ?? this as Document)?.ChildListMutated?.Invoke(
+            this, new[] { child }, null, insertedPrev, insertedNext);
+        NotifyConnected(child);
+        return child;
+    }
+
+    /// <summary>Link a single child into the tree before <paramref name="referenceChild"/>
+    /// (append when null): update sibling/parent links, owner document, live Ranges,
+    /// and layout bookkeeping. Does NOT fire the childList MutationRecord or
+    /// NotifyConnected — the InsertBefore caller does that once per logical insertion
+    /// (so a DocumentFragment yields a single record covering all moved nodes).</summary>
+    private void LinkChild(Node child, Node? referenceChild, bool suppressRemoveRecord)
+    {
+        child.RemoveFromParent(suppressRemoveRecord);
         child.ParentNode = this;
         child.SetOwnerDocumentRecursive(OwnerDocument ?? (this as Document));
 
@@ -111,12 +146,14 @@ public abstract class Node : EventTarget
                 previous.NextSibling = child;
         }
 
+        // DOM §5.3.4 "insert": update live Range boundary points now that the
+        // child is linked into the tree.
+        DomRange.OnNodeInserted(this, DomRange.IndexOf(child), 1);
+
         var childAffectsLayout = !IsLayoutInvariantElement(child);
         OnTreeMutated(affectsLayout: childAffectsLayout);
         if (childAffectsLayout)
             (OwnerDocument ?? this as Document)?.RecordLayoutMutation(this, LayoutChangeKind.ChildInserted);
-        NotifyConnected(child);
-        return child;
     }
 
     /// <summary>If <paramref name="inserted"/> is now connected to a document
@@ -157,7 +194,14 @@ public abstract class Node : EventTarget
     }
 
     /// <summary>Detach this node from its parent. No-op if already orphaned.</summary>
-    public void RemoveFromParent()
+    public void RemoveFromParent() => RemoveFromParent(suppressObservers: false);
+
+    /// <summary>Detach this node from its parent. When <paramref name="suppressObservers"/>
+    /// is set, no childList MutationRecord is queued for the removal — DOM §4.2.3
+    /// "insert" sets the suppress-observers flag while emptying a DocumentFragment
+    /// into its new parent, since that move is reported by the single insertion
+    /// record instead. Live Ranges and NodeIterators still update either way.</summary>
+    internal void RemoveFromParent(bool suppressObservers)
     {
         var parent = ParentNode;
         if (parent is null) return;
@@ -168,6 +212,14 @@ public abstract class Node : EventTarget
             var doc = OwnerDocument ?? (this is Document d ? d : null);
             if (doc is not null) hook(doc, this);
         }
+
+        // DOM §5.3.4 "remove": update live Range boundary points before the
+        // node is unlinked (needs the old parent and old index).
+        DomRange.OnNodeRemoved(this, parent, DomRange.IndexOf(this));
+
+        // Capture the old siblings for the childList MutationRecord before unlinking.
+        var oldPrev = PreviousSibling;
+        var oldNext = NextSibling;
 
         if (PreviousSibling is not null) PreviousSibling.NextSibling = NextSibling;
         else parent.FirstChild = NextSibling;
@@ -184,6 +236,9 @@ public abstract class Node : EventTarget
         parent.OnTreeMutated(affectsLayout: removedAffectsLayout);
         if (removedAffectsLayout)
             (parent.OwnerDocument ?? parent as Document)?.RecordLayoutMutation(parent, LayoutChangeKind.ChildRemoved);
+        if (!suppressObservers)
+            (parent.OwnerDocument ?? parent as Document)?.ChildListMutated?.Invoke(
+                parent, null, new[] { this }, oldPrev, oldNext);
     }
 
     public IEnumerable<Node> ChildNodes

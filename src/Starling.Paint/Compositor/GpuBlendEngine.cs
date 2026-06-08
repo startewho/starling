@@ -35,13 +35,13 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     internal WgpuExt? Poll { get; }
     internal Device* Device { get; }
     internal Queue* Queue { get; }
+    internal nint DeviceHandle => (nint)Device;
 
     private Sampler* _sampler;
     private BindGroupLayout* _bindLayout;
     private PipelineLayout* _pipelineLayout;
     private ShaderModule* _shader;
     private readonly Dictionary<(TextureFormat Format, TextureAlphaMode AlphaMode), nint> _pipelines = new();
-    private GpuPaintDeviceContext? _imageSharpContext;
 
     // Per-layer GPU textures, keyed by slice content hash. Resident across frames
     // so an unchanged layer never re-uploads.
@@ -69,6 +69,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     private WgpuBuffer* _vertexBuffer;
     private nuint _vertexCapacity;
+    private bool _disposed;
 
     // 5 floats per vertex (ndc.x, ndc.y, u, v, opacity), 6 vertices per layer quad.
     private const int FloatsPerVertex = 5;
@@ -413,14 +414,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
     }
 
-    internal GpuPaintDeviceContext ImageSharpContext
-    {
-        get
-        {
-            _imageSharpContext ??= new GpuPaintDeviceContext((nint)Device, (nint)Queue);
-            return _imageSharpContext;
-        }
-    }
+    internal GpuPaintDevice GpuDevice => new((nint)Device, (nint)Queue);
 
     /// <summary>Lazily builds the blend pipeline for a target format and texture alpha mode.</summary>
     private RenderPipeline* PipelineFor(TextureFormat format, TextureAlphaMode alphaMode = TextureAlphaMode.Premultiplied)
@@ -873,6 +867,12 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         foreach (var c in _textures.Values) ReleaseCached(c);
         _textures.Clear();
         _textureBytes = 0;
@@ -887,7 +887,9 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }
         if (_pipelineLayout != null) { Api.PipelineLayoutRelease(_pipelineLayout); _pipelineLayout = null; }
         if (_bindLayout != null) { Api.BindGroupLayoutRelease(_bindLayout); _bindLayout = null; }
-        if (_imageSharpContext is not null) { _imageSharpContext.Dispose(); _imageSharpContext = null; }
+        // TryDispose also tears down the adapter's cached WebGPU device context,
+        // so the compositor never references the ImageSharp adapter type directly.
+        ImageSharpWebGpuDeviceStateCache.TryDispose((nint)Device);
         if (Queue != null) Api.QueueRelease(Queue);
         if (Device != null) Api.DeviceRelease(Device);
     }

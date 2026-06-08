@@ -1,4 +1,5 @@
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Css.Cascade;
 using Starling.Layout.Box;
 using Starling.Layout.Tree;
@@ -9,22 +10,28 @@ using LayoutRect = Starling.Layout.Rect;
 
 namespace Starling.Gui.Core.Rendering;
 
+internal static partial class NativeViewportRendererLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "present.cold: total={TotalMs}ms layertree.build={BuildMs}ms renderToSurface={RenderMs}ms")]
+    public static partial void PresentCold(ILogger logger, long totalMs, long buildMs, long renderMs);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "layer-tree present via '{BackendName}' failed")]
+    public static partial void PresentFailed(ILogger logger, Exception ex, string backendName);
+}
+
 /// <summary>
-/// Renders a page's layer tree straight to a window swapchain for the zero-copy
-/// present path. The host supplies a <see cref="GpuSurfacePresenter"/>, and this
-/// renderer builds the layer tree, uploads changed layer content, composites, and
-/// presents.
+/// Renders page content into a native window surface. The host supplies a
+/// <see cref="GpuSurfacePresenter"/>. This renderer builds the layer tree, sends
+/// changed layer content to the presenter, and presents the frame.
 /// </summary>
 /// <remarks>
-/// Holds the same persistent per-layer caches as the Avalonia path (keyed by
-/// slice content hash), so a transform/opacity-only frame re-blits cached layer
-/// textures with no re-raster. The paint backend (CPU vs WebGPU) is still chosen
-/// by <c>STARLING_PAINT_BACKEND</c>; it rasterizes the changed layer slices that
-/// the presenter then uploads and blends.
+/// The renderer keeps one tile cache for the session. Frames that only move or
+/// fade layers can reuse cached layer textures. The paint backend still draws
+/// changed layer slices, then the presenter blends them on the GPU.
 /// </remarks>
 public sealed class NativeViewportRenderer : IDisposable
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILogger<NativeViewportRenderer> _log;
     private readonly IPaintBackend _backend;
 
     private readonly bool _ownsBackend;
@@ -35,32 +42,32 @@ public sealed class NativeViewportRenderer : IDisposable
     private readonly TileGrid _tiles;
     private bool _disposed;
 
-    public NativeViewportRenderer(IDiagnostics? diagnostics = null)
-        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diagnostics), diagnostics,
+    public NativeViewportRenderer(ILogger<NativeViewportRenderer>? log = null)
+        : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null),
+            log,
             ownsBackend: true)
     {
     }
 
-    internal NativeViewportRenderer(IPaintBackend backend, IDiagnostics? diagnostics = null)
-        : this(backend, diagnostics, ownsBackend: false)
+    internal NativeViewportRenderer(IPaintBackend backend, ILogger<NativeViewportRenderer>? log = null)
+        : this(backend, log, ownsBackend: false)
     {
     }
 
-    private NativeViewportRenderer(IPaintBackend backend, IDiagnostics? diagnostics, bool ownsBackend)
+    private NativeViewportRenderer(IPaintBackend backend, ILogger<NativeViewportRenderer>? log, bool ownsBackend)
     {
         ArgumentNullException.ThrowIfNull(backend);
-        _diag = diagnostics ?? NoopDiagnostics.Instance;
+        _log = log ?? NullLogger<NativeViewportRenderer>.Instance;
         _backend = backend;
         _ownsBackend = ownsBackend;
-        _tiles = new TileGrid(_diag);
+        _tiles = new TileGrid();
     }
 
     /// <summary>
-    /// Builds <paramref name="root"/>'s layer tree and presents it on
-    /// <paramref name="presenter"/>'s swapchain. <paramref name="viewport"/> is the
-    /// page-coordinate visible region (scroll offset + size); null renders the
-    /// whole page. Returns <c>false</c> if the frame could not be presented (the
-    /// surface may need reconfiguring — present the next frame).
+    /// Builds a layer tree for <paramref name="root"/> and presents it through
+    /// <paramref name="presenter"/>. <paramref name="viewport"/> is the visible
+    /// page region. Pass <c>null</c> to render the whole page. Returns
+    /// <c>false</c> when the frame was not presented.
     /// </summary>
     public bool Present(
         BlockBox root,
@@ -70,7 +77,7 @@ public sealed class NativeViewportRenderer : IDisposable
         IImageResolver? images = null,
         LayoutRect? viewport = null,
         Func<Box, bool>? isAnimatingLayerRoot = null,
-        IReadOnlyList<SurfaceOverlayRect>? overlays = null,
+        IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null,
         Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -82,35 +89,31 @@ public sealed class NativeViewportRenderer : IDisposable
             // DIAG (open-time investigation): split the cold first present into
             // layer-tree build vs raster+GPU present. Logged only for slow frames.
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var tree = new LayerTreeBuilder(styleOverride, images, _diag,
+            var tree = new LayerTreeBuilder(styleOverride, images,
                 isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
                 scrollOffsets: scrollOffsets).Build(root);
             var tBuild = sw.ElapsedMilliseconds;
             var region = viewport ?? new LayoutRect(0, 0,
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
-            var compositor = new Compositor(_backend, _diag, _tiles);
-            var ok = compositor.RenderToSurface(tree, region, scale, presenter, overlays);
+            var compositor = new Compositor(_backend, _tiles);
+            var ok = compositor.RenderToSurface(tree, region, scale, presenter, drawingOverlays);
             if (sw.ElapsedMilliseconds > 100)
-                _diag.Log(DiagLevel.Info, "shell",
-                    $"present.cold: total={sw.ElapsedMilliseconds}ms layertree.build={tBuild}ms renderToSurface={sw.ElapsedMilliseconds - tBuild}ms");
+                NativeViewportRendererLog.PresentCold(_log,
+                    sw.ElapsedMilliseconds, tBuild, sw.ElapsedMilliseconds - tBuild);
             return ok;
         }
         catch (Exception ex)
         {
-            _diag.LogException("shell", ex, $"layer-tree present via '{_backend.Name}' failed");
+            NativeViewportRendererLog.PresentFailed(_log, ex, _backend.Name);
             throw;
         }
     }
 
     /// <summary>
-    /// Presents engine-rendered chrome (a strip <paramref name="chromeHeightCss"/>
-    /// CSS px tall at the top) composited above the page, in one zero-copy frame.
-    /// Both are real Starling documents: <paramref name="chromeRoot"/> is laid out
-    /// at the window width × the chrome height, <paramref name="pageRoot"/> fills
-    /// the region below. They blend into a single swapchain present — no overlay,
-    /// no airspace. <paramref name="surfaceWidth"/>/<paramref name="surfaceHeight"/>
-    /// are the swapchain's device-pixel dimensions.
+    /// Presents chrome and page content in one surface frame. Top chrome, side
+    /// chrome, bottom chrome, page content, and overlays are blended into the
+    /// same present.
     /// </summary>
     public bool PresentComposited(
         GpuSurfacePresenter presenter,
@@ -119,6 +122,8 @@ public sealed class NativeViewportRenderer : IDisposable
         float scale,
         BlockBox chromeRoot,
         double chromeHeightCss,
+        BlockBox? leftChromeRoot,
+        double leftChromeWidthCss,
         BlockBox pageRoot,
         double scrollX = 0,
         double scrollY = 0,
@@ -126,7 +131,11 @@ public sealed class NativeViewportRenderer : IDisposable
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         BlockBox? overlayRoot = null,
-        BlockBox? screenOverlayRoot = null)
+        BlockBox? screenOverlayRoot = null,
+        BlockBox? bottomChromeRoot = null,
+        BlockBox? bottomChromeRightRoot = null,
+        double bottomChromeLeftWidthCss = 0,
+        double bottomChromeHeightCss = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -143,40 +152,69 @@ public sealed class NativeViewportRenderer : IDisposable
         }
 
         var chromeDevH = (int)Math.Ceiling(chromeHeightCss * scale);
+        var hasBottomChrome = bottomChromeRoot is not null || bottomChromeRightRoot is not null;
+        var bottomChromeCss = hasBottomChrome ? bottomChromeHeightCss : 0;
+        var bottomDevH = hasBottomChrome ? (int)Math.Ceiling(bottomChromeCss * scale) : 0;
+        var leftChromeCss = leftChromeRoot is null ? 0 : leftChromeWidthCss;
+        var leftDevW = leftChromeRoot is null ? 0 : (int)Math.Ceiling(leftChromeCss * scale);
         var logicalW = surfaceWidth / scale;
         var logicalH = surfaceHeight / scale;
+        var pageLogicalW = Math.Max(1, logicalW - leftChromeCss);
+        var pageLogicalH = Math.Max(1, logicalH - chromeHeightCss - bottomChromeCss);
+        var contentDevW = Math.Max(1, surfaceWidth - leftDevW);
+        var contentDevH = Math.Max(1, surfaceHeight - chromeDevH - bottomDevH);
 
-        var chromeTree = new LayerTreeBuilder(null, null, _diag, layerIdFor: _tiles.LayerIdFor).Build(chromeRoot);
-        var pageTree = new LayerTreeBuilder(styleOverride, images, _diag,
+        var chromeTree = new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(chromeRoot);
+        var leftChromeTree = leftChromeRoot is null
+            ? null
+            : new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(leftChromeRoot);
+        var pageTree = new LayerTreeBuilder(styleOverride, images,
             isAnimatingLayerRoot: pageAnimating, layerIdFor: _tiles.LayerIdFor).Build(pageRoot);
         // Optional overlay (find highlight, context menu, …) drawn in page space,
         // scrolling and clipping with the page content region.
         var overlayTree = overlayRoot is null
             ? null
-            : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(overlayRoot);
+            : new LayerTreeBuilder(null, images, layerIdFor: _tiles.LayerIdFor).Build(overlayRoot);
         // Screen-fixed overlay (context menu, devtools panel, …) drawn in window
         // space over everything, no scroll.
         var screenOverlayTree = screenOverlayRoot is null
             ? null
-            : new LayerTreeBuilder(null, images, _diag, layerIdFor: _tiles.LayerIdFor).Build(screenOverlayRoot);
+            : new LayerTreeBuilder(null, images, layerIdFor: _tiles.LayerIdFor).Build(screenOverlayRoot);
+        // Bottom chrome (status bar): same width as the page, fixed at the window
+        // bottom to the right of the sidebar.
+        var bottomChromeTree = bottomChromeRoot is null
+            ? null
+            : new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRoot);
+        var bottomChromeRightTree = bottomChromeRightRoot is null
+            ? null
+            : new LayerTreeBuilder(null, null, layerIdFor: _tiles.LayerIdFor).Build(bottomChromeRightRoot);
 
-        var compositor = new Compositor(_backend, _diag, _tiles);
+        var compositor = new Compositor(_backend, _tiles);
         var ops = new List<LayerBlend>();
 
-        // Chrome: top strip, no offset.
+        // Sidebar: left strip, full height.
+        if (leftChromeTree is not null)
+            compositor.AppendSurfaceOps(
+                leftChromeTree,
+                new LayoutRect(0, 0, leftChromeCss, logicalH),
+                scale, destOriginXDevice: 0, destOriginYDevice: 0,
+                regionClipDevice: new LayoutRect(0, 0, leftDevW, surfaceHeight),
+                ops, presenter);
+
+        // Top chrome: to the right of the sidebar.
         compositor.AppendSurfaceOps(
             chromeTree,
-            new LayoutRect(0, 0, logicalW, chromeHeightCss),
-            scale, destOriginXDevice: 0, destOriginYDevice: 0,
-            regionClipDevice: new LayoutRect(0, 0, surfaceWidth, chromeDevH),
+            new LayoutRect(0, 0, pageLogicalW, chromeHeightCss),
+            scale, destOriginXDevice: leftDevW, destOriginYDevice: 0,
+            regionClipDevice: new LayoutRect(leftDevW, 0, contentDevW, chromeDevH),
             ops, presenter);
 
-        // Page: below the chrome, scrolled, clipped to the content region.
-        var pageRegion = new LayoutRect(scrollX, scrollY, logicalW, logicalH - chromeHeightCss);
-        var pageClip = new LayoutRect(0, chromeDevH, surfaceWidth, surfaceHeight - chromeDevH);
+        // Page: below the toolbar and to the right of the sidebar.
+        var pageRegion = new LayoutRect(scrollX, scrollY, pageLogicalW, pageLogicalH);
+        var pageClip = new LayoutRect(leftDevW, chromeDevH, contentDevW, contentDevH);
         compositor.AppendSurfaceOps(
             pageTree, pageRegion,
-            scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+            scale, destOriginXDevice: leftDevW, destOriginYDevice: chromeDevH,
             regionClipDevice: pageClip,
             ops, presenter);
 
@@ -184,9 +222,46 @@ public sealed class NativeViewportRenderer : IDisposable
         if (overlayTree is not null)
             compositor.AppendSurfaceOps(
                 overlayTree, pageRegion,
-                scale, destOriginXDevice: 0, destOriginYDevice: chromeDevH,
+                scale, destOriginXDevice: leftDevW, destOriginYDevice: chromeDevH,
                 regionClipDevice: pageClip,
                 ops, presenter);
+
+        // Bottom chrome (status bar): the strip below the page, same width as the
+        // page region, fixed at the window bottom. Drawn after the page so it sits
+        // over any page content that would otherwise bleed into the strip.
+        if (bottomChromeTree is not null && bottomChromeRightTree is null)
+            compositor.AppendSurfaceOps(
+                bottomChromeTree,
+                new LayoutRect(0, 0, pageLogicalW, bottomChromeCss),
+                scale, destOriginXDevice: leftDevW, destOriginYDevice: surfaceHeight - bottomDevH,
+                regionClipDevice: new LayoutRect(leftDevW, surfaceHeight - bottomDevH, contentDevW, bottomDevH),
+                ops, presenter);
+        else if (bottomChromeTree is not null || bottomChromeRightTree is not null)
+        {
+            var leftCss = bottomChromeLeftWidthCss <= 0
+                ? pageLogicalW / 2
+                : Math.Clamp(bottomChromeLeftWidthCss, 1, Math.Max(1, pageLogicalW - 1));
+            var rightCss = Math.Max(1, pageLogicalW - leftCss);
+            var leftDev = Math.Clamp((int)Math.Round(leftCss * scale), 1, Math.Max(1, contentDevW - 1));
+            var rightDev = Math.Max(1, contentDevW - leftDev);
+            var bottomDevY = surfaceHeight - bottomDevH;
+
+            if (bottomChromeTree is not null)
+                compositor.AppendSurfaceOps(
+                    bottomChromeTree,
+                    new LayoutRect(0, 0, leftCss, bottomChromeCss),
+                    scale, destOriginXDevice: leftDevW, destOriginYDevice: bottomDevY,
+                    regionClipDevice: new LayoutRect(leftDevW, bottomDevY, leftDev, bottomDevH),
+                    ops, presenter);
+
+            if (bottomChromeRightTree is not null)
+                compositor.AppendSurfaceOps(
+                    bottomChromeRightTree,
+                    new LayoutRect(0, 0, rightCss, bottomChromeCss),
+                    scale, destOriginXDevice: leftDevW + leftDev, destOriginYDevice: bottomDevY,
+                    regionClipDevice: new LayoutRect(leftDevW + leftDev, bottomDevY, rightDev, bottomDevH),
+                    ops, presenter);
+        }
 
         // Screen overlay: whole window, no scroll, on top of everything.
         if (screenOverlayTree is not null)
@@ -204,7 +279,7 @@ public sealed class NativeViewportRenderer : IDisposable
         return presenter.PresentOps(surfaceWidth, surfaceHeight, ops);
     }
 
-    /// <summary>Drops the tile cache — call on navigation to a new document.</summary>
+    /// <summary>Clears cached tiles after navigation to a new document.</summary>
     public void ResetForNavigation()
     {
         _tiles.Clear();

@@ -92,6 +92,15 @@ public class JsLexerTests
         First("0xFF").Value.Should().Be(255.0);
     }
 
+    [Spec("ecma262", "https://tc39.es/ecma262/#prod-HexIntegerLiteral", "12.9.3 Numeric Literals")]
+    [SpecFact]
+    public void Large_hex_literal_decodes_as_number()
+    {
+        var t = First("0x8000000000000000");
+        t.Kind.Should().Be(JsTokenKind.NumericLiteral);
+        t.Value.Should().Be(9223372036854775808.0);
+    }
+
     [TestMethod]
     public void Binary_literal()
     {
@@ -566,6 +575,33 @@ public class JsLexerTests
         var t = First("1_000_000");
         t.Kind.Should().Be(JsTokenKind.NumericLiteral);
         t.Value.Should().Be(1_000_000.0);
+    }
+
+    [TestMethod]
+    public void Source_backed_tokens_preserve_public_text_and_values()
+    {
+        var lex = new JsLexer("alpha += 1_000n; 'plain'");
+
+        var identifier = lex.Next();
+        identifier.Kind.Should().Be(JsTokenKind.Identifier);
+        identifier.TextEquals("alpha").Should().BeTrue();
+        identifier.Lexeme.Should().Be("alpha");
+
+        var op = lex.Next();
+        op.Kind.Should().Be(JsTokenKind.PlusEq);
+        op.LexemeSpan.ToString().Should().Be("+=");
+
+        var bigint = lex.Next();
+        bigint.Kind.Should().Be(JsTokenKind.BigIntLiteral);
+        bigint.Lexeme.Should().Be("1_000n");
+        bigint.Value.Should().Be("1000");
+
+        lex.Next().Kind.Should().Be(JsTokenKind.Semicolon);
+
+        var str = lex.Next();
+        str.Kind.Should().Be(JsTokenKind.StringLiteral);
+        str.Lexeme.Should().Be("'plain'");
+        str.Value.Should().Be("plain");
     }
 
     // ----- Numeric separator early errors ----------------------------------

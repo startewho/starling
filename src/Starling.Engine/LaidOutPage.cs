@@ -1,4 +1,4 @@
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Starling.Css.Cascade;
 using Starling.Dom;
 using Starling.Layout;
@@ -95,8 +95,8 @@ public sealed class LaidOutPage : IDisposable
     /// the retained box tree and its dirty-tracking survive across frames). Null
     /// until incremental layout first runs, or when the feature is off.
     /// </summary>
-    internal LayoutSession GetOrCreateLayoutSession(IDiagnostics diagnostics)
-        => _layoutSession ??= new LayoutSession(Style, _images, diagnostics);
+    internal LayoutSession GetOrCreateLayoutSession(ILoggerFactory loggerFactory)
+        => _layoutSession ??= new LayoutSession(Style, _images, loggerFactory);
 
     /// <summary>Attach the live JS context after construction — used by the
     /// interactive path when the first-paint page is returned unchanged (no

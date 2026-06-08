@@ -34,6 +34,39 @@ public sealed class FetchTests
     }
 
     [TestMethod]
+    public async Task Fetch_file_url_resolves_with_buffer_and_content_type()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"starling_fetch_{Guid.NewGuid():N}.wasm");
+        try
+        {
+            File.WriteAllBytes(path, [0x00, 0x61, 0x73, 0x6d]);
+            var env = NewEnv(new Uri(path).AbsoluteUri);
+            Eval(env.Runtime, $@"
+                globalThis.status = null;
+                globalThis.type = null;
+                globalThis.length = null;
+                fetch('{new Uri(path).AbsoluteUri}').then(function(r) {{
+                    globalThis.status = r.status;
+                    globalThis.type = r.headers.get('content-type');
+                    return r.arrayBuffer();
+                }}).then(function(buffer) {{
+                    globalThis.length = buffer.byteLength;
+                }});
+            ");
+
+            await PumpUntil(env.Runtime, () => env.Runtime.GetGlobal("length").IsNumber);
+
+            env.Runtime.GetGlobal("status").AsNumber.Should().Be(200);
+            env.Runtime.GetGlobal("type").AsString.Should().Be("application/wasm");
+            env.Runtime.GetGlobal("length").AsNumber.Should().Be(4);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [TestMethod]
     public async Task Fetch_status_codes_round_trip()
     {
         await using var server = await LocalServer.Start(ctx =>
@@ -268,6 +301,34 @@ public sealed class FetchTests
         await PumpUntil(env.Runtime, () => env.Runtime.GetGlobal("errName").IsString, timeoutMs: 5000);
         hold.TrySetResult();
         env.Runtime.GetGlobal("errName").AsString.Should().Be("AbortError");
+    }
+
+    [TestMethod]
+    public async Task Fetch_pending_counter_tracks_in_flight_request()
+    {
+        var hold = new TaskCompletionSource();
+        await using var server = await LocalServer.Start(async ctx =>
+        {
+            await hold.Task.ConfigureAwait(false);
+            using var w = new StreamWriter(ctx.Response.OutputStream, new UTF8Encoding(false));
+            w.Write("done");
+        });
+        var env = NewEnv(server.BaseUrl);
+
+        Eval(env.Runtime, $@"
+            globalThis.result = null;
+            fetch('{server.BaseUrl}/slow')
+              .then(function(r) {{ return r.text(); }})
+              .then(function(t) {{ globalThis.result = t; }});
+        ");
+
+        Starling.Bindings.FetchBinding.HasPendingFetches(env.Runtime).Should().BeTrue();
+        hold.TrySetResult();
+
+        await PumpUntil(env.Runtime, () => env.Runtime.GetGlobal("result").IsString);
+
+        env.Runtime.GetGlobal("result").AsString.Should().Be("done");
+        Starling.Bindings.FetchBinding.HasPendingFetches(env.Runtime).Should().BeFalse();
     }
 
     [TestMethod]

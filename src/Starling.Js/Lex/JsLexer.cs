@@ -30,9 +30,10 @@ namespace Starling.Js.Lex;
 /// disambiguates based on position.
 /// </para>
 /// </remarks>
-public sealed class JsLexer
+public ref struct JsLexer
 {
-    private readonly string _src;
+    private readonly ReadOnlySpan<char> _src;
+    private readonly ReadOnlyMemory<char> _srcMemory;
     private readonly IJsLexErrorSink _errors;
     private int _i;
     private int _line = 1;
@@ -59,10 +60,25 @@ public sealed class JsLexer
     private bool _lastEscapeWasInvalid;
 
     public JsLexer(string source, IJsLexErrorSink? errors = null)
+        : this(source.AsMemory(), errors)
     {
-        _src = source ?? throw new ArgumentNullException(nameof(source));
+    }
+
+    public JsLexer(ReadOnlyMemory<char> source, IJsLexErrorSink? errors = null)
+    {
+        _srcMemory = source;
+        _src = source.Span;
         _errors = errors ?? IJsLexErrorSink.Null;
     }
+
+    public JsLexer(ReadOnlySpan<char> source, IJsLexErrorSink? errors = null)
+    {
+        _srcMemory = default;
+        _src = source;
+        _errors = errors ?? IJsLexErrorSink.Null;
+    }
+
+    internal ReadOnlySpan<char> Source => _src;
 
     /// <summary>Return the next token, advancing the stream. EOF is sticky.</summary>
     public JsToken Next()
@@ -205,7 +221,7 @@ public sealed class JsLexer
         _precedingLineTerm = false;
 
         if (_i >= _src.Length)
-            return MakeToken(JsTokenKind.EndOfFile, "", start, start, precededByLT);
+            return MakeToken(JsTokenKind.EndOfFile, ReadOnlyMemory<char>.Empty, start, start, precededByLT);
 
         var c = _src[_i];
 
@@ -252,8 +268,8 @@ public sealed class JsLexer
             // Roll back the peeked `/` (or `/=`) — we're going to re-lex it
             // as a regex; the lexeme that follows the leading slash is part
             // of the regex pattern.
-            _i -= pq.Lexeme.Length;
-            _col -= pq.Lexeme.Length;
+            _i -= pq.Length;
+            _col -= pq.Length;
             _peeked = null;
         }
         SkipWhitespaceAndComments();
@@ -273,7 +289,7 @@ public sealed class JsLexer
             if (IsLineTerminator(c))
             {
                 _errors.Report(JsLexError.UnterminatedRegExp, start, "unterminated regular expression");
-                return MakeToken(JsTokenKind.Invalid, _src[start.Offset.._i], start, CurrentPos(), precededByLT);
+                return MakeSourceToken(JsTokenKind.Invalid, start.Offset, _i - start.Offset, start, CurrentPos(), precededByLT);
             }
             if (c == '\\')
             {
@@ -289,15 +305,23 @@ public sealed class JsLexer
         if (_i >= _src.Length || _src[_i] != '/')
         {
             _errors.Report(JsLexError.UnterminatedRegExp, start, "unterminated regular expression");
-            return MakeToken(JsTokenKind.Invalid, _src[start.Offset.._i], start, CurrentPos(), precededByLT);
+            return MakeSourceToken(JsTokenKind.Invalid, start.Offset, _i - start.Offset, start, CurrentPos(), precededByLT);
         }
-        var pattern = _src[patternStart.._i];
+        var patternEnd = _i;
         Advance(); // closing /
         var flagsStart = _i;
         while (_i < _src.Length && IsIdPart(_src[_i])) Advance();
-        var flags = _src[flagsStart.._i];
-        var lex = _src[start.Offset.._i];
-        return MakeToken(JsTokenKind.RegExpLiteral, lex, start, CurrentPos(), precededByLT, (pattern, flags));
+        return JsToken.RegExpLiteral(
+            _srcMemory,
+            start.Offset,
+            _i - start.Offset,
+            patternStart,
+            patternEnd - patternStart,
+            flagsStart,
+            _i - flagsStart,
+            start,
+            CurrentPos(),
+            precededByLT);
     }
 
     /// <summary>Parser entry point after a <c>}</c> closes a substitution in a
@@ -339,14 +363,14 @@ public sealed class JsLexer
                 {
                     Advance();
                     var kind = head ? JsTokenKind.TemplateNoSubstitution : JsTokenKind.TemplateTail;
-                    return MakeToken(kind, _src[begin.._i], start, CurrentPos(), precededByLT,
+                    return MakeSourceToken(kind, begin, _i - begin, start, CurrentPos(), precededByLT,
                         segmentInvalid ? null : sb.ToString(), invalidEscape: segmentInvalid);
                 }
                 if (c == '$' && _i + 1 < _src.Length && _src[_i + 1] == '{')
                 {
                     Advance(); Advance();
                     var kind = head ? JsTokenKind.TemplateHead : JsTokenKind.TemplateMiddle;
-                    return MakeToken(kind, _src[begin.._i], start, CurrentPos(), precededByLT,
+                    return MakeSourceToken(kind, begin, _i - begin, start, CurrentPos(), precededByLT,
                         segmentInvalid ? null : sb.ToString(), invalidEscape: segmentInvalid);
                 }
                 if (c == '\\')
@@ -378,7 +402,7 @@ public sealed class JsLexer
                 Advance();
             }
             _errors.Report(JsLexError.UnterminatedTemplate, start, "unterminated template literal");
-            return MakeToken(JsTokenKind.Invalid, _src[begin.._i], start, CurrentPos(), precededByLT, sb.ToString());
+            return MakeSourceToken(JsTokenKind.Invalid, begin, _i - begin, start, CurrentPos(), precededByLT, sb.ToString());
         }
         finally { _inTemplateBody = prevInTemplate; }
     }
@@ -391,7 +415,7 @@ public sealed class JsLexer
         // The #-name allows the same \u escapes as a plain identifier (§12.6).
         ScanIdentifierChars(sb, start);
         var lex = sb.ToString();
-        return MakeToken(JsTokenKind.PrivateIdentifier, _src[begin.._i], start, CurrentPos(), precededByLT, lex);
+        return MakeSourceToken(JsTokenKind.PrivateIdentifier, begin, _i - begin, start, CurrentPos(), precededByLT, lex);
     }
 
     // -----------------------------------------------------------------------
@@ -458,19 +482,66 @@ public sealed class JsLexer
     // -----------------------------------------------------------------------
     private JsToken ScanIdentifier(JsPosition start, bool precededByLT)
     {
-        var sb = new StringBuilder();
-        var containsEscape = ScanIdentifierChars(sb, start);
-        var lex = sb.ToString();
+        var begin = _i;
+        var containsEscape = false;
+        StringBuilder? sb = null;
+        var first = true;
+        while (_i < _src.Length)
+        {
+            var c = _src[_i];
+            if (c == '\\')
+            {
+                var cp = PeekUnicodeEscape(_i, out var len);
+                if (cp < 0 || (first ? !IsIdStartCp(cp) : !IsIdPartCp(cp)))
+                {
+                    _errors.Report(JsLexError.InvalidUnicodeEscape, start,
+                        "invalid unicode escape in identifier");
+                    break;
+                }
+                sb ??= new StringBuilder(_src.Slice(begin, _i - begin).ToString());
+                sb.Append(char.ConvertFromUtf32(cp));
+                for (var k = 0; k < len; k++) Advance();
+                containsEscape = true;
+            }
+            else if (first ? IsIdStart(c) : IsIdPart(c))
+            {
+                if (sb is not null) sb.Append(c);
+                Advance();
+            }
+            else if (TryAstralIdChar(_i, first, out _))
+            {
+                if (sb is not null)
+                {
+                    sb.Append(c);
+                    sb.Append(_src[_i + 1]);
+                }
+                Advance();
+                Advance();
+            }
+            else break;
+            first = false;
+        }
+        var end = CurrentPos();
+        if (!containsEscape)
+        {
+            var span = _src.Slice(begin, _i - begin);
+            var sourceKind = KeywordLookup(span);
+            return MakeSourceToken(sourceKind, begin, _i - begin, start, end, precededByLT,
+                sourceKind == JsTokenKind.BooleanLiteral ? span.SequenceEqual("true")
+                    : sourceKind == JsTokenKind.NullLiteral ? (object?)null
+                    : null);
+        }
+
+        var lex = sb is not null ? sb.ToString().AsMemory() : _srcMemory.Slice(begin, _i - begin);
         // The token keeps its keyword kind even when written with a \u escape, so
         // an escaped reserved word stays usable as an IdentifierName (property /
         // member name — `a.if`, `{ if: 1 }`) while the parser still
         // rejects a keyword-kind token where a BindingIdentifier / reference is
         // required (`var if` → SyntaxError), per §12.7.2. A non-reserved
         // escaped name resolves to a plain Identifier.
-        var kind = KeywordLookup(lex);
-        var end = CurrentPos();
+        var kind = KeywordLookup(lex.Span);
         return MakeToken(kind, lex, start, end, precededByLT,
-            kind == JsTokenKind.BooleanLiteral ? lex == "true"
+            kind == JsTokenKind.BooleanLiteral ? lex.Span.SequenceEqual("true")
                 : kind == JsTokenKind.NullLiteral ? (object?)null
                 : null,
             containsEscape: containsEscape);
@@ -562,6 +633,49 @@ public sealed class JsLexer
         _ => JsTokenKind.Identifier,
     };
 
+    private static JsTokenKind KeywordLookup(ReadOnlySpan<char> s)
+        => s.Length switch
+        {
+            2 when s.SequenceEqual("do") => JsTokenKind.Do,
+            2 when s.SequenceEqual("if") => JsTokenKind.If,
+            2 when s.SequenceEqual("in") => JsTokenKind.In,
+            3 when s.SequenceEqual("for") => JsTokenKind.For,
+            3 when s.SequenceEqual("new") => JsTokenKind.New,
+            3 when s.SequenceEqual("try") => JsTokenKind.Try,
+            3 when s.SequenceEqual("var") => JsTokenKind.Var,
+            4 when s.SequenceEqual("case") => JsTokenKind.Case,
+            4 when s.SequenceEqual("else") => JsTokenKind.Else,
+            4 when s.SequenceEqual("enum") => JsTokenKind.Enum,
+            4 when s.SequenceEqual("null") => JsTokenKind.NullLiteral,
+            4 when s.SequenceEqual("this") => JsTokenKind.This,
+            4 when s.SequenceEqual("true") => JsTokenKind.BooleanLiteral,
+            4 when s.SequenceEqual("void") => JsTokenKind.Void,
+            4 when s.SequenceEqual("with") => JsTokenKind.With,
+            5 when s.SequenceEqual("break") => JsTokenKind.Break,
+            5 when s.SequenceEqual("catch") => JsTokenKind.Catch,
+            5 when s.SequenceEqual("class") => JsTokenKind.Class,
+            5 when s.SequenceEqual("const") => JsTokenKind.Const,
+            5 when s.SequenceEqual("false") => JsTokenKind.BooleanLiteral,
+            5 when s.SequenceEqual("super") => JsTokenKind.Super,
+            5 when s.SequenceEqual("throw") => JsTokenKind.Throw,
+            5 when s.SequenceEqual("while") => JsTokenKind.While,
+            5 when s.SequenceEqual("yield") => JsTokenKind.Yield,
+            6 when s.SequenceEqual("delete") => JsTokenKind.Delete,
+            6 when s.SequenceEqual("export") => JsTokenKind.Export,
+            6 when s.SequenceEqual("import") => JsTokenKind.Import,
+            6 when s.SequenceEqual("return") => JsTokenKind.Return,
+            6 when s.SequenceEqual("switch") => JsTokenKind.Switch,
+            6 when s.SequenceEqual("typeof") => JsTokenKind.Typeof,
+            7 when s.SequenceEqual("default") => JsTokenKind.Default,
+            7 when s.SequenceEqual("extends") => JsTokenKind.Extends,
+            7 when s.SequenceEqual("finally") => JsTokenKind.Finally,
+            8 when s.SequenceEqual("continue") => JsTokenKind.Continue,
+            8 when s.SequenceEqual("debugger") => JsTokenKind.Debugger,
+            8 when s.SequenceEqual("function") => JsTokenKind.Function,
+            10 when s.SequenceEqual("instanceof") => JsTokenKind.Instanceof,
+            _ => JsTokenKind.Identifier,
+        };
+
     // -----------------------------------------------------------------------
     // Numeric literal — §12.9.3
     // -----------------------------------------------------------------------
@@ -623,28 +737,30 @@ public sealed class JsLexer
         // BigInt suffix `n` only legal on pure integers.
         if (isInteger && _i < _src.Length && _src[_i] == 'n')
         {
-            var rawBi = _src[begin.._i];
+            var rawBi = _src.Slice(begin, _i - begin);
             // ScanDecimalDigits already reports a trailing `_` as a separator
             // error; no second report needed here.
-            var digitsBi = rawBi.Replace("_", "");
+            var digitsBi = rawBi.IndexOf('_') >= 0 ? RemoveSeparators(rawBi) : null;
+            var digitsSpan = digitsBi is null ? rawBi : digitsBi.AsSpan();
             // §12.9.3 — `LegacyOctalIntegerLiteral` / `NonOctalDecimalIntegerLiteral`
             // (a leading `0` immediately followed by a decimal digit) cannot carry
             // a BigInt suffix: `00n`, `01n`, `08n` are SyntaxErrors.
-            if (digitsBi.Length >= 2 && digitsBi[0] == '0' && IsAsciiDigit(digitsBi[1]))
+            if (digitsSpan.Length >= 2 && digitsSpan[0] == '0' && IsAsciiDigit(digitsSpan[1]))
                 _errors.Report(JsLexError.InvalidNumericLiteral, start,
                     "legacy octal / non-octal-decimal literal cannot have a BigInt suffix");
             Advance(); // consume n
             CheckNoIdentifierAfterNumber(start);
-            return MakeToken(JsTokenKind.BigIntLiteral, _src[begin.._i],
-                start, CurrentPos(), precededByLT, digitsBi);
+            return JsToken.BigIntLiteral(_srcMemory, begin, _i - begin, begin, _i - begin - 1,
+                start, CurrentPos(), precededByLT);
         }
 
-        var lex = _src[begin.._i];
+        var lex = _src.Slice(begin, _i - begin);
         // Strip separators before numeric conversion so `1_000` parses as 1000.
-        var lexNoSep = lex.Contains('_') ? lex.Replace("_", "") : lex;
-        if (!double.TryParse(lexNoSep, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+        var lexNoSep = lex.IndexOf('_') >= 0 ? RemoveSeparators(lex) : null;
+        var parseSpan = lexNoSep is null ? lex : lexNoSep.AsSpan();
+        if (!double.TryParse(parseSpan, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
         {
-            _errors.Report(JsLexError.InvalidNumericLiteral, start, lex);
+            _errors.Report(JsLexError.InvalidNumericLiteral, start, lex.ToString());
             value = double.NaN;
         }
         // §12.9.3 / B.1.2 — a literal that starts with `0` immediately followed
@@ -653,23 +769,24 @@ public sealed class JsLexer
         // SyntaxErrors. Tag the token so the parser can raise the error when the
         // surrounding scope is strict. A leading-zero literal with a `.` or `e`
         // (e.g. `0.5`, `0e3`) is an ordinary DecimalLiteral and not tagged.
-        var legacyOctal = isInteger && lexNoSep.Length >= 2 && lexNoSep[0] == '0' && IsAsciiDigit(lexNoSep[1]);
+        var legacyOctal = isInteger && parseSpan.Length >= 2 && parseSpan[0] == '0' && IsAsciiDigit(parseSpan[1]);
         // §12.9.3 — LegacyOctalIntegerLiteral / NonOctalDecimalIntegerLiteral do
         // not permit numeric separators. If the raw lexeme contains `_` and the
         // stripped form qualifies as a legacy-leading-zero literal, report it.
-        if (legacyOctal && lex.Contains('_'))
+        if (legacyOctal && lex.IndexOf('_') >= 0)
             _errors.Report(JsLexError.InvalidNumericLiteral, start,
                 "numeric separator is not allowed in legacy octal / non-octal decimal literals");
         // Legacy octal literals (`010`) denote a base-8 value; .NET parses the
         // lexeme as decimal above (`010` → 10). Recompute octal-style when every
         // digit is 0-7 so the runtime sees the spec value in sloppy mode.
-        if (legacyOctal && AllOctalDigits(lexNoSep))
+        if (legacyOctal && AllOctalDigits(parseSpan))
         {
             value = 0;
-            for (var k = 0; k < lexNoSep.Length; k++) value = value * 8 + (lexNoSep[k] - '0');
+            for (var k = 0; k < parseSpan.Length; k++) value = value * 8 + (parseSpan[k] - '0');
         }
         CheckNoIdentifierAfterNumber(start);
-        return MakeToken(JsTokenKind.NumericLiteral, lex, start, CurrentPos(), precededByLT, value, legacyOctal);
+        return MakeSourceToken(JsTokenKind.NumericLiteral, begin, _i - begin,
+            start, CurrentPos(), precededByLT, value, legacyOctal);
     }
 
     /// <summary>Consume a run of decimal digits, allowing a single <c>_</c>
@@ -725,7 +842,7 @@ public sealed class JsLexer
                 "identifier or digit immediately after numeric literal");
     }
 
-    private static bool AllOctalDigits(string s)
+    private static bool AllOctalDigits(ReadOnlySpan<char> s)
     {
         foreach (var ch in s) if (ch < '0' || ch > '7') return false;
         return true;
@@ -753,28 +870,29 @@ public sealed class JsLexer
         // BigInt suffix permitted on integer radix forms too.
         if (_i < _src.Length && _src[_i] == 'n')
         {
-            var rawBi = _src[digitStart.._i];
+            var rawBi = _src.Slice(digitStart, _i - digitStart);
             // ScanRadixDigits already reports a trailing `_`; no second report.
-            var digitsBi = rawBi.Replace("_", "");
             Advance();
             CheckNoIdentifierAfterNumber(start);
-            return MakeToken(JsTokenKind.BigIntLiteral, _src[begin.._i],
-                start, CurrentPos(), precededByLT, digitsBi);
+            _ = rawBi;
+            return JsToken.BigIntLiteral(_srcMemory, begin, _i - begin, digitStart, _i - digitStart - 1,
+                start, CurrentPos(), precededByLT);
         }
-        var rawDigits = _src[digitStart.._i];
-        var digits = rawDigits.Contains('_') ? rawDigits.Replace("_", "") : rawDigits;
+        var rawDigits = _src.Slice(digitStart, _i - digitStart);
+        var digitsNoSep = rawDigits.IndexOf('_') >= 0 ? RemoveSeparators(rawDigits) : null;
+        var digits = digitsNoSep is null ? rawDigits : digitsNoSep.AsSpan();
         double value;
         try
         {
-            value = (double)Convert.ToInt64(digits, radix);
+            value = ParseRadixDouble(digits, radix);
         }
         catch
         {
-            _errors.Report(JsLexError.InvalidNumericLiteral, start, _src[begin.._i]);
+            _errors.Report(JsLexError.InvalidNumericLiteral, start, _src.Slice(begin, _i - begin).ToString());
             value = double.NaN;
         }
         CheckNoIdentifierAfterNumber(start);
-        return MakeToken(JsTokenKind.NumericLiteral, _src[begin.._i],
+        return MakeSourceToken(JsTokenKind.NumericLiteral, begin, _i - begin,
             start, CurrentPos(), precededByLT, value);
     }
 
@@ -842,16 +960,36 @@ public sealed class JsLexer
             }
             ScanDecimalDigits(start, allowSeparator: true);
         }
-        var lex = _src[begin.._i];
+        var lex = _src.Slice(begin, _i - begin);
         // Strip separators before numeric conversion (`.0_1e2` -> `.01e2`).
-        var lexNoSep = lex.Contains('_') ? lex.Replace("_", "") : lex;
-        if (!double.TryParse(lexNoSep, System.Globalization.NumberStyles.Float,
+        var lexNoSep = lex.IndexOf('_') >= 0 ? RemoveSeparators(lex) : null;
+        var parseSpan = lexNoSep is null ? lex : lexNoSep.AsSpan();
+        if (!double.TryParse(parseSpan, System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var value))
         {
-            _errors.Report(JsLexError.InvalidNumericLiteral, start, lex);
+            _errors.Report(JsLexError.InvalidNumericLiteral, start, lex.ToString());
             value = double.NaN;
         }
-        return MakeToken(JsTokenKind.NumericLiteral, lex, start, CurrentPos(), precededByLT, value);
+        return MakeSourceToken(JsTokenKind.NumericLiteral, begin, _i - begin,
+            start, CurrentPos(), precededByLT, value);
+    }
+
+    private static double ParseRadixDouble(ReadOnlySpan<char> digits, int radix)
+    {
+        double value = 0;
+        foreach (var ch in digits)
+        {
+            var digit = ch switch
+            {
+                >= '0' and <= '9' => ch - '0',
+                >= 'A' and <= 'F' => ch - 'A' + 10,
+                >= 'a' and <= 'f' => ch - 'a' + 10,
+                _ => throw new FormatException(),
+            };
+            if (digit >= radix) throw new FormatException();
+            value = value * radix + digit;
+        }
+        return value;
     }
 
     private static bool IsDigitInRadix(char c, int radix) => radix switch
@@ -869,7 +1007,8 @@ public sealed class JsLexer
     {
         var begin = _i;
         Advance(); // skip opening quote
-        var sb = new StringBuilder();
+        var valueBegin = _i;
+        StringBuilder? sb = null;
         var legacyOctal = false; // §B.1.2 — a legacy octal / \8 / \9 escape was seen
         while (_i < _src.Length)
         {
@@ -877,18 +1016,32 @@ public sealed class JsLexer
             if (c == quote)
             {
                 Advance();
-                return MakeToken(JsTokenKind.StringLiteral, _src[begin.._i],
-                    start, CurrentPos(), precededByLT, sb.ToString(), legacyOctal);
+                if (sb is null && !legacyOctal)
+                {
+                    return JsToken.StringLiteralNoEscapes(
+                        _srcMemory,
+                        begin,
+                        _i - begin,
+                        valueBegin,
+                        _i - valueBegin - 1,
+                        start,
+                        CurrentPos(),
+                        precededByLT);
+                }
+                return MakeSourceToken(JsTokenKind.StringLiteral, begin, _i - begin,
+                    start, CurrentPos(), precededByLT, sb?.ToString() ?? string.Empty, legacyOctal);
             }
             if (IsLineTerminator(c))
             {
+                sb ??= new StringBuilder(_src.Slice(valueBegin, _i - valueBegin).ToString());
                 _errors.Report(JsLexError.UnterminatedString, start,
                     "string literal contains unescaped line terminator");
-                return MakeToken(JsTokenKind.Invalid, _src[begin.._i],
+                return MakeSourceToken(JsTokenKind.Invalid, begin, _i - begin,
                     start, CurrentPos(), precededByLT, sb.ToString());
             }
             if (c == '\\')
             {
+                sb ??= new StringBuilder(_src.Slice(valueBegin, _i - valueBegin).ToString());
                 Advance();
                 if (_i >= _src.Length)
                 {
@@ -899,11 +1052,12 @@ public sealed class JsLexer
                 if (_lastEscapeWasLegacyOctal) legacyOctal = true;
                 continue;
             }
-            sb.Append(c);
+            if (sb is not null) sb.Append(c);
             Advance();
         }
+        sb ??= new StringBuilder(_src.Slice(valueBegin, _i - valueBegin).ToString());
         _errors.Report(JsLexError.UnterminatedString, start, "closing quote not found");
-        return MakeToken(JsTokenKind.Invalid, _src[begin.._i],
+        return MakeSourceToken(JsTokenKind.Invalid, begin, _i - begin,
             start, CurrentPos(), precededByLT, sb.ToString());
     }
 
@@ -1021,14 +1175,17 @@ public sealed class JsLexer
     {
         if (_i + digits > _src.Length)
             return ReportEscapeError(JsLexError.InvalidEscape, start, "truncated hex escape", "�");
-        var slice = _src.Substring(_i, digits);
+        var slice = _src.Slice(_i, digits);
         foreach (var ch in slice)
         {
             if (!IsHex(ch))
                 return ReportEscapeError(JsLexError.InvalidEscape, start, "bad hex digit", "�");
         }
+        var value = 0;
+        foreach (var ch in slice)
+            value = (value * 16) + HexDigit(ch);
         for (var k = 0; k < digits; k++) Advance();
-        return ((char)Convert.ToInt32(slice, 16)).ToString();
+        return ((char)value).ToString();
     }
 
     // -----------------------------------------------------------------------
@@ -1129,9 +1286,9 @@ public sealed class JsLexer
 
     private JsToken Punct(JsTokenKind kind, int len, JsPosition start, bool precededByLT)
     {
-        var lex = _src.Substring(_i, len);
+        var begin = _i;
         for (var k = 0; k < len; k++) Advance();
-        return MakeToken(kind, lex, start, CurrentPos(), precededByLT);
+        return MakeSourceToken(kind, begin, len, start, CurrentPos(), precededByLT);
     }
 
     // -----------------------------------------------------------------------
@@ -1162,7 +1319,8 @@ public sealed class JsLexer
         || c == '\v'
         || c == '\f'
         || c == '\u00A0'   // NBSP
-        || c == '\uFEFF';
+        || c == '\uFEFF'
+        || c == '\u3000';  // IDEOGRAPHIC SPACE
 
     private static bool IsLineTerminator(char c)
         => c == '\n'
@@ -1321,15 +1479,29 @@ public sealed class JsLexer
         return cp >= 0 && IsIdStartCp(cp);
     }
 
-    private static JsToken MakeToken(
-        JsTokenKind kind, string lexeme, JsPosition start, JsPosition end,
+    private JsToken MakeSourceToken(
+        JsTokenKind kind, int offset, int length, JsPosition start, JsPosition end,
         bool precededByLT, object? value = null, bool legacyOctal = false,
         bool containsEscape = false, bool invalidEscape = false)
-        => new(kind, lexeme, start, end, value)
+        => JsToken.FromSource(kind, _srcMemory, offset, length, start, end, precededByLT,
+            value, legacyOctal, containsEscape, invalidEscape);
+
+    private static JsToken MakeToken(
+        JsTokenKind kind, ReadOnlyMemory<char> lexeme, JsPosition start, JsPosition end,
+        bool precededByLT, object? value = null, bool legacyOctal = false,
+        bool containsEscape = false, bool invalidEscape = false)
+        => JsToken.FromDecodedText(kind, lexeme, start, end, precededByLT,
+            value, legacyOctal, containsEscape, invalidEscape);
+
+    private static string RemoveSeparators(ReadOnlySpan<char> source)
+    {
+        var chars = new char[source.Length];
+        var count = 0;
+        foreach (var ch in source)
         {
-            PrecededByLineTerminator = precededByLT,
-            LegacyOctal = legacyOctal,
-            ContainsEscape = containsEscape,
-            InvalidEscape = invalidEscape,
-        };
+            if (ch != '_')
+                chars[count++] = ch;
+        }
+        return new string(chars, 0, count);
+    }
 }

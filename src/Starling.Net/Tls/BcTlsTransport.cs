@@ -49,7 +49,7 @@ public sealed class BcTlsTransport : ITlsTransport
         var client = new StarlingTlsClient(
             new BcTlsCrypto(new SecureRandom()),
             options,
-            RootCertificates.Default);
+            RootCertificates.SystemTrust);
         var protocol = new TlsClientProtocol(); // non-blocking mode
 
         try

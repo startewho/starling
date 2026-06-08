@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Core.Contexts;
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Dom;
 using Starling.Layout.Box;
@@ -11,6 +12,12 @@ using Starling.Paint.Compositor;
 using LayoutRect = Starling.Layout.Rect;
 
 namespace Starling.Gui.Core.Rendering;
+
+internal static partial class RenderSessionLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "STARLING_FORCE_READBACK=1: using the bitmap present path.")]
+    public static partial void ForceReadback(ILogger logger);
+}
 
 /// <summary>
 /// A render session owns the backend choice for one browser session. Callers hand it
@@ -30,19 +37,18 @@ public interface IRenderSession : IDisposable
 
 public static class RenderSessionFactory
 {
-    public static IRenderSession Create(IDiagnostics? diagnostics = null)
+    public static IRenderSession Create(ILogger? log = null)
     {
-        var diag = diagnostics ?? NoopDiagnostics.Instance;
+        var sessionLog = log ?? NullLogger.Instance;
         var forceReadback = Environment.GetEnvironmentVariable("STARLING_FORCE_READBACK") == "1";
         var supportsSurface = PaintBackendSelector.Selected == PaintBackendKind.ImageSharpWebGpu && !forceReadback;
         if (forceReadback)
         {
-            diag.Log(DiagLevel.Info, "gui",
-                "STARLING_FORCE_READBACK=1: using the bitmap present path.");
+            RenderSessionLog.ForceReadback(sessionLog);
         }
 
-        var backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null, diag);
-        return new DefaultRenderSession(diag, backend, supportsSurface);
+        var backend = PaintBackendSelector.Create(FontResolver.Default, webFonts: null);
+        return new DefaultRenderSession(backend, supportsSurface);
     }
 }
 
@@ -55,7 +61,7 @@ public sealed class PageFrameRequest
     public LayoutRect? Viewport { get; init; }
     public int PageVersion { get; init; }
     public Func<Box, bool>? IsAnimatingLayerRoot { get; init; }
-    public IReadOnlyList<SurfaceOverlayRect>? Overlays { get; init; }
+    public IReadOnlyList<SurfaceOverlayLayer>? DrawingOverlays { get; init; }
     public Func<Element, (double X, double Y)>? ScrollOffsets { get; init; }
     public bool UseLayerTree { get; init; }
 }
@@ -67,6 +73,8 @@ public sealed class CompositedFrameRequest
     public required float Scale { get; init; }
     public required BlockBox ChromeRoot { get; init; }
     public required double ChromeHeightCss { get; init; }
+    public BlockBox? LeftChromeRoot { get; init; }
+    public double LeftChromeWidthCss { get; init; }
     public required BlockBox PageRoot { get; init; }
     public double ScrollX { get; init; }
     public double ScrollY { get; init; }
@@ -75,6 +83,16 @@ public sealed class CompositedFrameRequest
     public IImageResolver? Images { get; init; }
     public BlockBox? OverlayRoot { get; init; }
     public BlockBox? ScreenOverlayRoot { get; init; }
+
+    /// <summary>
+    /// Optional bottom chrome (status bar) — a strip below the page, to the right
+    /// of the sidebar, the same width as the page region. Null leaves the page
+    /// filling all the way to the window bottom (the prior behaviour).
+    /// </summary>
+    public BlockBox? BottomChromeRoot { get; init; }
+    public BlockBox? BottomChromeRightRoot { get; init; }
+    public double BottomChromeLeftWidthCss { get; init; }
+    public double BottomChromeHeightCss { get; init; }
 }
 
 public enum FrameTargetKind
@@ -121,9 +139,9 @@ public sealed class MetalLayerFrameTarget : SurfaceFrameTarget
 
     internal override GpuSurfacePresenter? Presenter => _presenter;
 
-    public static MetalLayerFrameTarget? TryCreate(nint caMetalLayer, IDiagnostics? diagnostics = null)
+    public static MetalLayerFrameTarget? TryCreate(nint caMetalLayer)
     {
-        var presenter = GpuSurfacePresenter.CreateForMetalLayer(caMetalLayer, diagnostics);
+        var presenter = GpuSurfacePresenter.CreateForMetalLayer(caMetalLayer);
         return presenter is null ? null : new MetalLayerFrameTarget(presenter);
     }
 
@@ -143,22 +161,18 @@ public sealed class NativePageSurfaceFrameTarget : SurfaceFrameTarget
     internal override GpuSurfacePresenter? Presenter => _presenter;
 
     public static NativePageSurfaceFrameTarget? TryCreate(
-        NativePageSurface surface,
-        IDiagnostics? diagnostics = null)
+        NativePageSurface surface)
     {
         var presenter = surface.Kind switch
         {
             NativePageSurfaceKind.MetalLayer => GpuSurfacePresenter.CreateForMetalLayer(
-                surface.Handle,
-                diagnostics),
+                surface.Handle),
             NativePageSurfaceKind.WindowsHwnd => GpuSurfacePresenter.CreateForWindowsHwnd(
                 surface.Handle,
-                surface.AuxiliaryHandle,
-                diagnostics),
+                surface.AuxiliaryHandle),
             NativePageSurfaceKind.XlibWindow => GpuSurfacePresenter.CreateForXlibWindow(
                 surface.AuxiliaryHandle,
-                surface.WindowId,
-                diagnostics),
+                surface.WindowId),
             _ => null,
         };
 
@@ -180,9 +194,9 @@ public sealed class WindowSurfaceFrameTarget : SurfaceFrameTarget
 
     internal override GpuSurfacePresenter? Presenter => _presenter;
 
-    public static WindowSurfaceFrameTarget? TryCreate(INativeWindowSource window, IDiagnostics? diagnostics = null)
+    public static WindowSurfaceFrameTarget? TryCreate(INativeWindowSource window)
     {
-        var presenter = GpuSurfacePresenter.CreateForWindow(window, diagnostics);
+        var presenter = GpuSurfacePresenter.CreateForWindow(window);
         return presenter is null ? null : new WindowSurfaceFrameTarget(presenter);
     }
 
@@ -222,20 +236,15 @@ public sealed class RenderFrame : IDisposable
 
 internal sealed class DefaultRenderSession : IRenderSession
 {
-    private readonly IDiagnostics _diag;
     private readonly IPaintBackend _backend;
-    // private readonly PageRendererHost _bitmapRenderer;
     private readonly NativeViewportRenderer? _surfaceRenderer;
     private bool _disposed;
 
-    public DefaultRenderSession(IDiagnostics diagnostics, IPaintBackend backend, bool supportsSurfaceTargets)
+    public DefaultRenderSession(IPaintBackend backend, bool supportsSurfaceTargets)
     {
-        ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(backend);
-        _diag = diagnostics;
         _backend = backend;
-        // _bitmapRenderer = new PageRendererHost(_backend, _diag);
-        _surfaceRenderer = supportsSurfaceTargets ? new NativeViewportRenderer(_backend, _diag) : null;
+        _surfaceRenderer = supportsSurfaceTargets ? new NativeViewportRenderer(_backend) : null;
     }
 
     public bool SupportsSurfaceTargets => _surfaceRenderer is not null;
@@ -248,7 +257,6 @@ internal sealed class DefaultRenderSession : IRenderSession
 
         return target.Kind switch
         {
-            // FrameTargetKind.CpuBitmap => RenderBitmap(request),
             FrameTargetKind.Surface => RenderSurface(request, target),
             _ => RenderFrame.Unavailable(),
         };
@@ -276,6 +284,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.Scale,
             request.ChromeRoot,
             request.ChromeHeightCss,
+            request.LeftChromeRoot,
+            request.LeftChromeWidthCss,
             request.PageRoot,
             request.ScrollX,
             request.ScrollY,
@@ -283,7 +293,11 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.StyleOverride,
             request.Images,
             request.OverlayRoot,
-            request.ScreenOverlayRoot);
+            request.ScreenOverlayRoot,
+            request.BottomChromeRoot,
+            request.BottomChromeRightRoot,
+            request.BottomChromeLeftWidthCss,
+            request.BottomChromeHeightCss);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface compositor did not present the frame.");
@@ -293,34 +307,8 @@ internal sealed class DefaultRenderSession : IRenderSession
 
     public void ResetForNavigation()
     {
-        // _bitmapRenderer.ResetForNavigation();
         _surfaceRenderer?.ResetForNavigation();
     }
-
-    // public void InvalidateBitmapCache()
-    //     => _bitmapRenderer.InvalidateCache();
-
-    // private RenderFrame RenderBitmap(PageFrameRequest request)
-    // {
-    //     var bitmap = request.UseLayerTree
-    //         ? _bitmapRenderer.RenderViaLayerTree(
-    //             request.Root,
-    //             request.Scale,
-    //             request.StyleOverride,
-    //             request.Images,
-    //             request.Viewport,
-    //             request.IsAnimatingLayerRoot)
-    //         : _bitmapRenderer.Render(
-    //             request.Root,
-    //             request.Scale,
-    //             request.StyleOverride,
-    //             request.Images,
-    //             request.Viewport,
-    //             request.PageVersion,
-    //             request.ScrollOffsets);
-    //
-    //     return RenderFrame.FromBitmap(bitmap);
-    // }
 
     private RenderFrame RenderSurface(PageFrameRequest request, IFrameTarget target)
     {
@@ -341,7 +329,7 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.Images,
             request.Viewport,
             request.IsAnimatingLayerRoot,
-            request.Overlays,
+            request.DrawingOverlays,
             request.ScrollOffsets);
         if (!ok)
         {
@@ -359,7 +347,6 @@ internal sealed class DefaultRenderSession : IRenderSession
 
         _disposed = true;
         _surfaceRenderer?.Dispose();
-        // _bitmapRenderer.Dispose();
         _backend.Dispose();
     }
 }

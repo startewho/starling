@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Html;
@@ -58,16 +59,19 @@ public static class IFrameBinding
         JsRealm Realm,
         StarlingHttpClient? Http,
         string DocumentUrl,
-        IDiagnostics Diag);
+        ILoggerFactory LoggerFactory)
+    {
+        public ILogger Log { get; } = LoggerFactory.CreateLogger(typeof(IFrameBinding));
+    }
 
     /// <summary>Register the parent realm's environment so subframes can
     /// resolve relative URLs and reuse the parent's HTTP client.</summary>
     public static void RegisterParent(
         JsRealm parentRealm, string documentUrl,
-        StarlingHttpClient? http, IDiagnostics? diag = null)
+        StarlingHttpClient? http, ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(parentRealm);
-        var env = new ParentEnv(parentRealm, http, documentUrl ?? "about:blank", diag ?? NoopDiagnostics.Instance);
+        var env = new ParentEnv(parentRealm, http, documentUrl ?? "about:blank", loggerFactory ?? NullLoggerFactory.Instance);
         Parents.AddOrUpdate(parentRealm, env);
     }
 
@@ -96,6 +100,35 @@ public static class IFrameBinding
     public static BrowsingContext? TryGetContext(Element frame)
         => Contexts.TryGetValue(frame, out var c) ? c : null;
 
+    /// <summary>The window (browsing-context global) that a document belongs to,
+    /// or null if the document is not the content document of any iframe. Used by
+    /// <c>document.defaultView</c> so an iframe's contentDocument resolves to its
+    /// contentWindow (the few live iframes make the scan cheap).</summary>
+    public static JsObject? WindowForDocument(JsRealm parentRealm, Document doc)
+    {
+        foreach (var kv in Contexts)
+            if (ReferenceEquals(kv.Value.Document, doc))
+                return EnsureContentWindow(parentRealm, kv.Value);
+        return null;
+    }
+
+    /// <summary>The JS realm associated with <paramref name="doc"/> when it is the
+    /// content document of some iframe, or null when it has no nested browsing
+    /// context. Used so a DOM method invoked on a cross-realm document (e.g.
+    /// <c>iframeDoc.createElementNS(bad)</c>) throws its DOMException from that
+    /// document's realm — WebIDL's "relevant realm" — so the error is an instance
+    /// of the iframe's <c>DOMException</c>, not the caller's.</summary>
+    public static JsRealm? RealmForDocument(JsRealm parentRealm, Document doc)
+    {
+        foreach (var kv in Contexts)
+            if (ReferenceEquals(kv.Value.Document, doc))
+            {
+                EnsureContentWindow(parentRealm, kv.Value); // lazily stands up the nested realm
+                return kv.Value.Runtime?.Realm;
+            }
+        return null;
+    }
+
     /// <summary>Replace the iframe's document (used by the loader when a
     /// new src lands). Disposes the previous nested runtime, if any.</summary>
     private static void AssignDocument(BrowsingContext ctx, Document doc, string url)
@@ -113,7 +146,7 @@ public static class IFrameBinding
     public static JsObject EnsureContentWindow(JsRealm parentRealm, BrowsingContext ctx)
     {
         if (ctx.WindowObject is not null) return ctx.WindowObject;
-        var parent = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NoopDiagnostics.Instance);
+        var parent = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NullLoggerFactory.Instance);
         EnsureRuntime(ctx, parent);
         return ctx.WindowObject!;
     }
@@ -133,7 +166,7 @@ public static class IFrameBinding
         // resolves its src and reuses the same HTTP client. The child's own
         // document URL is the resolution base, so callers up the tree don't
         // bleed.
-        RegisterParent(runtime.Realm, ctx.DocumentUrl, parent.Http, parent.Diag);
+        RegisterParent(runtime.Realm, ctx.DocumentUrl, parent.Http, parent.LoggerFactory);
     }
 
     private static void WireFrameWindow(BrowsingContext ctx, ParentEnv parent)
@@ -168,7 +201,7 @@ public static class IFrameBinding
         if (!IsFrameElement(frame)) return;
         var src = frame.GetAttribute("src");
         if (string.IsNullOrEmpty(src)) return;
-        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NoopDiagnostics.Instance);
+        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NullLoggerFactory.Instance);
         var ctx = EnsureContext(frame);
         var resolved = ResolveUrl(parentEnv.DocumentUrl, src);
         var parentRuntime = WindowBinding.RuntimeForRealm(parentRealm);
@@ -185,7 +218,7 @@ public static class IFrameBinding
             }
             catch (Exception ex)
             {
-                parentEnv.Diag.LogException("iframe", ex, $"subframe fetch failed: {resolved}");
+                IFrameBindingLog.SubframeFetchFailed(parentEnv.Log, ex, resolved);
             }
 
             void Settle()
@@ -198,7 +231,7 @@ public static class IFrameBinding
                 }
                 catch (Exception ex)
                 {
-                    parentEnv.Diag.LogException("iframe", ex, $"subframe load failed: {resolved}");
+                    IFrameBindingLog.SubframeLoadFailed(parentEnv.Log, ex, resolved);
                     FireLoad(parentRealm, frame); // still fire so test driver can move on
                 }
             }
@@ -218,7 +251,7 @@ public static class IFrameBinding
         if (ct.Contains("xml") || ct.Contains("xhtml"))
             doc = ParseXmlIntoDocument(body);
         else
-            doc = HtmlParser.Parse(body, parent.Diag, scriptingEnabled: true);
+            doc = HtmlParser.Parse(body, scriptingEnabled: true);
         AssignDocument(ctx, doc, url);
         EnsureRuntime(ctx, parent);
         ExecuteFrameScripts(ctx, parent, url);
@@ -257,7 +290,7 @@ public static class IFrameBinding
                 }
                 catch (Exception ex)
                 {
-                    parent.Diag.LogException("iframe", ex, $"subframe script fetch failed: {resolved}");
+                    IFrameBindingLog.SubframeScriptFetchFailed(parent.Log, ex, resolved);
                     continue;
                 }
             }
@@ -279,9 +312,39 @@ public static class IFrameBinding
             }
             catch (Exception ex)
             {
-                parent.Diag.LogException("iframe", ex, $"subframe script error in {label}");
+                IFrameBindingLog.SubframeScriptError(parent.Log, ex, label);
             }
         }
+    }
+
+    /// <summary>HTML §iframe — synchronously load a parser-inserted iframe's
+    /// <c>src</c> during the parent's load lifecycle (DOMContentLoaded). Unlike
+    /// <see cref="OnSrcSet"/> (which fetches off-thread for a script-driven src
+    /// write), this fetches + parses inline so <c>contentDocument</c> is ready
+    /// before the parent's <c>load</c> event, which conformance tests wait on.
+    /// The subframe fetch is same-origin/localhost and small, matching the
+    /// already-synchronous external-script fetch in <see cref="ExecuteFrameScripts"/>.</summary>
+    public static void LoadSubframeNow(JsRealm parentRealm, Element frame)
+    {
+        ArgumentNullException.ThrowIfNull(parentRealm);
+        ArgumentNullException.ThrowIfNull(frame);
+        if (!IsFrameElement(frame)) return;
+        var src = frame.GetAttribute("src");
+        if (string.IsNullOrEmpty(src)) return;
+        var parentEnv = Parents.TryGetValue(parentRealm, out var p) ? p : new ParentEnv(parentRealm, null, "about:blank", NullLoggerFactory.Instance);
+        if (parentEnv.Http is null) return; // no HTTP client → nothing to fetch through
+        var ctx = EnsureContext(frame);
+        var resolved = ResolveUrl(parentEnv.DocumentUrl, src);
+        try
+        {
+            var (body, contentType) = FetchAsync(parentEnv.Http, resolved).GetAwaiter().GetResult();
+            LoadIntoFrame(ctx, parentEnv, resolved, body, contentType);
+        }
+        catch (Exception ex)
+        {
+            IFrameBindingLog.SubframeSyncLoadFailed(parentEnv.Log, ex, resolved);
+        }
+        FireLoad(parentRealm, frame);
     }
 
     private static void FireLoad(JsRealm parentRealm, Element frame)
@@ -290,7 +353,9 @@ public static class IFrameBinding
         // iframe element (via DOM EventTarget) and to the wrapper's on-load
         // handler if any.
         var ev = new Event("load", new EventInit(Bubbles: false, Cancelable: false));
-        try { frame.DispatchEvent(ev); } catch { /* fail-soft */ }
+        // fail-soft: load event dispatch must not throw up into the caller
+        try { frame.DispatchEvent(ev); }
+        catch (Exception ex) { IFrameBindingLog.LoadEventDispatchFailed(NullLogger.Instance, ex); }
 
         // on{event} handler attached via `iframe.onload = fn` lives on the
         // JS wrapper, not the host EventTarget. Invoke it explicitly.
@@ -317,10 +382,15 @@ public static class IFrameBinding
 
     private static string ResolveUrl(string baseUrl, string href)
     {
-        if (Uri.TryCreate(href, UriKind.Absolute, out var abs)) return abs.ToString();
+        // Resolve against the base FIRST. A path-absolute href ("/common/x")
+        // must combine with the base's scheme+authority, but System.Uri treats
+        // a Unix rooted path as an absolute file:// URI — so an href-first
+        // short-circuit would wrongly yield "file:///common/x". Combining with
+        // an absolute base also correctly passes a truly absolute href through.
         if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var bu)
             && Uri.TryCreate(bu, href, out var combined))
             return combined.ToString();
+        if (Uri.TryCreate(href, UriKind.Absolute, out var abs)) return abs.ToString();
         return href;
     }
 
@@ -375,11 +445,105 @@ public static class IFrameBinding
     /// <summary>Trivial XML parse for the WPT XML/XHTML iframe pattern.
     /// We don't have an XML parser yet; fall back to the HTML parser, then
     /// flip the document's <see cref="Document.IsHtml"/> off so attribute
-    /// case behaviour matches the WHATWG XML branch.</summary>
+    /// case behavior matches the WHATWG XML branch.</summary>
+    /// <summary>Parse an XML/XHTML document into a Starling DOM tree using the
+    /// .NET XML reader (namespace-aware, case-preserving). A well-formedness error
+    /// produces a &lt;parsererror&gt; document, matching browsers.</summary>
     private static Document ParseXmlIntoDocument(string body)
     {
-        var doc = HtmlParser.Parse(body, null, scriptingEnabled: false);
-        doc.IsHtml = false;
+        var doc = new Document { IsHtml = false };
+        try
+        {
+            var settings = new System.Xml.XmlReaderSettings
+            {
+                DtdProcessing = System.Xml.DtdProcessing.Parse,
+                ValidationType = System.Xml.ValidationType.None,
+                IgnoreWhitespace = false,
+                IgnoreComments = false,
+                IgnoreProcessingInstructions = false,
+                CheckCharacters = false,
+                XmlResolver = null, // never fetch external DTDs
+            };
+            using var sr = new System.IO.StringReader(body);
+            using var reader = System.Xml.XmlReader.Create(sr, settings);
+            Node current = doc;
+            var stack = new Stack<Node>();
+            while (reader.Read())
+            {
+                switch (reader.NodeType)
+                {
+                    case System.Xml.XmlNodeType.Element:
+                        {
+                            var qname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
+                            var ns = string.IsNullOrEmpty(reader.NamespaceURI) ? null : reader.NamespaceURI;
+                            var el = doc.CreateElementNS(ns, qname);
+                            var empty = reader.IsEmptyElement;
+                            if (reader.HasAttributes)
+                            {
+                                for (var i = 0; i < reader.AttributeCount; i++)
+                                {
+                                    reader.MoveToAttribute(i);
+                                    var aname = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : reader.Prefix + ":" + reader.LocalName;
+                                    el.SetAttribute(aname, reader.Value);
+                                }
+                                reader.MoveToElement();
+                            }
+                            current.AppendChild(el);
+                            if (!empty) { stack.Push(current); current = el; }
+                            break;
+                        }
+                    case System.Xml.XmlNodeType.EndElement:
+                        if (stack.Count > 0) current = stack.Pop();
+                        break;
+                    case System.Xml.XmlNodeType.Text:
+                    case System.Xml.XmlNodeType.Whitespace:
+                    case System.Xml.XmlNodeType.SignificantWhitespace:
+                        current.AppendChild(doc.CreateTextNode(reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.CDATA:
+                        current.AppendChild(doc.CreateCDataSection(reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.Comment:
+                        current.AppendChild(doc.CreateComment(reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.ProcessingInstruction:
+                        current.AppendChild(doc.CreateProcessingInstruction(reader.Name, reader.Value));
+                        break;
+                    case System.Xml.XmlNodeType.DocumentType:
+                        doc.AppendChild(doc.CreateDocumentType(reader.Name,
+                            reader.GetAttribute("PUBLIC") ?? "", reader.GetAttribute("SYSTEM") ?? ""));
+                        break;
+                }
+            }
+        }
+        catch (System.Xml.XmlException)
+        {
+            // Not well-formed: browsers replace the document with a parsererror tree.
+            while (doc.FirstChild is { } c) c.RemoveFromParent();
+            doc.AppendChild(doc.CreateElementNS(
+                "http://www.mozilla.org/newlayout/xml/parsererror.xml", "parsererror"));
+        }
         return doc;
     }
+}
+
+internal static partial class IFrameBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe fetch failed: {Url}")]
+    public static partial void SubframeFetchFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe load failed: {Url}")]
+    public static partial void SubframeLoadFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe script fetch failed: {Url}")]
+    public static partial void SubframeScriptFetchFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe script error in {Label}")]
+    public static partial void SubframeScriptError(ILogger logger, Exception ex, string label);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "subframe sync load failed: {Url}")]
+    public static partial void SubframeSyncLoadFailed(ILogger logger, Exception ex, string url);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "load event dispatch failed on iframe element (fail-soft)")]
+    public static partial void LoadEventDispatchFailed(ILogger logger, Exception ex);
 }

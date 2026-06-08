@@ -196,6 +196,12 @@ features previously listed as deferred — `:has`, `:nth-*`, `:is`, `:where`,
 > 12/16 are layout/CSS-only (disjoint); 13/14/15 share the paint display-list +
 > backend switch and are reconciled on merge by the orchestrator.
 
+## M10 — Hardening, security, perf
+
+| ID | Status | Owner | Subsystem |
+|---|---|---|---|
+| [wp:M10-01-diagnostics-hot-path](M10/wp-M10-01-diagnostics-hot-path.md) | 🔵 available | — | cross-cutting |
+
 ## M12 — Tiled compositor + layer tree
 
 Long-term fix for "we render the entire page in one bitmap" (the architectural
@@ -222,6 +228,7 @@ quality monotonically improves at every step.
 | [wp:M12-12-webgpu-scene-cache](M12/wp-M12-12-webgpu-scene-cache.md) | ⚫ closed (not viable — RenderScene bakes transform) | — | Starling.Paint |
 | [wp:M12-13-gpu-composite-blend](M12/wp-M12-13-gpu-composite-blend.md) | 🟢 complete | agent-claude-opus | Starling.Paint |
 | [wp:M12-14-compositor-path-gate](M12/wp-M12-14-compositor-path-gate.md) | ⚫ blocked | — | Starling.Gui |
+| [wp:M12-15-webgpu-shutdown-lifetime](M12/wp-M12-15-webgpu-shutdown-lifetime.md) | 🟢 complete | agent-codex-cody | Starling.Paint |
 
 ## M13 — Engine module code review
 
@@ -241,6 +248,7 @@ Parallel review track for targeted module audits. Each package records
 | [wp:M13-09-review-js](M13/wp-M13-09-review-js.md) | 🔵 available | — | Starling.Js | — |
 | [wp:M13-10-review-bindings](M13/wp-M13-10-review-bindings.md) | 🔵 available | — | Starling.Bindings | — |
 | [wp:M13-11-review-engine](M13/wp-M13-11-review-engine.md) | 🔵 available | — | Starling.Engine | — |
+| [wp:M13-12-anglesharp-html-backend](M13/wp-M13-12-anglesharp-html-backend.md) | 🟡 claimed | agent-claude-anglesharp | Starling.Html | — |
 
 ## Spec conformance (ongoing — CSS-V1)
 

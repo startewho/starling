@@ -32,11 +32,9 @@
          so this takes precedence over the repo-root sixlabors.lic on CI. -->
     <SixLaborsLicenseKey Condition="'$(SixLaborsLicenseKey)' == ''">$(SIXLABORS_LICENSE_KEY)</SixLaborsLicenseKey>
 
-    <!-- Local dev: point Six Labors license validation at the repo-root
-         sixlabors.lic so every consumer project finds it; the targets glob is
-         rooted at each project dir and won't walk up. ImageSharp.Drawing 3 +
-         Fonts 3 + image codec licensing require this. -->
-    <SixLaborsLicenseFile Condition="'$(SixLaborsLicenseFile)' == '' And Exists('$(MSBuildThisFileDirectory)sixlabors.lic')">$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
+    <!-- Local dev: the Six Labors license FILE is resolved from the shared
+         org-root Starling.Org.props, imported below. -->
+
 
     <!--
       Strict-on-purpose, but a handful of CA / RCS rules are noisy on
@@ -49,12 +47,38 @@
   </PropertyGroup>
 
   <!--
+    Six Labors license: prefer the shared copy at the starling-browser org root,
+    declared once in Starling.Org.props (found by walking up the folder tree, so
+    it resolves from nested submodules too); fall back to a repo-local
+    sixlabors.lic for standalone clones. CI finds neither and uses
+    SIXLABORS_LICENSE_KEY above.
+  -->
+  <PropertyGroup>
+    <StarlingOrgProps>$([MSBuild]::GetPathOfFileAbove('Starling.Org.props', '$(MSBuildThisFileDirectory)'))</StarlingOrgProps>
+  </PropertyGroup>
+  <Import Project="$(StarlingOrgProps)" Condition="'$(StarlingOrgProps)' != ''" />
+  <PropertyGroup>
+    <SixLaborsLicenseFile Condition="'$(SixLaborsLicenseFile)' == '' And Exists('$(MSBuildThisFileDirectory)sixlabors.lic')">$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
+  </PropertyGroup>
+
+  <!--
     Analyzers are shared across every project. PrivateAssets="all" prevents
     them from being treated as transitive package references.
   -->
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" PrivateAssets="all" />
     <PackageReference Include="Roslynator.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!--
+    ILogger is the engine's logging surface everywhere. The Abstractions package
+    carries ILogger/ILoggerFactory/NullLogger and the [LoggerMessage] source
+    generator; concrete providers (console, OpenTelemetry, in-memory) are wired
+    up only at the host. Shared by every project so source-generated log methods
+    and NullLoggerFactory are available in libraries and tests alike.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
   <!--

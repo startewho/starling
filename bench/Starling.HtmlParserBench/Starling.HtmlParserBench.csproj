@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Standalone HTML-parser comparison bench: Starling.Html vs AngleSharp, on the
+    same fixtures, ranked on one machine so the numbers compare fairly.
+
+    Kept as its OWN project, separate from bench/Starling.Bench, on purpose
+    (same reasoning as Starling.JsEngineBench vs Jint): it needs only
+    Starling.Html + Starling.Dom + AngleSharp (+ the AngleSharp backend adapter),
+    so it builds and runs without dragging in the paint/compositor benches and
+    needs no Six Labors license. AngleSharp is pure-managed, so referencing it
+    does not affect the managed-first interop policy. See
+    bench/html-parser-comparison.md for how to run + results.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="AngleSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Starling.Html\Starling.Html.csproj" />
+    <ProjectReference Include="..\..\src\Starling.Dom\Starling.Dom.csproj" />
+    <!-- The "AngleSharp+copy" column measures AngleSharp parse PLUS the tree copy
+         into the Starling DOM — the real in-engine cost of the opt-in backend. -->
+    <ProjectReference Include="..\..\src\Starling.Html.AngleSharp\Starling.Html.AngleSharp.csproj" />
+  </ItemGroup>
+</Project>

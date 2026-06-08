@@ -18,6 +18,27 @@ public sealed class ImageSharpTextMeasurerTests
     private const double FontSize = 16d;
 
     /// <summary>
+    /// A run whose glyph count exceeds its character count (non-1:1) must slice
+    /// without overrunning the character string. Before the clamp, slicing by
+    /// glyph index ran <c>Text.Substring</c> past the string and threw.
+    /// </summary>
+    [TestMethod]
+    public void Slice_clamps_text_substring_when_glyphs_exceed_chars()
+    {
+        var font = SystemFonts.Families.First().CreateFont(16f);
+        var glyphs = new[]
+        {
+            new ShapedGlyph(1, 0, 0), new ShapedGlyph(2, 4, 0),
+            new ShapedGlyph(3, 8, 0), new ShapedGlyph(4, 12, 0),
+        };
+        var run = new ImageSharpShapedRun("ab", font, new TextBlock("ab", new TextOptions(font)), glyphs, 16d);
+
+        var act = () => run.Slice(0, 4);
+        act.Should().NotThrow("glyph-index slicing must clamp to the character string for non-1:1 runs");
+        run.Slice(0, 4).Glyphs.Length.Should().Be(4, "glyph slicing stays exact even when text slicing clamps");
+    }
+
+    /// <summary>
     /// Bold text must measure wider than Regular at the same font size for any
     /// system family that ships a real Bold face. If the measurer regressed
     /// to bundled-only OpenSans (no Bold face), Bold and Regular collapse to

@@ -20,11 +20,18 @@ public static class AbstractOperations
     {
         if (input.Kind != JsValueKind.Object) return input;
         var obj = input.AsObject;
-        var exotic = obj.Get(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive);
-        if (IsCallable(exotic))
+        var exotic = Get(vm, obj, JsPropertyKey.Symbol(Starling.Js.Intrinsics.SymbolCtor.ToPrimitive));
+        if (!exotic.IsUndefined && !exotic.IsNull)
         {
+            if (!IsCallable(exotic))
+                throw new JsThrow(vm is not null
+                    ? vm.Realm.NewTypeError("@@toPrimitive must be callable")
+                    : JsValue.String("@@toPrimitive must be callable"));
             var r = Call(vm, exotic, input, new[] { JsValue.String(hint) });
             if (r.Kind != JsValueKind.Object) return r;
+            throw new JsThrow(vm is not null
+                ? vm.Realm.NewTypeError("@@toPrimitive must return a primitive value")
+                : JsValue.String("@@toPrimitive must return a primitive value"));
         }
         // §13.4.10 OrdinaryToPrimitive: try toString/valueOf in hint order.
         // Use Get (chain-walking) + Call so BOTH native (e.g.
@@ -113,6 +120,8 @@ public static class AbstractOperations
         // throws "VM required"). Covers compound-assignment / ++ / -- / unary.
         var prim = ToPrimitive(realm.ActiveVm, value, "number");
         if (prim.IsBigInt) return prim;
+        if (prim.IsSymbol)
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
         return JsValue.Number(JsValue.ToNumber(prim));
     }
 
@@ -165,6 +174,14 @@ public static class AbstractOperations
     public static JsValue Get(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver = default)
     {
         if (receiver.IsUndefined) receiver = JsValue.Object(obj);
+        return GetCore(vm, obj, key, receiver);
+    }
+
+    public static JsValue GetWithReceiver(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver)
+        => GetCore(vm, obj, key, receiver);
+
+    private static JsValue GetCore(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue receiver)
+    {
         // §10.5.8: Proxy exotic objects route property reads through the [[Get]]
         // internal method (which consults the `get` trap). Done at the AO entry
         // so every call site picks it up — the VM and intrinsics all call here
@@ -219,6 +236,14 @@ public static class AbstractOperations
     public static bool Set(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver = default)
     {
         if (receiver.IsUndefined) receiver = JsValue.Object(obj);
+        return SetCore(vm, obj, key, value, receiver);
+    }
+
+    public static bool SetWithReceiver(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver)
+        => SetCore(vm, obj, key, value, receiver);
+
+    private static bool SetCore(JsVm? vm, JsObject obj, JsPropertyKey key, JsValue value, JsValue receiver)
+    {
         // §10.5.9: Proxy exotic objects route writes through the [[Set]] internal
         // method (which consults the `set` trap). See note on Get above.
         if (obj is JsProxy proxy)
@@ -262,7 +287,8 @@ public static class AbstractOperations
         // For the common case (receiver === obj) this is identical to the old
         // behavior; for super[...] = v / Reflect.set the property is created on
         // the receiver rather than the prototype that was walked.
-        var target = receiver.IsObject ? receiver.AsObject : obj;
+        if (!receiver.IsObject) return false;
+        var target = receiver.AsObject;
         if (target.HasOwn(key))
         {
             var existing = target.GetOwnPropertyDescriptor(key);
@@ -276,57 +302,6 @@ public static class AbstractOperations
         if (!target.Extensible) return false;
         return target.DefineOwnProperty(key, PropertyDescriptor.Data(value));
     }
-
-    /// <summary>Per-native-function aggregate timing for the active VM/Realm.
-    /// Diagnostic-only. Keyed by <see cref="JsNativeFunction.Name"/>; each
-    /// entry tracks call count and total Stopwatch ticks. Read+cleared by the
-    /// host's script-session trace shim. Always populated (negligible per-call
-    /// overhead) so a single STARLING_DIAG_TRACE=1 run can surface
-    /// intrinsic-cost hot spots without a re-build.
-    /// <para>
-    /// Ticks here are <b>inclusive</b>: a call to <c>Function.prototype.apply</c>
-    /// that dispatches a JS body charges that body's wall-clock against
-    /// <c>apply</c>. <see cref="NativeCallSelfTicks"/> holds the same key set
-    /// with the inner JS / inner native time subtracted, so a reader can tell
-    /// whether the native function itself is slow or just dispatched expensive
-    /// work.
-    /// </para></summary>
-    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Count, long Ticks)> NativeCallStats =
-        new(StringComparer.Ordinal);
-
-    /// <summary>Companion to <see cref="NativeCallStats"/> tracking only the
-    /// outermost frame's <i>self</i> time — total elapsed minus any nested
-    /// CallNative/JsFunction invocations made from the body. Reveals the
-    /// inclusive/exclusive split for dispatchers like <c>call</c>/<c>apply</c>/
-    /// <c>forEach</c>.</summary>
-    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> NativeCallSelfTicks =
-        new(StringComparer.Ordinal);
-
-    /// <summary>Per-thread stack of "ticks charged to nested callees so far"
-    /// for the active native frame. Each <see cref="CallNative"/> pushes a zero
-    /// on entry; its own elapsed minus the popped child-sum is the self-time
-    /// it accumulates. Re-entrancy from JS bodies (which can call more native
-    /// methods) updates the same stack so the math composes.</summary>
-    [ThreadStatic]
-    private static System.Collections.Generic.List<long>? t_nestedTicksStack;
-
-    /// <summary>Single-call outliers — any <see cref="CallNative"/> invocation
-    /// whose inclusive elapsed exceeded <see cref="NativeOutlierMinTicks"/>.
-    /// Diagnostic ring of up to <see cref="NativeOutlierCapacity"/> entries so
-    /// (name, ticks) outliers (e.g. one 37 ms <c>apply</c>) are individually
-    /// visible instead of hiding in the per-function average.</summary>
-    public static readonly System.Collections.Concurrent.ConcurrentQueue<(string Name, long Ticks)> NativeCallOutliers =
-        new();
-
-    /// <summary>Outlier threshold — calls below this are not recorded
-    /// individually. 5 ms picks up multi-frame native dispatchers and
-    /// pathological regex matches without flooding on normal traffic.</summary>
-    public static readonly long NativeOutlierMinTicks =
-        System.Diagnostics.Stopwatch.Frequency / 200;  // 5 ms
-
-    /// <summary>Cap on the outlier queue. Older entries are evicted FIFO so a
-    /// long-running script doesn't grow this unboundedly.</summary>
-    public const int NativeOutlierCapacity = 64;
 
     /// <summary>§7.3.14 Call — dispatch to native or JS callables. For JS
     /// functions, requires the VM. For native functions, the VM is optional.</summary>
@@ -356,44 +331,7 @@ public static class AbstractOperations
     }
 
     private static JsValue CallNative(JsNativeFunction nat, JsValue thisValue, JsValue[] args)
-    {
-        // Push a zero "charged to nested callees" slot for this frame; any
-        // nested CallNative (or JsFunction body recursing through CallFunction
-        // → CallNative) will add its own inclusive elapsed into this slot, so
-        // self = (my inclusive elapsed) − (sum of nested ticks).
-        var stack = t_nestedTicksStack ??= new System.Collections.Generic.List<long>();
-        stack.Add(0);
-        var start = System.Diagnostics.Stopwatch.GetTimestamp();
-        try
-        {
-            return nat.Body(thisValue, args);
-        }
-        finally
-        {
-            var dt = System.Diagnostics.Stopwatch.GetTimestamp() - start;
-            var nested = stack[^1];
-            stack.RemoveAt(stack.Count - 1);
-            // Charge my inclusive elapsed up to whatever native frame is now on
-            // top (if any) so it can subtract it from its own self time later.
-            if (stack.Count > 0) stack[^1] += dt;
-
-            var key = string.IsNullOrEmpty(nat.Name) ? "<anon>" : nat.Name;
-            NativeCallStats.AddOrUpdate(key,
-                (1, dt),
-                (_, prev) => (prev.Count + 1, prev.Ticks + dt));
-
-            var self = dt - nested;
-            if (self < 0) self = 0;  // clock skew guard (Stopwatch.GetTimestamp is monotonic but ticks accounting can race in proxies)
-            NativeCallSelfTicks.AddOrUpdate(key, self, (_, prev) => prev + self);
-
-            if (dt >= NativeOutlierMinTicks)
-            {
-                NativeCallOutliers.Enqueue((key, dt));
-                while (NativeCallOutliers.Count > NativeOutlierCapacity)
-                    NativeCallOutliers.TryDequeue(out _);
-            }
-        }
-    }
+        => nat.Body(thisValue, args);
 
     /// <summary>§7.3.14 Call step 2 — calling a non-callable is a TypeError.
     /// Uses the realm's TypeError when a VM is available so embedders observe a

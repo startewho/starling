@@ -129,6 +129,22 @@ public class SymbolTests
         r.AsString.Should().Be("ok-default!");
     }
 
+    [TestMethod]
+    public void ToPrimitive_non_callable_well_known_symbol_throws_type_error()
+    {
+        var act = () => Eval("var o = { [Symbol.toPrimitive]: 1 }; o + 0;");
+        act.Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
+    public void ToPrimitive_returning_object_throws_type_error()
+    {
+        var act = () => Eval("var o = { [Symbol.toPrimitive]: function() { return {}; } }; o + 0;");
+        act.Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
     private static JsValue Eval(string src)
     {
         var program = new JsParser(src).ParseProgram();

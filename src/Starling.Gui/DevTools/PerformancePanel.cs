@@ -3,11 +3,19 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Chrome;
 using Starling.Gui.Theme;
 using Starling.Telemetry;
 
 namespace Starling.Gui.DevTools;
+
+internal static partial class PerformancePanelLog
+{
+    [LoggerMessage(Level = LogLevel.Trace, Message = "performance span pump stopped")]
+    public static partial void PumpStopped(ILogger logger, OperationCanceledException ex);
+}
 
 /// <summary>
 /// Live performance panel wired to <see cref="TelemetryStream.Activities"/>.
@@ -19,6 +27,7 @@ public sealed class PerformancePanel : Grid, IDisposable
 
     private readonly ThemeManager _tm;
     private readonly TelemetryStream _stream;
+    private readonly ILogger _log;
     private readonly StackPanel _flameRows;
     private readonly TextBlock _summary;
     private readonly InMemoryActivitySink.Subscription _subscription;
@@ -26,10 +35,12 @@ public sealed class PerformancePanel : Grid, IDisposable
 
     private readonly List<ActivityRecord> _recent = new(MaxRows);
 
-    public PerformancePanel(ThemeManager tm, TelemetryStream stream)
+    public PerformancePanel(ThemeManager tm, TelemetryStream stream,
+        ILogger<PerformancePanel>? log = null)
     {
         _tm = tm;
         _stream = stream;
+        _log = log ?? NullLogger<PerformancePanel>.Instance;
         var t = tm.Tokens;
 
         Background = new SolidColorBrush(t.Panel);
@@ -76,7 +87,7 @@ public sealed class PerformancePanel : Grid, IDisposable
                 });
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex) { PerformancePanelLog.PumpStopped(_log, ex); }
     }
 
     private void Push(ActivityRecord record)

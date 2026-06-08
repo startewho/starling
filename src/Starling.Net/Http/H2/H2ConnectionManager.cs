@@ -1,4 +1,13 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Starling.Net.Http.H2;
+
+internal static partial class H2ConnectionManagerLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "H2 connection dispose threw during teardown")]
+    public static partial void ConnectionDisposeFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// Holds at most one live <see cref="H2Connection"/> per origin. Unlike the
@@ -10,7 +19,13 @@ internal sealed class H2ConnectionManager : IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly Dictionary<OriginKey, H2Connection> _byOrigin = [];
+    private readonly ILogger _log;
     private bool _disposed;
+
+    public H2ConnectionManager(ILogger<H2ConnectionManager>? log = null)
+    {
+        _log = log ?? NullLogger<H2ConnectionManager>.Instance;
+    }
 
     /// <summary>Return the live, usable connection for an origin, or null.</summary>
     public H2Connection? TryGet(OriginKey origin)
@@ -68,7 +83,7 @@ internal sealed class H2ConnectionManager : IAsyncDisposable
         foreach (var c in all)
         {
             try { await c.DisposeAsync().ConfigureAwait(false); }
-            catch { /* teardown of a dying connection */ }
+            catch (Exception ex) { H2ConnectionManagerLog.ConnectionDisposeFailed(_log, ex); /* teardown of a dying connection */ }
         }
     }
 }

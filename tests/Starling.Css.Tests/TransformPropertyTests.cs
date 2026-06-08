@@ -81,9 +81,12 @@ public sealed class TransformPropertyTests
     [TestMethod]
     public void Clip_path_with_inset_function()
     {
+        // clip-path now parses to a typed CssClipPath / CssInsetShape value
+        // (CSS Masking 1 §7 + CSS Shapes 1 §4.1).
         var decls = Expand("clip-path: inset(10px);");
 
         var value = decls.Single(d => d.Id == PropertyId.ClipPath).Value;
-        value.Should().BeOfType<CssFunctionValue>();
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        clip.Shape.Should().BeOfType<CssInsetShape>();
     }
 }

@@ -145,6 +145,12 @@ public static class PseudoElementHelpers
 /// selector as a parse error.</summary>
 public sealed record NthArgument(NthPattern Pattern, SelectorList? OfSelector = null, bool IsValid = true);
 
+/// <summary>Argument for the functional <c>:heading()</c> pseudo-class (Selectors 5 §heading).
+/// The argument is a comma-separated list of plain integers — each names a heading level to
+/// match. <paramref name="IsValid"/> is false when the list failed to parse (e.g. An+B forms,
+/// non-integers, an empty list); the selector then matches nothing.</summary>
+public sealed record HeadingArgument(IReadOnlyList<int> Levels, bool IsValid = true);
+
 public readonly record struct Specificity(int Ids, int Classes, int Types) : IComparable<Specificity>
 {
     public static Specificity Zero => new(0, 0, 0);
