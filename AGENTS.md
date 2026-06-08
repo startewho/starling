@@ -146,6 +146,19 @@ resource. `headless` is registered with explicit start and is launched from the
 dashboard when needed. `sites` serves `testdata/sites/` at
 `http://localhost:8088/`. Restart the resource after editing those fixtures.
 
+**Always test a demo site through this harness, never from the files.** To check
+a site in `testdata/sites/<name>/`, load `http://localhost:8088/<name>/` in the
+running `gui` (or `headless`) resource. Do not render the on-disk `index.html` —
+not a `file://` path, not a loopback or in-process stub. Rendering from disk
+skips the real serving path, so it hides bugs that only show up there. The
+biggest one: `sites` is a YARP container, so when the container runtime (Docker
+or Podman) is not running it serves nothing and every site returns 404. If a
+site will not load, do not guess — check the runtime is up with `docker info`,
+check the `sites` resource is healthy in the Aspire dashboard, then
+`curl http://localhost:8088/<name>/`. A site that renders from disk but not
+through the harness is not working, and "it renders headlessly" is not proof a
+demo site loads.
+
 Runtime selection flags go after `aspire run --` and are forwarded to both GUI
 and headless resources:
 
