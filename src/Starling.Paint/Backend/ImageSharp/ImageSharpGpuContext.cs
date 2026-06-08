@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using SixLabors.ImageSharp.Drawing.Processing.Backends;
@@ -7,11 +7,18 @@ using SixLabors.ImageSharp.Drawing.Processing.Backends;
 namespace Starling.Paint.Backend;
 
 /// <summary>
-/// Reflection bridge to ImageSharp's non-public WebGPU device context. It lets
-/// Starling allocate ImageSharp render targets on the compositor device.
+/// Adapter-internal reflection bridge to ImageSharp's non-public WebGPU device
+/// context, used to allocate render targets on the compositor's device. One
+/// instance is cached per device handle (matching the old engine-held context)
+/// and disposed when the device is torn down via
+/// <see cref="DisposeForDevice"/>. The compositor never sees this type — it
+/// passes a neutral <see cref="GpuPaintDevice"/> and the adapter resolves the
+/// context here.
 /// </summary>
-internal sealed class GpuPaintDeviceContext : IDisposable
+internal sealed class ImageSharpGpuContext : IDisposable
 {
+    private static readonly ConcurrentDictionary<nint, ImageSharpGpuContext> ByDevice = new();
+
     private static readonly Type ContextType = typeof(WebGPURenderTarget).Assembly.GetType(
         "SixLabors.ImageSharp.Drawing.Processing.Backends.WebGPUDeviceContext",
         throwOnError: true)!;
@@ -41,9 +48,23 @@ internal sealed class GpuPaintDeviceContext : IDisposable
 
     private object? _context;
 
-    public GpuPaintDeviceContext(nint deviceHandle, nint queueHandle)
+    private ImageSharpGpuContext(nint deviceHandle, nint queueHandle)
     {
         _context = ContextConstructor.Invoke([deviceHandle, queueHandle]);
+    }
+
+    /// <summary>The cached context for <paramref name="device"/>, created on first use.
+    /// Keyed by device handle; <see cref="DisposeForDevice"/> must run on device
+    /// teardown (it does, via the engine's dispose) so a reused handle never hits a
+    /// stale context.</summary>
+    public static ImageSharpGpuContext GetOrCreate(GpuPaintDevice device)
+        => ByDevice.GetOrAdd(device.Device, static (_, d) => new ImageSharpGpuContext(d.Device, d.Queue), device);
+
+    /// <summary>Dispose and forget the context for a device being torn down.</summary>
+    public static void DisposeForDevice(nint deviceHandle)
+    {
+        if (deviceHandle != 0 && ByDevice.TryRemove(deviceHandle, out var context))
+            context.Dispose();
     }
 
     public void ThrowIfDisposed()
@@ -61,14 +82,11 @@ internal sealed class GpuPaintDeviceContext : IDisposable
     }
 
     private object Context
-        => _context ?? throw new ObjectDisposedException(nameof(GpuPaintDeviceContext));
+        => _context ?? throw new ObjectDisposedException(nameof(ImageSharpGpuContext));
 
     private static void Invoke(Action action)
     {
-        try
-        {
-            action();
-        }
+        try { action(); }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {
             ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
@@ -78,10 +96,7 @@ internal sealed class GpuPaintDeviceContext : IDisposable
 
     private static T Invoke<T>(Func<T> action)
     {
-        try
-        {
-            return action();
-        }
+        try { return action(); }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {
             ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
@@ -92,10 +107,7 @@ internal sealed class GpuPaintDeviceContext : IDisposable
     public void Dispose()
     {
         if (_context is IDisposable disposable)
-        {
             disposable.Dispose();
-        }
-
         _context = null;
     }
 }

@@ -28,6 +28,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Starling.Paint\Starling.Paint.csproj" />
+    <ProjectReference Include="..\..\src\Starling.Paint.NeutralStub\Starling.Paint.NeutralStub.csproj" />
     <ProjectReference Include="..\..\src\Starling.Html\Starling.Html.csproj" />
     <ProjectReference Include="..\..\src\Starling.Layout\Starling.Layout.csproj" />
     <ProjectReference Include="..\..\src\Starling.Css\Starling.Css.csproj" />

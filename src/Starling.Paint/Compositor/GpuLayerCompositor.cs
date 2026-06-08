@@ -126,7 +126,7 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         }
     }
 
-    public GpuPaintDeviceContext ImageSharpContext => _engine.ImageSharpContext;
+    public GpuPaintDevice GpuDevice => _engine.GpuDevice;
 
     public void AdoptTexture(long contentHash, GpuPaintTexture texture)
     {

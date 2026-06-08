@@ -96,7 +96,7 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         }
     }
 
-    internal GpuPaintDeviceContext ImageSharpContext => _engine.ImageSharpContext;
+    internal GpuPaintDevice GpuDevice => _engine.GpuDevice;
 
     internal void AdoptTexture(long contentHash, GpuPaintTexture texture)
     {

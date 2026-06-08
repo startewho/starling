@@ -449,7 +449,7 @@ internal sealed class Compositor
                 tileRectPage,
                 scale,
                 opaqueBackground: false,
-                textureCache.ImageSharpContext);
+                textureCache.GpuDevice);
 
             textureCache.AdoptTexture(opHash, texture);
             _tileGrid.PutResidentTile(key, tileHash, texture.Width, texture.Height);
@@ -473,7 +473,7 @@ internal sealed class Compositor
         public bool HasResidentTexture(long contentHash, int width, int height)
             => presenter.HasResidentTexture(contentHash, width, height);
 
-        public GpuPaintDeviceContext ImageSharpContext => presenter.ImageSharpContext;
+        public GpuPaintDevice GpuDevice => presenter.GpuDevice;
 
         public void AdoptTexture(long contentHash, GpuPaintTexture texture)
             => presenter.AdoptTexture(contentHash, texture);
