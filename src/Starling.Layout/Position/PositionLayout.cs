@@ -241,12 +241,38 @@ internal sealed class PositionLayout
         var contentWidth = System.Math.Max(0, usedWidth - box.Padding.Horizontal - box.Border.Horizontal);
         var naturalHeight = _block.LayoutChildren(box, contentWidth);
 
+        // CSS 2.1 §10.6.5 — a replaced element (e.g. <img>) with height:auto takes
+        // its height from the intrinsic ratio at the used width, NOT from the
+        // content height or the insets. Without this, an absolutely-positioned
+        // image (e.g. the hero's decorative "echo" birds) collapsed to h=0.
+        double? replacedHeight = null;
+        if (box is Box.ImageBox img && heightResolved is null)
+        {
+            var iw = img.IntrinsicWidth > 0 ? img.IntrinsicWidth : 1;
+            var ih = img.IntrinsicHeight > 0 ? img.IntrinsicHeight : 1;
+            var replacedContentW = System.Math.Max(0, usedWidth - box.Padding.Horizontal - box.Border.Horizontal);
+            replacedHeight = replacedContentW * (ih / iw) + box.Padding.Vertical + box.Border.Vertical;
+        }
+
+        // CSS 2.1 §10.6.4 — when height is `auto` but BOTH top and bottom are
+        // specified, the used height is derived from the insets (cb height minus
+        // top/bottom), exactly like the width axis derives width from left/right.
+        // Only when at most one vertical inset is set does auto height shrink-wrap
+        // to the content. Without this, an inset-sized overlay (e.g. a glow with
+        // `inset: -56px`) collapsed to its zero content height and never painted.
+        var bothVerticalInsets =
+            props.Top.Resolve(cbDocRect.Height) is not null &&
+            props.Bottom.Resolve(cbDocRect.Height) is not null;
+        var heightExplicit = heightResolved ?? replacedHeight ?? (bothVerticalInsets
+            ? (double?)null
+            : naturalHeight + box.Padding.Vertical + box.Border.Vertical);
+
         var (top, bottom, usedHeight) = ResolveAxis(
             startInset: props.Top,
             endInset: props.Bottom,
             cbStart: cbDocRect.Y,
             cbExtent: cbDocRect.Height,
-            explicitSize: heightResolved ?? (naturalHeight + box.Padding.Vertical + box.Border.Vertical),
+            explicitSize: heightExplicit,
             startMargin: box.Margin.Top,
             endMargin: box.Margin.Bottom,
             outerInsets: box.Padding.Vertical + box.Border.Vertical);

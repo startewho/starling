@@ -63,6 +63,8 @@ public sealed class MainWindow : Window, IBrowserController
 {
     private static readonly IReadOnlyList<TabInfo> Bookmarks =
     [
+        new TabInfo("b0s", "starlingbrowser.com", "Starling Browser",     Url: "https://starlingbrowser.com/"),
+        new TabInfo("b0g", "localhost:8088",   "SVG Logo",                Url: "http://localhost:8088/svg-logo/"),
         new TabInfo("b0t", "localhost:8088",   "Todo",                    Url: "http://localhost:8088/todo/"),
         new TabInfo("b0n", "localhost:8088",   "Animations",              Url: "http://localhost:8088/animations/"),
         new TabInfo("b0a", "example.com",      "Example",                 Url: "https://example.com"),

@@ -50,6 +50,36 @@ public sealed class GradientPaintTests
     }
 
     [TestMethod]
+    public void Rounded_gradient_paints_through_an_overflow_clip()
+    {
+        // Regression (starlingbrowser.com progress bars): a pill-shaped gradient
+        // fill (border-radius >= height/2) clipped by an `overflow: hidden`
+        // ancestor used to vanish — the rounded path rasterized into an offscreen
+        // layer whose blit ignored the active clip stack. The fix fills the rounded
+        // path straight onto the canvas, so the clip is honoured and the fill shows.
+        var gradient = Linear(
+            CssGradientLine.FromAngle(90),
+            new CssColorStop(Red),
+            new CssColorStop(Blue));
+
+        var pill = CornerRadii.Uniform(5, 5, 5, 5); // >= height/2 for a 10px-tall bar
+        var list = new PaintList();
+        list.Add(new PushClip(new LayoutRect(0, 0, 100, 10), pill)); // overflow:hidden parent
+        list.Add(new FillGradient(new LayoutRect(0, 0, 80, 10), gradient, pill)); // rounded fill
+        list.Add(new PopClip());
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var bmp = backend.Render(list, new LayoutSize(100, 10));
+
+        // Mid-fill must carry the red→blue gradient (so near-zero green and a real
+        // red/blue presence). The bug left this area unpainted — the empty/white
+        // background it showed instead would have full green.
+        var (r, g, b, _) = bmp.GetPixel(40, 5);
+        g.Should().BeLessThan(120, "the red→blue gradient has no green; an unpainted pixel would");
+        (r + b).Should().BeGreaterThan(120, "the fill should carry gradient colour");
+    }
+
+    [TestMethod]
     public void Linear_to_right_keyword_matches_90deg()
     {
         var gradient = Linear(

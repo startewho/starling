@@ -242,4 +242,36 @@ public sealed class ImageReplacedSizingTests
         // 800×400 HTML hint), so 200 / 800 * 400 = 100.
         img.Frame.Height.Should().BeApproximately(100, 0.5);
     }
+
+    [TestMethod]
+    public void Absolutely_positioned_image_height_auto_follows_intrinsic_ratio()
+    {
+        // CSS 2.1 §10.6.5 — an absolutely-positioned <img> with width set and
+        // height auto takes its height from the intrinsic aspect ratio, not the
+        // (zero) content height. Regression: the hero's decorative "echo" birds
+        // collapsed to h=0 and never painted.
+        var root = Layout(
+            """<body><div style="position:relative; width:400px; height:300px">"""
+            + """<img src="x.png" style="position:absolute; top:10px; left:10px; width:100px"></div></body>""",
+            intrinsicW: 200, intrinsicH: 100, new Size(800, 600));
+
+        var img = FindImage(root);
+        img.Frame.Width.Should().BeApproximately(100, 0.5);
+        img.Frame.Height.Should().BeApproximately(50, 0.5, "100px width at a 200:100 intrinsic ratio");
+    }
+
+    [TestMethod]
+    public void Image_with_opacity_establishes_a_compositor_layer()
+    {
+        // Replaced elements must establish a stacking-context layer for opacity /
+        // transform / filter, or the compositor never applies them and the image
+        // paints at full strength. Regression: <img opacity:.1> rendered opaque.
+        var root = Layout(
+            """<body><img src="x.png" style="opacity:0.5"></body>""",
+            intrinsicW: 80, intrinsicH: 80, new Size(800, 600));
+
+        var img = FindImage(root);
+        img.Hints.HasFlag(Compositor.LayerHint.OpacityLessThanOne).Should().BeTrue(
+            "opacity < 1 on an <img> must establish a compositor layer");
+    }
 }

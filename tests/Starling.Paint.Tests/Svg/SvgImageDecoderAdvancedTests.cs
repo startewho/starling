@@ -108,6 +108,67 @@ public sealed class SvgImageDecoderAdvancedTests
 
     [Spec("svg11", SvgUrl, section: "pservers.html#LinearGradients")]
     [SpecFact]
+    public void LinearGradient_objectBoundingBox_under_group_transform_is_not_flat()
+    {
+        // Regression: a gradient-filled shape inside a scaled group (the common
+        // Inkscape `scale(0.1,-0.1)` export pattern, as on the Starling logo).
+        // The fill path is drawn in device space, so the gradient vector must be
+        // mapped through the same element transform — otherwise the whole shape
+        // clamps to a single stop and renders flat.
+        const string Svg =
+            "<svg width='40' height='20' viewBox='0 0 40 20'>" +
+            "<defs>" +
+            "<linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>" +
+            "<stop offset='0' stop-color='black'/>" +
+            "<stop offset='1' stop-color='white'/>" +
+            "</linearGradient></defs>" +
+            "<g transform='scale(0.1,0.1)'>" +
+            "<rect width='400' height='200' fill='url(#g)'/>" +
+            "</g></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+
+        // Top-left of the bounding box is the first (black) stop...
+        var topLeft = PixelAt(img, 2, 2);
+        topLeft.R.Should().BeLessThan(80);
+
+        // ...bottom-right is the last (white) stop. A flat fill would make these equal.
+        var bottomRight = PixelAt(img, 37, 17);
+        bottomRight.R.Should().BeGreaterThan(150);
+
+        AnyNonTransparent(img).Should().BeTrue();
+    }
+
+    [Spec("svg11", SvgUrl, section: "pservers.html#RadialGradients")]
+    [SpecFact]
+    public void RadialGradient_under_group_transform_positions_center_correctly()
+    {
+        // Same regression for radial gradients: the center/radius must follow the
+        // element transform, or the device shape falls entirely outside the
+        // gradient circle and clamps to the edge stop.
+        const string Svg =
+            "<svg width='40' height='40' viewBox='0 0 40 40'>" +
+            "<defs>" +
+            "<radialGradient id='rg' cx='50%' cy='50%' r='50%'>" +
+            "<stop offset='0' stop-color='white'/>" +
+            "<stop offset='100%' stop-color='black'/>" +
+            "</radialGradient></defs>" +
+            "<g transform='scale(0.1,0.1)'>" +
+            "<rect width='400' height='400' fill='url(#rg)'/>" +
+            "</g></svg>";
+        using var img = SvgImageDecoder.DecodeText(Svg);
+
+        // Center is the first (white) stop; a corner is near the last (black) stop.
+        var center = PixelAt(img, 20, 20);
+        center.R.Should().BeGreaterThan(150);
+
+        var corner = PixelAt(img, 2, 2);
+        corner.R.Should().BeLessThan(center.R);
+
+        AnyNonTransparent(img).Should().BeTrue();
+    }
+
+    [Spec("svg11", SvgUrl, section: "pservers.html#LinearGradients")]
+    [SpecFact]
     public void LinearGradient_stop_opacity_blends_into_alpha()
     {
         // A gradient from opaque red (stop-opacity=1) to transparent red (stop-opacity=0).

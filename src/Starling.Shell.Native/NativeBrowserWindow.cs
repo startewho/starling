@@ -81,6 +81,8 @@ internal sealed class NativeBrowserWindow : IDisposable
 
     private static readonly NativeBookmark[] Bookmarks =
     [
+        new("b0s", "starlingbrowser.com", "Starling Browser", "https://starlingbrowser.com/"),
+        new("b0g", "localhost:8088", "SVG Logo", "http://localhost:8088/svg-logo/"),
         new("b0t", "localhost:8088", "Todo", "http://localhost:8088/todo/"),
         new("b0n", "localhost:8088", "Animations", "http://localhost:8088/animations/"),
         new("b0a", "example.com", "Example", "https://example.com"),

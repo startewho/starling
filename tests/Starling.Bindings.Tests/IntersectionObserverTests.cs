@@ -7,9 +7,10 @@ using Starling.Js.Runtime;
 namespace Starling.Bindings.Tests;
 
 /// <summary>
-/// B5-4 — IntersectionObserver JS surface tests. Layout integration is not
-/// wired (see IntersectionObserverBinding's file-level TODO); these tests
-/// assert only the constructable / observable / disconnectable shape.
+/// B5-4 — IntersectionObserver tests. Covers the constructable / observable /
+/// disconnectable JS surface, plus entry delivery off a layout snapshot: an
+/// initial notification per observed target, threshold-gated
+/// <c>isIntersecting</c>, and idempotent re-delivery.
 /// </summary>
 [TestClass]
 public sealed class IntersectionObserverTests
@@ -123,7 +124,8 @@ public sealed class IntersectionObserverTests
             io.observe(a);
             io.observe(b);
         """);
-        Drain(runtime);
+        // The settle pump delivers against the initial (unscrolled) viewport.
+        IntersectionObserverBinding.RunPending(runtime);
 
         // a (y 100) is inside the 800-tall viewport; b (y 2000) is below it.
         Eval(runtime, "result = calls.slice().sort().join(',');")
@@ -146,7 +148,8 @@ public sealed class IntersectionObserverTests
             io.observe(a);
             io.observe(b);
         """);
-        Drain(runtime);
+        // Initial delivery against the unscrolled viewport (a in view, b below).
+        IntersectionObserverBinding.RunPending(runtime);
         Eval(runtime, "calls.length = 0;");
 
         // Scroll so the viewport (0,1800,1000,800) covers b (y 2000) but not a (y 100).
@@ -157,7 +160,110 @@ public sealed class IntersectionObserverTests
             .AsString.Should().Be("a:false,b:true");
     }
 
-    private static (JsRuntime, Document) BuildEnv()
+    // ---- delivery off a layout snapshot ------------------------------------
+
+    [TestMethod]
+    public void Observe_delivers_initial_intersecting_entry_for_in_viewport_target()
+    {
+        var host = new FakeLayoutHost();
+        host.Rects["t"] = new LayoutRect(10, 10, 40, 40); // fully inside 100x100
+        var (runtime, _) = BuildEnv(host, 100, 100);
+
+        IntersectionObserverBinding.HasPending(runtime).Should().BeFalse("no observer yet");
+        SetupObserver(runtime, threshold: "0");
+        IntersectionObserverBinding.HasPending(runtime).Should().BeTrue("an observed target awaits its initial report");
+
+        IntersectionObserverBinding.RunPending(runtime).Should().BeTrue();
+
+        // isIntersecting, ratio, target identity, observer identity.
+        ReadLog(runtime).Should().Be("true,1.00,true,true");
+    }
+
+    [TestMethod]
+    public void Below_viewport_target_reports_not_intersecting()
+    {
+        var host = new FakeLayoutHost();
+        host.Rects["t"] = new LayoutRect(0, 200, 40, 40); // below a 100-tall viewport
+        var (runtime, _) = BuildEnv(host, 100, 100);
+
+        SetupObserver(runtime, threshold: "0");
+        IntersectionObserverBinding.RunPending(runtime);
+
+        ReadLog(runtime).Should().Be("false,0.00,true,true");
+    }
+
+    [TestMethod]
+    public void Threshold_gates_is_intersecting()
+    {
+        // Target sits with only 25% of its area inside the viewport.
+        var host = new FakeLayoutHost();
+        host.Rects["t"] = new LayoutRect(0, 90, 40, 40); // 10px of 40px tall visible -> ratio 0.25
+        var (runtime, _) = BuildEnv(host, 100, 100);
+
+        SetupObserver(runtime, threshold: "0.5");
+        IntersectionObserverBinding.RunPending(runtime);
+
+        // 0.25 ratio does not meet the 0.5 threshold, so isIntersecting is false.
+        ReadLog(runtime).Should().Be("false,0.25,true,true");
+    }
+
+    [TestMethod]
+    public void Delivery_is_idempotent_until_state_changes()
+    {
+        var host = new FakeLayoutHost();
+        host.Rects["t"] = new LayoutRect(10, 10, 40, 40);
+        var (runtime, _) = BuildEnv(host, 100, 100);
+
+        SetupObserver(runtime, threshold: "0");
+        IntersectionObserverBinding.RunPending(runtime).Should().BeTrue();
+        // Layout is unchanged, so there is nothing new to deliver.
+        IntersectionObserverBinding.HasPending(runtime).Should().BeFalse();
+        IntersectionObserverBinding.RunPending(runtime).Should().BeFalse();
+
+        Eval(runtime, "result = String(window.__log.length);").AsString.Should().Be("1");
+    }
+
+    [TestMethod]
+    public void Disconnect_before_delivery_suppresses_the_callback()
+    {
+        var host = new FakeLayoutHost();
+        host.Rects["t"] = new LayoutRect(10, 10, 40, 40);
+        var (runtime, _) = BuildEnv(host, 100, 100);
+
+        SetupObserver(runtime, threshold: "0");
+        Eval(runtime, "io.disconnect();");
+        IntersectionObserverBinding.HasPending(runtime).Should().BeFalse();
+        IntersectionObserverBinding.RunPending(runtime).Should().BeFalse();
+        Eval(runtime, "result = String(window.__log.length);").AsString.Should().Be("0");
+    }
+
+    /// <summary>Creates <c>window.__log</c>, a target <c>#t</c> appended to the
+    /// body, and an observer that records each entry as
+    /// <c>isIntersecting,ratio,targetMatch,observerMatch</c>.</summary>
+    private static void SetupObserver(JsRuntime runtime, string threshold)
+    {
+        Eval(runtime, $$"""
+            window.__log = [];
+            var el = document.createElement('div');
+            el.id = 't';
+            document.body.appendChild(el);
+            var io = new IntersectionObserver(function (entries, obs) {
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i];
+                    window.__log.push(
+                        e.isIntersecting + ',' + e.intersectionRatio.toFixed(2)
+                        + ',' + (e.target === el) + ',' + (obs === io));
+                }
+            }, { threshold: {{threshold}} });
+            io.observe(el);
+        """);
+    }
+
+    private static string ReadLog(JsRuntime runtime)
+        => Eval(runtime, "result = window.__log.join('|');").AsString;
+
+    private static (JsRuntime, Document) BuildEnv(
+        ILayoutHost? layoutHost = null, double viewportWidth = 0, double viewportHeight = 0)
     {
         var doc = new Document();
         var html = doc.CreateElement("html");
@@ -165,7 +271,8 @@ public sealed class IntersectionObserverTests
         doc.AppendChild(html);
         html.AppendChild(body);
         var runtime = new JsRuntime();
-        WindowBinding.Install(runtime, doc);
+        WindowBinding.Install(runtime, doc, new WindowInstallOptions(
+            InnerWidth: viewportWidth, InnerHeight: viewportHeight, LayoutHost: layoutHost));
         return (runtime, doc);
     }
 
@@ -200,10 +307,30 @@ public sealed class IntersectionObserverTests
     // which WithActiveVm flushes on exit).
     private static void Drain(JsRuntime runtime) => runtime.WithActiveVm(() => { });
 
-    private sealed class FakeLayoutHost(Dictionary<Element, LayoutRect> rects) : ILayoutHost
+    private static JsValue Eval(JsRuntime runtime, string source)
     {
+        var program = new JsParser(source).ParseProgram();
+        var chunk = JsCompiler.Compile(program);
+        new JsVm(runtime).Run(chunk);
+        return runtime.GetGlobal("result");
+    }
+
+    /// <summary>Layout host backed by a fixed map of element → viewport rect.
+    /// Entries can be seeded by Element (constructor) or by element id
+    /// (<see cref="Rects"/>). Elements without an entry report "not laid out".</summary>
+    private sealed class FakeLayoutHost : ILayoutHost
+    {
+        private readonly Dictionary<Element, LayoutRect> _byElement;
+        public readonly Dictionary<string, LayoutRect> Rects = new();
+
+        public FakeLayoutHost() => _byElement = new();
+        public FakeLayoutHost(Dictionary<Element, LayoutRect> rects) => _byElement = rects;
+
         public bool TryGetBoundingClientRect(Element element, out LayoutRect rect)
-            => rects.TryGetValue(element, out rect);
+        {
+            if (_byElement.TryGetValue(element, out rect)) return true;
+            return Rects.TryGetValue(element.Id, out rect);
+        }
 
         public bool TryGetOffsetMetrics(Element element, out OffsetMetrics metrics)
         {
@@ -214,13 +341,5 @@ public sealed class IntersectionObserverTests
         public string GetComputedProperty(Element element, string propertyName) => string.Empty;
 
         public bool MatchMedia(string query) => false;
-    }
-
-    private static JsValue Eval(JsRuntime runtime, string source)
-    {
-        var program = new JsParser(source).ParseProgram();
-        var chunk = JsCompiler.Compile(program);
-        new JsVm(runtime).Run(chunk);
-        return runtime.GetGlobal("result");
     }
 }

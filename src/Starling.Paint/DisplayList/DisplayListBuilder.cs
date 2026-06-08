@@ -720,6 +720,34 @@ public sealed class DisplayListBuilder
     {
         var bgImage = style.Get(PropertyId.BackgroundImage);
 
+        // CSS Backgrounds 3 §3.4 — `background-image` may be a comma-separated
+        // list of layers. The first layer is the topmost, so paint the list
+        // back-to-front (later layers sit behind earlier ones). Per-layer
+        // position/size are read from the matching index of those longhands.
+        if (bgImage is CssValueList layers && layers.Values.Count > 0)
+        {
+            var posList = style.Get(PropertyId.BackgroundPosition);
+            var sizeList = style.Get(PropertyId.BackgroundSize);
+            for (var i = layers.Values.Count - 1; i >= 0; i--)
+                EmitOneBackgroundLayer(box, frameX, frameY, list, current, cull, images, radii,
+                    layers.Values[i], LayerValueAt(sizeList, i), LayerValueAt(posList, i));
+            return;
+        }
+
+        EmitOneBackgroundLayer(box, frameX, frameY, list, current, cull, images, radii,
+            bgImage, style.Get(PropertyId.BackgroundSize), style.Get(PropertyId.BackgroundPosition));
+    }
+
+    /// <summary>Index into a layered background longhand: returns the i-th
+    /// layer's value when <paramref name="value"/> is a list (clamping to the
+    /// last entry when short), or the value itself for a single, shared value.</summary>
+    private static CssValue? LayerValueAt(CssValue? value, int i)
+        => value is CssValueList l
+            ? (l.Values.Count == 0 ? null : l.Values[Math.Min(i, l.Values.Count - 1)])
+            : value;
+
+    private static void EmitOneBackgroundLayer(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, IImageResolver? images, CornerRadii radii, CssValue? layerImage, CssValue? layerSize, CssValue? layerPosition)
+    {
         // CSS Images 3 §3 — `background-image: <gradient>`. Gradients paint
         // directly from the typed value and don't need an image resolver; map
         // the recognised gradient functions (linear, radial, conic, and their
@@ -728,7 +756,7 @@ public sealed class DisplayListBuilder
         // unresolved-image path below. Pass the box's corner radii so the
         // backend clips the gradient fill to the rounded rectangle (CSS
         // Backgrounds 3 §5 border-radius).
-        if (bgImage is CssFunctionValue gradientFn
+        if (layerImage is CssFunctionValue gradientFn
             && CssGradientParser.TryParseFunction(gradientFn, out var gradient)
             && gradient.IsPaintable
             && box.Frame.Width > 0 && box.Frame.Height > 0)
@@ -739,7 +767,7 @@ public sealed class DisplayListBuilder
         }
 
         if (images is null) return;
-        var url = bgImage switch
+        var url = layerImage switch
         {
             CssUrl u => u.Value,
             _ => null,
@@ -753,7 +781,7 @@ public sealed class DisplayListBuilder
 
         // background-size — default `auto auto` keeps the image at native
         // dimensions. A single length applies to width with height = auto.
-        var (renderW, renderH) = ResolveBackgroundSize(style.Get(PropertyId.BackgroundSize), boxW, boxH, decoded.Width, decoded.Height);
+        var (renderW, renderH) = ResolveBackgroundSize(layerSize, boxW, boxH, decoded.Width, decoded.Height);
         if (renderW <= 0 || renderH <= 0) return;
 
         // background-position — where the rendered image's top-left lands
@@ -761,7 +789,7 @@ public sealed class DisplayListBuilder
         // centred per the spec, but the sprite use case keys on X only, so
         // we default Y to 0 for the single-value case to match common
         // sprite-sheet authoring).
-        var (offsetX, offsetY) = ResolveBackgroundPosition(style.Get(PropertyId.BackgroundPosition), boxW, boxH, renderW, renderH);
+        var (offsetX, offsetY) = ResolveBackgroundPosition(layerPosition, boxW, boxH, renderW, renderH);
 
         // The rendered image rectangle in box coordinates.
         var imgX = offsetX;

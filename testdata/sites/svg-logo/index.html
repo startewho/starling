@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starling Logo — SVG Demo</title>
+  <style>
+    :root {
+      --ink: #17131f;
+      --muted: #6b6478;
+      --primary: #7c3aed;
+      --paper: #ffffff;
+      --paper-2: #f5f3fb;
+      --line: #e7e3f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(90% 80% at 80% -10%, #ede9fe, transparent 60%),
+        linear-gradient(180deg, var(--paper), var(--paper-2));
+      min-height: 100vh;
+    }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 56px 24px 72px; }
+    .eyebrow {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 13px;
+      letter-spacing: .02em;
+      color: var(--primary);
+      margin: 0 0 12px;
+    }
+    h1 { font-size: 40px; line-height: 1.1; margin: 0 0 8px; letter-spacing: -.01em; }
+    h1 span { color: var(--primary); }
+    p.lead { color: var(--muted); font-size: 17px; line-height: 1.5; margin: 0 0 40px; max-width: 60ch; }
+
+    /* Hero: the logo drawn once as a crisp, resolution-independent vector. */
+    .hero {
+      display: grid;
+      place-items: center;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 48px;
+      box-shadow: 0 18px 50px -28px rgba(76, 29, 149, .35);
+    }
+    .hero img { width: 280px; height: auto; }
+
+    h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 44px 0 16px; }
+
+    /* Size row: the same SVG file at several sizes, all pixel-sharp. */
+    .sizes { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 28px; }
+    .swatch { display: grid; justify-items: center; gap: 8px; }
+    .swatch img { display: block; }
+    .swatch code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
+
+    footer { margin-top: 56px; color: var(--muted); font-size: 13px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    footer a { color: var(--primary); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">// asset · svg · vector</p>
+    <h1>The Starling <span>logo</span>, in SVG.</h1>
+    <p class="lead">
+      One vector file — a violet-backed starling in flight, filled with a single
+      linear gradient — drawn through Starling's own SVG rasterizer. Scale it to
+      any size and the edges stay crisp.
+    </p>
+
+    <section class="hero">
+      <img src="starling-logo.svg" alt="Starling logo — a violet-backed starling in flight" width="280">
+    </section>
+
+    <h2>One file, every size</h2>
+    <div class="sizes">
+      <div class="swatch"><img src="starling-logo.svg" alt="Starling logo at 32px" width="32"><code>32px</code></div>
+      <div class="swatch"><img src="starling-logo.svg" alt="Starling logo at 48px" width="48"><code>48px</code></div>
+      <div class="swatch"><img src="starling-logo.svg" alt="Starling logo at 72px" width="72"><code>72px</code></div>
+      <div class="swatch"><img src="starling-logo.svg" alt="Starling logo at 120px" width="120"><code>120px</code></div>
+    </div>
+
+    <footer>starling-logo.svg · <a href="https://starlingbrowser.com/">starlingbrowser.com</a></footer>
+  </main>
+</body>
+</html>

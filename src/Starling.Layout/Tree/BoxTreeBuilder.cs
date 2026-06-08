@@ -493,6 +493,10 @@ internal sealed class BoxTreeBuilder
         {
             var (width, height) = ResolveImageSize(img, resolved);
             var box = new ImageBox(style, img, width, height, resolved.Source);
+            // Replaced elements establish a stacking-context layer just like any
+            // other element — without this, opacity / transform / filter on an
+            // <img> never reach the compositor and paint at full strength.
+            box.Hints = StackingContextResolver.Resolve(box, style);
             if (_elementMap is not null) _elementMap[img] = box;
             parentBox.AppendChild(box);
             return;
@@ -533,6 +537,7 @@ internal sealed class BoxTreeBuilder
             var ratioOnly = string.IsNullOrEmpty(svg.GetAttribute("width"))
                 && string.IsNullOrEmpty(svg.GetAttribute("height"));
             var svgBox = new ImageBox(style, svg, width, height, resolved.Source, ratioOnly);
+            svgBox.Hints = StackingContextResolver.Resolve(svgBox, style);
             if (_elementMap is not null) _elementMap[svg] = svgBox;
             parentBox.AppendChild(svgBox);
             return;

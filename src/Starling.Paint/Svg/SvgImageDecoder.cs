@@ -1345,12 +1345,17 @@ public static class SvgImageDecoder
             float x2 = ParseGradCoord(GAttr(gradEl, "x2", ctx), obb, bbox.X, bbox.Width) ?? (obb ? bbox.X + bbox.Width : bbox.Width);
             float y2 = ParseGradCoord(GAttr(gradEl, "y2", ctx), obb, bbox.Y, bbox.Height) ?? (obb ? bbox.Y : 0);
 
-            if (gradTransform != Matrix3x2.Identity)
-            {
-                var p1 = Vector2.Transform(new Vector2(x1, y1), gradTransform);
-                var p2 = Vector2.Transform(new Vector2(x2, y2), gradTransform);
-                x1 = p1.X; y1 = p1.Y; x2 = p2.X; y2 = p2.Y;
-            }
+            // Map the gradient vector into device space. The caller fills a
+            // device-space path (path.Transform(transform)) but ImageSharp brushes
+            // use absolute coordinates, so the brush must share that space:
+            // apply gradientTransform first (the gradient's own coordinate map),
+            // then the element CTM. Without this, any element under a group
+            // transform (e.g. an Inkscape `scale(0.1,-0.1)` export) draws the gradient
+            // line far outside the shape and the whole fill clamps to one stop.
+            var toDevice = gradTransform * transform;
+            var p1 = Vector2.Transform(new Vector2(x1, y1), toDevice);
+            var p2 = Vector2.Transform(new Vector2(x2, y2), toDevice);
+            x1 = p1.X; y1 = p1.Y; x2 = p2.X; y2 = p2.Y;
 
             if (MathF.Abs(x2 - x1) < 0.001f && MathF.Abs(y2 - y1) < 0.001f)
             {
@@ -1369,14 +1374,15 @@ public static class SvgImageDecoder
             float r = ParseGradCoordAbs(GAttr(gradEl, "r", ctx), obb, MathF.Sqrt(bbox.Width * bbox.Width + bbox.Height * bbox.Height) * 0.5f)
                       ?? (obb ? MathF.Min(bbox.Width, bbox.Height) * 0.5f : MathF.Min(bbox.Width, bbox.Height) * 0.5f);
 
-            if (gradTransform != Matrix3x2.Identity)
-            {
-                var pc = Vector2.Transform(new Vector2(cx, cy), gradTransform);
-                cx = pc.X; cy = pc.Y;
-                // Scale r by the gradient transform's scale factor.
-                float rs = MathF.Sqrt(gradTransform.M11 * gradTransform.M11 + gradTransform.M12 * gradTransform.M12);
-                if (rs > 0) r *= rs;
-            }
+            // Map the gradient center/radius into device space (gradientTransform
+            // then the element CTM) so the brush shares the device-space path's
+            // coordinate system — see the linearGradient note above.
+            var toDevice = gradTransform * transform;
+            var pc = Vector2.Transform(new Vector2(cx, cy), toDevice);
+            cx = pc.X; cy = pc.Y;
+            // Scale r by the combined transform's scale factor.
+            float rs = MathF.Sqrt(toDevice.M11 * toDevice.M11 + toDevice.M12 * toDevice.M12);
+            if (rs > 0) r *= rs;
 
             if (r <= 0)
                 return Brushes.Solid(stops[^1].Color);

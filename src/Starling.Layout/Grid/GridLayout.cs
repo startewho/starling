@@ -118,6 +118,26 @@ internal sealed class GridLayout
             if (outerH > rowHeights[row]) rowHeights[row] = outerH;
         }
 
+        // align-content: normal/stretch (the default) — when the container has a
+        // definite height taller than its content rows, distribute the surplus
+        // across the rows so a single auto row fills the container. Without this an
+        // `align-items: center` item stays pinned to the top, because its row was
+        // only as tall as the item. CSS Grid §11.6. (Explicit non-stretch
+        // align-content keeps the rows content-sized.)
+        var alignContent = Keyword(container.Style, PropertyId.AlignContent);
+        if (explicitHeight is { } definiteHeight && numRows > 0
+            && alignContent is null or "normal" or "stretch")
+        {
+            var contentRowsTotal = 0d;
+            for (var r = 0; r < numRows; r++) contentRowsTotal += rowHeights[r];
+            var surplus = definiteHeight - contentRowsTotal - rowGap * (numRows - 1);
+            if (surplus > 0)
+            {
+                var perRow = surplus / numRows;
+                for (var r = 0; r < numRows; r++) rowHeights[r] += perRow;
+            }
+        }
+
         // Row y offsets.
         var rowY = new double[numRows];
         var y = 0d;

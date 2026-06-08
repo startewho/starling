@@ -41,10 +41,23 @@ public static class PerformanceBinding
         "domComplete", "loadEventStart", "loadEventEnd",
     ];
 
-    public static void Install(JsRuntime runtime) => Install(runtime, () => (DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch).TotalMilliseconds);
+    public static void Install(JsRuntime runtime)
+        => Install(runtime, () => (DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch).TotalMilliseconds, monotonicNowMs: null);
 
     /// <summary>Test seam: lets a suite pin <c>timeOrigin</c> deterministically.</summary>
     public static void Install(JsRuntime runtime, Func<double> wallClockMs)
+        => Install(runtime, wallClockMs, monotonicNowMs: null);
+
+    /// <summary>
+    /// Install with an explicit monotonic clock backing <c>performance.now()</c>.
+    /// The engine passes the simulated event-loop clock here so <c>now()</c> shares
+    /// a timeline with <c>requestAnimationFrame</c> timestamps and <c>setTimeout</c>
+    /// — otherwise a wall-clock <c>now()</c> and a simulated rAF timestamp disagree,
+    /// and the common <c>(t - performance.now()) / duration</c> animation easing goes
+    /// haywire (negative progress, never settling). When <paramref name="monotonicNowMs"/>
+    /// is null, <c>now()</c> falls back to a real <see cref="Stopwatch"/>.
+    /// </summary>
+    public static void Install(JsRuntime runtime, Func<double> wallClockMs, Func<double>? monotonicNowMs)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(wallClockMs);
@@ -59,7 +72,7 @@ public static class PerformanceBinding
         EventTargetBinding.DefineAccessor(realm, performance, "timeOrigin",
             (_, _) => JsValue.Number(origin));
         EventTargetBinding.DefineMethod(realm, performance, "now",
-            (_, _) => JsValue.Number(stopwatch.Elapsed.TotalMilliseconds),
+            (_, _) => JsValue.Number(monotonicNowMs is not null ? monotonicNowMs() : stopwatch.Elapsed.TotalMilliseconds),
             length: 0);
         EventTargetBinding.DefineMethod(realm, performance, "toJSON",
             (_, _) =>

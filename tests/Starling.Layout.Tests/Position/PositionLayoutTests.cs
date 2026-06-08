@@ -239,6 +239,41 @@ public sealed class PositionLayoutTests
         aDoc.Y.Should().BeApproximately(parentDoc.Y, 0.5);
     }
 
+    [TestMethod]
+    public void Position_absolute_height_auto_resolves_from_top_and_bottom()
+    {
+        // CSS 2.1 §10.6.4 — with height:auto and BOTH top and bottom specified,
+        // the used height fills the gap between the insets (mirroring how width
+        // derives from left+right). Regression: an inset-sized overlay (e.g. a
+        // glow with `inset: ...`) collapsed to its zero content height and never
+        // painted.
+        var root = Layout("""
+            <body><div id="parent" style="position:relative; width:400px; height:300px; padding:0">
+              <div id="a" style="position:absolute; top:40px; bottom:60px; left:0; width:100px"></div>
+            </div></body>
+            """, new Size(800, 600));
+
+        var a = ById(root, "a")!;
+        a.Frame.Height.Should().BeApproximately(200, 0.5, "300 - top(40) - bottom(60)");
+        a.Frame.Y.Should().BeApproximately(40, 0.5);
+    }
+
+    [TestMethod]
+    public void Position_absolute_explicit_height_ignores_bottom_inset()
+    {
+        // When height is explicit, bottom is over-constrained and ignored (the
+        // box keeps its explicit height and is anchored by top).
+        var root = Layout("""
+            <body><div id="parent" style="position:relative; width:400px; height:300px; padding:0">
+              <div id="a" style="position:absolute; top:40px; bottom:60px; left:0; width:100px; height:70px"></div>
+            </div></body>
+            """, new Size(800, 600));
+
+        var a = ById(root, "a")!;
+        a.Frame.Height.Should().BeApproximately(70, 0.5);
+        a.Frame.Y.Should().BeApproximately(40, 0.5);
+    }
+
     // ----- helpers ------------------------------------------------------
 
     private static Box.Box? ById(Box.Box root, string id)

@@ -175,13 +175,15 @@ public static class WindowBinding
         HistoryBinding.Install(runtime, document, initialUrl);
         StorageBinding.Install(runtime, document, initialUrl);
         CookieBinding.Install(runtime, document, options.CookieJar);
-        PerformanceBinding.Install(runtime);
+        PerformanceBinding.Install(runtime,
+            () => (DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch).TotalMilliseconds,
+            options.MonotonicTimeMs);
 
         // 7) B5-4: MutationObserver / IntersectionObserver / ResizeObserver
         // surfaces. JS-side only — records are not yet produced (see each
         // binding's file-level TODO for the missing DOM/layout hook).
         MutationObserverBinding.Install(runtime, document);
-        IntersectionObserverBinding.Install(runtime, document);
+        IntersectionObserverBinding.Install(runtime, document, options.LayoutHost, options.InnerWidth, options.InnerHeight);
         ResizeObserverBinding.Install(runtime, document);
 
         // 8) getComputedStyle(el, pseudoElt?) — consults the optional
@@ -578,7 +580,8 @@ public readonly record struct WindowInstallOptions(
     StarlingHttpClient? HttpClient = null,
     CookieJar? CookieJar = null,
     ILayoutHost? LayoutHost = null,
-    IAnimationHost? AnimationHost = null);
+    IAnimationHost? AnimationHost = null,
+    Func<double>? MonotonicTimeMs = null);
 
 internal static class ConditionalWeakTableExtensions
 {
