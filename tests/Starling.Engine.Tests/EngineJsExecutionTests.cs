@@ -633,6 +633,39 @@ public sealed class EngineJsExecutionTests
         frames.Should().BeLessThan(100);
     }
 
+    [TestMethod]
+    public async Task Raf_loop_with_intersection_observer_still_settles_on_the_frame_budget()
+    {
+        // Regression: an animated page (self-rescheduling rAF) that ALSO uses an
+        // IntersectionObserver must still hit the rAF-frame-budget early-exit. The
+        // IO "pump front" reports pending until its first delivery; if it is drained
+        // only BELOW the rAF front, the rAF loop (which never reports idle) starves
+        // it forever, so HasPending stays true, OnlyAnimationFramePending stays
+        // false, the budget exit never fires, and the load burns the full 8s cap at
+        // full CPU. The IO front runs above the rAF front so it converges, then the
+        // bounded rAF budget settles the page (frames stays small, not ~160 = cap).
+        var html = @"<!doctype html><html><head><script>
+  var n = 0;
+  function tick() {
+    n++;
+    document.getElementById('out').textContent = 'frames=' + n;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  var io = new IntersectionObserver(function () {});
+  io.observe(document.getElementById('out'));
+</script></head><body><p id=""out"">frames=0</p></body></html>";
+
+        var outcome = await RenderHtmlAsync(html);
+
+        var match = System.Text.RegularExpressions.Regex.Match(outcome.DisplayText, @"frames=(\d+)");
+        match.Success.Should().BeTrue();
+        var frames = int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        frames.Should().BeGreaterThan(0);
+        // Bounded by the frame budget, not run to the wall-clock cap.
+        frames.Should().BeLessThan(100);
+    }
+
     [Spec("html", "https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element", "4.12.1 prepare a script")]
     [SpecFact]
     public async Task Already_run_external_script_does_not_rerun_when_src_reassigned()

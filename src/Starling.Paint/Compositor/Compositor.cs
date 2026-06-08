@@ -271,16 +271,27 @@ internal sealed class Compositor
         // they were intersected, so combine by plain rect intersection.
         var effectiveClip = IntersectClip(ancestorClip, layer.Clip);
 
+        // Children are already in paint order (sorted by z-index, then tree order,
+        // at build time), so negative-z layers are the prefix. CSS-Position-3 §9:
+        // they paint BEHIND this layer's own slice; non-negative layers paint over
+        // it. Without this split a negative-z layer (e.g. a full-viewport `z-index:-1`
+        // background overlay) would draw over the parent's in-flow text.
+        var childIndex = 0;
+        for (; childIndex < layer.Children.Count && layer.Children[childIndex].ZIndex < 0; childIndex++)
+        {
+            CollectOps(layer.Children[childIndex], ops, viewport, scale,
+                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+        }
+
         if (layer.Bounds.Width > 0 && layer.Bounds.Height > 0 && effectiveOpacity > 0f)
         {
             EmitLayerTiles(layer, ops, viewport, scale,
                 effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
         }
 
-        // Children already in paint order (z-index sorted at build time).
-        foreach (var child in layer.Children)
+        for (; childIndex < layer.Children.Count; childIndex++)
         {
-            CollectOps(child, ops, viewport, scale,
+            CollectOps(layer.Children[childIndex], ops, viewport, scale,
                 effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
         }
     }
