@@ -87,6 +87,8 @@ internal sealed class StarlingScriptSession : IScriptSession
         WindowBinding.Install(_runtime, _document, new WindowInstallOptions(
             DocumentUrl: _baseUrl.ToString(),
             HttpClient: options.Http,
+            InnerWidth: options.ViewportWidth,
+            InnerHeight: options.ViewportHeight,
             LayoutHost: options.LayoutHost,
             AnimationHost: options.AnimationHost));
 
@@ -334,6 +336,19 @@ internal sealed class StarlingScriptSession : IScriptSession
         if (_dynamicRunner.HasPending)
             _ = _dynamicRunner.DrainAsync(CancellationToken.None);
 
+        return _document.MutationVersion != before;
+    }
+
+    public bool UpdateIntersectionObservations(double viewportX, double viewportY, double viewportWidth, double viewportHeight)
+    {
+        if (_disposed) return false;
+        var before = _document.MutationVersion;
+        // WithActiveVm drains the microtask queue on exit, so the delivery
+        // microtasks the update schedules run (observer callbacks fire) before
+        // we read the mutation version back.
+        _runtime.WithActiveVm(() =>
+            Observers.IntersectionObserverBinding.UpdateForDocument(
+                _document, new LayoutRect(viewportX, viewportY, viewportWidth, viewportHeight)));
         return _document.MutationVersion != before;
     }
 

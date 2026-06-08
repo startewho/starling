@@ -83,6 +83,19 @@ public sealed class PageScripting : IDisposable
         return _session.PumpFrame(elapsedMs);
     }
 
+    /// <summary>
+    /// Runs the IntersectionObserver "update intersection observations" step
+    /// against the given viewport (the visible region in document CSS px: scroll
+    /// offset as origin, viewport size as extent). The shell calls this on
+    /// scroll/resize so reveal-on-scroll content fires as it enters the viewport.
+    /// Returns true when an observer callback mutated the DOM (re-render).
+    /// </summary>
+    public bool UpdateIntersectionObservations(double viewportX, double viewportY, double viewportWidth, double viewportHeight)
+    {
+        if (_disposed) return false;
+        return _session.UpdateIntersectionObservations(viewportX, viewportY, viewportWidth, viewportHeight);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

@@ -139,7 +139,59 @@ internal sealed class LayerTreeBuilder
         var contentHash = DisplayListContentHash.Compute(slice);
 
         return new CompositorLayer(slice, bounds, transform ?? Matrix2D.Identity, opacity, clip, ordered,
-            contentHash: contentHash, layerId: _layerIdFor?.Invoke(layerBox) ?? 0);
+            contentHash: contentHash, layerId: _layerIdFor?.Invoke(layerBox) ?? 0,
+            sourceBox: layerBox, originParentX: parentOriginX, originParentY: parentOriginY);
+    }
+
+    /// <summary>
+    /// Produces a refreshed copy of a previously-built layer tree for an animation
+    /// frame, rebuilding only the nodes whose box is actively animating (per
+    /// <see cref="_isAnimatingLayerRoot"/>) and reusing every static node as-is.
+    /// </summary>
+    /// <remarks>
+    /// The caller guarantees the frame is a pure animation tick: the DOM, layout,
+    /// viewport, scale, and the set of animating layer roots are all unchanged since
+    /// <paramref name="cached"/> was built (only the animation clock advanced). Under
+    /// that guarantee every static layer's slice — and therefore its content hash —
+    /// is byte-identical to last frame, so reusing it is exact. An animating node is
+    /// rebuilt in full so a transform / opacity / colour change is sampled fresh; its
+    /// slice still hashes identically for a transform/opacity-only change, so the tile
+    /// cache re-blits rather than re-rasters. This skips the per-frame rebuild + re-hash
+    /// of the whole document, which is the allocation churn that otherwise pins the GC.
+    /// </remarks>
+    public CompositorLayer RefreshAnimating(CompositorLayer cached)
+    {
+        ArgumentNullException.ThrowIfNull(cached);
+        return Refresh(cached);
+    }
+
+    private CompositorLayer Refresh(CompositorLayer node)
+    {
+        // An animating layer root is rebuilt in full (slice, transform, opacity,
+        // hash, and its own subtree) so the fresh animation sample takes effect.
+        if (node.SourceBox is { } box && (_isAnimatingLayerRoot?.Invoke(box) ?? false))
+            return BuildLayer(box, node.OriginParentX, node.OriginParentY);
+
+        // Static node: reuse its slice/hash unchanged, but recurse so an animating
+        // descendant layer still refreshes.
+        var children = node.Children;
+        List<CompositorLayer>? refreshed = null;
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            var r = Refresh(child);
+            if (!ReferenceEquals(r, child))
+            {
+                if (refreshed is null)
+                {
+                    refreshed = new List<CompositorLayer>(children.Count);
+                    for (var j = 0; j < i; j++) refreshed.Add(children[j]);
+                }
+            }
+            refreshed?.Add(r);
+        }
+
+        return refreshed is null ? node : node.WithChildren(refreshed);
     }
 
     /// <summary>
