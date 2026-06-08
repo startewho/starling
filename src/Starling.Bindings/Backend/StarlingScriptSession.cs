@@ -86,11 +86,15 @@ internal sealed class StarlingScriptSession : IScriptSession
 
         WindowBinding.Install(_runtime, _document, new WindowInstallOptions(
             DocumentUrl: _baseUrl.ToString(),
-            HttpClient: options.Http,
             InnerWidth: options.ViewportWidth,
             InnerHeight: options.ViewportHeight,
+            HttpClient: options.Http,
             LayoutHost: options.LayoutHost,
-            AnimationHost: options.AnimationHost));
+            AnimationHost: options.AnimationHost,
+            // Back performance.now() with the simulated loop clock so it shares a
+            // timeline with rAF timestamps / setTimeout — page animations that ease
+            // on (rafTimestamp - performance.now()) then progress correctly.
+            MonotonicTimeMs: () => _loop.NowMilliseconds));
 
         // setTimeout / setInterval / rAF ride the same simulated WebEventLoop
         // clock; PumpOnce advances it.
@@ -249,6 +253,16 @@ internal sealed class StarlingScriptSession : IScriptSession
             return true;
         }
 
+        // "Run the update intersection observations steps" (IO spec §3.2.2)
+        // modelled as a pump front: deliver any queued IntersectionObserver
+        // notifications off the layout snapshot. Callbacks can enqueue more work
+        // (class toggles, microtasks), picked up on the next iteration.
+        if (Observers.IntersectionObserverBinding.HasPending(_runtime))
+        {
+            Observers.IntersectionObserverBinding.RunPending(_runtime);
+            return true;
+        }
+
         return false;
     }
 
@@ -257,6 +271,7 @@ internal sealed class StarlingScriptSession : IScriptSession
         && _loop.PendingTimerCount == 0
         && !_dynamicRunner.HasPending
         && !HasPendingHostAsyncWork
+        && !Observers.IntersectionObserverBinding.HasPending(_runtime)
         && _loop.PendingAnimationFrameCount > 0;
 
     public bool HasPendingHostAsyncWork => FetchBinding.HasPendingFetches(_runtime);

@@ -1532,14 +1532,20 @@ public sealed class StarlingEngine
 
         // A self-rescheduling requestAnimationFrame loop never reports idle, so
         // without a bound the pump burns the entire wall-clock cap on every
-        // animated page — first paint lands fast but navigation stays "busy" for
-        // seconds. Give rAF a few frames (bootstrap callbacks like double-rAF
-        // "after paint" hooks and one-shot layout measurers), then stop waiting
-        // on it: steady animation is the live phase's job (PumpFrame), not a
-        // reason to hold the navigation settle. Microtasks, timers, and
-        // dynamic-script fetches still pump to true quiescence, so SPA bundle
-        // chains are unaffected.
-        const int RafFrameBudget = 8;
+        // animated page. We give rAF a frame budget, then stop waiting on it.
+        //
+        // A static/headless render has no live phase (PumpFrame) to continue the
+        // animation, so the budget must be generous enough that typical entrance
+        // animations — counters easing on performance.now() deltas, width/opacity
+        // transitions of ~1–2s — reach their final state before the snapshot;
+        // otherwise the page is captured mid-animation. At SimulatedStepMs per
+        // frame this still bounds how long a truly endless rAF loop (game loop,
+        // spinner) holds the navigation settle. Override with
+        // STARLING_RAF_FRAME_BUDGET. Microtasks, timers, and dynamic-script
+        // fetches always pump to true quiescence, independent of this budget.
+        var RafFrameBudget = 40;
+        if (int.TryParse(Environment.GetEnvironmentVariable("STARLING_RAF_FRAME_BUDGET"), out var rafBudgetOverride) && rafBudgetOverride > 0)
+            RafFrameBudget = rafBudgetOverride;
 
         var wall = System.Diagnostics.Stopwatch.StartNew();
         var idle = System.Diagnostics.Stopwatch.StartNew();

@@ -898,28 +898,19 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
     private void FillGradientRounded(DrawingCanvas canvas, FillGradient item, float scale, DisposableBag pendingImageSources)
     {
         var bounds = item.Bounds;
-        var px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
-        var py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
-        if ((long)px * py > 64L * 1024 * 1024) return;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
-        var device = new RectangleF(0, 0, px, py);
-        var brush = BuildGradientBrush(item.Gradient, device);
+        // Fill the gradient brush straight into a rounded-rect path on the canvas
+        // — the same direct-fill path the solid FillRoundedRect uses. The brush
+        // supplies the colour, the rounded path the shape, so the corners are
+        // clipped without an offscreen layer. Filling on the canvas honours the
+        // active clip stack (e.g. an `overflow: hidden` ancestor); the old
+        // offscreen rasterize + DrawImage blit did NOT compose with that clip,
+        // so a rounded gradient inside a clipped box (the classic pill-shaped
+        // progress-bar fill) vanished.
+        var brush = BuildGradientBrush(item.Gradient, ToRectF(bounds));
         if (brush is null) return;
-
-        var layer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
-        pendingImageSources.Add(layer);
-
-        layer.Mutate(ctx => ctx.Paint(c =>
-            c.Fill(brush, new RectanglePolygon(device))));
-
-        // Clip the rasterized gradient to the rounded corners.
-        var deviceBounds = new LayoutRect(0, 0, px, py);
-        var scaledRadii = ScaleRadii(item.Radii, scale);
-        var clipPath = BuildClipPath(deviceBounds, scaledRadii);
-        ApplyClipMask(layer, clipPath);
-
-        var destRect = new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height);
-        canvas.DrawImage(layer, new Rectangle(0, 0, px, py), destRect, _resampler);
+        canvas.Fill(brush, BuildRoundedRectPath(bounds, item.Radii));
     }
 
     /// <summary>

@@ -7,3 +7,6 @@ args = [
 
 [mcp_servers.starling]
 url = "http://127.0.0.1:3078/mcp"
+
+[sandbox_workspace_write]
+network_access = true
