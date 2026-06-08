@@ -5,6 +5,17 @@ namespace Starling.Layout.Text;
 /// <summary>
 /// One shaped glyph in a run: a glyph id and its pen position relative to the
 /// run origin (0,0).
+/// <para>
+/// <b>Pen positions are authoritative</b> and renderer-neutral — layout slices
+/// and hit-tests on them. <see cref="GlyphId"/> is best-effort: it is the
+/// shaping engine's glyph index, which is <i>not portable</i> across shaping
+/// engines (the ImageSharp measurer cannot read OpenType ids from SixLabors'
+/// public surface and carries the codepoint as a stand-in; a skrifa/HarfBuzz
+/// backend emits its own ids). A non-ImageSharp paint backend therefore re-shapes
+/// the run's source text with its own engine rather than trusting these ids —
+/// the neutral text contract a backend relies on is the source text plus the
+/// <c>FontSpec</c> carried on the draw item, with these positions for layout.
+/// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct ShapedGlyph(uint GlyphId, float X, float Y);
@@ -38,6 +49,15 @@ public abstract class ShapedRun
     /// The post-run pen advance — the total width of the shaped text.
     /// </summary>
     public double Advance { get; }
+
+    /// <summary>
+    /// Whether the paint backend can reuse this run's pre-shaped data to draw at
+    /// <paramref name="fontSize"/> without re-shaping. The backend asks the run
+    /// instead of pattern-matching its concrete type, so a non-ImageSharp run
+    /// (e.g. <see cref="GlyphShapedRun"/>) is handled without a down-cast. Default
+    /// false — a run that carries no renderer-ready payload forces the slow path.
+    /// </summary>
+    public virtual bool CanReuseAtSize(double fontSize) => false;
 
     /// <summary>
     /// Carve a sub-run out of an already-shaped run. Used by inline layout to

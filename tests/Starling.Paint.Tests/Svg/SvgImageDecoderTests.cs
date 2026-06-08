@@ -1,5 +1,5 @@
 using AwesomeAssertions;
-using SixLabors.ImageSharp;
+using Starling.Css.Values;
 using Starling.Common.Image;
 using Starling.Paint.Svg;
 using Starling.Spec;
@@ -110,7 +110,7 @@ public sealed class SvgImageDecoderTests
         using var img = SvgImageDecoder.DecodeText(
             "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' " +
             "fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='8'/></svg>",
-            currentColor: Color.FromPixel(new SixLabors.ImageSharp.PixelFormats.Rgba32(0, 128, 255, 255)));
+            currentColor: CssColor.FromSrgb(0 / 255.0, 128 / 255.0, 255 / 255.0, 1.0));
 
         // The ring is drawn in the supplied blue, not the default black.
         CountWhere(img, p => p.A > 0 && p.B > 150 && p.R < 80).Should().BeGreaterThan(0);
@@ -161,7 +161,7 @@ public sealed class SvgImageDecoderTests
         // currentColor resolves to the supplied color (cyan-ish).
         using var cur = SvgImageDecoder.DecodeText(
             "<svg width='10' height='10' viewBox='0 0 10 10'><rect width='10' height='10' fill='currentColor'/></svg>",
-            currentColor: Color.FromPixel(new SixLabors.ImageSharp.PixelFormats.Rgba32(0, 200, 200, 255)));
+            currentColor: CssColor.FromSrgb(0 / 255.0, 200 / 255.0, 200 / 255.0, 1.0));
         var px = PixelAt(cur, 5, 5);
         px.G.Should().BeGreaterThan(150);
         px.B.Should().BeGreaterThan(150);

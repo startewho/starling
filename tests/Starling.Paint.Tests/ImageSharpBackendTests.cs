@@ -186,7 +186,7 @@ public sealed class ImageSharpBackendTests
                 new LayoutRect(0, 0, 16, 16),
                 scale: 1f,
                 opaqueBackground: false,
-                engine.ImageSharpContext);
+                engine.GpuDevice);
 
             texture.Width.Should().Be(16);
             texture.Height.Should().Be(16);
@@ -208,7 +208,7 @@ public sealed class ImageSharpBackendTests
         var deviceHandle = engine.DeviceHandle;
         try
         {
-            _ = engine.ImageSharpContext;
+            _ = ImageSharpGpuContext.GetOrCreate(engine.GpuDevice);
             ImageSharpWebGpuDeviceStateCache.Contains(deviceHandle).Should().BeTrue(
                 "ImageSharp tracks shared state for external WebGPU devices");
 
