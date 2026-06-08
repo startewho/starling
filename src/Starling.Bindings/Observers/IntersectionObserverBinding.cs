@@ -5,32 +5,64 @@ using Starling.Js.Runtime;
 namespace Starling.Bindings.Observers;
 
 /*
- * TODO (B5-4 partial impl): real intersection firing.
+ * IntersectionObserver — "run the update intersection observations steps"
+ * (IO spec §3.2.2), driven off the host's layout + viewport.
  *
- * IntersectionObserver fires entries at the "run the update intersection
- * observations steps" render step (IO spec §3.2.2). That requires:
- *   - A layout result that the bindings can read (target bounding box,
- *     root bounding box, viewport).
- *   - A render-step hook in the event loop where the bindings can iterate
- *     each registered (observer, target) and compute the intersection ratio
- *     against the configured thresholds.
+ * The host (interactive shell or headless renderer) calls
+ * UpdateForDocument(doc, viewport) after layout and on scroll. For each
+ * observed target we read its document-space border box from the ILayoutHost,
+ * intersect it with the current viewport rect (its scroll offset + size),
+ * compute the intersection ratio, and — when the target crosses the smallest
+ * configured threshold (its intersecting/not state flips) — queue an
+ * IntersectionObserverEntry and deliver it to the callback via a microtask.
  *
- * Neither hook is in place for B5-4. This binding therefore only exposes
- * the constructable JS surface; no IntersectionObserverEntry will ever be
- * delivered. Once layout + render-step hooks land (see B6-* and
- * browser-plan/07_LAYOUT.md), wire a per-frame pass that calls
- * ObserverRecords.BuildIntersectionEntry and queues a delivery microtask
- * through runtime.WithActiveVm.
+ * observe() also schedules one initial update using the realm's current
+ * viewport globals, so a target already in view fires without waiting for the
+ * first host-driven update (and a context with no layout host falls back to
+ * "treat as on-screen", preserving one-shot renders that gate content on the
+ * observer ever firing).
  */
 
 /// <summary>
-/// B5-4 — installs the JS-visible <c>IntersectionObserver</c> constructor and
-/// prototype. <b>Partial implementation:</b> JS surface only — entries are
-/// never produced (see file-level TODO).
+/// Installs the JS-visible <c>IntersectionObserver</c> constructor and prototype,
+/// and drives intersection delivery from host layout via
+/// <see cref="UpdateForDocument"/>.
 /// </summary>
 public static class IntersectionObserverBinding
 {
     internal static readonly ConditionalWeakTable<JsObject, IntersectionObserverState> States = new();
+
+    // Per-document registry of live observer states, so the host's
+    // UpdateForDocument can iterate every observer rooted in a document without
+    // holding the JS wrapper. Mirrors MutationObserverBinding.DocStates.
+    internal static readonly ConditionalWeakTable<Document, List<WeakReference<IntersectionObserverState>>> DocStates = new();
+
+    internal static void Register(Document doc, IntersectionObserverState state)
+    {
+        var list = DocStates.GetValue(doc, static _ => new List<WeakReference<IntersectionObserverState>>());
+        foreach (var w in list) if (w.TryGetTarget(out var s) && ReferenceEquals(s, state)) return;
+        list.Add(new WeakReference<IntersectionObserverState>(state));
+    }
+
+    /// <summary>
+    /// Runs the "update intersection observations" step for every observer in
+    /// <paramref name="doc"/> against <paramref name="viewport"/> (the visible
+    /// region in document CSS px — scroll offset as origin, viewport size as
+    /// extent). Targets that crossed their threshold get a record delivered to
+    /// the callback via a microtask. Returns true when any record was queued.
+    /// </summary>
+    public static bool UpdateForDocument(Document doc, LayoutRect viewport)
+    {
+        ArgumentNullException.ThrowIfNull(doc);
+        if (!DocStates.TryGetValue(doc, out var list)) return false;
+        var any = false;
+        for (var i = list.Count - 1; i >= 0; i--)
+        {
+            if (!list[i].TryGetTarget(out var state)) { list.RemoveAt(i); continue; }
+            any |= state.Update(viewport);
+        }
+        return any;
+    }
 
     public static void Install(JsRuntime runtime, Document document)
     {
@@ -65,6 +97,11 @@ public static class IntersectionObserverBinding
             if (args.Length == 0 || DomWrappers.UnwrapElement(args[0]) is not { } el)
                 throw new JsThrow(realm.NewTypeError("IntersectionObserver.observe: target must be an Element"));
             state.AddTarget(el);
+            if (el.OwnerDocument is { } ownerDoc) Register(ownerDoc, state);
+            // Schedule one initial "update intersection observations" against the
+            // realm's current viewport so a target already in view fires without
+            // waiting for the first host-driven update.
+            state.QueueInitialUpdate();
             return JsValue.Undefined;
         }, length: 1);
 
@@ -168,6 +205,10 @@ internal sealed class IntersectionObserverState
     private readonly JsValue _callback;
     private readonly List<Element> _targets = new();
     private readonly List<JsObject> _pending = new();
+    // Last delivered intersecting state per target (absent = never evaluated), so a
+    // record is queued only when the target crosses its threshold, not every update.
+    private readonly Dictionary<Element, bool> _intersecting = new();
+    private bool _deliveryQueued;
 
     public Element? Root { get; }
     public string RootMargin { get; }
@@ -193,13 +234,141 @@ internal sealed class IntersectionObserverState
     public void RemoveTarget(Element target)
     {
         for (var i = 0; i < _targets.Count; i++)
-            if (ReferenceEquals(_targets[i], target)) { _targets.RemoveAt(i); return; }
+            if (ReferenceEquals(_targets[i], target))
+            {
+                _targets.RemoveAt(i);
+                _intersecting.Remove(target);
+                return;
+            }
     }
 
     public void Disconnect()
     {
         _targets.Clear();
         _pending.Clear();
+        _intersecting.Clear();
+    }
+
+    /// <summary>Schedules an initial update against the realm's current viewport
+    /// globals, so a target already in view fires without waiting for the host.</summary>
+    public void QueueInitialUpdate()
+        => _runtime.Realm.Microtasks.Enqueue(() => Update(ReadViewport()));
+
+    /// <summary>
+    /// Recomputes intersection for every target against <paramref name="viewport"/>
+    /// (document CSS px). Queues a record for each target whose intersecting state
+    /// flipped across the smallest threshold and schedules one delivery microtask.
+    /// Returns true when any record was queued.
+    /// </summary>
+    public bool Update(LayoutRect viewport)
+    {
+        if (_targets.Count == 0) return false;
+        var host = WindowBinding.LayoutHostForRealm(_runtime.Realm);
+        var realm = _runtime.Realm;
+        var threshold = Thresholds.Count == 0 ? 0.0 : MinOf(Thresholds);
+        var rootRect = ResolveRootRect(host, viewport);
+        var queued = false;
+
+        foreach (var target in _targets)
+        {
+            double ratio;
+            bool isIntersecting;
+            if (host is null || !host.TryGetBoundingClientRect(target, out var tr))
+            {
+                // No layout available (e.g. a non-laid-out test realm): treat the
+                // target as on-screen so content gated on the observer firing still
+                // appears, matching a one-shot "render the whole page" context.
+                ratio = 1.0;
+                isIntersecting = true;
+            }
+            else
+            {
+                ratio = IntersectionRatio(tr, rootRect);
+                isIntersecting = threshold <= 0 ? ratio > 0 : ratio >= threshold;
+            }
+
+            if (_intersecting.TryGetValue(target, out var last) && last == isIntersecting)
+                continue; // no threshold crossing since last update
+            _intersecting[target] = isIntersecting;
+            _pending.Add(ObserverRecords.BuildIntersectionEntry(realm, target, ratio, isIntersecting));
+            queued = true;
+        }
+
+        if (queued) ScheduleDelivery();
+        return queued;
+    }
+
+    private LayoutRect ResolveRootRect(ILayoutHost? host, LayoutRect viewport)
+        => Root is { } r && host is not null && host.TryGetBoundingClientRect(r, out var rr)
+            ? rr
+            : viewport;
+
+    private static double IntersectionRatio(LayoutRect target, LayoutRect root)
+    {
+        var area = target.Width * target.Height;
+        if (area <= 0) return 0;
+        var ix = Math.Max(target.Left, root.Left);
+        var iy = Math.Max(target.Top, root.Top);
+        var ir = Math.Min(target.Right, root.Right);
+        var ib = Math.Min(target.Bottom, root.Bottom);
+        var w = ir - ix;
+        var h = ib - iy;
+        return w <= 0 || h <= 0 ? 0 : w * h / area;
+    }
+
+    private static double MinOf(IReadOnlyList<double> xs)
+    {
+        var m = xs[0];
+        for (var i = 1; i < xs.Count; i++) if (xs[i] < m) m = xs[i];
+        return m;
+    }
+
+    private LayoutRect ReadViewport()
+    {
+        var g = _runtime.Realm.GlobalObject;
+        double Num(string n)
+        {
+            var d = JsValue.ToNumber(g.Get(n));
+            return double.IsNaN(d) ? 0 : d;
+        }
+        return new LayoutRect(Num("scrollX"), Num("scrollY"), Num("innerWidth"), Num("innerHeight"));
+    }
+
+    private void ScheduleDelivery()
+    {
+        if (_deliveryQueued) return;
+        _deliveryQueued = true;
+        _runtime.Realm.Microtasks.Enqueue(() =>
+        {
+            _deliveryQueued = false;
+            Deliver();
+        });
+    }
+
+    private void Deliver()
+    {
+        if (_pending.Count == 0) return;
+        var realm = _runtime.Realm;
+        var records = DrainRecords(realm);
+        _runtime.WithActiveVm(() =>
+        {
+            try
+            {
+                AbstractOperations.Call(realm.ActiveVm, _callback,
+                    JsValue.Object(_observerWrapper),
+                    new[] { JsValue.Object(records), JsValue.Object(_observerWrapper) });
+            }
+            catch (JsThrow ex)
+            {
+                realm.ConsoleSink(ConsoleLevel.Error,
+                    $"Uncaught (in IntersectionObserver) {JsValue.ToStringValue(ex.Value)}");
+            }
+            catch (Exception ex)
+            {
+                realm.ConsoleSink(ConsoleLevel.Error,
+                    $"Uncaught (in IntersectionObserver) {ex.Message}");
+            }
+        });
     }
 
     public JsArray DrainRecords(JsRealm realm)

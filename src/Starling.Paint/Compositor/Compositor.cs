@@ -346,7 +346,7 @@ internal sealed class Compositor
         // whole-layer-invalidation lag: a localized change (one text node, a hover
         // colour) only changes the hash of the tiles it overlaps, so every other
         // visible tile still serves from cache.
-        var prepared = DisplayList.DisplayListContentHash.Prepare(layer.Items);
+        var prepared = _tileGrid.GetOrPrepare(layer.ContentHash, layer.Items);
 
         for (var row = row0; row <= row1; row++)
         {
