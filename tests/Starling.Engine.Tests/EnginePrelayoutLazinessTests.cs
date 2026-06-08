@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using SixLabors.ImageSharp;
 using Starling.Common.Diagnostics;
 
@@ -25,9 +27,9 @@ public sealed class EnginePrelayoutLazinessTests
             <script>document.getElementById('out').textContent = 'after';</script>
             </body></html>";
 
-        var (outcome, diag) = await RenderAsync(html);
+        var (outcome, probe) = await RenderAsync(html);
 
-        diag.PrelayoutCount.Should().Be(0,
+        probe.PrelayoutCount.Should().Be(0,
             "no script read geometry or computed style, so the pre-script layout must be skipped");
         outcome.DisplayText.Should().Contain("after",
             "the script still ran and its mutation is reflected in the final render");
@@ -49,27 +51,27 @@ public sealed class EnginePrelayoutLazinessTests
             </script>
             </body></html>";
 
-        var (outcome, diag) = await RenderAsync(html);
+        var (outcome, probe) = await RenderAsync(html);
 
-        diag.PrelayoutCount.Should().BeGreaterThanOrEqualTo(1,
+        probe.PrelayoutCount.Should().BeGreaterThanOrEqualTo(1,
             "the geometry read must trigger a lazy pre-script layout");
         outcome.DisplayText.Should().Contain("w=140");
     }
 
-    private static async Task<(RenderOutcome Outcome, SpanCountingDiagnostics Diag)> RenderAsync(string html)
+    private static async Task<(RenderOutcome Outcome, PrelayoutProbe Probe)> RenderAsync(string html)
     {
         var tempHtml = Path.Combine(Path.GetTempPath(), $"starling-prelayout-{Guid.NewGuid():N}.html");
         var tempPng = Path.Combine(Path.GetTempPath(), $"starling-prelayout-{Guid.NewGuid():N}.png");
         await File.WriteAllTextAsync(tempHtml, html, CancellationToken.None);
-        var diag = new SpanCountingDiagnostics();
+        using var probe = new PrelayoutProbe();
         try
         {
-            var engine = new StarlingEngine(diagnostics: diag);
+            var engine = new StarlingEngine(loggerFactory: NullLoggerFactory.Instance);
             var url = new Uri(tempHtml).AbsoluteUri;
             var result = await engine.RenderAsync(
                 url, new RenderOptions(new Size(800, 600), 16f), tempPng, CancellationToken.None);
             result.IsOk.Should().BeTrue(result.IsErr ? result.Error.Message : "");
-            return (result.Value, diag);
+            return (result.Value, probe);
         }
         finally
         {
@@ -85,27 +87,28 @@ public sealed class EnginePrelayoutLazinessTests
     }
 
     /// <summary>Counts how many times the engine opened a "prelayout_for_js" span.</summary>
-    private sealed class SpanCountingDiagnostics : IDiagnostics
+    private sealed class PrelayoutProbe : IDisposable
     {
         private int _prelayoutCount;
+        private readonly ActivityListener _al;
+
+        public PrelayoutProbe()
+        {
+            _al = new ActivityListener
+            {
+                ShouldListenTo = src => src.Name == StarlingTelemetry.SourceName,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStarted = a =>
+                {
+                    if (a.OperationName == "engine.prelayout_for_js")
+                        Interlocked.Increment(ref _prelayoutCount);
+                },
+            };
+            ActivitySource.AddActivityListener(_al);
+        }
+
         public int PrelayoutCount => Volatile.Read(ref _prelayoutCount);
 
-        public IDisposable Span(string area, string operation)
-        {
-            if (area == "engine" && operation == "prelayout_for_js")
-                Interlocked.Increment(ref _prelayoutCount);
-            return NoopSpan.Instance;
-        }
-
-        public void Log(DiagLevel level, string area, string message) { }
-        public void Counter(string name, double value) { }
-        public void Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        public void LogException(string area, Exception exception, string? message = null) { }
-
-        private sealed class NoopSpan : IDisposable
-        {
-            public static readonly NoopSpan Instance = new();
-            public void Dispose() { }
-        }
+        public void Dispose() => _al.Dispose();
     }
 }

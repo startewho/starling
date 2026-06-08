@@ -6,10 +6,10 @@ using Starling.Js.Runtime;
 namespace Starling.Bindings.Tests;
 
 /// <summary>
-/// B5-4 — MutationObserver JS surface tests. The DOM-side mutation hook is
-/// not yet wired (see MutationObserverBinding's file-level TODO), so these
-/// tests only assert the constructable / observable / disconnectable shape.
-/// They do NOT assert that mutation records actually fire.
+/// B5-4 — MutationObserver tests. Covers the JS surface (constructable /
+/// observable / disconnectable) and end-to-end record delivery now that the
+/// DOM mutation hooks are wired: attribute/childList/characterData records are
+/// queued from real DOM mutations and delivered on a drained microtask.
 /// </summary>
 [TestClass]
 public sealed class MutationObserverTests
@@ -115,6 +115,110 @@ public sealed class MutationObserverTests
             var r = o.takeRecords();
             result = Array.isArray(r) && r.length === 0 ? 'ok' : 'fail';
         """).AsString.Should().Be("ok");
+    }
+
+    // -------------------- end-to-end record delivery -----------------------
+
+    [TestMethod]
+    public void Attribute_records_carry_old_value_on_set_replace_and_remove()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            globalThis.recs = [];
+            var o = new MutationObserver(function (records) {
+                for (var i = 0; i < records.length; i++) {
+                    var r = records[i];
+                    recs.push(r.type + ':' + r.attributeName + ':' + r.oldValue);
+                }
+            });
+            o.observe(document.body, { attributes: true, attributeOldValue: true });
+            document.body.setAttribute('data-x', 'one');  // add    -> oldValue null
+            document.body.setAttribute('data-x', 'two');  // replace-> oldValue "one"
+            document.body.removeAttribute('data-x');       // remove -> oldValue "two"
+        """);
+        runtime.DrainMicrotasks();
+        // The removal record (last) must carry "two" — the bug under review left
+        // oldValue null on the remove path.
+        Eval(runtime, "result = recs.join('|');").AsString
+            .Should().Be("attributes:data-x:null|attributes:data-x:one|attributes:data-x:two");
+    }
+
+    [TestMethod]
+    public void ChildList_records_fire_for_append_and_remove()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            globalThis.recs = [];
+            var o = new MutationObserver(function (records) {
+                for (var i = 0; i < records.length; i++) {
+                    var r = records[i];
+                    recs.push(r.type + ':+' + r.addedNodes.length + ':-' + r.removedNodes.length);
+                }
+            });
+            o.observe(document.body, { childList: true });
+            var d = document.createElement('div');
+            document.body.appendChild(d);
+            document.body.removeChild(d);
+        """);
+        runtime.DrainMicrotasks();
+        Eval(runtime, "result = recs.join('|');").AsString
+            .Should().Be("childList:+1:-0|childList:+0:-1");
+    }
+
+    [TestMethod]
+    public void ChildList_fragment_insert_produces_one_record_with_all_added_nodes()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            globalThis.recs = [];
+            var o = new MutationObserver(function (records) {
+                for (var i = 0; i < records.length; i++)
+                    recs.push(records[i].type + ':+' + records[i].addedNodes.length);
+            });
+            o.observe(document.body, { childList: true });
+            var frag = document.createDocumentFragment();
+            frag.appendChild(document.createElement('a'));
+            frag.appendChild(document.createElement('b'));
+            document.body.appendChild(frag);
+        """);
+        runtime.DrainMicrotasks();
+        // One record covering both moved nodes — not two single-node records.
+        Eval(runtime, "result = recs.join('|');").AsString.Should().Be("childList:+2");
+    }
+
+    [TestMethod]
+    public void CharacterData_record_carries_old_value()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            globalThis.recs = [];
+            var t = document.createTextNode('abc');
+            document.body.appendChild(t);
+            var o = new MutationObserver(function (records) {
+                for (var i = 0; i < records.length; i++)
+                    recs.push(records[i].type + ':' + records[i].oldValue);
+            });
+            o.observe(t, { characterData: true, characterDataOldValue: true });
+            t.data = 'xyz';
+        """);
+        runtime.DrainMicrotasks();
+        Eval(runtime, "result = recs.join('|');").AsString
+            .Should().Be("characterData:abc");
+    }
+
+    [TestMethod]
+    public void Observing_same_target_twice_does_not_duplicate_records()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            globalThis.count = 0;
+            var o = new MutationObserver(function (records) { count += records.length; });
+            o.observe(document.body, { attributes: true });
+            o.observe(document.body, { attributes: true }); // re-observe same target
+            document.body.setAttribute('data-y', '1');
+        """);
+        runtime.DrainMicrotasks();
+        Eval(runtime, "result = count;").AsNumber.Should().Be(1);
     }
 
     private static (JsRuntime, Document) BuildEnv()

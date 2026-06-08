@@ -52,9 +52,22 @@ public sealed class JsArray : JsObject
     /// <summary>Append without going through descriptor machinery.</summary>
     public void Push(JsValue value) => _items.Add(value);
 
-    /// <summary>§7.1.21 IsArray. Only host-side <see cref="JsArray"/> instances
-    /// count today, so proxies around arrays are not unwrapped yet.</summary>
-    public static bool IsArray(JsValue v) => v.IsObject && v.AsObject is JsArray;
+    /// <summary>§7.2.2 IsArray. Proxies around arrays unwrap recursively and
+    /// revoked proxies throw.</summary>
+    public static bool IsArray(JsValue v, JsRealm? realm = null)
+    {
+        if (!v.IsObject) return false;
+        var obj = v.AsObject;
+        while (obj is JsProxy proxy)
+        {
+            if (proxy.Target is null)
+                throw new JsThrow(realm is not null
+                    ? realm.NewTypeError("Cannot perform IsArray on a revoked proxy")
+                    : JsValue.String("Cannot perform IsArray on a revoked proxy"));
+            obj = proxy.Target;
+        }
+        return obj is JsArray;
+    }
 
     /// <summary>Canonical array index per §6.1.7: a String <c>P</c> such that
     /// <c>ToString(ToUint32(P)) === P</c> and value &lt; 2^32 - 1.</summary>

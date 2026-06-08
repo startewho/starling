@@ -15,7 +15,10 @@ public class IntlTests
         Eval("typeof Intl.DateTimeFormat === 'function';").AsBool.Should().BeTrue();
         Eval("typeof Intl.NumberFormat === 'function';").AsBool.Should().BeTrue();
         Eval("typeof Intl.Collator === 'function';").AsBool.Should().BeTrue();
+        Eval("typeof Intl.Locale === 'function';").AsBool.Should().BeTrue();
+        Eval("typeof Intl.supportedValuesOf === 'function';").AsBool.Should().BeTrue();
         Eval("Intl.getCanonicalLocales(['en-us', 'bad-locale']).join('|');").AsString.Should().Be("en-US");
+        Eval("Object.prototype.toString.call(Intl);").AsString.Should().Be("[object Intl]");
     }
 
     [TestMethod]
@@ -62,6 +65,49 @@ public class IntlTests
         Eval("var f = new Intl.NumberFormat('en-US').format; f(12.5);").AsString.Should().Be("12.5");
         Eval("var f = Intl.DateTimeFormat('en-US').format; f(0);").AsString.Should().Be("1/1/1970");
         Eval("var c = new Intl.Collator('en-US').compare; c('x', 'x');").AsNumber.Should().Be(0);
+    }
+
+    [TestMethod]
+    public void SupportedValuesOf_returns_arrays_for_known_keys_and_throws_for_invalid_key()
+    {
+        Eval("Intl.supportedValuesOf('calendar').length > 0;").AsBool.Should().BeTrue();
+        Eval("Intl.supportedValuesOf('currency').indexOf('USD') >= 0;").AsBool.Should().BeTrue();
+        Eval("Intl.supportedValuesOf('unit').indexOf('meter') >= 0 && Intl.supportedValuesOf('unit').indexOf('second') >= 0;")
+            .AsBool.Should().BeTrue();
+
+        Action invalid = () => Eval("Intl.supportedValuesOf('invalid');");
+        invalid.Should().Throw<JsThrow>();
+    }
+
+    [TestMethod]
+    public void Locale_constructor_exposes_core_properties_and_to_string_tag()
+    {
+        Eval("new Intl.Locale('en-US').toString();").AsString.Should().Be("en-US");
+        Eval("new Intl.Locale('en-US').language;").AsString.Should().Be("en");
+        Eval("new Intl.Locale('en-US').region;").AsString.Should().Be("US");
+        Eval("new Intl.Locale('zh-Hans-CN').script;").AsString.Should().Be("Hans");
+        Eval("new Intl.Locale('en-US').baseName;").AsString.Should().Be("en-US");
+        Eval("Object.prototype.toString.call(new Intl.Locale('en-US'));").AsString.Should().Be("[object Intl.Locale]");
+    }
+
+    [TestMethod]
+    public void Locale_requires_new_and_rejects_invalid_tags()
+    {
+        Action withoutNew = () => Eval("Intl.Locale('en-US');");
+        Action invalidTag = () => Eval("new Intl.Locale('invalid tag with spaces');");
+
+        withoutNew.Should().Throw<JsThrow>();
+        invalidTag.Should().Throw<JsThrow>();
+    }
+
+    [TestMethod]
+    public void Locale_reads_options_unicode_extensions_and_minimizes()
+    {
+        Eval("new Intl.Locale('en-US', { calendar: 'gregory' }).calendar;").AsString.Should().Be("gregory");
+        Eval("new Intl.Locale('en-US', { hourCycle: 'h12' }).hourCycle;").AsString.Should().Be("h12");
+        Eval("new Intl.Locale('en-US', { numeric: true }).numeric;").AsBool.Should().BeTrue();
+        Eval("new Intl.Locale('en-US-u-ca-gregory').calendar;").AsString.Should().Be("gregory");
+        Eval("new Intl.Locale('en-US').minimize().toString();").AsString.Should().Be("en");
     }
 
     private static JsValue Eval(string src)

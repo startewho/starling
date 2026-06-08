@@ -68,6 +68,18 @@
     <!-- 10.0.8+ required transitively by Aspire.Hosting.Yarp 13.4.0 (NU1109 otherwise). -->
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
 
+    <!-- Logging is the engine's single structured-log surface. Libraries depend
+         only on the Abstractions package (ILogger + the [LoggerMessage] source
+         generator); concrete providers are registered at the host. ActivitySource
+         and Meter for StarlingTelemetry come from the net10.0 shared framework. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <!-- IServiceCollection + AddSingleton/AddTransient for AddStarlingEngine; the
+         engine library registers its services without pulling the full DI host. -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
+    <!-- Console provider: only the Headless CLI host references it, to print
+         engine logs to stderr on plain `dotnet run` (no OTLP endpoint). -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+
     <!-- Crypto: pure-managed TLS support (consumed from M2 onward) -->
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.5.0" />
 
@@ -78,6 +90,7 @@
          runtime via STARLING_JS_ENGINE=jint; removable by deleting the backend
          project + this line. -->
     <PackageVersion Include="Jint" Version="4.9.2" />
+    <PackageVersion Include="Wasmtime" Version="44.0.0" />
 
     <!-- Legacy single-byte / CJK encodings (pure-managed; Rule-0 clean).
          Consumed by Starling.Engine for WHATWG-table charset support. -->
@@ -86,7 +99,7 @@
     <!-- Aspire orchestration + observability (Starling.AppHost + Starling.ServiceDefaults). -->
     <!-- YARP hosting integration: serves the repo-root sites/ directory at stable
          localhost paths for engine smoke-testing (Starling.AppHost "sites" resource). -->
-    <PackageVersion Include="Aspire.Hosting.Yarp" Version="13.4.0" />
+    <PackageVersion Include="Aspire.Hosting.Yarp" Version="13.4.2" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.5.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
@@ -105,7 +118,13 @@
          GUI tests; Avalonia.Headless.XUnit 12.0.3 targets xunit.v3. -->
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
-    <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <!-- HTML-parser comparison bench (Starling.HtmlParserBench): a mature,
+         pure-managed reference parser to benchmark Starling.Html against. Only
+         that standalone bench project references it — no engine project does, so
+         the managed-first interop policy is unaffected (AngleSharp ships no
+         native dependency). MIT-licensed. -->
+    <PackageVersion Include="AngleSharp" Version="1.4.0" />
 
     <!-- Analyzers (PrivateAssets in Directory.Build.props) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.0.0" />

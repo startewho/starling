@@ -60,8 +60,31 @@ internal sealed class FlexLayout
             _viewport);
 
         // Main / cross sizes of the container's content box.
+        //
+        // The main size is DEFINITE for a row container (its width is given) and
+        // for a column container with an explicit height. A column container with
+        // `height: auto` has an INDEFINITE main size — it sizes to its content.
+        // We must not fall back to the viewport height there: that phantom main
+        // size makes `justify-content` (center/end/space-*) distribute hundreds of
+        // px of non-existent free space, shoving the items far below the box
+        // (angular.dev's `flex-direction: column` nav buttons landing at y≈422 in
+        // a 96px box). When indefinite, the main size used for free-space math is
+        // the items' own used main extent, so free space is zero.
+        var mainIsDefinite = props.IsRow || explicitHeight.HasValue;
         var mainSize = props.IsRow ? containerWidth : (explicitHeight ?? _viewport.Height);
         var crossSize = props.IsRow ? (explicitHeight ?? double.NaN) : containerWidth;
+
+        // A column container's `min-height` raises a definite floor under the
+        // main size even when `height` is auto (CSS Sizing 3 §5). Resolve it so
+        // justify-content can distribute any real slack between the content and
+        // the floor, while still treating a purely content-sized column as
+        // indefinite (no free space).
+        double? minMainFloor = null;
+        if (!props.IsRow && container.Style is not null)
+        {
+            minMainFloor = BlockLayout.ResolveLength(
+                container.Style, PropertyId.MinHeight, _viewport.Height, _viewport);
+        }
 
         // CSS Flexbox §4: an absolutely/fixed-positioned child is NOT a flex
         // item — it takes no part in flex sizing or spacing and is placed later
@@ -130,7 +153,8 @@ internal sealed class FlexLayout
         {
             var (start, count) = lines[li];
             var (lineCross, usedMain) = LayoutLine(
-                items, start, count, props, mainSize, containerWidth, crossSize,
+                items, start, count, props, mainSize, mainIsDefinite, minMainFloor,
+                containerWidth, crossSize,
                 crossOffset: crossCursor, singleLine: lines.Count == 1);
             if (li == 0) firstLineUsedMain = usedMain;
             crossCursor += lineCross + props.CrossGap;
@@ -142,7 +166,10 @@ internal sealed class FlexLayout
         // single line's main extent.
         if (props.IsRow)
             return !double.IsNaN(crossSize) && crossSize > 0 && lines.Count == 1 ? crossSize : totalCross;
-        return firstLineUsedMain;
+        // Column with `height: auto`: the consumed main extent is the content,
+        // raised to a `min-height` floor when one is set so the box never
+        // collapses below it.
+        return Math.Max(firstLineUsedMain, minMainFloor ?? 0);
     }
 
     /// <summary>
@@ -190,7 +217,8 @@ internal sealed class FlexLayout
     /// </summary>
     private (double LineCross, double UsedMain) LayoutLine(
         Item[] items, int start, int count, FlexContainerProps props,
-        double mainSize, double containerWidth, double crossSize, double crossOffset, bool singleLine)
+        double mainSize, bool mainIsDefinite, double? minMainFloor,
+        double containerWidth, double crossSize, double crossOffset, bool singleLine)
     {
         var end = start + count;
 
@@ -198,7 +226,17 @@ internal sealed class FlexLayout
         var gapTotal = props.MainGap * Math.Max(0, count - 1);
         var outerSum = 0d;
         for (var i = start; i < end; i++) outerSum += items[i].MainSize + items[i].MainPad;
-        var free = mainSize - outerSum - gapTotal;
+
+        // When the main size is indefinite (a column with `height: auto`) the
+        // container sizes to its content, so the main size used for free-space
+        // math is the items' own extent — there is no slack to distribute and
+        // grow/justify-content become no-ops. A `min-height` floor still grants
+        // real slack between the content and the floor.
+        var contentMain = outerSum + gapTotal;
+        var justifyMain = mainIsDefinite
+            ? mainSize
+            : Math.Max(contentMain, minMainFloor ?? 0);
+        var free = justifyMain - outerSum - gapTotal;
 
         if (free > 0)
         {
@@ -240,9 +278,12 @@ internal sealed class FlexLayout
         // they stack (align-content: flex-start).
         var lineCrossSize = singleLine && !double.IsNaN(crossSize) && crossSize > 0 ? crossSize : maxCrossOuter;
 
-        // align-items: stretch grows auto-cross items to the line.
+        // align-items: stretch grows auto-cross items to the line. A percentage
+        // cross size that resolved to `auto` (indefinite container cross, see
+        // MeasureCrossSize) is auto for stretch too.
+        var crossIndefinite = props.IsRow && double.IsNaN(crossSize);
         for (var i = start; i < end; i++)
-            if (props.Align == AlignItems.Stretch && ChildCrossSizeIsAuto(items[i].Box, props))
+            if (props.Align == AlignItems.Stretch && ChildCrossSizeIsAuto(items[i].Box, props, crossIndefinite))
                 items[i].CrossSize = Math.Max(0, lineCrossSize - items[i].CrossPad);
 
         for (var i = start; i < end; i++)
@@ -252,7 +293,7 @@ internal sealed class FlexLayout
         var usedMain = gapTotal;
         for (var i = start; i < end; i++) usedMain += items[i].MainSize + items[i].MainPad;
 
-        var (leadingMain, betweenMain) = ResolveMainAxisSpacing(props.Justify, mainSize, usedMain, count, props.MainGap);
+        var (leadingMain, betweenMain) = ResolveMainAxisSpacing(props.Justify, justifyMain, usedMain, count, props.MainGap);
 
         var cursor = leadingMain;
         for (var i = start; i < end; i++)
@@ -263,7 +304,7 @@ internal sealed class FlexLayout
 
             // For *-reverse the main-start edge is on the far end; mirror the
             // logical position while keeping paint order.
-            var mainPos = props.IsReverse ? mainSize - cursor - mainExtent : cursor;
+            var mainPos = props.IsReverse ? justifyMain - cursor - mainExtent : cursor;
             var cross = crossOffset + ResolveCrossOffset(props.Align, lineCrossSize, crossExtent);
 
             item.Box.Frame = props.IsRow
@@ -553,9 +594,22 @@ internal sealed class FlexLayout
     private double MeasureCrossSize(Box.Box child, FlexContainerProps props, double itemMainSize, double containerWidth, double containerCross)
     {
         var crossProperty = props.IsRow ? PropertyId.Height : PropertyId.Width;
-        var crossBasis = props.IsRow ? (double.IsNaN(containerCross) ? _viewport.Height : containerCross) : containerWidth;
-        var explicitCross = BlockLayout.ResolveLength(child.Style, crossProperty, crossBasis, _viewport, allowAuto: true);
-        if (explicitCross is { } c) return Math.Max(0, c);
+        // CSS 2.1 §10.5: a child's percentage cross size resolves to `auto` when
+        // the container's cross size is indefinite. For a row container the cross
+        // axis is height, and an auto-height container has an indefinite cross
+        // (containerCross is NaN). Resolving `height: 100%` against the viewport
+        // there would inflate the item to a near-viewport height — angular.dev's
+        // search `<input>` (`height: 100%` inside an auto-height flex row) blew up
+        // to ~900px, dragging the whole banner past its container. When the cross
+        // basis is indefinite we treat a percentage cross size as auto and fall
+        // through to the content/stretch path below.
+        var crossIsIndefinite = props.IsRow && double.IsNaN(containerCross);
+        if (!(crossIsIndefinite && child.Style?.Get(crossProperty) is CssPercentage))
+        {
+            var crossBasis = props.IsRow ? (double.IsNaN(containerCross) ? _viewport.Height : containerCross) : containerWidth;
+            var explicitCross = BlockLayout.ResolveLength(child.Style, crossProperty, crossBasis, _viewport, allowAuto: true);
+            if (explicitCross is { } c) return Math.Max(0, c);
+        }
 
         // Auto cross size: lay out the child at the chosen main size and let
         // its natural content height settle. For row direction the child's
@@ -576,11 +630,15 @@ internal sealed class FlexLayout
         }
     }
 
-    private static bool ChildCrossSizeIsAuto(Box.Box child, FlexContainerProps props)
+    private static bool ChildCrossSizeIsAuto(Box.Box child, FlexContainerProps props, bool crossIndefinite)
     {
         var crossProperty = props.IsRow ? PropertyId.Height : PropertyId.Width;
         if (child.Style is null) return true;
-        return child.Style.Get(crossProperty) is CssKeyword { Name: "auto" };
+        var value = child.Style.Get(crossProperty);
+        if (value is CssKeyword { Name: "auto" }) return true;
+        // A percentage cross size against an indefinite container cross resolves
+        // to auto (CSS 2.1 §10.5), so it stretches like an auto item would.
+        return crossIndefinite && value is CssPercentage;
     }
 
     /// <summary>

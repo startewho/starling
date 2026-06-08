@@ -12,4 +12,11 @@
     <ProjectReference Include="..\Starling.Net\Starling.Net.csproj" />
     <ProjectReference Include="..\Starling.Url\Starling.Url.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Wasmtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->
+    <InternalsVisibleTo Include="Starling.Shell.Native" />
+  </ItemGroup>
 </Project>

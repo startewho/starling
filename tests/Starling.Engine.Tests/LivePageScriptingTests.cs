@@ -51,6 +51,48 @@ public sealed class LivePageScriptingTests
     }
 
     [TestMethod]
+    public async Task Dispatching_click_to_status_island_root_updates_counter()
+    {
+        const string html = """
+            <!doctype html><html><body>
+              <div id='wasm-island'>
+                <span id='wasm-state'>booting</span>
+                <button id='wasm-clicks'>0</button>
+              </div>
+              <script>
+                var island = document.getElementById('wasm-island');
+                var clicks = document.getElementById('wasm-clicks');
+                var count = 0;
+                island.addEventListener('click', function () {
+                  count = count + 1;
+                  clicks.textContent = String(count);
+                });
+                var bytes = new Uint8Array([
+                  0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+                  0x01,0x07,0x01,0x60,0x02,0x7f,0x7f,0x01,0x7f,
+                  0x03,0x02,0x01,0x00,
+                  0x07,0x07,0x01,0x03,0x61,0x64,0x64,0x00,0x00,
+                  0x0a,0x09,0x01,0x07,0x00,0x20,0x00,0x20,0x01,0x6a,0x0b
+                ]);
+                WebAssembly.instantiate(bytes).then(function (result) {
+                  document.getElementById('wasm-state').textContent =
+                    'Wasmtime add(19, 23) = ' + result.instance.exports.add(19, 23);
+                });
+              </script>
+            </body></html>
+            """;
+        using var page = await LoadInteractiveAsync(html);
+        var island = page.Document.GetElementById("wasm-island")!;
+        var clicks = page.Document.GetElementById("wasm-clicks")!;
+
+        var mutated = page.Scripting!.DispatchEvent(
+            island, new MouseEvent("click", new EventInit(Bubbles: true, Cancelable: true)) { Button = 0 });
+
+        mutated.Should().BeTrue("the status island listener should update the visible counter");
+        clicks.TextContent.Should().Be("1");
+    }
+
+    [TestMethod]
     public async Task Pumping_runs_a_timer_scheduled_after_load()
     {
         // The setTimeout is scheduled by the event listener — i.e. AFTER load —

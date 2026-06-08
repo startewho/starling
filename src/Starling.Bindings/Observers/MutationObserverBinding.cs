@@ -49,12 +49,75 @@ public static class MutationObserverBinding
 {
     // observer JS wrapper → host state (callback + list of (target, options) + pending records).
     internal static readonly ConditionalWeakTable<JsObject, MutationObserverState> States = new();
+    // document → live observer states. Held as WeakReferences so an observer that
+    // is disconnected and dropped by JS can be garbage-collected even while the
+    // Document lives; dead entries are pruned under lock before each dispatch.
+    internal static readonly ConditionalWeakTable<Document, List<WeakReference<MutationObserverState>>> DocStates = new();
+
+    internal static void RegisterState(Document doc, MutationObserverState state)
+    {
+        var list = DocStates.GetValue(doc, static _ => new List<WeakReference<MutationObserverState>>());
+        lock (list)
+        {
+            // Prune dead refs and bail if this state is already registered.
+            for (var i = list.Count - 1; i >= 0; i--)
+            {
+                if (!list[i].TryGetTarget(out var existing)) list.RemoveAt(i);
+                else if (ReferenceEquals(existing, state)) return;
+            }
+            list.Add(new WeakReference<MutationObserverState>(state));
+        }
+    }
+
+    /// <summary>Snapshot the live observer states for a document, compacting dead
+    /// WeakReferences out of the backing list under lock. Returns null when no
+    /// (live) observers are registered.</summary>
+    private static List<MutationObserverState>? LiveStates(Document doc)
+    {
+        if (!DocStates.TryGetValue(doc, out var list)) return null;
+        List<MutationObserverState>? live = null;
+        lock (list)
+        {
+            var write = 0;
+            for (var read = 0; read < list.Count; read++)
+            {
+                if (!list[read].TryGetTarget(out var s)) continue; // dead — drop
+                list[write++] = list[read];                        // compact, preserving order
+                (live ??= new List<MutationObserverState>()).Add(s);
+            }
+            if (write < list.Count) list.RemoveRange(write, list.Count - write);
+        }
+        return live;
+    }
+
+    private static void OnAttributeChanged(Document doc, Element el, string attrName, string? oldValue)
+    {
+        if (LiveStates(doc) is { } states)
+            foreach (var s in states) s.MaybeQueueAttribute(el, attrName, oldValue);
+    }
+
+    private static void OnChildListChanged(Document doc, Node target, IReadOnlyList<Node>? added, IReadOnlyList<Node>? removed, Node? prev, Node? next)
+    {
+        if (LiveStates(doc) is { } states)
+            foreach (var s in states) s.MaybeQueueChildList(target, added, removed, prev, next);
+    }
+
+    private static void OnCharacterDataChanged(Document doc, Node target, string oldValue)
+    {
+        if (LiveStates(doc) is { } states)
+            foreach (var s in states) s.MaybeQueueCharacterData(target, oldValue);
+    }
 
     public static void Install(JsRuntime runtime, Document document)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(document);
         var realm = runtime.Realm;
+        // Subscribe the DOM attribute-mutation hook (idempotent — overwrites with
+        // an equivalent closure when re-installed on the same document).
+        document.AttributeMutated = (el, attr, old) => OnAttributeChanged(document, el, attr, old);
+        document.ChildListMutated = (t, a, r, p, n) => OnChildListChanged(document, t, a, r, p, n);
+        document.CharacterDataMutated = (t, old) => OnCharacterDataChanged(document, t, old);
         if (realm.MutationObserverConstructor is not null) return; // idempotent
 
         var proto = new JsObject(realm.ObjectPrototype);
@@ -75,6 +138,8 @@ public static class MutationObserverBinding
 
             var opts = ParseOptions(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
             state.AddOrReplaceObservation(target, opts);
+            var doc = target as Document ?? target.OwnerDocument;
+            if (doc is not null) RegisterState(doc, state);
             return JsValue.Undefined;
         }, length: 2);
 
@@ -196,6 +261,115 @@ internal sealed class MutationObserverState
         _observations.Clear();
         _pending.Clear();
         _microtaskQueued = false;
+    }
+
+    /// <summary>DOM §4.3.4 — queue an attribute MutationRecord on this observer
+    /// when one of its observations matches the mutated element (target, or an
+    /// ancestor with subtree) and its options select this attribute.</summary>
+    public void MaybeQueueAttribute(Element el, string attrName, string? oldValue)
+    {
+        foreach (var (target, opts) in _observations)
+        {
+            if (!opts.Attributes) continue;
+            if (!Matches(target, el, opts.Subtree)) continue;
+            if (opts.AttributeFilter is { } f && !f.Contains(attrName)) continue;
+            var realm = _runtime.Realm;
+            EnqueueRecord(BuildAttributeRecord(realm, el, attrName,
+                opts.AttributeOldValue ? oldValue : null));
+            return; // at most one record per observer per mutation
+        }
+    }
+
+    /// <summary>DOM §4.3.4 — queue a childList MutationRecord when an observation
+    /// with childList matches the mutated parent (target, or an ancestor with
+    /// subtree).</summary>
+    public void MaybeQueueChildList(Node target, IReadOnlyList<Node>? added, IReadOnlyList<Node>? removed, Node? prev, Node? next)
+    {
+        foreach (var (obsTarget, opts) in _observations)
+        {
+            if (!opts.ChildList) continue;
+            if (!Matches(obsTarget, target, opts.Subtree)) continue;
+            EnqueueRecord(BuildChildListRecord(_runtime.Realm, target, added, removed, prev, next));
+            return;
+        }
+    }
+
+    private static JsObject BuildChildListRecord(JsRealm realm, Node target, IReadOnlyList<Node>? added, IReadOnlyList<Node>? removed, Node? prev, Node? next)
+    {
+        JsValue NodeList(IReadOnlyList<Node>? ns)
+        {
+            if (ns is null || ns.Count == 0) return JsValue.Object(new JsArray(realm));
+            var items = new JsValue[ns.Count];
+            for (var i = 0; i < ns.Count; i++)
+                items[i] = JsValue.Object(DomWrappers.Wrap(realm, ns[i]));
+            return JsValue.Object(new JsArray(realm, items));
+        }
+        JsValue OrNull(Node? n) => n is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, n));
+        var r = new JsObject(realm.MutationRecordPrototype ?? realm.ObjectPrototype);
+        void P(string k, JsValue v) => r.DefineOwnProperty(k,
+            PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: true));
+        P("type", JsValue.String("childList"));
+        P("target", JsValue.Object(DomWrappers.Wrap(realm, target)));
+        P("addedNodes", NodeList(added));
+        P("removedNodes", NodeList(removed));
+        P("previousSibling", OrNull(prev));
+        P("nextSibling", OrNull(next));
+        P("attributeName", JsValue.Null);
+        P("attributeNamespace", JsValue.Null);
+        P("oldValue", JsValue.Null);
+        return r;
+    }
+
+    /// <summary>DOM §4.3.4 — queue a characterData MutationRecord when an
+    /// observation with characterData matches the mutated node.</summary>
+    public void MaybeQueueCharacterData(Node target, string oldValue)
+    {
+        foreach (var (obsTarget, opts) in _observations)
+        {
+            if (!opts.CharacterData) continue;
+            if (!Matches(obsTarget, target, opts.Subtree)) continue;
+            var realm = _runtime.Realm;
+            var r = new JsObject(realm.MutationRecordPrototype ?? realm.ObjectPrototype);
+            void P(string k, JsValue v) => r.DefineOwnProperty(k,
+                PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: true));
+            P("type", JsValue.String("characterData"));
+            P("target", JsValue.Object(DomWrappers.Wrap(realm, target)));
+            P("oldValue", opts.CharacterDataOldValue ? JsValue.String(oldValue) : JsValue.Null);
+            P("addedNodes", JsValue.Object(new JsArray(realm)));
+            P("removedNodes", JsValue.Object(new JsArray(realm)));
+            P("previousSibling", JsValue.Null);
+            P("nextSibling", JsValue.Null);
+            P("attributeName", JsValue.Null);
+            P("attributeNamespace", JsValue.Null);
+            EnqueueRecord(r);
+            return;
+        }
+    }
+
+    private static bool Matches(Node target, Node el, bool subtree)
+    {
+        if (ReferenceEquals(target, el)) return true;
+        if (!subtree) return false;
+        for (var p = el.ParentNode; p is not null; p = p.ParentNode)
+            if (ReferenceEquals(p, target)) return true;
+        return false;
+    }
+
+    private static JsObject BuildAttributeRecord(JsRealm realm, Element el, string attrName, string? oldValue)
+    {
+        var r = new JsObject(realm.MutationRecordPrototype ?? realm.ObjectPrototype);
+        void P(string k, JsValue v) => r.DefineOwnProperty(k,
+            PropertyDescriptor.Data(v, writable: false, enumerable: true, configurable: true));
+        P("type", JsValue.String("attributes"));
+        P("target", JsValue.Object(DomWrappers.Wrap(realm, el)));
+        P("attributeName", JsValue.String(attrName));
+        P("attributeNamespace", JsValue.Null);
+        P("oldValue", oldValue is null ? JsValue.Null : JsValue.String(oldValue));
+        P("addedNodes", JsValue.Object(new JsArray(realm)));
+        P("removedNodes", JsValue.Object(new JsArray(realm)));
+        P("previousSibling", JsValue.Null);
+        P("nextSibling", JsValue.Null);
+        return r;
     }
 
     public JsArray DrainRecords(JsRealm realm)

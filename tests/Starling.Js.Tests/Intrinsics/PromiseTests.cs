@@ -71,6 +71,33 @@ public class PromiseTests
     }
 
     [TestMethod]
+    public void Promise_constructor_throws_without_executor()
+    {
+        var ex = Assert.ThrowsExactly<JsThrow>(() =>
+        {
+            var rt = new JsRuntime();
+            var program = new JsParser("new Promise();").ParseProgram();
+            var chunk = JsCompiler.CompileForEval(program);
+            new JsVm(rt).Run(chunk);
+        });
+
+        ex.Value.IsObject.Should().BeTrue();
+        ex.Value.AsObject.Get("message").AsString.Should().Contain("Promise resolver");
+    }
+
+    [TestMethod]
+    public void Promise_constructor_accepts_callable_executor()
+    {
+        var rt = Run(@"
+            globalThis.result = 0;
+            new Promise(function(resolve, reject) { resolve(66); })
+                .then(function(v) { globalThis.result = v; });
+        ");
+
+        rt.GetGlobal("result").AsNumber.Should().Be(66);
+    }
+
+    [TestMethod]
     public void Executor_throw_causes_rejection_with_thrown_value()
     {
         var rt = Run(@"
@@ -149,6 +176,36 @@ public class PromiseTests
     }
 
     [TestMethod]
+    public void Finally_returns_new_promise_and_non_callable_handler_forwards_value()
+    {
+        var rt = Run(@"
+            globalThis.same = true;
+            globalThis.value = 0;
+            var p = Promise.resolve(2);
+            var q = p.finally();
+            globalThis.same = p === q;
+            q.then(function(v) { globalThis.value = v; });
+        ");
+
+        rt.GetGlobal("same").AsBool.Should().BeFalse();
+        rt.GetGlobal("value").AsNumber.Should().Be(2);
+    }
+
+    [TestMethod]
+    public void Finally_chain_ignores_fulfilled_handler_return_value()
+    {
+        var rt = Run(@"
+            globalThis.value = 0;
+            Promise.resolve(2)
+                .finally(function() { return 6; })
+                .finally(function() { return 9; })
+                .then(function(v) { globalThis.value = v; });
+        ");
+
+        rt.GetGlobal("value").AsNumber.Should().Be(2);
+    }
+
+    [TestMethod]
     public void Promise_all_resolves_to_array_of_values_in_order()
     {
         var rt = Run(@"
@@ -182,6 +239,20 @@ public class PromiseTests
     }
 
     [TestMethod]
+    public void Promise_all_rejects_missing_or_non_iterable_input()
+    {
+        var rt = Run(@"
+            globalThis.missing = '';
+            globalThis.object = '';
+            Promise.all().catch(function(e) { globalThis.missing = e.name; });
+            Promise.all({}).catch(function(e) { globalThis.object = e.name; });
+        ");
+
+        rt.GetGlobal("missing").AsString.Should().Be("TypeError");
+        rt.GetGlobal("object").AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
     public void Promise_allSettled_reports_per_entry_status()
     {
         var rt = Run(@"
@@ -192,6 +263,20 @@ public class PromiseTests
                 });
         ");
         rt.GetGlobal("r").AsString.Should().Be("fulfilled=1|rejected=bad");
+    }
+
+    [TestMethod]
+    public void Promise_allSettled_rejects_missing_or_non_iterable_input()
+    {
+        var rt = Run(@"
+            globalThis.missing = '';
+            globalThis.object = '';
+            Promise.allSettled().catch(function(e) { globalThis.missing = e.name; });
+            Promise.allSettled({}).catch(function(e) { globalThis.object = e.name; });
+        ");
+
+        rt.GetGlobal("missing").AsString.Should().Be("TypeError");
+        rt.GetGlobal("object").AsString.Should().Be("TypeError");
     }
 
     [TestMethod]
@@ -216,6 +301,52 @@ public class PromiseTests
                 .catch(function(r) { globalThis.reason = r; });
         ");
         rt.GetGlobal("reason").AsString.Should().Be("first");
+    }
+
+    [TestMethod]
+    public void Promise_race_resolves_plain_values_and_pending_promises_in_order()
+    {
+        Run(@"
+            globalThis.first = 0;
+            Promise.race([12, 2, 3]).then(function(v) { globalThis.first = v; });
+        ").GetGlobal("first").AsNumber.Should().Be(12);
+
+        Run(@"
+            globalThis.second = 0;
+            Promise.race([Promise.resolve(2), 6, 3]).then(function(v) { globalThis.second = v; });
+        ").GetGlobal("second").AsNumber.Should().Be(2);
+
+        Run(@"
+            globalThis.third = 0;
+            Promise.race([new Promise(function() {}), Promise.resolve(55), 3])
+                .then(function(v) { globalThis.third = v; });
+        ").GetGlobal("third").AsNumber.Should().Be(55);
+    }
+
+    [TestMethod]
+    public void Promise_race_rejects_missing_or_non_iterable_input()
+    {
+        var rt = Run(@"
+            globalThis.missing = '';
+            globalThis.object = '';
+            Promise.race().catch(function(e) { globalThis.missing = e.name; });
+            Promise.race({}).catch(function(e) { globalThis.object = e.name; });
+        ");
+
+        rt.GetGlobal("missing").AsString.Should().Be("TypeError");
+        rt.GetGlobal("object").AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
+    public void Promise_race_rejects_when_first_settled_input_rejects_after_pending()
+    {
+        var rt = Run(@"
+            globalThis.reason = '';
+            Promise.race([new Promise(function() {}), Promise.reject('Could not connect'), 3])
+                .catch(function(e) { globalThis.reason = e; });
+        ");
+
+        rt.GetGlobal("reason").AsString.Should().Be("Could not connect");
     }
 
     [TestMethod]
@@ -284,6 +415,20 @@ public class PromiseTests
         rt.GetGlobal("e0").AsNumber.Should().Be(1);
         rt.GetGlobal("e1").AsNumber.Should().Be(2);
         rt.GetGlobal("len").AsNumber.Should().Be(2);
+    }
+
+    [TestMethod]
+    public void Promise_any_rejects_missing_or_non_iterable_input()
+    {
+        var rt = Run(@"
+            globalThis.missing = '';
+            globalThis.object = '';
+            Promise.any().catch(function(e) { globalThis.missing = e.name; });
+            Promise.any({}).catch(function(e) { globalThis.object = e.name; });
+        ");
+
+        rt.GetGlobal("missing").AsString.Should().Be("TypeError");
+        rt.GetGlobal("object").AsString.Should().Be("TypeError");
     }
 
     [TestMethod]

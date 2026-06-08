@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Starling.Paint.Tests" />
+    <InternalsVisibleTo Include="Starling.Paint.NeutralStub" />
     <!-- GUI's PageRendererHost routes through PaintBackendSelector so
          STARLING_PAINT_BACKEND=imagesharp-webgpu flips both layout (measurer)
          and raster backend together. -->
@@ -53,5 +54,9 @@
          GetManifestResourceNames() for *.ttf/*.otf. -->
     <EmbeddedResource Include="Resources\Fonts\**\*.ttf" />
     <EmbeddedResource Include="Resources\Fonts\**\*.otf" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->
+    <InternalsVisibleTo Include="Starling.Shell.Native" />
   </ItemGroup>
 </Project>

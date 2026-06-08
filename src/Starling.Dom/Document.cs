@@ -234,6 +234,23 @@ public sealed class Document : Node
     /// </summary>
     internal Action<Node>? NodeConnected { get; set; }
 
+    /// <summary>Fired after an attribute mutation on an element in this document:
+    /// (element, qualifiedName, oldValue). Subscribed by MutationObserverBinding
+    /// to queue attribute MutationRecords. Null when no observer is installed.</summary>
+    internal Action<Element, string, string?>? AttributeMutated { get; set; }
+
+    /// <summary>Fired after a childList mutation: (target parent, addedNodes,
+    /// removedNodes, previousSibling, nextSibling) — one of added/removed is
+    /// non-empty. A DocumentFragment insertion reports all moved children in a
+    /// single call (one MutationRecord per DOM §4.3). Subscribed by
+    /// MutationObserverBinding to queue childList MutationRecords.</summary>
+    internal Action<Node, IReadOnlyList<Node>?, IReadOnlyList<Node>?, Node?, Node?>? ChildListMutated { get; set; }
+
+    /// <summary>Fired after a CharacterData (Text/Comment/CDATA) data change:
+    /// (target, oldData). Subscribed by MutationObserverBinding for characterData
+    /// MutationRecords.</summary>
+    internal Action<Node, string>? CharacterDataMutated { get; set; }
+
     /// <summary>Raise <see cref="NodeConnected"/> for <paramref name="node"/>
     /// if a host has subscribed. Called from the tree-mutation path.</summary>
     internal void NotifyNodeConnected(Node node) => NodeConnected?.Invoke(node);
@@ -255,6 +272,12 @@ public sealed class Document : Node
     /// <c>implementation.createDocument</c>. Affects name-casing in
     /// <c>createAttribute</c> (HTML lower-cases, XML preserves).</summary>
     public bool IsHtml { get; set; } = true;
+
+    /// <summary>DOM §4.5 — the document's content type. Null defers to the
+    /// <see cref="IsHtml"/> default ("text/html" vs "application/xml").
+    /// <c>createDocument</c> sets it from the root element's namespace
+    /// (HTML → application/xhtml+xml, SVG → image/svg+xml, else application/xml).</summary>
+    public string? ContentType { get; set; }
 
     // ---- DOM §4.9 — createAttribute / createAttributeNS --------------------
 
@@ -280,15 +303,38 @@ public sealed class Document : Node
     }
 
     public Element CreateElement(string tagName, string? @namespace = null)
-        => new(tagName, @namespace) { OwnerDocument = this };
+    {
+        Element e = IsHtmlTemplate(tagName, @namespace)
+            ? new HtmlTemplateElement(tagName, @namespace)
+            : new Element(tagName, @namespace);
+        e.OwnerDocument = this;
+        return e;
+    }
 
     /// <summary>DOM §4.5 createElementNS — preserves the qualified name's case and
     /// splits the prefix (unlike <see cref="CreateElement(string,string?)"/>).</summary>
     public Element CreateElementNS(string? @namespace, string qualifiedName)
     {
-        var e = Element.CreateNamespaced(@namespace, qualifiedName);
+        // <template> is HTML-only, so the rare createElementNS("…/xhtml",
+        // "template") still needs the specialized type for template.content.
+        var local = LocalNameOf(qualifiedName);
+        Element e = IsHtmlTemplate(local, @namespace)
+            ? new HtmlTemplateElement(local, @namespace)
+            : Element.CreateNamespaced(@namespace, qualifiedName);
         e.OwnerDocument = this;
         return e;
+    }
+
+    // True when (tagName, namespace) names the HTML <template> element. A null or
+    // empty namespace is the HTML namespace in this engine's element model.
+    private static bool IsHtmlTemplate(string tagName, string? @namespace)
+        => string.Equals(tagName, "template", StringComparison.OrdinalIgnoreCase)
+           && (string.IsNullOrEmpty(@namespace) || @namespace == Element.HtmlNamespace);
+
+    private static string LocalNameOf(string qualifiedName)
+    {
+        var i = qualifiedName.IndexOf(':', StringComparison.Ordinal);
+        return i >= 0 ? qualifiedName[(i + 1)..] : qualifiedName;
     }
 
     public Text CreateText(string data) => CreateTextNode(data);

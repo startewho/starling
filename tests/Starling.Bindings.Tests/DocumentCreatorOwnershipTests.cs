@@ -39,6 +39,20 @@ public sealed class DocumentCreatorOwnershipTests
         """).AsBool.Should().BeTrue($"document.{method}({args}) must return a Node owned by the document");
     }
 
+    [TestMethod]
+    [Spec("dom", "https://dom.spec.whatwg.org/#interface-node", "4.4")]
+    [DataRow("createTextNode", "'x'", "Text")]
+    [DataRow("createComment", "'x'", "Comment")]
+    [DataRow("createDocumentFragment", "", "DocumentFragment")]
+    public void Document_create_uses_global_interface_prototype(string method, string args, string ctorName)
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, $$"""
+            var n = document.{{method}}({{args}});
+            result = n instanceof globalThis.{{ctorName}};
+        """).AsBool.Should().BeTrue($"document.{method}({args}) must share the global {ctorName}.prototype");
+    }
+
     // ---- Helpers ------------------------------------------------------------
 
     private static (JsRuntime, Document) BuildEnv()

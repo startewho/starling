@@ -404,8 +404,9 @@ public static class PromiseCtor
     /// rejection reason.</summary>
     private static JsValue All(JsRealm realm, JsValue iterable)
     {
-        var items = ArrayLikeToList(realm, iterable);
         var capability = NewPromiseCapability(realm);
+        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
+            return JsValue.Object(capability.Promise);
         if (items.Count == 0)
         {
             var emptyArr = MakeArrayLike(realm, Array.Empty<JsValue>());
@@ -438,8 +439,9 @@ public static class PromiseCtor
     /// <summary>§27.2.4.2 Promise.allSettled.</summary>
     private static JsValue AllSettled(JsRealm realm, JsValue iterable)
     {
-        var items = ArrayLikeToList(realm, iterable);
         var capability = NewPromiseCapability(realm);
+        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
+            return JsValue.Object(capability.Promise);
         if (items.Count == 0)
         {
             var emptyArr = MakeArrayLike(realm, Array.Empty<JsValue>());
@@ -493,8 +495,9 @@ public static class PromiseCtor
     /// <c>errors</c> own property is a JsArray of the rejection reasons.</summary>
     private static JsValue Any(JsRealm realm, JsValue iterable)
     {
-        var items = ArrayLikeToList(realm, iterable);
         var capability = NewPromiseCapability(realm);
+        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
+            return JsValue.Object(capability.Promise);
         if (items.Count == 0)
         {
             // Empty iterable → immediate AggregateError, per §27.2.4.3.
@@ -528,8 +531,9 @@ public static class PromiseCtor
     /// <summary>§27.2.4.5 Promise.race.</summary>
     private static JsValue Race(JsRealm realm, JsValue iterable)
     {
-        var items = ArrayLikeToList(realm, iterable);
         var capability = NewPromiseCapability(realm);
+        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
+            return JsValue.Object(capability.Promise);
         for (var i = 0; i < items.Count; i++)
         {
             var item = ResolveStatic(realm, items[i]);
@@ -580,6 +584,25 @@ public static class PromiseCtor
 
     /// <summary>Pull items out of an array-like (length + index access). Promise
     /// statics do not consume general iterables yet.</summary>
+    private static bool TryArrayLikeToList(
+        JsRealm realm,
+        JsValue iterable,
+        PromiseCapability capability,
+        out List<JsValue> items)
+    {
+        try
+        {
+            items = ArrayLikeToList(realm, iterable);
+            return true;
+        }
+        catch (JsThrow ex)
+        {
+            items = new List<JsValue>();
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            return false;
+        }
+    }
+
     private static List<JsValue> ArrayLikeToList(JsRealm realm, JsValue iterable)
     {
         if (!iterable.IsObject)

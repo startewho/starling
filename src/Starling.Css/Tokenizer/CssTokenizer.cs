@@ -7,10 +7,11 @@ namespace Starling.Css.Tokenizer;
 /// CSS Syntax Module Level 3 §4 tokenizer.
 /// </summary>
 /// <remarks>
-/// The tokenizer follows the spec's "consume a token" algorithm. It does not
-/// implement the full preprocessing step from §3.3 — we accept raw CRLF/CR/FF
-/// at consume sites instead. The output stream is materialized eagerly via
-/// <see cref="Tokenize"/>; the parser consumes the list.
+/// The tokenizer follows the spec's "consume a token" algorithm. Input is run
+/// through the §3.3 preprocessing step first (see <see cref="Preprocess"/>):
+/// newlines are normalized and NULL/lone surrogates become U+FFFD. The output
+/// stream is materialized eagerly via <see cref="Tokenize"/>; the parser
+/// consumes the list.
 /// </remarks>
 public sealed class CssTokenizer
 {
@@ -20,8 +21,73 @@ public sealed class CssTokenizer
     public CssTokenizer(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        _source = source;
+        _source = Preprocess(source);
     }
+
+    // CSS Syntax 3 §3.3 input preprocessing: normalize newlines (CR, CRLF, FF
+    // → LF), replace U+0000 NULL and lone surrogates with U+FFFD. We do this up
+    // front so downstream consume steps see a clean stream.
+    private static string Preprocess(string source)
+    {
+        var needsWork = false;
+        for (var i = 0; i < source.Length; i++)
+        {
+            var c = source[i];
+            if (c is '\r' or '\f' or '\0' || char.IsSurrogate(c))
+            {
+                needsWork = true;
+                break;
+            }
+        }
+        if (!needsWork)
+            return source;
+
+        var builder = new StringBuilder(source.Length);
+        for (var i = 0; i < source.Length; i++)
+        {
+            var c = source[i];
+            switch (c)
+            {
+                case '\r':
+                    builder.Append('\n');
+                    if (i + 1 < source.Length && source[i + 1] == '\n')
+                        i++;
+                    break;
+                case '\f':
+                    builder.Append('\n');
+                    break;
+                case '\0':
+                    builder.Append('�');
+                    break;
+                default:
+                    if (char.IsHighSurrogate(c) && i + 1 < source.Length && char.IsLowSurrogate(source[i + 1]))
+                    {
+                        // A valid surrogate pair encodes a non-BMP code point; keep it.
+                        builder.Append(c);
+                        builder.Append(source[i + 1]);
+                        i++;
+                    }
+                    else if (char.IsSurrogate(c))
+                    {
+                        builder.Append('�');
+                    }
+                    else
+                    {
+                        builder.Append(c);
+                    }
+                    break;
+            }
+        }
+        return builder.ToString();
+    }
+
+    // CSS Syntax 3 §3: whitespace is exactly U+0009 TAB, U+000A LF, U+000C FF,
+    // U+000D CR, and U+0020 SPACE. After preprocessing FF and CR become LF, but
+    // we still accept them here for robustness. Note: char.IsWhiteSpace also
+    // matches Unicode spaces (NBSP, U+2000…) which CSS does NOT treat as
+    // whitespace, so we must not use it.
+    private static bool IsCssWhitespace(char c)
+        => c is '\t' or '\n' or '\f' or '\r' or ' ';
 
     public static IReadOnlyList<CssToken> Tokenize(string source)
     {
@@ -47,7 +113,7 @@ public sealed class CssTokenizer
             return new CssToken(CssTokenType.Eof);
 
         var c = Peek();
-        if (char.IsWhiteSpace(c))
+        if (IsCssWhitespace(c))
             return ConsumeWhitespace();
         if (StartsWith("<!--"))
         {
@@ -105,7 +171,7 @@ public sealed class CssTokenizer
     private CssToken ConsumeWhitespace()
     {
         var start = _position;
-        while (!IsEnd && char.IsWhiteSpace(Peek()))
+        while (!IsEnd && IsCssWhitespace(Peek()))
             _position++;
         return new CssToken(CssTokenType.Whitespace, _source[start.._position]);
     }
@@ -213,7 +279,7 @@ public sealed class CssTokenizer
 
     private CssToken ConsumeUrl()
     {
-        while (char.IsWhiteSpace(Peek()))
+        while (IsCssWhitespace(Peek()))
             _position++;
 
         if (Peek() is '"' or '\'')
@@ -229,9 +295,9 @@ public sealed class CssTokenizer
                 return new CssToken(CssTokenType.Url, value.ToString());
             }
 
-            if (char.IsWhiteSpace(c))
+            if (IsCssWhitespace(c))
             {
-                while (!IsEnd && char.IsWhiteSpace(Peek()))
+                while (!IsEnd && IsCssWhitespace(Peek()))
                     _position++;
                 if (IsEnd || Peek() == ')')
                 {
@@ -312,7 +378,7 @@ public sealed class CssTokenizer
             var count = 1;
             while (count < 6 && IsHex(Peek()))
                 hex[count++] = _source[_position++];
-            if (char.IsWhiteSpace(Peek()))
+            if (IsCssWhitespace(Peek()))
             {
                 // Spec: a single trailing whitespace after a hex escape is consumed (CRLF as one).
                 if (Peek() == '\r' && Peek(1) == '\n')

@@ -1,5 +1,5 @@
 using BenchmarkDotNet.Attributes;
-using Starling.Common.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Starling.Css;
 using Starling.Css.Cascade;
 using Starling.Css.Parser;
@@ -60,11 +60,11 @@ public class GitHubStyleBench
 
     [Benchmark]
     public int PrecomputeTree_GitHubHome()
-        => PrecomputeTree_GitHubHome(diagnostics: null);
+        => PrecomputeTree_GitHubHome(loggerFactory: null);
 
-    public int PrecomputeTree_GitHubHome(IDiagnostics? diagnostics)
+    public int PrecomputeTree_GitHubHome(ILoggerFactory? loggerFactory)
     {
-        var style = CreateStyleEngine(_doc, useCachedInlineSheets: true, diagnostics);
+        var style = CreateStyleEngine(_doc, useCachedInlineSheets: true, loggerFactory);
         var cache = new CascadeCache();
         style.PrecomputeTree(_doc.DocumentElement!, cache);
         return cache.Count;
@@ -72,12 +72,12 @@ public class GitHubStyleBench
 
     [Benchmark]
     public double LayoutDocument_GitHubHome()
-        => LayoutDocument_GitHubHome(diagnostics: null);
+        => LayoutDocument_GitHubHome(loggerFactory: null);
 
-    public double LayoutDocument_GitHubHome(IDiagnostics? diagnostics)
+    public double LayoutDocument_GitHubHome(ILoggerFactory? loggerFactory)
     {
-        var style = CreateStyleEngine(_doc, useCachedInlineSheets: true, diagnostics: null);
-        var root = new LayoutEngine(style, diagnostics: diagnostics).LayoutDocument(_doc, Viewport);
+        var style = CreateStyleEngine(_doc, useCachedInlineSheets: true, loggerFactory: null);
+        var root = new LayoutEngine(style, loggerFactory: loggerFactory).LayoutDocument(_doc, Viewport);
         return root.Frame.Height;
     }
 
@@ -97,7 +97,7 @@ public class GitHubStyleBench
         var doc = HtmlParser.Parse(_html);
         var style = CreateStyleEngine(doc, useCachedInlineSheets: false);
         var layout = new LayoutEngine(style).LayoutDocument(doc, Viewport);
-        using var renderer = new CompositedPageRenderer(diagnostics: null);
+        using var renderer = new CompositedPageRenderer();
         using var bitmap = renderer.Render(
             layout,
             new LayoutRect(0, 0, Viewport.Width, Viewport.Height));
@@ -141,9 +141,9 @@ public class GitHubStyleBench
         }
     }
 
-    private StyleEngine CreateStyleEngine(Document doc, bool useCachedInlineSheets, IDiagnostics? diagnostics = null)
+    private StyleEngine CreateStyleEngine(Document doc, bool useCachedInlineSheets, ILoggerFactory? loggerFactory = null)
     {
-        var style = new StyleEngine(diagnostics: diagnostics);
+        var style = new StyleEngine(loggerFactory: loggerFactory);
         style.MediaContext = style.MediaContext with
         {
             ViewportWidthPx = Viewport.Width,

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Starling.Bindings;
 using Starling.Dom;
 using Starling.Dom.Events;
@@ -47,7 +48,7 @@ public sealed record ScriptSessionOptions(
     ScriptFetcherDelegate Fetcher,
     StarlingHttpClient Http,
     ILayoutHost? LayoutHost,
-    Starling.Common.Diagnostics.IDiagnostics Diag)
+    ILoggerFactory LoggerFactory)
 {
     /// <summary>Layout viewport size in CSS px. Backends expose this through
     /// <c>window.innerWidth</c>/<c>innerHeight</c> and <c>window.screen</c>.
@@ -120,6 +121,12 @@ public interface IScriptSession : IDisposable
     /// is pending on any front (fully idle), so the engine's outer pump loop can
     /// terminate.</summary>
     bool PumpOnce();
+
+    /// <summary>True while host-side asynchronous work can still enqueue JS
+    /// jobs even though the in-realm queues are currently empty. The engine uses
+    /// this to avoid declaring the page settled between a background fetch and
+    /// the promise job that will resolve it.</summary>
+    bool HasPendingHostAsyncWork { get; }
 
     /// <summary>True when the only work still pending is one or more queued
     /// <c>requestAnimationFrame</c> callbacks — no microtasks/promise jobs, no

@@ -16,5 +16,5 @@ internal interface IGpuTexturePaintBackend : IPaintBackend
         LayoutRect viewport,
         float scale,
         bool opaqueBackground,
-        GpuPaintDeviceContext context);
+        GpuPaintDevice device);
 }

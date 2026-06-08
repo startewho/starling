@@ -7,7 +7,7 @@ internal interface IGpuLayerTextureCache
 {
     bool HasResidentTexture(long contentHash, int width, int height);
 
-    GpuPaintDeviceContext ImageSharpContext { get; }
+    GpuPaintDevice GpuDevice { get; }
 
     void AdoptTexture(long contentHash, GpuPaintTexture texture);
 }

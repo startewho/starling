@@ -4,6 +4,9 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Provided by the ASP.NET Core shared framework (FrameworkReference below);
+         the repo-wide global ref would otherwise trip NU1510. -->
+    <PackageReference Remove="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="MSTest" />
     <PackageReference Include="AwesomeAssertions" />
   </ItemGroup>

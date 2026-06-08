@@ -61,19 +61,25 @@ public static class WeakSetCtor
         if (!ReferenceEquals(instProto, realm.WeakSetPrototype)) s.SetPrototypeOf(instProto);
         if (args.Length == 0 || args[0].IsNullish) return s;
 
+        var adder = AbstractOperations.Get(realm.ActiveVm, s, "add");
+        if (!AbstractOperations.IsCallable(adder))
+            throw new JsThrow(realm.NewTypeError("WeakSet constructor add method is not callable"));
         var iterable = args[0];
         var record = AbstractOperations.GetIterator(realm, realm.ActiveVm, iterable);
         while (true)
         {
             var next = AbstractOperations.IteratorStep(realm, realm.ActiveVm, ref record);
             if (next is null) break;
-            var value = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
-            if (!value.IsObject)
+            try
+            {
+                var value = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
+                AbstractOperations.Call(realm.ActiveVm, adder, JsValue.Object(s), new[] { value });
+            }
+            catch
             {
                 AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
-                throw new JsThrow(realm.NewTypeError("WeakSet value must be an object"));
+                throw;
             }
-            s.Add(value.AsObject);
         }
         return s;
     }

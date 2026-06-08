@@ -8,7 +8,7 @@ namespace Starling.Js.Parse;
 /// <see cref="ParseProgram()"/> so static import/export declarations remain
 /// restricted to program scope.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     private Statement ParseProgramStatement()
     {
@@ -47,7 +47,7 @@ public sealed partial class JsParser
         {
             Advance(); // .
             var meta = ExpectIdentifierName("expected 'meta' after 'import.'");
-            if (meta.Lexeme != "meta")
+            if (!meta.TextEquals("meta"))
                 throw new JsParseException(
                     $"the only valid meta-property for import is 'import.meta' (got 'import.{meta.Lexeme}')",
                     meta.Start);
@@ -192,9 +192,9 @@ public sealed partial class JsParser
             JsTokenKind.Const => ParseVar("const"),
             JsTokenKind.Function => ParseFunctionDeclaration(),
             JsTokenKind.Class => ParseClassDeclarationWithExtendsTracking(),
-            _ when _current.Kind == JsTokenKind.Identifier && _current.Lexeme == "let" && IsLetDeclarationStart()
+            _ when _current.Kind == JsTokenKind.Identifier && _current.TextEquals("let") && IsLetDeclarationStart()
                 => ParseVar("let"),
-            _ when _current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async" && _lex.Peek().Kind == JsTokenKind.Function
+            _ when _current.Kind == JsTokenKind.Identifier && _current.TextEquals("async") && _lex.Peek().Kind == JsTokenKind.Function
                 => ParseAsyncFunctionDeclaration(),
             _ => throw new JsParseException("expected declaration, 'default', '*', or named export list after 'export'", _current.Start),
         };
@@ -219,7 +219,7 @@ public sealed partial class JsParser
         {
             declaration = ParseClassExpression();
         }
-        else if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async" && _lex.Peek().Kind == JsTokenKind.Function)
+        else if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("async") && _lex.Peek().Kind == JsTokenKind.Function)
         {
             var asyncStart = _current.Start;
             Advance(); // async

@@ -53,6 +53,16 @@ public class JsonTests
     }
 
     [TestMethod]
+    public void Parse_numbers_cover_safe_integer_fraction_and_signed_forms()
+    {
+        Eval("JSON.parse('-1');").AsNumber.Should().Be(-1);
+        Eval("JSON.parse('-0');").AsNumber.Should().Be(0);
+        Eval("JSON.parse('9007199254740991');").AsNumber.Should().Be(9007199254740991d);
+        Eval("JSON.parse('0.1');").AsNumber.Should().Be(0.1d);
+        Eval("JSON.parse('1E-2');").AsNumber.Should().Be(0.01d);
+    }
+
+    [TestMethod]
     public void Parse_escape_sequences()
     {
         // JS source: JSON.parse('"\n\tA"')  — the JS string literal
@@ -60,6 +70,35 @@ public class JsonTests
         // it sees the six characters {", \, n, \, t, \, u, 0, 0, 4, 1, "}
         // and decodes them to {newline, tab, 'A'}.
         Eval("JSON.parse('\"\\\\n\\\\t\\\\u0041\"');").AsString.Should().Be("\n\tA");
+    }
+
+    [TestMethod]
+    public void Parse_all_json_string_escape_sequences()
+    {
+        Eval("JSON.parse('{\"a\":\"\\\\\\\"\"}').a;").AsString.Should().Be("\"");
+        Eval("JSON.parse('{\"a\":\"\\\\\\\\\"}').a;").AsString.Should().Be("\\");
+        Eval("JSON.parse('{\"a\":\"\\\\/\"}').a;").AsString.Should().Be("/");
+        Eval("JSON.parse('{\"a\":\"\\\\b\"}').a;").AsString.Should().Be("\b");
+        Eval("JSON.parse('{\"a\":\"\\\\f\"}').a;").AsString.Should().Be("\f");
+        Eval("JSON.parse('{\"a\":\"\\\\n\"}').a;").AsString.Should().Be("\n");
+        Eval("JSON.parse('{\"a\":\"\\\\r\"}').a;").AsString.Should().Be("\r");
+        Eval("JSON.parse('{\"a\":\"\\\\t\"}').a;").AsString.Should().Be("\t");
+        Eval("JSON.parse('{\"a\":\"\\\\u0000\"}').a;").AsString.Should().Be("\0");
+        Eval("JSON.parse('{\"a\":\"\\\\u0001\"}').a;").AsString.Should().Be("\x01");
+        Eval("JSON.parse('{\"a\":\"\\\\u003C\"}').a;").AsString.Should().Be("<");
+        Eval("JSON.parse('{\"a\":\"\\\\u003e\"}').a;").AsString.Should().Be(">");
+    }
+
+    [TestMethod]
+    public void Parse_escape_sequences_in_property_names()
+    {
+        Eval("JSON.parse('{\"abc\\\\tdef\":\"42\"}').hasOwnProperty('abc\\tdef');").AsBool.Should().BeTrue();
+        Eval("JSON.parse('{\"abc\\\\ndef\":\"42\"}').hasOwnProperty('abc\\ndef');").AsBool.Should().BeTrue();
+        Eval("JSON.parse('{\"abc\\\\fdef\":\"42\"}').hasOwnProperty('abc\\fdef');").AsBool.Should().BeTrue();
+        Eval("JSON.parse('{\"abc\\\\bdef\":\"42\"}').hasOwnProperty('abc\\bdef');").AsBool.Should().BeTrue();
+        Eval("JSON.parse('{\"abc\\\\rdef\":\"42\"}').hasOwnProperty('abc\\rdef');").AsBool.Should().BeTrue();
+        Eval("JSON.parse('{\"abc\\\\r\\\\ndef\":\"42\"}').hasOwnProperty('abc\\r\\ndef');").AsBool.Should().BeTrue();
+        Eval("JSON.parse('{\"abc\\\\\\\"def\":\"42\"}').hasOwnProperty('abc\"def');").AsBool.Should().BeTrue();
     }
 
     [TestMethod]
@@ -217,6 +256,13 @@ public class JsonTests
     {
         Eval("JSON.stringify({a:1}, null, 2);")
             .AsString.Should().Be("{\n  \"a\": 1\n}");
+    }
+
+    [TestMethod]
+    public void Stringify_indent_number_pretty_prints_nested_arrays()
+    {
+        Eval("JSON.stringify([[]], null, 2);")
+            .AsString.Should().Be("[\n  []\n]");
     }
 
     [TestMethod]

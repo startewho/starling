@@ -94,4 +94,10 @@ public static class DomExceptionBinding
     /// given DOM error name (§4.4) — for bindings to throw.</summary>
     public static JsThrow Throw(JsRealm realm, string name, string message = "")
         => new(JsValue.Object(MakeInstance(realm, name, message)));
+
+    /// <summary>Build a real DOMException value (not thrown) with the given DOM
+    /// error name, so its <c>constructor</c> is the realm's DOMException — for
+    /// bindings that need a DOMException as a value (e.g. AbortSignal.reason).</summary>
+    public static JsValue Make(JsRealm realm, string name, string message = "")
+        => JsValue.Object(MakeInstance(realm, name, message));
 }

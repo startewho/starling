@@ -6,15 +6,17 @@ using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Threading;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Chrome;
 using Starling.Gui.Core.Rendering;
 using Starling.Gui.Theme;
 using Starling.Paint.Backend;
 using System.Diagnostics;
-using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Css.Properties;
 using Starling.Css.Selectors;
+using Starling.Css.Values;
 using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Engine;
@@ -30,6 +32,30 @@ using LayoutBox = Starling.Layout.Box.Box;
 
 namespace Starling.Gui.Controls;
 
+internal static partial class WebviewPanelLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "zero-copy GPU page surface active ({Width}x{Height} device px)")]
+    public static partial void SurfaceActive(ILogger logger, int width, int height);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "GPU page surface setup failed")]
+    public static partial void SurfaceSetupFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "GPU surface present failed")]
+    public static partial void SurfacePresentFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "live JS pump failed: {Message}")]
+    public static partial void LivePumpFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "DOM event dispatch failed: {Message}")]
+    public static partial void DomDispatchFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "click-coordinate diagnostic write failed")]
+    public static partial void HitDiagFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "caret debug log write failed")]
+    public static partial void CaretLogFailed(ILogger logger, Exception ex);
+}
+
 /// <summary>
 /// The page surface. A ScrollViewer wraps a Canvas that hosts the page
 /// bitmap plus absolute-positioned overlays for hover highlight, drag-select,
@@ -40,7 +66,8 @@ namespace Starling.Gui.Controls;
 internal sealed class WebviewPanel : UserControl, IDisposable
 {
     private readonly ThemeManager _tm;
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Action<string> _onLinkActivated;
     private readonly Action<string, bool> _onStatus;
     private readonly IRenderSession _renderSession;
@@ -73,6 +100,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // full layer-tree present per overlay change. Without it a single relayout tick
     // fired ~4 redundant full presents (one per Clear*/RenderCaret) of the same frame.
     private bool _suppressPresent;
+
+    // Counts the overlay-driven presents RefreshOverlays decides to fire (i.e. those
+    // not coalesced away by _suppressPresent). It increments even on the readback
+    // path, where the present itself is a no-op, so a headless test can assert that a
+    // drag-select move coalesces its clear + rebuild into ONE present, not two.
+    private int _overlayPresentRequests;
     private readonly TextBlock _placeholder;
     private readonly Border _placeholderHost;
 
@@ -153,23 +186,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private long _animClockMs;
     private bool _animating;
 
-    // Frame-rate tracking. Every presented frame bumps the monotonic
-    // "gui.frames.presented" counter (its rate in the Aspire dashboard is the
-    // live FPS), and once a second we log the computed FPS so it can be queried
-    // from structured logs. The clock is independent of _liveStopwatch, which
-    // restarts whenever a new JS context binds. After an idle gap (the live
-    // timer stops when nothing animates) the window resets so the first frame
-    // back does not report a misleadingly low average.
-    private readonly Stopwatch _frameClock = Stopwatch.StartNew();
-    private long _fpsWindowStartMs;
-    private long _fpsLastFrameMs;
-    private int _fpsFrames;
-    private const long FpsWindowMs = 1000;
-    private const long FpsIdleResetMs = 250;
-
     public WebviewPanel(
         ThemeManager tm,
-        IDiagnostics diag,
+        ILoggerFactory loggerFactory,
         Action<string> onLinkActivated,
         Action<string, bool> onStatus,
         Func<LaidOutPage, EngineSize, LaidOutPage?>? relayout = null,
@@ -177,8 +196,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         Func<LaidOutPage, bool>? hasActiveAnimations = null)
     {
         _tm = tm;
-        _diag = diag;
-        _renderSession = RenderSessionFactory.Create(diag);
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _log = _loggerFactory.CreateLogger<WebviewPanel>();
+        _renderSession = RenderSessionFactory.Create(_log);
         _onLinkActivated = onLinkActivated;
         _onStatus = onStatus;
         _relayout = relayout;
@@ -226,6 +246,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // Focusable so the page surface can receive keyboard/text input once
             // an editable field is focused (links/selection only need pointers).
             Focusable = true,
+            // Pin to the top-left. ShowPage gives the canvas a fixed Width/Height
+            // (the page extent); with the default Stretch alignment the ScrollViewer
+            // centers a page shorter than the viewport, which shifts the pointer/
+            // hit-test space away from the native GPU surface (which always paints
+            // at the top). Centering them apart is what made clicks/hover land
+            // (viewportHeight - pageHeight)/2 px below the element.
+            HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left,
+            VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Top,
         };
         _pageCanvas.Children.Add(_pageImage);
         _pageCanvas.PointerMoved += OnPointerMoved;
@@ -464,8 +492,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 _scroll.Offset = new Vector(0, 0);
             }
 
-            using (_diag.Span("gui", "show_page.hit_index"))
-                _fragments = BoxHitTester.CollectFragments(page.Root);
+            _fragments = BoxHitTester.CollectFragments(page.Root);
             RebuildFindIndex();
 
             // Re-establish (or drop) the text caret against the new box tree. The
@@ -582,7 +609,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         try
         {
-            _surfaceTarget = NativePageSurfaceFrameTarget.TryCreate(surface.Value, _diag);
+            _surfaceTarget = NativePageSurfaceFrameTarget.TryCreate(surface.Value);
             if (_surfaceTarget is null)
             {
                 throw new InvalidOperationException("GPU page surface unavailable.");
@@ -592,12 +619,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             var (w, h) = DeviceSize(rect);
             _surfaceTarget.Configure(w, h);
             _useSurface = true;
-            _diag.Log(DiagLevel.Info, "gui", $"zero-copy GPU page surface active ({w}x{h} device px)");
+            WebviewPanelLog.SurfaceActive(_log, w, h);
         }
         catch (Exception ex)
         {
             // The selected GPU session must not silently switch to the bitmap path.
-            _diag.LogException("gui", ex, "GPU page surface setup failed");
+            WebviewPanelLog.SurfaceSetupFailed(_log, ex);
             _surfaceTarget?.Dispose();
             _surfaceTarget = null;
             _useSurface = false;
@@ -624,7 +651,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         var (styleOverride, scrollLookup) = BuildRenderInputs();
 
-        var overlays = CollectSurfaceOverlays();
+        var drawingOverlays = CollectSurfaceOverlayLayers();
         bool ok;
         try
         {
@@ -633,48 +660,43 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // Resize call is required. The scroll lookup threads per-container
             // (overflow:scroll) offsets into the layer tree so inner-scrolled pages
             // present on the zero-copy surface instead of dropping to readback.
-            using (_diag.Span("gui", "render"))
             using (var frame = _renderSession.Render(new PageFrameRequest
-                   {
-                       Root = _currentPage.Root,
-                       Scale = (float)_currentScale,
-                       StyleOverride = styleOverride,
-                       Images = _currentPage.ImageResolver,
-                       Viewport = rect,
-                       IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-                       Overlays = overlays,
-                       ScrollOffsets = scrollLookup,
-                   }, _surfaceTarget))
+            {
+                Root = _currentPage.Root,
+                Scale = (float)_currentScale,
+                StyleOverride = styleOverride,
+                Images = _currentPage.ImageResolver,
+                Viewport = rect,
+                IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
+                DrawingOverlays = drawingOverlays,
+                ScrollOffsets = scrollLookup,
+            }, _surfaceTarget))
             {
                 ok = frame.Presented;
             }
         }
         catch (Exception ex)
         {
-            _diag.LogException("gui", ex, "GPU surface present failed");
+            WebviewPanelLog.SurfacePresentFailed(_log, ex);
             throw;
         }
 
-        if (ok)
-        {
-            RecordPresentedFrame();
-        }
-        else
+        if (!ok)
         {
             throw new InvalidOperationException("GPU surface did not present the frame.");
         }
     }
 
     /// <summary>
-    /// Snapshots the page-coordinate overlay rects (selection highlight, find-match
-    /// flash, blinking caret) the readback path draws as Avalonia controls, so the
-    /// surface path can paint them on top of the page. The native surface occludes
-    /// those Avalonia controls, so on the surface path they must be drawn into the
-    /// GPU frame instead. Returns null when there's nothing to overlay.
+    /// Snapshots selection, find, highlight, and caret overlays as GPU drawing
+    /// layers. The native surface covers the Avalonia controls, so the surface
+    /// path draws these overlays into the frame.
     /// </summary>
-    private IReadOnlyList<SurfaceOverlayRect>? CollectSurfaceOverlays()
+    private IReadOnlyList<SurfaceOverlayLayer>? CollectSurfaceOverlayLayers()
     {
-        List<SurfaceOverlayRect>? overlays = null;
+        List<SurfaceOverlayInstance>? instances = null;
+        var width = 1d;
+        var height = 1d;
 
         void Add(Control c)
         {
@@ -685,9 +707,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (double.IsNaN(w) || double.IsNaN(h) || w <= 0 || h <= 0) return;
             var x = Canvas.GetLeft(b);
             var y = Canvas.GetTop(b);
+            if (double.IsNaN(x) || double.IsNaN(y)) return;
             var col = brush.Color;
-            (overlays ??= new List<SurfaceOverlayRect>())
-                .Add(new SurfaceOverlayRect(x, y, w, h, col.R, col.G, col.B, col.A));
+            if (col.A == 0) return;
+            (instances ??= new List<SurfaceOverlayInstance>())
+                .Add(new SurfaceOverlayInstance(x, y, w, h, new CssColor(col.R, col.G, col.B, col.A)));
+            width = Math.Max(width, x + w);
+            height = Math.Max(height, y + h);
         }
 
         foreach (var o in _selectionOverlays) Add(o);
@@ -695,7 +721,36 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         foreach (var o in _highlightOverlays) Add(o);
         if (_caretOverlay is not null) Add(_caretOverlay);
 
-        return overlays;
+        if (instances is not { Count: > 0 })
+            return null;
+
+        var scene = SurfaceOverlayScene.Create(width, height, HashSurfaceOverlayInstances(instances),
+            builder => builder.FillInstances(SurfaceOverlayPrimitive.Rectangle, instances));
+        return [new SurfaceOverlayLayer(0, 0, width, height, scene)];
+    }
+
+    private static long HashSurfaceOverlayInstances(IReadOnlyList<SurfaceOverlayInstance> instances)
+    {
+        unchecked
+        {
+            var hash = 0x9E3779B97F4A7C15UL;
+            foreach (var instance in instances)
+            {
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.X));
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.Y));
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.W));
+                hash = Mix(hash, (ulong)BitConverter.DoubleToInt64Bits(instance.H));
+                hash = Mix(hash, ((ulong)instance.Color.R << 24) |
+                                 ((ulong)instance.Color.G << 16) |
+                                 ((ulong)instance.Color.B << 8) |
+                                 instance.Color.A);
+            }
+
+            return (long)hash;
+        }
+
+        static ulong Mix(ulong hash, ulong value)
+            => (hash ^ value) * 1099511628211UL;
     }
 
     /// <summary>
@@ -708,7 +763,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// </summary>
     private void RefreshOverlays()
     {
-        if (_useSurface && _currentPage is not null && !_suppressPresent)
+        // Suppressed (a ShowPage / UpdateSelection batch is coalescing) or no page:
+        // do nothing, and do NOT count it — the single end-of-batch present is what
+        // reaches the screen. Otherwise this overlay change wants its own present;
+        // count it (surface or readback) so tests can verify the coalescing, then
+        // present on the surface path. The readback present is a no-op (the Avalonia
+        // overlay controls composite themselves over the bitmap).
+        if (_currentPage is null || _suppressPresent) return;
+        _overlayPresentRequests++;
+        if (_useSurface)
             RenderViewportRegion();
     }
 
@@ -969,6 +1032,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (!e.GetCurrentPoint(_pageCanvas).Properties.IsLeftButtonPressed) return;
 
         var doc = PointerToDocSpace(e);
+
+        HitDiag(e, doc);
+
         if (doc is null) return;
 
         // Always collapse any prior selection on primary press; the new gesture
@@ -1249,15 +1315,60 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private static readonly bool _caretDebug =
         Environment.GetEnvironmentVariable("STARLING_CARET_DEBUG") == "1";
 
-    private static void CaretLog(string msg)
+    private void CaretLog(string msg)
     {
         if (!_caretDebug) return;
         try
         {
             System.IO.File.AppendAllText("/tmp/starling-caret.log", $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
         }
-        catch
+        catch (Exception ex)
         {
+            // Best-effort debug log; file I/O failures are logged at debug level.
+            WebviewPanelLog.CaretLogFailed(_log, ex);
+        }
+    }
+
+    // TEMP click-coordinate diagnostic: dumps every coordinate space involved in
+    // mapping a pointer press to a box, so a visual/hit-test offset can be read
+    // straight off the numbers. Writes to /tmp/starling-hit.log.
+    private void HitDiag(PointerEventArgs e, (double X, double Y)? doc)
+    {
+        try
+        {
+            var pCanvas = e.GetPosition(_pageCanvas);
+            var pSelf = e.GetPosition(this);
+            var pHost = _pageSurfaceHost is not null ? e.GetPosition(_pageSurfaceHost) : default;
+            var tl = TopLevel.GetTopLevel(this);
+            var pTop = tl is not null ? e.GetPosition(tl) : default;
+            var rect = _currentPage is not null ? CurrentViewportRect() : default;
+
+            string hitDesc = "none";
+            if (doc is { } d)
+            {
+                var hit = HitTestPage(d.X, d.Y);
+                if (hit.Box is { } b)
+                {
+                    var el = FindClickTarget(b);
+                    hitDesc = $"<{el?.LocalName ?? b.Element?.LocalName ?? "?"}"
+                            + (el?.Id is { Length: > 0 } id ? $" #{id}" : "")
+                            + $"> frame=({b.Frame.X:F0},{b.Frame.Y:F0} {b.Frame.Width:F0}x{b.Frame.Height:F0})";
+                }
+            }
+
+            System.IO.File.AppendAllText("/tmp/starling-hit.log",
+                $"{DateTime.Now:HH:mm:ss.fff} CLICK\n" +
+                $"  pointer: canvas=({pCanvas.X:F1},{pCanvas.Y:F1}) panel=({pSelf.X:F1},{pSelf.Y:F1}) " +
+                $"host=({pHost.X:F1},{pHost.Y:F1}) toplevel=({pTop.X:F1},{pTop.Y:F1})\n" +
+                $"  doc: {(doc is { } dd ? $"({dd.X:F1},{dd.Y:F1})" : "null(out-of-bounds)")}\n" +
+                $"  canvas.Bounds={_pageCanvas.Bounds} host.Bounds={_pageSurfaceHost?.Bounds}\n" +
+                $"  scroll.Viewport={_scroll.Viewport} scroll.Offset={_scroll.Offset}\n" +
+                $"  scale={_currentScale} renderScaling={GetRenderScale()} viewportRect=({rect.X:F0},{rect.Y:F0} {rect.Width:F0}x{rect.Height:F0})\n" +
+                $"  hit: {hitDesc}\n");
+        }
+        catch (Exception ex)
+        {
+            WebviewPanelLog.HitDiagFailed(_log, ex);
         }
     }
 
@@ -1271,6 +1382,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             CaretLog("RenderCaret: no focus/page");
             return;
         }
+
+        // The value can change under us without going through the edit path —
+        // a script clearing the field on submit, for instance — so the stored
+        // index may now point past the end. Clamp before measuring (HTML places
+        // the caret at the end of a freshly-assigned value; clearing → index 0).
+        _caretIndex = Math.Clamp(_caretIndex, 0, CurrentValue().Length);
 
         if (ComputeCaretRect(_currentPage.Root, _focusedInput, _caretIndex) is not { } c)
         {
@@ -1312,7 +1429,15 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var cx = found.X + inputBox.Border.Left + inputBox.Padding.Left;
         var cy = found.Y + inputBox.Border.Top + inputBox.Padding.Top;
 
-        var tb = FindValueTextBox(inputBox, cx, cy);
+        // The caret tracks the field's value only. An empty field still shows
+        // its placeholder as a text box, but the placeholder is not editable
+        // content — measuring the caret into its glyphs would strand it
+        // mid-word after the value is cleared (e.g. submitting a to-do leaves
+        // the caret in the middle of "What needs doing?"). So an empty value
+        // skips the text walk and drops to the content-origin branch below.
+        var tb = HtmlFormControls.Value(input).Length > 0
+            ? FindValueTextBox(inputBox, cx, cy)
+            : null;
         if (tb is { } th)
         {
             // The value is laid out as one fragment per whitespace-delimited token
@@ -1505,25 +1630,17 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         page.Document.DecayRecentMutations();
 
         using var detachedActivity = GuiActivityScope.Detached();
-        // One span per frame, with sub-spans for each phase (pump / relayout /
-        // prepare_anim / render) so a trace shows where a laggy animation frame
-        // spends its time. The inner "gui.render" span lives in RenderPageBitmap.
-        using var _tick = _diag.Span("gui", "live.tick");
-        // End-to-end frame time for the daemon's frame report (overrun rate, p99,
-        // fps). Emitted on the normal completion path below.
-        var frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
         var scripting = page.Scripting;
         if (scripting is not null)
         {
             try
             {
-                using (_diag.Span("gui", "live.pump"))
-                    scripting.PumpFrame(_liveStopwatch.ElapsedMilliseconds);
+                scripting.PumpFrame(_liveStopwatch.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
-                _diag.Log(DiagLevel.Warn, "gui", $"live JS pump failed: {ex.Message}");
+                WebviewPanelLog.LivePumpFailed(_log, ex.Message);
                 return;
             }
         }
@@ -1566,8 +1683,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (animating)
         {
             _animClockMs = _liveStopwatch.ElapsedMilliseconds;
-            using (_diag.Span("gui", "live.prepare_anim"))
-                _prepareAnimationFrame!(page, _animClockMs);
+            _prepareAnimationFrame!(page, _animClockMs);
             _animating = true;
             // Re-sample the hovered scope at the advanced clock so a hover
             // transition (e.g. a tile easing on :hover) progresses. Elements that
@@ -1596,21 +1712,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _liveTimer.Stop();
             _boundScripting = null;
         }
-
-        EmitFrameTime(frameStart);
-    }
-
-    // Records this frame's end-to-end time as gui.frame.time_ms and bumps the
-    // budget-overrun counter when it blew the 60fps budget. The telemetry daemon
-    // turns these into the frame-time distribution + overrun rate and correlates
-    // the spikes with the sampled CPU/RAM.
-    private const double FrameBudgetMs = 1000.0 / 60; // 16.667ms — the actual 60fps budget
-
-    private void EmitFrameTime(long startTimestamp)
-    {
-        var ms = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
-        _diag.Gauge(RenderMetrics.FrameTimeMs, ms);
-        if (ms > FrameBudgetMs) _diag.Counter(RenderMetrics.FrameBudgetOverrun, 1);
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,
@@ -1618,9 +1719,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private void RefreshLiveLayout(bool deferRender = false)
     {
         if (_currentPage is null || _relayout is null) return;
-        LaidOutPage? relaid;
-        using (_diag.Span("gui", "live.relayout"))
-            relaid = _relayout(_currentPage, CurrentViewportSize());
+        var relaid = _relayout(_currentPage, CurrentViewportSize());
         if (relaid is not null) ShowPage(relaid, preserveScroll: true, deferRender: deferRender);
     }
 
@@ -1639,7 +1738,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         }
         catch (Exception ex)
         {
-            _diag.Log(DiagLevel.Warn, "gui", $"DOM event dispatch failed: {ex.Message}");
+            WebviewPanelLog.DomDispatchFailed(_log, ex.Message);
         }
 
         if (!_liveTimer.IsEnabled) BindLiveScripting();
@@ -2208,7 +2307,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var full = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "starling-viewport.png" : path);
         var rect = CurrentViewportRect();
         var (styleOverride, scrollLookup) = BuildRenderInputs();
-        var overlays = CollectSurfaceOverlays();
+        var drawingOverlays = CollectSurfaceOverlayLayers();
 
         using var rendered = ViewportCaptureRenderer().Render(
             _currentPage.Root,
@@ -2218,7 +2317,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _currentPage.ImageResolver,
             IsElementAnimatingLayerRoot,
             scrollLookup,
-            overlays);
+            drawingOverlays);
 
         var dir = Path.GetDirectoryName(full);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -2230,7 +2329,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     private CompositedPageRenderer ViewportCaptureRenderer()
-        => _viewportCaptureRenderer ??= new CompositedPageRenderer(diagnostics: _diag);
+        => _viewportCaptureRenderer ??= new CompositedPageRenderer(loggerFactory: _loggerFactory);
 
     /// <summary>
     /// Debug report for the <c>browser_computed_style</c> MCP
@@ -2562,7 +2661,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         if (_focusedInput is null) return false;
         var target = _focusedInput;
         var down = new KeyboardEvent("keydown", new EventInit(Bubbles: true, Cancelable: true))
-            { Key = "Enter", Code = "Enter" };
+        { Key = "Enter", Code = "Enter" };
         var mutated = DispatchDom(target, down);
         if (target.LocalName == "input")
         {
@@ -2571,7 +2670,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         }
 
         var up = new KeyboardEvent("keyup", new EventInit(Bubbles: true, Cancelable: true))
-            { Key = "Enter", Code = "Enter" };
+        { Key = "Enter", Code = "Enter" };
         mutated |= DispatchDom(target, up);
         if (mutated) RefreshLiveLayout();
         return mutated;
@@ -2743,6 +2842,35 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// <summary>Test hook: number of elements in the current hover override set.</summary>
     internal int HoverOverrideCountForTest => _hoverOverrides?.Count ?? 0;
 
+    /// <summary>Test hook: running count of overlay presents RefreshOverlays has
+    /// decided to fire. A drag-select move must bump this by exactly one — its clear
+    /// and rebuild coalesce into a single present. Two would be the flash regression.</summary>
+    internal int OverlayPresentRequestsForTest => _overlayPresentRequests;
+
+    /// <summary>Test hook: number of selection-highlight rects currently drawn.</summary>
+    internal int SelectionOverlayCountForTest => _selectionOverlays.Count;
+
+    /// <summary>Test hook: run a drag-select from <paramref name="anchor"/> to
+    /// <paramref name="cursor"/> (document space), exactly as a pointer drag would,
+    /// so a test can assert the present count and the resulting highlight.</summary>
+    internal void DragSelectForTest((double X, double Y) anchor, (double X, double Y) cursor)
+        => UpdateSelection(anchor, cursor);
+
+    /// <summary>Test hook: document-space anchor/cursor that span the first through
+    /// last placed text fragment, so a test can drive a full-text drag-select without
+    /// re-deriving glyph geometry. Null when the page has no text fragments.</summary>
+    internal ((double X, double Y) Anchor, (double X, double Y) Cursor)? FullTextSelectionSpanForTest
+    {
+        get
+        {
+            if (_fragments.Count == 0) return null;
+            var first = _fragments[0];
+            var last = _fragments[^1];
+            return ((first.X + 0.5, first.Y + (first.Height / 2)),
+                    (last.X + last.Width - 0.5, last.Y + (last.Height / 2)));
+        }
+    }
+
     /// <summary>Test hook: drive the CSS <c>:hover</c> re-cascade for
     /// <paramref name="el"/> directly (no hit-test), exactly as a real pointer move
     /// onto it would — so a test can assert which elements the hover overrides.</summary>
@@ -2855,99 +2983,6 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Renders the <paramref name="viewport"/> region of <c>_currentPage.Root</c>
-    /// through the paint pipeline, threading the current hover overrides into
-    /// <see cref="DisplayListBuilder"/> so <c>a:hover</c> rules repaint without
-    /// re-layout. Called on page load, on scroll, and on every hover transition
-    /// that changes paint-affecting styles.
-    /// </summary>
-    // private void RenderPageBitmap(Starling.Layout.Rect viewport)
-    // {
-    //     if (_currentPage is null) return;
-    //
-    //     // A finished navigation can leave its stopped Activity as the UI thread's
-    //     // ambient Activity.Current (async span leak — see RunNavigation). A
-    //     // standalone render (hover / resize / scroll) must not pile into that prior
-    //     // navigation's trace, so detach from a leaked, already-stopped span. Renders
-    //     // that run inside a live navigation keep their (non-stopped) parent and nest.
-    //     if (Activity.Current is { IsStopped: true })
-    //         Activity.Current = null;
-    //
-    //     var animate = _animating && _currentPage is not null;
-    //     var (styleOverride, scrollLookup) = BuildRenderInputs();
-    //
-    //     // While animating, the painted pixels change every frame even though the
-    //     // box tree (DisplayListVersion) is unchanged, so vary the picture-cache
-    //     // key by the animation clock to force a fresh raster each frame.
-    //     // On live animation frames with no per-container scroll offsets, use the
-    //     // compositor layer tree. Promoted layers keep content-keyed caches, while
-    //     // transform and opacity are applied at composite time. Pages with element
-    //     // scroll offsets fall back to the flat path because RenderViaLayerTree does
-    //     // not thread those offsets yet.
-    //     var useLayerTree = scrollLookup is null && _animating;
-    //     RenderFrame rendered;
-    //     using (_diag.Span("gui", "render"))
-    //     {
-    //         var pageVersion = animate
-    //             ? unchecked(_currentPage!.DisplayListVersion + (int)_animClockMs)
-    //             : _currentPage!.DisplayListVersion;
-    //         rendered = _renderSession.Render(new PageFrameRequest
-    //         {
-    //             Root = _currentPage!.Root,
-    //             Scale = (float)_currentScale,
-    //             StyleOverride = styleOverride,
-    //             Images = _currentPage.ImageResolver,
-    //             Viewport = viewport,
-    //             PageVersion = pageVersion,
-    //             IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
-    //             ScrollOffsets = scrollLookup,
-    //             UseLayerTree = useLayerTree,
-    //         }, CpuBitmapFrameTarget.Instance);
-    //     }
-    //     var cpuFrame = rendered.Bitmap
-    //         ?? throw new InvalidOperationException("Bitmap render target did not produce a CPU frame.");
-    //     WriteableBitmap bmp;
-    //     using (rendered)
-    //         bmp = BitmapBridge.ToWriteableBitmap(cpuFrame, _currentScale);
-    //
-    //     (_pageImage.Source as IDisposable)?.Dispose();
-    //     _pageImage.Source = bmp;
-    //     RecordPresentedFrame();
-    // }
-
-    /// <summary>Counts a frame that just reached the screen and, once per second,
-    /// emits the live frame rate as a metric and a structured log line. The log
-    /// line is what surfaces in the Aspire structured-logs query; the
-    /// "gui.frames.presented" counter graphs as a rate in the dashboard.</summary>
-    private void RecordPresentedFrame()
-    {
-        var now = _frameClock.ElapsedMilliseconds;
-        _diag.Counter("gui.frames.presented", 1);
-
-        // A gap larger than a couple of frames means the loop went idle (no
-        // animation / no script). Restart the averaging window so the resumed
-        // frame is not divided by the idle seconds.
-        if (now - _fpsLastFrameMs > FpsIdleResetMs)
-        {
-            _fpsWindowStartMs = now;
-            _fpsFrames = 0;
-        }
-
-        _fpsLastFrameMs = now;
-        _fpsFrames++;
-
-        var elapsed = now - _fpsWindowStartMs;
-        if (elapsed >= FpsWindowMs)
-        {
-            var fps = _fpsFrames * 1000.0 / elapsed;
-            _diag.Gauge("gui.fps", fps);
-            _diag.Log(DiagLevel.Info, "gui", $"fps {fps:F1} ({_fpsFrames} frames / {elapsed} ms)");
-            _fpsWindowStartMs = now;
-            _fpsFrames = 0;
-        }
-    }
-
-    /// <summary>
     /// Maps a paint-time box back to its hover override. Boxes with their own
     /// <see cref="LayoutBox.Element"/> match directly; anonymous text boxes
     /// inherit by walking up the box-parent chain to find the nearest box
@@ -3025,29 +3060,47 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     private void UpdateSelection((double X, double Y) anchor, (double X, double Y) cursor)
     {
-        ClearSelectionOverlays();
-        if (_fragments.Count == 0) return;
-
-        var anchorCaret = SelectionModel.CaretFromPoint(_fragments, anchor.X, anchor.Y);
-        var cursorCaret = SelectionModel.CaretFromPoint(_fragments, cursor.X, cursor.Y);
-        var range = SelectionModel.Order(anchorCaret, cursorCaret);
-        if (range.IsEmpty)
+        // Coalesce the clear + rebuild into ONE surface present. On the GPU surface
+        // path every RefreshOverlays is an immediate, synchronous swapchain present.
+        // ClearSelectionOverlays empties the highlight list and presents, so without
+        // suppression each pointer-move of a drag would publish a selection-ABSENT
+        // frame (the cleared state) immediately followed by the rebuilt selection
+        // frame — a visible flash on every move. Suppress the inner presents (the same
+        // mechanism ShowPage uses) and present exactly once in the finally, so every
+        // exit path — including the early returns that leave the selection cleared —
+        // shows the final state in a single frame.
+        var prevSuppressPresent = _suppressPresent;
+        _suppressPresent = true;
+        try
         {
-            _selectionText = string.Empty;
-            return;
-        }
+            ClearSelectionOverlays();
+            if (_fragments.Count == 0) return;
 
-        var brush = new SolidColorBrush(AvColor.FromArgb(96, 80, 140, 255));
-        foreach (var r in SelectionModel.RectsFor(_fragments, range))
+            var anchorCaret = SelectionModel.CaretFromPoint(_fragments, anchor.X, anchor.Y);
+            var cursorCaret = SelectionModel.CaretFromPoint(_fragments, cursor.X, cursor.Y);
+            var range = SelectionModel.Order(anchorCaret, cursorCaret);
+            if (range.IsEmpty)
+            {
+                _selectionText = string.Empty;
+                return;
+            }
+
+            var brush = new SolidColorBrush(AvColor.FromArgb(96, 80, 140, 255));
+            foreach (var r in SelectionModel.RectsFor(_fragments, range))
+            {
+                var overlay = MakeOverlay(brush, r.X, r.Y, r.Width, r.Height);
+                _pageCanvas.Children.Add(overlay);
+                _selectionOverlays.Add(overlay);
+            }
+
+            _selectionText = SelectionModel.TextFor(_fragments, range);
+            _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
+        }
+        finally
         {
-            var overlay = MakeOverlay(brush, r.X, r.Y, r.Width, r.Height);
-            _pageCanvas.Children.Add(overlay);
-            _selectionOverlays.Add(overlay);
+            _suppressPresent = prevSuppressPresent;
+            RefreshOverlays();
         }
-
-        _selectionText = SelectionModel.TextFor(_fragments, range);
-        _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
-        RefreshOverlays();
     }
 
     private void ClearSelection()

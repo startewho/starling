@@ -4,6 +4,7 @@ using Starling.Css.Values;
 using Starling.Paint.Backend;
 using Starling.Paint.Compositor;
 using Starling.Paint.DisplayList;
+using Starling.Paint.Interop;
 using LayoutRect = Starling.Layout.Rect;
 using LayoutSize = Starling.Layout.Size;
 using PaintList = Starling.Paint.DisplayList.DisplayList;
@@ -150,7 +151,7 @@ public sealed class ImageSharpBackendTests
         var list = new PaintList();
         list.Add(new FillRect(new LayoutRect(0, 0, 100, 100), new Starling.Css.Values.CssColor(0, 0, 255, 255), FillRectPixelAlignment.Preserve));
 
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         Action act = () =>
         {
@@ -179,18 +180,46 @@ public sealed class ImageSharpBackendTests
                 new Starling.Css.Values.CssColor(0, 128, 255, 255),
                 FillRectPixelAlignment.Preserve));
 
-            using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+            using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
             using var texture = backend.RenderTexture(
                 list,
                 new LayoutRect(0, 0, 16, 16),
                 scale: 1f,
                 opaqueBackground: false,
-                engine.ImageSharpContext);
+                engine.GpuDevice);
 
             texture.Width.Should().Be(16);
             texture.Height.Should().Be(16);
             texture.TextureHandle.Should().NotBe(0);
             texture.TextureViewHandle.Should().NotBe(0);
+        }
+    }
+
+    [TestMethod]
+    public void Disposing_gpu_engine_removes_imagesharp_external_device_state()
+    {
+        var engine = GpuBlendEngine.CreateOffscreen();
+        if (engine is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
+        var deviceHandle = engine.DeviceHandle;
+        try
+        {
+            _ = ImageSharpGpuContext.GetOrCreate(engine.GpuDevice);
+            ImageSharpWebGpuDeviceStateCache.Contains(deviceHandle).Should().BeTrue(
+                "ImageSharp tracks shared state for external WebGPU devices");
+
+            engine.Dispose();
+
+            ImageSharpWebGpuDeviceStateCache.Contains(deviceHandle).Should().BeFalse(
+                "Starling must remove ImageSharp's borrowed-device state before releasing the device");
+        }
+        finally
+        {
+            engine.Dispose();
         }
     }
 

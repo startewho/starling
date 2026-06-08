@@ -1,4 +1,13 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Starling.Net.Http;
+
+internal static partial class ConnectionPoolLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "transport dispose threw during pool discard")]
+    public static partial void DiscardFailed(ILogger logger, Exception ex);
+}
 
 /// <summary>
 /// Per-origin pool of idle, kept-alive HTTP/1.1 transports. Keyed on
@@ -36,6 +45,7 @@ public sealed class ConnectionPool : IAsyncDisposable
 
     private readonly Dictionary<OriginKey, LinkedList<Entry>> _byOrigin = [];
     private readonly object _gate = new();
+    private readonly ILogger _log;
     private bool _disposed;
 
     public int MaxPerOrigin { get; }
@@ -43,7 +53,7 @@ public sealed class ConnectionPool : IAsyncDisposable
 
     public ConnectionPool() : this(DefaultMaxPerOrigin, DefaultIdleTimeout) { }
 
-    public ConnectionPool(int maxPerOrigin, TimeSpan idleTimeout)
+    public ConnectionPool(int maxPerOrigin, TimeSpan idleTimeout, ILogger<ConnectionPool>? log = null)
     {
         if (maxPerOrigin < 1)
             throw new ArgumentOutOfRangeException(
@@ -53,6 +63,7 @@ public sealed class ConnectionPool : IAsyncDisposable
                 nameof(idleTimeout), "Idle timeout must be positive.");
         MaxPerOrigin = maxPerOrigin;
         IdleTimeout = idleTimeout;
+        _log = log ?? NullLogger<ConnectionPool>.Instance;
     }
 
     /// <summary>
@@ -107,7 +118,7 @@ public sealed class ConnectionPool : IAsyncDisposable
                     return node.Value.Transport;
 
                 // Stale: dispose and keep looking.
-                _ = DiscardAsync(node.Value.Transport);
+                _ = DiscardAsync(node.Value.Transport, _log);
             }
             return null;
         }
@@ -146,9 +157,9 @@ public sealed class ConnectionPool : IAsyncDisposable
         }
 
         if (transport is not null)
-            await DiscardAsync(transport).ConfigureAwait(false);
+            await DiscardAsync(transport, _log).ConfigureAwait(false);
         if (evicted is not null)
-            await DiscardAsync(evicted).ConfigureAwait(false);
+            await DiscardAsync(evicted, _log).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -179,7 +190,7 @@ public sealed class ConnectionPool : IAsyncDisposable
 
         if (expired is null) return 0;
         foreach (var t in expired)
-            await DiscardAsync(t).ConfigureAwait(false);
+            await DiscardAsync(t, _log).ConfigureAwait(false);
         return expired.Count;
     }
 
@@ -204,7 +215,7 @@ public sealed class ConnectionPool : IAsyncDisposable
         }
         if (toClose is null) return;
         foreach (var t in toClose)
-            await DiscardAsync(t).ConfigureAwait(false);
+            await DiscardAsync(t, _log).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
@@ -223,10 +234,10 @@ public sealed class ConnectionPool : IAsyncDisposable
         return q;
     }
 
-    private static async ValueTask DiscardAsync(IHttpTransport transport)
+    private static async ValueTask DiscardAsync(IHttpTransport transport, ILogger log)
     {
         try { await transport.DisposeAsync().ConfigureAwait(false); }
-        catch { /* a stale socket may throw on shutdown; pooling doesn't care */ }
+        catch (Exception ex) { ConnectionPoolLog.DiscardFailed(log, ex); /* a stale socket may throw on shutdown; pooling doesn't care */ }
     }
 
     private readonly record struct Entry(IHttpTransport Transport, DateTimeOffset LastUsed);

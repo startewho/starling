@@ -5,11 +5,18 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Gui.Chrome;
 using Starling.Gui.Theme;
 using Starling.Telemetry;
 
 namespace Starling.Gui.DevTools;
+
+internal static partial class ConsolePanelLog
+{
+    [LoggerMessage(Level = LogLevel.Trace, Message = "console log pump stopped")]
+    public static partial void PumpStopped(ILogger logger, OperationCanceledException ex);
+}
 
 /// <summary>
 /// Live console panel wired to <see cref="InMemoryLogSink"/> via
@@ -23,6 +30,7 @@ public sealed class ConsolePanel : Grid, IDisposable
 
     private readonly ThemeManager _tm;
     private readonly TelemetryStream _stream;
+    private readonly ILogger _log;
     private readonly StackPanel _rows;
     private readonly TextBlock _countLabel;
     private readonly InMemoryLogSink.Subscription _subscription;
@@ -30,10 +38,12 @@ public sealed class ConsolePanel : Grid, IDisposable
     private LogLevel? _filter;
     private int _emitted;
 
-    public ConsolePanel(ThemeManager tm, TelemetryStream stream)
+    public ConsolePanel(ThemeManager tm, TelemetryStream stream,
+        ILogger<ConsolePanel>? log = null)
     {
         _tm = tm;
         _stream = stream;
+        _log = log ?? NullLogger<ConsolePanel>.Instance;
         var t = tm.Tokens;
 
         Background = new SolidColorBrush(t.Panel);
@@ -73,7 +83,7 @@ public sealed class ConsolePanel : Grid, IDisposable
                 });
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex) { ConsolePanelLog.PumpStopped(_log, ex); }
     }
 
     private void AppendRow(LogRecord record)

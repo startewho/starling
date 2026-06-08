@@ -171,17 +171,14 @@ public static class FunctionCtor
         return JsValue.Object(bound);
     }
 
-    /// <summary>Spec 20.2.3.5 — Function.prototype.toString. Yields a feature-
-    /// detection-friendly source string. We don't keep raw source bytes
-    /// around, so user functions get synthetic text that still matches the
-    /// <c>function name() { … }</c> shape that sniffers regex against.</summary>
+    /// <summary>Spec 20.2.3.5 — Function.prototype.toString.</summary>
     private static JsValue ProtoToString(JsValue thisV, JsValue[] args)
     {
         if (!thisV.IsObject) return JsValue.String("function () { [native code] }");
         return thisV.AsObject switch
         {
             JsNativeFunction nat => JsValue.String($"function {nat.Name}() {{ [native code] }}"),
-            JsFunction fn => JsValue.String($"function {fn.Name}() {{ [bytecode] }}"),
+            JsFunction fn => JsValue.String(fn.SourceText ?? $"function {fn.Name}() {{ [bytecode] }}"),
             JsBoundFunction => JsValue.String("function () { [native code] }"),
             _ => JsValue.String("function () { [native code] }"),
         };

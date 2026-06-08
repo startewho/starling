@@ -57,10 +57,11 @@ public sealed class NamedNodeMap : IReadOnlyList<AttrNode>
             {
                 var old = _attributes[i];
                 if (ReferenceEquals(old, attr)) return null; // no change
+                var oldValue = old.Value;
                 old.OwnerElement = null;
                 attr.OwnerElement = _owner;
                 _attributes[i] = attr;
-                _owner.OnAttributeMutated(attr.Name);
+                _owner.OnAttributeMutated(attr.Name, oldValue);
                 return old;
             }
         }
@@ -80,7 +81,7 @@ public sealed class NamedNodeMap : IReadOnlyList<AttrNode>
                 var removed = _attributes[i];
                 removed.OwnerElement = null;
                 _attributes.RemoveAt(i);
-                _owner.OnAttributeMutated(removed.Name);
+                _owner.OnAttributeMutated(removed.Name, removed.Value);
                 return removed;
             }
         }
@@ -123,10 +124,11 @@ public sealed class NamedNodeMap : IReadOnlyList<AttrNode>
             {
                 var old = _attributes[i];
                 if (ReferenceEquals(old, attr)) return null;
+                var oldValue = old.Value;
                 old.OwnerElement = null;
                 attr.OwnerElement = _owner;
                 _attributes[i] = attr;
-                _owner.OnAttributeMutated(attr.Name);
+                _owner.OnAttributeMutated(attr.Name, oldValue);
                 return old;
             }
         }
@@ -146,7 +148,7 @@ public sealed class NamedNodeMap : IReadOnlyList<AttrNode>
                 var removed = _attributes[i];
                 removed.OwnerElement = null;
                 _attributes.RemoveAt(i);
-                _owner.OnAttributeMutated(removed.Name);
+                _owner.OnAttributeMutated(removed.Name, removed.Value);
                 return removed;
             }
         }

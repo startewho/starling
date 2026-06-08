@@ -19,6 +19,8 @@ namespace Starling.Js.Intrinsics;
 /// </remarks>
 public static class ArrayCtor
 {
+    [ThreadStatic] private static HashSet<JsObject>? s_joinStack;
+
     public static void Install(JsRealm realm)
     {
         ArgumentNullException.ThrowIfNull(realm);
@@ -42,7 +44,7 @@ public static class ArrayCtor
 
         // -------- Statics
         IntrinsicHelpers.DefineMethod(realm, ctor, "isArray", 1, (_, args) =>
-            JsValue.Boolean(args.Length > 0 && JsArray.IsArray(args[0])));
+            JsValue.Boolean(args.Length > 0 && JsArray.IsArray(args[0], realm)));
         IntrinsicHelpers.DefineMethod(realm, ctor, "of", 0, (_, args) =>
         {
             var arr = new JsArray(realm);
@@ -72,7 +74,7 @@ public static class ArrayCtor
             new IntrinsicHelpers.BulkMember("concat", 1, (thisV, args) => Concat(realm, thisV, args)),
             new IntrinsicHelpers.BulkMember("slice", 2, (thisV, args) => Slice(realm, thisV, args)),
             new IntrinsicHelpers.BulkMember("join", 1, (thisV, args) => Join(realm, thisV, args)),
-            new IntrinsicHelpers.BulkMember("toString", 0, (thisV, _) => Join(realm, thisV, Array.Empty<JsValue>())),
+            new IntrinsicHelpers.BulkMember("toString", 0, (thisV, _) => ToString(realm, thisV)),
             new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, _) => Join(realm, thisV, Array.Empty<JsValue>())),
             new IntrinsicHelpers.BulkMember("indexOf", 1, (thisV, args) => IndexOf(realm, thisV, args, fromEnd: false)),
             new IntrinsicHelpers.BulkMember("lastIndexOf", 1, (thisV, args) => IndexOf(realm, thisV, args, fromEnd: true)),
@@ -365,10 +367,9 @@ public static class ArrayCtor
         if (!cmpV.IsUndefined && !AbstractOperations.IsCallable(cmpV))
             throw new JsThrow(realm.NewTypeError("Array.prototype.sort: comparator must be a function"));
         var len = ToLength(obj);
-        var items = new List<JsValue>(len);
-        for (var i = 0; i < len; i++) items.Add(GetElement(obj, i));
-        items.Sort((a, b) => Compare(realm, a, b, cmpV));
-        for (var i = 0; i < len; i++) SetElement(obj, i, items[i]);
+        var items = CollectIndexedValues(obj, len);
+        StableSort(realm, items, cmpV);
+        for (var i = 0; i < len; i++) SetElement(obj, i, items[i].Value);
         return JsValue.Object(obj);
     }
 
@@ -389,6 +390,34 @@ public static class ArrayCtor
             return 0;
         }
         return string.CompareOrdinal(JsValue.ToStringValue(a), JsValue.ToStringValue(b));
+    }
+
+    private static List<IndexedValue> CollectIndexedValues(JsObject obj, int len)
+    {
+        var items = new List<IndexedValue>(len);
+        for (var i = 0; i < len; i++) items.Add(new IndexedValue(GetElement(obj, i), i));
+        return items;
+    }
+
+    private static void StableSort(JsRealm realm, List<IndexedValue> items, JsValue cmpV)
+    {
+        items.Sort((a, b) =>
+        {
+            var c = Compare(realm, a.Value, b.Value, cmpV);
+            return c != 0 ? c : a.Index.CompareTo(b.Index);
+        });
+    }
+
+    private readonly struct IndexedValue
+    {
+        public readonly JsValue Value;
+        public readonly int Index;
+
+        public IndexedValue(JsValue value, int index)
+        {
+            Value = value;
+            Index = index;
+        }
     }
 
     private static JsValue Fill(JsRealm realm, JsValue thisV, JsValue[] args)
@@ -426,21 +455,33 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var result = new JsArray(realm);
-        AppendConcat(result, JsValue.Object(obj));
-        foreach (var a in args) AppendConcat(result, a);
+        if (JsArray.IsArray(JsValue.Object(obj), realm))
+            _ = AbstractOperations.Get(realm.ActiveVm, obj, "constructor");
+        AppendConcat(realm, result, JsValue.Object(obj));
+        foreach (var a in args) AppendConcat(realm, result, a);
         return JsValue.Object(result);
     }
 
-    private static void AppendConcat(JsArray target, JsValue v)
+    private static void AppendConcat(JsRealm realm, JsArray target, JsValue v)
     {
-        if (v.IsObject && v.AsObject is JsArray ja)
+        if (IsConcatSpreadable(realm, v))
         {
-            for (var i = 0; i < ja.Length; i++) target.Push(ja[i]);
+            var source = v.AsObject;
+            var len = ToLength(source);
+            for (var i = 0; i < len; i++) target.Push(GetElement(source, i));
         }
         else
         {
             target.Push(v);
         }
+    }
+
+    private static bool IsConcatSpreadable(JsRealm realm, JsValue value)
+    {
+        if (!value.IsObject) return false;
+        var spreadable = AbstractOperations.Get(realm.ActiveVm, value.AsObject,
+            JsPropertyKey.Symbol(SymbolCtor.IsConcatSpreadable));
+        return spreadable.IsUndefined ? JsArray.IsArray(value, realm) : JsValue.ToBoolean(spreadable);
     }
 
     private static JsValue Slice(JsRealm realm, JsValue thisV, JsValue[] args)
@@ -460,13 +501,35 @@ public static class ArrayCtor
         var sep = args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : ",";
         var len = ToLength(obj);
         var sb = new System.Text.StringBuilder();
-        for (var i = 0; i < len; i++)
+        var stack = s_joinStack ??= new HashSet<JsObject>();
+        if (!stack.Add(obj)) return JsValue.String(string.Empty);
+        try
         {
-            if (i > 0) sb.Append(sep);
-            var v = GetElement(obj, i);
-            if (!v.IsNullish) sb.Append(JsValue.ToStringValue(v));
+            for (var i = 0; i < len; i++)
+            {
+                if (i > 0) sb.Append(sep);
+                var v = GetElement(obj, i);
+                if (v.IsNullish) continue;
+                if (v.IsObject && stack.Contains(v.AsObject)) continue;
+                sb.Append(AbstractOperations.ToStringJs(realm.ActiveVm, v));
+            }
+        }
+        finally
+        {
+            stack.Remove(obj);
         }
         return JsValue.String(sb.ToString());
+    }
+
+    private static JsValue ToString(JsRealm realm, JsValue thisV)
+    {
+        var obj = ThisObject(realm, thisV);
+        var join = AbstractOperations.Get(realm.ActiveVm, obj, "join");
+        if (AbstractOperations.IsCallable(join))
+            return AbstractOperations.Call(realm.ActiveVm, join, JsValue.Object(obj), Array.Empty<JsValue>());
+
+        var objectToString = AbstractOperations.Get(realm.ActiveVm, realm.ObjectPrototype, "toString");
+        return AbstractOperations.Call(realm.ActiveVm, objectToString, JsValue.Object(obj), Array.Empty<JsValue>());
     }
 
     private static JsValue IndexOf(JsRealm realm, JsValue thisV, JsValue[] args, bool fromEnd)
@@ -723,11 +786,10 @@ public static class ArrayCtor
         if (!cmpV.IsUndefined && !AbstractOperations.IsCallable(cmpV))
             throw new JsThrow(realm.NewTypeError("Array.prototype.toSorted: comparator must be a function"));
         var len = ToLength(obj);
-        var items = new List<JsValue>(len);
-        for (var i = 0; i < len; i++) items.Add(GetElement(obj, i));
-        items.Sort((a, b) => Compare(realm, a, b, cmpV));
+        var items = CollectIndexedValues(obj, len);
+        StableSort(realm, items, cmpV);
         var result = new JsArray(realm);
-        foreach (var v in items) result.Push(v);
+        foreach (var item in items) result.Push(item.Value);
         return JsValue.Object(result);
     }
 

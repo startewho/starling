@@ -1,4 +1,5 @@
 using Starling.Css.TypedOm;
+using Starling.Js.Intrinsics;
 using Starling.Js.Runtime;
 
 namespace Starling.Bindings;
@@ -67,6 +68,35 @@ internal static class CssBinding
             return JsValue.Undefined;
         }, length: 1);
 
+        // CSSOM §6.5.1 — CSS.supports(property, value) and CSS.supports(conditionText).
+        EventTargetBinding.DefineMethod(realm, css, "supports", (_, args) =>
+        {
+            string condition;
+            if (args.Length >= 2 && !args[1].IsUndefined)
+            {
+                var prop = JsValue.ToStringValue(args[0]);
+                var value = JsValue.ToStringValue(args[1]);
+                // The 2-arg form is false for an empty value or one that smuggles in
+                // a priority / extra declaration.
+                if (value.Length == 0 || value.Contains('!') || value.Contains(';')) return JsValue.False;
+                condition = $"({prop}:{value})";
+            }
+            else if (args.Length >= 1)
+            {
+                condition = JsValue.ToStringValue(args[0]);
+            }
+            else
+            {
+                throw new JsThrow(realm.NewTypeError("CSS.supports requires an argument"));
+            }
+            return JsValue.Boolean(EvaluateSupports(condition));
+        }, length: 1);
+
+        // WebIDL §3.7.3 — a namespace object has an @@toStringTag of its name,
+        // making Object.prototype.toString.call(CSS) yield "[object CSS]".
+        css.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("CSS"), writable: false, enumerable: false, configurable: true));
+
         global.DefineOwnProperty("CSS",
             PropertyDescriptor.Data(JsValue.Object(css), writable: true, enumerable: false, configurable: true));
 
@@ -80,6 +110,25 @@ internal static class CssBinding
         }, length: 2);
         global.DefineOwnProperty("CSSStyleValue",
             PropertyDescriptor.Data(JsValue.Object(styleValue), writable: true, enumerable: false, configurable: true));
+    }
+
+    /// <summary>Evaluate a CSS @supports condition by round-tripping it through the
+    /// parser and the shared <see cref="Starling.Css.Cascade.SupportsEvaluator"/>.</summary>
+    private static bool EvaluateSupports(string condition)
+    {
+        try
+        {
+            var sheet = Starling.Css.Parser.CssParser.ParseStyleSheet($"@supports {condition} {{}}");
+            foreach (var rule in sheet.Rules)
+                if (rule is Starling.Css.Parser.AtRule at &&
+                    string.Equals(at.Name, "supports", StringComparison.OrdinalIgnoreCase))
+                    return Starling.Css.Cascade.SupportsEvaluator.Evaluate(at.Prelude);
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>Wrap a declared CSS value (property + cssText) as a CSSStyleValue

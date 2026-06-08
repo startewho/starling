@@ -137,6 +137,59 @@ public class JsArgumentsObjectTests
         => Eval("var f = function(){ return arguments.length; }; f(1,2,3,4)")
             .AsNumber.Should().Be(4);
 
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-generator-function-definitions", "27.5 GeneratorFunction Objects")]
+    [SpecFact]
+    public void Generator_arguments_are_not_reused_between_functions()
+        => Eval(@"
+            function *method() {
+              return arguments[0] + ':' + String(arguments[1]);
+            }
+
+            function *other() {
+              return arguments[0] + ':' + String(arguments[1]);
+            }
+
+            var generator1 = method(42, undefined);
+            var generator2 = other(10, undefined);
+            generator1.next().value + '|' + generator2.next().value;
+        ").AsString.Should().Be("42:undefined|10:undefined");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-generator-function-definitions", "27.5 GeneratorFunction Objects")]
+    [SpecFact]
+    public void Generator_named_arguments_are_not_reused_between_functions()
+        => Eval(@"
+            function *method(a, b) {
+              return a + ':' + String(b);
+            }
+
+            function *other(a, b) {
+              return a + ':' + String(b);
+            }
+
+            var generator1 = method(42, undefined);
+            var generator2 = other(10, undefined);
+            generator1.next().value + '|' + generator2.next().value;
+        ").AsString.Should().Be("42:undefined|10:undefined");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-function.prototype.bind", "20.2.3.2 Function.prototype.bind")]
+    [SpecFact]
+    public void Bound_generator_arguments_are_not_reused_between_functions()
+        => Eval(@"
+            function *method() {
+              return arguments[0] + ':' + String(arguments[1]);
+            }
+
+            function *other() {
+              return arguments[0] + ':' + String(arguments[1]);
+            }
+
+            var methodWithBind = method.bind({});
+            var otherWithBind = other.bind({});
+            var generator1 = methodWithBind(42, undefined);
+            var generator2 = otherWithBind(10, undefined);
+            generator1.next().value + '|' + generator2.next().value;
+        ").AsString.Should().Be("42:undefined|10:undefined");
+
     private static JsValue Eval(string src)
     {
         var program = new JsParser(src).ParseProgram();

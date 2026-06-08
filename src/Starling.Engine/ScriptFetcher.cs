@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Starling.Common.Diagnostics;
 using Starling.Common.Encoding;
 using Starling.Dom;
@@ -37,7 +38,8 @@ namespace Starling.Engine;
 /// </remarks>
 internal sealed class ScriptFetcher : IDisposable
 {
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Func<StarlingHttpClient> _httpFactory;
     // Concurrent because FetchAllAsync starts multiple external fetches in
     // parallel; their cache writes (on the network continuation) can race.
@@ -48,9 +50,10 @@ internal sealed class ScriptFetcher : IDisposable
     private StarlingHttpClient? _sharedHttp;
     private readonly bool _ownsHttp;
 
-    public ScriptFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
+    public ScriptFetcher(ILoggerFactory loggerFactory, Func<StarlingHttpClient> httpFactory)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<ScriptFetcher>();
         _httpFactory = httpFactory;
         _ownsHttp = true;
     }
@@ -61,9 +64,10 @@ internal sealed class ScriptFetcher : IDisposable
     /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
     /// shared client is owned by the caller and is not disposed by this fetcher.
     /// </summary>
-    public ScriptFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    public ScriptFetcher(ILoggerFactory loggerFactory, StarlingHttpClient sharedHttp)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<ScriptFetcher>();
         _sharedHttp = sharedHttp;
         _httpFactory = () => sharedHttp;
         _ownsHttp = false;
@@ -203,15 +207,14 @@ internal sealed class ScriptFetcher : IDisposable
         var absolute = ResolveAbsolute(src, baseUrl);
         if (absolute is null)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve <script src='{src}'>");
+            ScriptFetcherLog.CannotResolveScriptSrc(_log, src);
             return null;
         }
 
         var source = await FetchAsync(absolute, ct).ConfigureAwait(false);
         if (source is null) return null;
 
-        _diag.Log(DiagLevel.Info, "engine",
-            $"external script disposition={disposition} bytes={source.Length}");
+        ScriptFetcherLog.ExternalScriptLoaded(_log, disposition.ToString(), source.Length);
 
         // Large bundles dominate critical-path wall time on real pages
         // (google.com's xjs bundle is ~1 MB Defer / ~2 s of compile+exec and
@@ -231,8 +234,7 @@ internal sealed class ScriptFetcher : IDisposable
         if ((disposition == ScriptDisposition.None || disposition == ScriptDisposition.Defer)
             && source.Length > LargeScriptDeferThresholdBytes)
         {
-            _diag.Log(DiagLevel.Info, "engine",
-                $"deferring large external script ({source.Length} bytes, was {disposition}): {absolute}");
+            ScriptFetcherLog.DeferringLargeScript(_log, source.Length, disposition.ToString(), absolute.ToString());
             disposition = ScriptDisposition.Async;
         }
         return new LoadedScript(script, source, absolute, IsInline: false, disposition);
@@ -276,7 +278,7 @@ internal sealed class ScriptFetcher : IDisposable
         var absolute = ResolveAbsolute(src, baseUrl);
         if (absolute is null)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve <script type=module src='{src}'>");
+            ScriptFetcherLog.CannotResolveModuleScriptSrc(_log, src);
             return null;
         }
 
@@ -326,7 +328,7 @@ internal sealed class ScriptFetcher : IDisposable
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
 
-        using var _ = _diag.Span("engine", "fetch_script");
+        using var _ = StarlingTelemetry.Span("engine", "fetch_script");
         Activity.Current?.SetTag("url", key);
 
         // data: URLs decode locally — no network. The deferred-bundle repro
@@ -338,11 +340,11 @@ internal sealed class ScriptFetcher : IDisposable
             {
                 var decoded = Decode(payload.MediaType, payload.Bytes);
                 _byUrl[key] = decoded;
-                _diag.Counter("engine.fetch.script", 1);
+                StarlingTelemetry.Counter("engine.fetch.script", 1);
                 return decoded;
             }
-            _diag.Log(DiagLevel.Warn, "engine", $"Malformed data: script URL");
-            _diag.Counter("engine.fetch.script.failed", 1);
+            ScriptFetcherLog.MalformedDataScriptUrl(_log);
+            StarlingTelemetry.Counter("engine.fetch.script.failed", 1);
             return null;
         }
 
@@ -355,8 +357,8 @@ internal sealed class ScriptFetcher : IDisposable
                 var path = url.ToFileSystemPath();
                 if (!File.Exists(path))
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Missing local script: {path}");
-                    _diag.Counter("engine.fetch.script.failed", 1);
+                    ScriptFetcherLog.MissingLocalScript(_log, path);
+                    StarlingTelemetry.Counter("engine.fetch.script.failed", 1);
                     return null;
                 }
                 bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -367,16 +369,15 @@ internal sealed class ScriptFetcher : IDisposable
                 var response = await _sharedHttp.GetAsync(url, ct).ConfigureAwait(false);
                 if (response.IsErr)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Script fetch failed {url}: {response.Error}");
-                    _diag.Counter("engine.fetch.script.failed", 1);
+                    ScriptFetcherLog.ScriptFetchFailed(_log, url.ToString(), response.Error.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.script.failed", 1);
                     return null;
                 }
                 Activity.Current?.SetTag("http.status_code", response.Value.StatusCode);
                 if (response.Value.StatusCode is < 200 or >= 400)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine",
-                        $"Script fetch HTTP {response.Value.StatusCode} from {url}");
-                    _diag.Counter("engine.fetch.script.failed", 1);
+                    ScriptFetcherLog.ScriptFetchHttpError(_log, response.Value.StatusCode, url.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.script.failed", 1);
                     return null;
                 }
                 bytes = response.Value.Body.ToArray();
@@ -384,21 +385,21 @@ internal sealed class ScriptFetcher : IDisposable
             }
             else
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Unsupported script scheme '{url.Scheme}' for {url}");
-                _diag.Counter("engine.fetch.script.failed", 1);
+                ScriptFetcherLog.UnsupportedScriptScheme(_log, url.Scheme, url.ToString());
+                StarlingTelemetry.Counter("engine.fetch.script.failed", 1);
                 return null;
             }
 
             Activity.Current?.SetTag("bytes", bytes.Length);
             var source = Decode(contentType, bytes);
             _byUrl[key] = source;
-            _diag.Counter("engine.fetch.script", 1);
+            StarlingTelemetry.Counter("engine.fetch.script", 1);
             return source;
         }
         catch (IOException ex)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Script read failed {url}: {ex.Message}");
-            _diag.Counter("engine.fetch.script.failed", 1);
+            ScriptFetcherLog.ScriptReadFailed(_log, ex, url.ToString());
+            StarlingTelemetry.Counter("engine.fetch.script.failed", 1);
             return null;
         }
     }
@@ -496,4 +497,37 @@ internal enum ScriptDisposition
     /// <summary><c>defer</c> (without <c>async</c>): runs after parsing
     /// completes, in document order, before <c>DOMContentLoaded</c>.</summary>
     Defer,
+}
+
+internal static partial class ScriptFetcherLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not resolve <script src='{Src}'>")]
+    public static partial void CannotResolveScriptSrc(ILogger logger, string src);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "external script disposition={Disposition} bytes={Bytes}")]
+    public static partial void ExternalScriptLoaded(ILogger logger, string disposition, int bytes);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "deferring large external script ({Bytes} bytes, was {Disposition}): {Url}")]
+    public static partial void DeferringLargeScript(ILogger logger, int bytes, string disposition, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not resolve <script type=module src='{Src}'>")]
+    public static partial void CannotResolveModuleScriptSrc(ILogger logger, string src);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Malformed data: script URL")]
+    public static partial void MalformedDataScriptUrl(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Missing local script: {Path}")]
+    public static partial void MissingLocalScript(ILogger logger, string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Script fetch failed {Url}: {Error}")]
+    public static partial void ScriptFetchFailed(ILogger logger, string url, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Script fetch HTTP {StatusCode} from {Url}")]
+    public static partial void ScriptFetchHttpError(ILogger logger, int statusCode, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Unsupported script scheme '{Scheme}' for {Url}")]
+    public static partial void UnsupportedScriptScheme(ILogger logger, string scheme, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Script read failed {Url}")]
+    public static partial void ScriptReadFailed(ILogger logger, Exception ex, string url);
 }

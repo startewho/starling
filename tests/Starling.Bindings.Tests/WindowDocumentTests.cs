@@ -36,6 +36,29 @@ public sealed class WindowDocumentTests
     }
 
     [TestMethod]
+    public void Html_element_specific_instanceof_checks_use_tag_name()
+    {
+        var (runtime, _) = BuildEnv();
+        Eval(runtime, """
+            var input = document.createElement('input');
+            var button = document.createElement('button');
+            var option = document.createElement('option');
+            var select = document.createElement('select');
+            var textarea = document.createElement('textarea');
+            var span = document.createElement('span');
+            result =
+                input instanceof HTMLElement &&
+                input instanceof HTMLInputElement &&
+                button instanceof HTMLButtonElement &&
+                option instanceof HTMLOptionElement &&
+                select instanceof HTMLSelectElement &&
+                textarea instanceof HTMLTextAreaElement &&
+                !(span instanceof HTMLInputElement) &&
+                !(span instanceof HTMLButtonElement);
+        """).AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Element_id_attribute_round_trips()
     {
         var (runtime, _) = BuildEnv();
@@ -58,9 +81,9 @@ public sealed class WindowDocumentTests
             result = document.body.children.length;
         """).AsNumber.Should().Be(1);
         doc.GetElementById("hello").Should().NotBeNull();
-        // B5-1-followup: children is a real JsArray, not a plain "array-like".
-        Eval(runtime, "result = Array.isArray(document.body.children);")
-            .AsBool.Should().BeTrue();
+        // children is a live HTMLCollection (DOM §4.2.10), not a JS Array.
+        Eval(runtime, "result = Object.prototype.toString.call(document.body.children);")
+            .AsString.Should().Be("[object HTMLCollection]");
     }
 
     [TestMethod]
@@ -160,6 +183,58 @@ public sealed class WindowDocumentTests
     }
 
     [TestMethod]
+    public void Event_composedPath_returns_dispatch_path()
+    {
+        var (runtime, _) = BuildEnv();
+        var errors = new List<string>();
+        runtime.Realm.ConsoleSink = (lvl, msg) => errors.Add($"{lvl} {msg}");
+        Eval(runtime, """
+            var outer = document.createElement('div');
+            var button = document.createElement('button');
+            outer.appendChild(button);
+            document.body.appendChild(outer);
+            var ok = false;
+            document.addEventListener('click', function (e) {
+                var path = e.composedPath();
+                ok = Array.isArray(path) &&
+                    path.length >= 5 &&
+                    path[0] === button &&
+                    path[1] === outer &&
+                    path[path.length - 1] === document;
+            });
+            button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            result = ok;
+        """).AsBool.Should().BeTrue();
+        errors.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void MouseEvent_dispatch_preserves_subtype_accessors_for_listeners()
+    {
+        var (runtime, _) = BuildEnv();
+        var errors = new List<string>();
+        runtime.Realm.ConsoleSink = (lvl, msg) => errors.Add($"{lvl} {msg}");
+        Eval(runtime, """
+            var button = document.createElement('button');
+            document.body.appendChild(button);
+            var ok = false;
+            button.addEventListener('click', function (e) {
+                ok = e instanceof MouseEvent &&
+                    e.clientX === 17 &&
+                    e.clientY === 9 &&
+                    e.button === 1;
+            });
+            button.dispatchEvent(new MouseEvent('click', {
+                clientX: 17,
+                clientY: 9,
+                button: 1
+            }));
+            result = ok;
+        """).AsBool.Should().BeTrue();
+        errors.Should().BeEmpty();
+    }
+
+    [TestMethod]
     public void Window_location_href_reflects_install_url()
     {
         var (runtime, _) = BuildEnv("https://example.com/path?q=1#frag");
@@ -173,6 +248,28 @@ public sealed class WindowDocumentTests
             .AsString.Should().Be("?q=1");
         Eval(runtime, "result = window.location.hash;")
             .AsString.Should().Be("#frag");
+    }
+
+    [TestMethod]
+    public void Node_base_uri_reflects_document_url()
+    {
+        var (runtime, _) = BuildEnv("https://example.com/app/index.html");
+        Eval(runtime, "result = document.baseURI;")
+            .AsString.Should().Be("https://example.com/app/index.html");
+        Eval(runtime, "result = document.body.baseURI;")
+            .AsString.Should().Be("https://example.com/app/index.html");
+    }
+
+    [TestMethod]
+    public void Node_base_uri_honors_first_base_href()
+    {
+        var (runtime, _) = BuildEnv("https://example.com/app/index.html");
+        Eval(runtime, """
+            var base = document.createElement('base');
+            base.setAttribute('href', './assets/');
+            document.body.appendChild(base);
+            result = document.baseURI;
+            """).AsString.Should().Be("https://example.com/app/assets/");
     }
 
     [TestMethod]

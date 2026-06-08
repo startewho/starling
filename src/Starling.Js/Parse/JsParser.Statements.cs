@@ -8,7 +8,7 @@ namespace Starling.Js.Parse;
 /// in <c>JsParser.cs</c> via partial class. Method names mirror
 /// ES2024 §14 sub-sections.
 /// </summary>
-public sealed partial class JsParser
+public ref partial struct JsParser
 {
     /// <summary>wp:M3-71 — §19.2.1.1 — parse a DIRECT-eval program seeding the
     /// caller's lexical context: caller strictness, in-function-ness (so
@@ -37,7 +37,7 @@ public sealed partial class JsParser
         // in the body depend on it). The prologue is parsed twice-tolerant: we
         // collect the leading string-literal statements, set _strict if any is
         // "use strict", then continue parsing the body under that strictness.
-        ScanDirectivePrologue(body, ParseProgramStatement);
+        ScanDirectivePrologue(body, isProgram: true);
         while (!Check(JsTokenKind.EndOfFile))
         {
             body.Add(ParseProgramStatement());
@@ -81,12 +81,11 @@ public sealed partial class JsParser
     }
 
     /// <summary>§11.2.1 — parse the directive prologue (leading
-    /// ExpressionStatements that are bare StringLiterals) using
-    /// <paramref name="parseOne"/>, appending each parsed statement to
-    /// <paramref name="into"/>. Sets <see cref="_strict"/> if a "use strict"
-    /// directive is present. Stops at (and does not consume) the first
-    /// non-directive statement.</summary>
-    private void ScanDirectivePrologue(List<Statement> into, Func<Statement> parseOne)
+    /// ExpressionStatements that are bare StringLiterals), appending each
+    /// parsed statement to <paramref name="into"/>. Sets <see cref="_strict"/>
+    /// if a "use strict" directive is present. Stops at (and does not consume)
+    /// the first non-directive statement.</summary>
+    private void ScanDirectivePrologue(List<Statement> into, bool isProgram)
     {
         // §11.2.1 — if a "use strict" directive appears, any directive in the
         // prologue that contained a legacy octal escape is a SyntaxError, even
@@ -99,7 +98,7 @@ public sealed partial class JsParser
             var lexeme = _current.Lexeme;
             var octal = _current.LegacyOctal;
             var octalPos = _current.Start;
-            var stmt = parseOne();
+            var stmt = isProgram ? ParseProgramStatement() : ParseStatement();
             into.Add(stmt);
             if (!IsDirective(stmt))
                 break; // a string used as part of a larger expression ends the prologue
@@ -143,13 +142,13 @@ public sealed partial class JsParser
         }
         // 'let' is contextual; treat as variable decl when followed by an
         // identifier or pattern starter, else expression statement.
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "let"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
             && IsLetDeclarationStart())
         {
             return ParseVar("let");
         }
         // B1b-2c — `async function` at statement level → async function decl.
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "async"
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("async")
             && _lex.Peek().Kind == JsTokenKind.Function)
         {
             var asyncStart = _current.Start;
@@ -310,7 +309,7 @@ public sealed partial class JsParser
         // wp:M3-04g — `for await (… of …)`. `await` is a contextual keyword
         // (an Identifier here); consume it and require an of-iteration form.
         bool isAwait = false;
-        if (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "await")
+        if (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("await"))
         {
             isAwait = true;
             Advance();
@@ -323,7 +322,7 @@ public sealed partial class JsParser
         {
             if (_current.Kind == JsTokenKind.Var
                 || _current.Kind == JsTokenKind.Const
-                || (_current.Kind == JsTokenKind.Identifier && _current.Lexeme == "let"
+                || (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
                     && IsLetDeclarationStart()))
             {
                 var kind = _current.Kind == JsTokenKind.Var ? "var"
@@ -387,7 +386,7 @@ public sealed partial class JsParser
     }
 
     private bool IsContextualOf()
-        => _current.Kind == JsTokenKind.Identifier && _current.Lexeme == "of";
+        => _current.Kind == JsTokenKind.Identifier && _current.TextEquals("of");
 
     private ForInStatement FinishForIn(JsPosition start, AstNode left)
     {
@@ -768,7 +767,7 @@ public sealed partial class JsParser
                 // §15.8.1 — an async FunctionExpression's BindingIdentifier is
                 // [+Await], so it may not be `await` (`async function await(){}`,
                 // `async function* await(){}`).
-                if (isAsync && tok.Lexeme == "await")
+                if (isAsync && tok.TextEquals("await"))
                     throw new JsParseException(
                         "'await' may not be used as the name of an async function", tok.Start);
                 fnName = new Identifier(tok.Lexeme, tok.Start, tok.End);
@@ -804,7 +803,7 @@ public sealed partial class JsParser
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);
             return new FunctionExpression(fnName, parameters, body, generator, start, body.End,
-                Async: isAsync, Strict: strict);
+                Async: isAsync, Strict: strict, SourceText: SourceSlice(start, body.End));
         }
         finally { _strict = savedStrict; (_inAsync, _inGenerator) = (savedAsync, savedGen); _moduleTopAwait = savedModuleAwait; _superPropertyDepth = savedSuper; }
     }
@@ -846,7 +845,7 @@ public sealed partial class JsParser
             ValidateParameters(parameters, strict);
             CheckParamsVsLexicalBody(parameters, body);
             return new FunctionDeclaration(name, parameters, body, generator, start, body.End,
-                Async: isAsync, Strict: strict);
+                Async: isAsync, Strict: strict, SourceText: SourceSlice(start, body.End));
         }
         finally { _strict = savedStrict; (_inAsync, _inGenerator) = (savedAsync, savedGen); _moduleTopAwait = savedModuleAwait; _superPropertyDepth = savedSuper; }
     }

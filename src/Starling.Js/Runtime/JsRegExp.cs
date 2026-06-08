@@ -11,7 +11,7 @@ namespace Starling.Js.Runtime;
 public sealed class JsRegExp : JsObject
 {
     public IRegexMatcher Compiled { get; }
-    public string Source => Compiled.Source;
+    public string Source => EscapeSource(Compiled.Source);
     public RegexFlags Flags => Compiled.Flags;
 
     public JsRegExp(JsRealm realm, IRegexMatcher compiled) : base(realm.RegExpPrototype)
@@ -33,4 +33,48 @@ public sealed class JsRegExp : JsObject
     }
 
     public override string ToString() => $"/{Source}/{RegexFlagParser.ToFlagString(Flags)}";
+
+    private static string EscapeSource(string source)
+    {
+        if (source.Length == 0) return "(?:)";
+
+        var sb = new System.Text.StringBuilder(source.Length);
+        var inClass = false;
+        for (var i = 0; i < source.Length; i++)
+        {
+            var c = source[i];
+            if (c == '\\')
+            {
+                sb.Append(c);
+                if (i + 1 < source.Length) sb.Append(source[++i]);
+                continue;
+            }
+
+            if (c == '[') inClass = true;
+            else if (c == ']') inClass = false;
+
+            switch (c)
+            {
+                case '/' when !inClass:
+                    sb.Append("\\/");
+                    break;
+                case '\n':
+                    sb.Append("\\n");
+                    break;
+                case '\r':
+                    sb.Append("\\r");
+                    break;
+                case '\u2028':
+                    sb.Append("\\u2028");
+                    break;
+                case '\u2029':
+                    sb.Append("\\u2029");
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
 }

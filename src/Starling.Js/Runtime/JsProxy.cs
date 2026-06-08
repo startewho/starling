@@ -579,49 +579,56 @@ public sealed class JsProxy : JsObject
             throw new JsThrow(_realm.NewTypeError("Property descriptor must be an object"));
         var obj = input.AsObject;
 
-        var hasValue = obj.Has("value");
-        var hasWritable = obj.Has("writable");
-        var hasGet = obj.Has("get");
-        var hasSet = obj.Has("set");
-        var hasEnumerable = obj.Has("enumerable");
-        var hasConfigurable = obj.Has("configurable");
+        var hasEnumerable = AbstractOperations.HasProperty(obj, "enumerable");
+        var enumerable = hasEnumerable
+            && JsValue.ToBoolean(AbstractOperations.Get(_realm.ActiveVm, obj, "enumerable"));
+
+        var hasConfigurable = AbstractOperations.HasProperty(obj, "configurable");
+        var configurable = hasConfigurable
+            && JsValue.ToBoolean(AbstractOperations.Get(_realm.ActiveVm, obj, "configurable"));
+
+        var hasValue = AbstractOperations.HasProperty(obj, "value");
+        var value = hasValue
+            ? AbstractOperations.Get(_realm.ActiveVm, obj, "value")
+            : JsValue.Undefined;
+
+        var hasWritable = AbstractOperations.HasProperty(obj, "writable");
+        var writable = hasWritable
+            && JsValue.ToBoolean(AbstractOperations.Get(_realm.ActiveVm, obj, "writable"));
+
+        JsObject? getter = null;
+        var hasGet = AbstractOperations.HasProperty(obj, "get");
+        if (hasGet)
+        {
+            var g = AbstractOperations.Get(_realm.ActiveVm, obj, "get");
+            if (!g.IsUndefined)
+            {
+                if (!AbstractOperations.IsCallable(g))
+                    throw new JsThrow(_realm.NewTypeError("Getter must be a function"));
+                getter = g.AsObject;
+            }
+        }
+
+        JsObject? setter = null;
+        var hasSet = AbstractOperations.HasProperty(obj, "set");
+        if (hasSet)
+        {
+            var s = AbstractOperations.Get(_realm.ActiveVm, obj, "set");
+            if (!s.IsUndefined)
+            {
+                if (!AbstractOperations.IsCallable(s))
+                    throw new JsThrow(_realm.NewTypeError("Setter must be a function"));
+                setter = s.AsObject;
+            }
+        }
 
         if ((hasValue || hasWritable) && (hasGet || hasSet))
             throw new JsThrow(_realm.NewTypeError(
                 "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute"));
 
-        var enumerable = hasEnumerable && JsValue.ToBoolean(obj.Get("enumerable"));
-        var configurable = hasConfigurable && JsValue.ToBoolean(obj.Get("configurable"));
-
         if (hasGet || hasSet)
-        {
-            JsObject? getter = null;
-            JsObject? setter = null;
-            if (hasGet)
-            {
-                var g = obj.Get("get");
-                if (!g.IsUndefined)
-                {
-                    if (!AbstractOperations.IsCallable(g))
-                        throw new JsThrow(_realm.NewTypeError("Getter must be a function"));
-                    getter = g.AsObject;
-                }
-            }
-            if (hasSet)
-            {
-                var s = obj.Get("set");
-                if (!s.IsUndefined)
-                {
-                    if (!AbstractOperations.IsCallable(s))
-                        throw new JsThrow(_realm.NewTypeError("Setter must be a function"));
-                    setter = s.AsObject;
-                }
-            }
             return PropertyDescriptor.Accessor(getter, setter, enumerable, configurable);
-        }
 
-        var writable = hasWritable && JsValue.ToBoolean(obj.Get("writable"));
-        var value = hasValue ? obj.Get("value") : JsValue.Undefined;
         return PropertyDescriptor.Data(value, writable, enumerable, configurable);
     }
 

@@ -65,7 +65,7 @@ public sealed class FrameReplayHarness : IDisposable
         // GPU paint path Starling ships, and reusing one target across frames
         // keeps per-frame backend-init noise out of the raster numbers. The host
         // must expose a working WebGPU adapter or Render throws.
-        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, diagnostics: null, useWebGpu: true);
+        _backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
         _compositeBackend = options.Composite ? new CountingBackend(_backend) : null;
         _session = options.Incremental ? new LayoutSession(scenario.Style) : null;
     }
@@ -218,9 +218,9 @@ public sealed class FrameReplayHarness : IDisposable
             a0 = GC.GetAllocatedBytesForCurrentThread();
             sw.Restart();
             var before = _compositeBackend!.RenderCount;
-            var tree = new LayerTreeBuilder(null, null, null, isAnimatingLayerRoot: Promote,
+            var tree = new LayerTreeBuilder(isAnimatingLayerRoot: Promote,
                 layerIdFor: _tiles.LayerIdFor).Build(root);
-            using var bmp = new Compositor(_compositeBackend, null, _tiles).Render(
+            using var bmp = new Compositor(_compositeBackend, _tiles).Render(
                 tree, new Rect(0, 0, _scenario.Viewport.Width, _scenario.Viewport.Height), _options.Scale);
             sw.Stop();
             pt.RasterTicks = sw.ElapsedTicks;

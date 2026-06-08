@@ -1,4 +1,7 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Starling.Dom;
 using Starling.Dom.Events;
 using Starling.Js.Runtime;
 
@@ -21,10 +24,36 @@ namespace Starling.Bindings;
 /// </remarks>
 public static class EventTargetBinding
 {
+    private static readonly ILogger Log = NullLoggerFactory.Instance.CreateLogger(typeof(EventTargetBinding));
+
     // Lookup the host EventTarget that backs a JS wrapper.
     private static readonly ConditionalWeakTable<JsObject, EventTarget> WrapperToTarget = new();
     // Per host-EventTarget map of (type, capture) → (JS-listener → delegate).
     private static readonly ConditionalWeakTable<EventTarget, ListenerRegistry> Registries = new();
+    // Per-realm legacy `window.event` slot: the event currently being dispatched.
+    private static readonly ConditionalWeakTable<JsRealm, MutableJsValueSlot> CurrentEvent = new();
+    // Host EventTargets that are the realm's Window object — needed to compute the
+    // DOM "default passive value" (touch/wheel listeners on window/document/root/body).
+    private static readonly ConditionalWeakTable<EventTarget, object> WindowTargets = new();
+    // Host Event → its canonical JS wrapper, so a listener (and window.event) sees
+    // the same Event object identity that was passed to dispatchEvent.
+    private static readonly ConditionalWeakTable<Event, JsEventWrapper> EventWrappers = new();
+
+    private static JsEventWrapper Track(JsEventWrapper wrapper)
+    {
+        EventWrappers.AddOrUpdate(wrapper.HostEvent, wrapper);
+        return wrapper;
+    }
+
+    /// <summary>Mark a host <see cref="EventTarget"/> as the realm's Window object,
+    /// so the default-passive-value computation can recognize it.</summary>
+    public static void MarkWindowTarget(EventTarget host) => WindowTargets.AddOrUpdate(host, BoxedTrue);
+    private static readonly object BoxedTrue = new();
+
+    /// <summary>The legacy <c>window.event</c> value for this realm — the event
+    /// being dispatched right now, or undefined when no dispatch is active.</summary>
+    public static JsValue GetCurrentEvent(JsRealm realm)
+        => CurrentEvent.TryGetValue(realm, out var slot) ? slot.Value : JsValue.Undefined;
 
     /// <summary>Install the EventTarget + Event constructors and prototypes onto the realm.</summary>
     public static void Install(JsRealm realm)
@@ -63,6 +92,9 @@ public static class EventTargetBinding
         DefineAccessor(realm, evProto, "type", (thisV, _) => HostEventOr(thisV, e => JsValue.String(e.Type), JsValue.String("")));
         DefineAccessor(realm, evProto, "target", (thisV, _) => HostEventOr(thisV, e =>
             e.Target is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, e.Target)), JsValue.Null));
+        // DOM §2.2 — srcElement: legacy alias for target (returns null when unset).
+        DefineAccessor(realm, evProto, "srcElement", (thisV, _) => HostEventOr(thisV, e =>
+            e.Target is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, e.Target)), JsValue.Null));
         DefineAccessor(realm, evProto, "currentTarget", (thisV, _) => HostEventOr(thisV, e =>
             e.CurrentTarget is null ? JsValue.Null : JsValue.Object(DomWrappers.Wrap(realm, e.CurrentTarget)), JsValue.Null));
         DefineAccessor(realm, evProto, "bubbles", (thisV, _) => HostEventOr(thisV, e => JsValue.Boolean(e.Bubbles), JsValue.False));
@@ -80,6 +112,17 @@ public static class EventTargetBinding
             (thisV, _) => TryGetHostEvent(thisV, out var e) && e is PopStateEvent p && p.State is JsValue jv
                 ? jv
                 : JsValue.Undefined);
+
+        DefineMethod(realm, evProto, "composedPath", (thisV, _) =>
+        {
+            if (!TryGetHostEvent(thisV, out var e) || e.ComposedPath.Count == 0)
+                return JsValue.Object(new JsArray(realm));
+
+            var items = new JsValue[e.ComposedPath.Count];
+            for (var i = 0; i < e.ComposedPath.Count; i++)
+                items[i] = JsValue.Object(DomWrappers.Wrap(realm, e.ComposedPath[i]));
+            return JsValue.Object(new JsArray(realm, items));
+        }, length: 0);
 
         DefineMethod(realm, evProto, "preventDefault", (thisV, _) =>
         {
@@ -116,11 +159,15 @@ public static class EventTargetBinding
                 return JsValue.Undefined;
             });
         // Legacy Event.initEvent (DOM §2.9) — used with document.createEvent.
+        // The `type` argument is mandatory per WebIDL: a missing first argument
+        // is a TypeError.
         DefineMethod(realm, evProto, "initEvent", (thisV, args) =>
         {
+            if (args.Length == 0)
+                throw new JsThrow(realm.NewTypeError("initEvent requires a type argument"));
             if (TryGetHostEvent(thisV, out var e))
                 e.InitEvent(
-                    args.Length > 0 ? JsValue.ToStringValue(args[0]) : "",
+                    JsValue.ToStringValue(args[0]),
                     args.Length > 1 && JsValue.ToBoolean(args[1]),
                     args.Length > 2 && JsValue.ToBoolean(args[2]));
             return JsValue.Undefined;
@@ -141,7 +188,7 @@ public static class EventTargetBinding
                     Composed: JsValue.ToBoolean(initObj.Get("composed")));
             }
             var host = new Event(type, init);
-            return JsValue.Object(new JsEventWrapper(evProto, host));
+            return JsValue.Object(Track(new JsEventWrapper(evProto, host)));
         }, isConstructor: true);
         evCtor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(evProto), writable: false, enumerable: false, configurable: false));
@@ -170,12 +217,15 @@ public static class EventTargetBinding
             return JsValue.Null;
         });
         // Legacy CustomEvent.initCustomEvent (DOM §2.3) — used with createEvent.
+        // The `type` argument is mandatory per WebIDL.
         DefineMethod(realm, customEvProto, "initCustomEvent", (thisV, args) =>
         {
+            if (args.Length == 0)
+                throw new JsThrow(realm.NewTypeError("initCustomEvent requires a type argument"));
             if (TryGetHostEvent(thisV, out var e))
             {
                 e.InitEvent(
-                    args.Length > 0 ? JsValue.ToStringValue(args[0]) : "",
+                    JsValue.ToStringValue(args[0]),
                     args.Length > 1 && JsValue.ToBoolean(args[1]),
                     args.Length > 2 && JsValue.ToBoolean(args[2]));
                 if (thisV.AsObject is JsCustomEventWrapper cw)
@@ -203,7 +253,7 @@ public static class EventTargetBinding
             }
             var host = new CustomEvent(type, init);
             CacheCustomEventDetail(host, detail);
-            return JsValue.Object(new JsCustomEventWrapper(customEvProto, host, detail));
+            return JsValue.Object(Track(new JsCustomEventWrapper(customEvProto, host, detail)));
         }, isConstructor: true);
         customEvCtor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(customEvProto), writable: false, enumerable: false, configurable: false));
@@ -219,7 +269,7 @@ public static class EventTargetBinding
         var uiEvProto = new JsObject(evProto);
         realm.UiEventPrototype = uiEvProto;
         DefineAccessor(realm, uiEvProto, "detail", (t, _) => TryGetHostEvent(t, out var e) && e is UiEvent u ? JsValue.Number(u.Detail) : JsValue.Number(0));
-        DefineAccessor(realm, uiEvProto, "view", (_, _) => JsValue.Null);
+        DefineAccessor(realm, uiEvProto, "view", (t, _) => InitMember(t, "view", JsValue.Null));
         DefineSubtypeCtor(realm, uiEvProto, "UIEvent", (type, init) =>
             new UiEvent(type, ReadInit(init)) { Detail = (int)NumOf(init, "detail") });
 
@@ -234,7 +284,7 @@ public static class EventTargetBinding
         DefineAccessor(realm, mouseEvProto, "pageX", (t, _) => MouseNum(t, m => m.ClientX));
         DefineAccessor(realm, mouseEvProto, "pageY", (t, _) => MouseNum(t, m => m.ClientY));
         DefineAccessor(realm, mouseEvProto, "button", (t, _) => MouseNum(t, m => m.Button));
-        DefineAccessor(realm, mouseEvProto, "buttons", (t, _) => JsValue.Number(0));
+        DefineAccessor(realm, mouseEvProto, "buttons", (t, _) => InitNum(t, "buttons"));
         DefineAccessor(realm, mouseEvProto, "ctrlKey", (t, _) => MouseBool(t, m => m.CtrlKey));
         DefineAccessor(realm, mouseEvProto, "shiftKey", (t, _) => MouseBool(t, m => m.ShiftKey));
         DefineAccessor(realm, mouseEvProto, "altKey", (t, _) => MouseBool(t, m => m.AltKey));
@@ -261,7 +311,11 @@ public static class EventTargetBinding
         DefineAccessor(realm, kbdEvProto, "key", (t, _) => KbdStr(t, k => k.Key));
         DefineAccessor(realm, kbdEvProto, "code", (t, _) => KbdStr(t, k => k.Code));
         DefineAccessor(realm, kbdEvProto, "repeat", (t, _) => TryGetHostEvent(t, out var e) && e is KeyboardEvent k ? JsValue.Boolean(k.Repeat) : JsValue.False);
-        DefineAccessor(realm, kbdEvProto, "location", (_, _) => JsValue.Number(0));
+        DefineAccessor(realm, kbdEvProto, "location", (t, _) => InitNum(t, "location"));
+        DefineAccessor(realm, kbdEvProto, "isComposing", (t, _) => InitBool(t, "isComposing"));
+        DefineAccessor(realm, kbdEvProto, "charCode", (t, _) => InitNum(t, "charCode"));
+        DefineAccessor(realm, kbdEvProto, "keyCode", (t, _) => InitNum(t, "keyCode"));
+        DefineAccessor(realm, kbdEvProto, "which", (t, _) => InitNum(t, "which"));
         DefineAccessor(realm, kbdEvProto, "ctrlKey", (t, _) => KbdBool(t, k => k.CtrlKey));
         DefineAccessor(realm, kbdEvProto, "shiftKey", (t, _) => KbdBool(t, k => k.ShiftKey));
         DefineAccessor(realm, kbdEvProto, "altKey", (t, _) => KbdBool(t, k => k.AltKey));
@@ -292,18 +346,34 @@ public static class EventTargetBinding
         // from UIEvent. No extra properties for now; these just need to be
         // constructable so `new WheelEvent('wheel')` doesn't throw.
         var wheelEvProto = new JsObject(mouseEvProto);
-        DefineAccessor(realm, wheelEvProto, "deltaX", (_, _) => JsValue.Number(0));
-        DefineAccessor(realm, wheelEvProto, "deltaY", (_, _) => JsValue.Number(0));
-        DefineAccessor(realm, wheelEvProto, "deltaZ", (_, _) => JsValue.Number(0));
-        DefineAccessor(realm, wheelEvProto, "deltaMode", (_, _) => JsValue.Number(0));
-        DefineSubtypeCtor(realm, wheelEvProto, "WheelEvent", (type, init) => new MouseEvent(type, ReadInit(init)));
+        DefineAccessor(realm, wheelEvProto, "deltaX", (t, _) => InitNum(t, "deltaX"));
+        DefineAccessor(realm, wheelEvProto, "deltaY", (t, _) => InitNum(t, "deltaY"));
+        DefineAccessor(realm, wheelEvProto, "deltaZ", (t, _) => InitNum(t, "deltaZ"));
+        DefineAccessor(realm, wheelEvProto, "deltaMode", (t, _) => InitNum(t, "deltaMode"));
+        DefineSubtypeCtor(realm, wheelEvProto, "WheelEvent", (type, init) => new MouseEvent(type, ReadInit(init))
+        {
+            ClientX = NumOf(init, "clientX"),
+            ClientY = NumOf(init, "clientY"),
+            ScreenX = NumOf(init, "screenX"),
+            ScreenY = NumOf(init, "screenY"),
+            Button = (short)NumOf(init, "button"),
+            Detail = (int)NumOf(init, "detail"),
+            CtrlKey = BoolOf(init, "ctrlKey"),
+            ShiftKey = BoolOf(init, "shiftKey"),
+            AltKey = BoolOf(init, "altKey"),
+            MetaKey = BoolOf(init, "metaKey"),
+            RelatedTarget = init.IsObject ? ResolveHost(init.AsObject.Get("relatedTarget")) : null,
+        });
 
         var inputEvProto = new JsObject(uiEvProto);
         DefineSubtypeCtor(realm, inputEvProto, "InputEvent", (type, init) => new UiEvent(type, ReadInit(init)));
 
         var compositionEvProto = new JsObject(uiEvProto);
-        DefineAccessor(realm, compositionEvProto, "data", (_, _) => JsValue.String(""));
-        DefineSubtypeCtor(realm, compositionEvProto, "CompositionEvent", (type, init) => new UiEvent(type, ReadInit(init)));
+        DefineAccessor(realm, compositionEvProto, "data", (t, _) => JsValue.String(JsValue.ToStringValue(InitMember(t, "data", JsValue.String("")))));
+        DefineSubtypeCtor(realm, compositionEvProto, "CompositionEvent", (type, init) => new UiEvent(type, ReadInit(init))
+        {
+            Detail = (int)NumOf(init, "detail"),
+        });
 
         // HashChangeEvent / PopStateEvent / StorageEvent / MessageEvent — stubs
         // for tests that reference these constructors.
@@ -350,6 +420,21 @@ public static class EventTargetBinding
     private static double NumOf(JsValue v, string k) => v.IsObject && !v.AsObject.Get(k).IsUndefined ? JsValue.ToNumber(v.AsObject.Get(k)) : 0;
     private static bool BoolOf(JsValue v, string k) => v.IsObject && JsValue.ToBoolean(v.AsObject.Get(k));
     private static string StrOf(JsValue v, string k) => v.IsObject && v.AsObject.Get(k).IsString ? v.AsObject.Get(k).AsString : "";
+    /// <summary>Read a member of the init dictionary the event was constructed
+    /// with. Returns <paramref name="fallback"/> when the wrapper carries no init
+    /// dict or the member is undefined.</summary>
+    private static JsValue InitMember(JsValue thisV, string key, JsValue fallback)
+    {
+        if (thisV.IsObject && thisV.AsObject is JsEventWrapper w && w.InitDict.IsObject)
+        {
+            var v = w.InitDict.AsObject.Get(key);
+            if (!v.IsUndefined) return v;
+        }
+        return fallback;
+    }
+    private static JsValue InitNum(JsValue thisV, string key) => JsValue.Number(JsValue.ToNumber(InitMember(thisV, key, JsValue.Number(0))));
+    private static JsValue InitBool(JsValue thisV, string key) => JsValue.Boolean(JsValue.ToBoolean(InitMember(thisV, key, JsValue.False)));
+
     private static JsValue MouseNum(JsValue t, Func<MouseEvent, double> f) => TryGetHostEvent(t, out var e) && e is MouseEvent m ? JsValue.Number(f(m)) : JsValue.Number(0);
     private static JsValue MouseBool(JsValue t, Func<MouseEvent, bool> f) => TryGetHostEvent(t, out var e) && e is MouseEvent m ? JsValue.Boolean(f(m)) : JsValue.False;
     private static JsValue KbdStr(JsValue t, Func<KeyboardEvent, string> f) => TryGetHostEvent(t, out var e) && e is KeyboardEvent k ? JsValue.String(f(k)) : JsValue.String("");
@@ -361,7 +446,16 @@ public static class EventTargetBinding
         {
             if (args.Length == 0 || args[0].IsUndefined)
                 throw new JsThrow(realm.NewTypeError($"{name} constructor requires a type"));
-            return JsValue.Object(new JsEventWrapper(proto, build(JsValue.ToStringValue(args[0]), args.Length > 1 ? args[1] : JsValue.Undefined)));
+            var init = args.Length > 1 ? args[1] : JsValue.Undefined;
+            // UIEvents §3.5 — `view` must be a Window (a Window wrapper) or null.
+            // A primitive like a Number is a TypeError per WebIDL interface coercion.
+            if (init.IsObject)
+            {
+                var view = init.AsObject.Get("view");
+                if (!view.IsUndefined && !view.IsNull && !view.IsObject)
+                    throw new JsThrow(realm.NewTypeError($"{name}: 'view' member is not a Window"));
+            }
+            return JsValue.Object(Track(new JsEventWrapper(proto, build(JsValue.ToStringValue(args[0]), init), init)));
         }, isConstructor: true);
         ctor.DefineOwnProperty("prototype", PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
         proto.DefineOwnProperty("constructor", PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -380,11 +474,31 @@ public static class EventTargetBinding
         switch ((interfaceName ?? "").ToLowerInvariant())
         {
             case "customevent":
-                return JsValue.Object(new JsCustomEventWrapper(realm.CustomEventPrototype!, new CustomEvent(""), JsValue.Null));
+                {
+                    var ce = new CustomEvent("");
+                    ce.MarkAsUninitialized();
+                    return JsValue.Object(Track(new JsCustomEventWrapper(realm.CustomEventPrototype!, ce, JsValue.Null)));
+                }
             case "event":
             case "events":
             case "htmlevents":
             case "svgevents":
+            // Interfaces in the legacy createEvent table that Starling has no
+            // dedicated subtype for yet map to a base Event. They are returned
+            // uninitialized, so dispatching one before initEvent() throws
+            // InvalidStateError per DOM §2.7.
+            case "beforeunloadevent":
+            case "compositionevent":
+            case "textevent":
+            case "hashchangeevent":
+            case "messageevent":
+            case "storageevent":
+            case "dragevent":
+            case "devicemotionevent":
+            case "deviceorientationevent":
+            case "touchevent":
+            case "wheelevent":
+            case "popstateevent":
                 return WrapUninitEvent(realm, new Event(""));
             case "uievent":
             case "uievents":
@@ -398,7 +512,11 @@ public static class EventTargetBinding
             case "focusevent":
                 return WrapUninitEvent(realm, new FocusEvent(""));
             default:
-                throw new JsThrow(realm.NewTypeError($"createEvent: unsupported interface '{interfaceName}'"));
+                // DOM §4.5.1 — createEvent throws "NotSupportedError" (not a
+                // TypeError) for an interface outside the legacy event table, so
+                // assert_throws_dom("NOT_SUPPORTED_ERR") matches (code 9).
+                throw DomExceptionBinding.Throw(realm, "NotSupportedError",
+                    $"createEvent: unsupported interface '{interfaceName}'");
         }
     }
 
@@ -416,7 +534,7 @@ public static class EventTargetBinding
             UiEvent => realm.UiEventPrototype,
             _ => realm.EventPrototype,
         } ?? realm.EventPrototype!;
-        return JsValue.Object(new JsEventWrapper(proto, host));
+        return JsValue.Object(Track(new JsEventWrapper(proto, host)));
     }
 
     /// <summary>Associate an existing host <see cref="EventTarget"/> with a JS
@@ -438,10 +556,15 @@ public static class EventTargetBinding
     private static JsValue AddListener(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var host = ResolveHost(thisV);
-        if (host is null || args.Length < 2 || !args[1].IsObject) return JsValue.Undefined;
-        if (!AbstractOperations.IsCallable(args[1])) return JsValue.Undefined;
+        if (host is null || args.Length < 2) return JsValue.Undefined;
         var type = JsValue.ToStringValue(args[0]);
-        var (capture, once, passive) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        // DOM §addEventListener: flatten the options first (so a `capture` getter
+        // runs) even if the callback is null. The listener may be a callable
+        // (a function) OR any object with a callable `handleEvent` method; a null
+        // or non-object callback adds nothing.
+        var (capture, once, passiveOpt) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        if (!args[1].IsObject) return JsValue.Undefined;
+        var passive = passiveOpt ?? DefaultPassiveValue(host, type);
         var listenerObj = args[1].AsObject;
 
         var registry = Registries.GetValue(host, _ => new ListenerRegistry());
@@ -467,9 +590,12 @@ public static class EventTargetBinding
     private static JsValue RemoveListener(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var host = ResolveHost(thisV);
-        if (host is null || args.Length < 2 || !args[1].IsObject) return JsValue.Undefined;
+        if (host is null || args.Length < 2) return JsValue.Undefined;
         var type = JsValue.ToStringValue(args[0]);
+        // Flatten options (running any `capture` getter) before bailing on a
+        // null/non-object callback, matching addEventListener.
         var (capture, _, _) = ParseListenerOptions(args.Length > 2 ? args[2] : JsValue.Undefined);
+        if (!args[1].IsObject) return JsValue.Undefined;
         var listenerObj = args[1].AsObject;
 
         if (!Registries.TryGetValue(host, out var registry)) return JsValue.Undefined;
@@ -525,23 +651,80 @@ public static class EventTargetBinding
     /// host-driven dispatches still work.</summary>
     private static void InvokeJsListener(JsRealm realm, JsObject listener, Event ev)
     {
+        var slot = CurrentEvent.GetValue(realm, _ => new MutableJsValueSlot());
+        var prevEvent = slot.Value;
         try
         {
             var vm = realm.ActiveVm ?? new JsVm(GetRuntimeForRealm(realm));
-            JsValue thisVal = ev.CurrentTarget is null
-                ? JsValue.Undefined
-                : JsValue.Object(DomWrappers.Wrap(realm, ev.CurrentTarget));
             var jsEvent = JsValue.Object(WrapHostEvent(realm, ev));
-            AbstractOperations.Call(vm, JsValue.Object(listener), thisVal, new[] { jsEvent });
+            // Legacy `window.event` (HTML §window.event): the event being
+            // dispatched is exposed on the global for the duration of the call.
+            slot.Value = jsEvent;
+
+            // DOM §2.7 invoke: if the listener is callable, call it with `this`
+            // set to the current target. Otherwise it must be an object with a
+            // `handleEvent` method, which is re-fetched on every dispatch and
+            // called with `this` set to the listener object itself.
+            if (AbstractOperations.IsCallable(JsValue.Object(listener)))
+            {
+                JsValue thisVal = ev.CurrentTarget is null
+                    ? JsValue.Undefined
+                    : JsValue.Object(DomWrappers.Wrap(realm, ev.CurrentTarget));
+                AbstractOperations.Call(vm, JsValue.Object(listener), thisVal, new[] { jsEvent });
+            }
+            else
+            {
+                // Use the abstract Get so a `handleEvent` accessor getter actually
+                // runs (and re-runs on every dispatch), per the DOM invoke step.
+                var handle = AbstractOperations.Get(vm, listener, "handleEvent");
+                if (AbstractOperations.IsCallable(handle))
+                    AbstractOperations.Call(vm, handle, JsValue.Object(listener), new[] { jsEvent });
+            }
         }
         catch (JsThrow jt)
         {
-            realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {JsValue.ToStringValue(jt.Value)}");
+            ReportListenerError(realm, JsValue.ToStringValue(jt.Value), jt.Value);
         }
         catch (Exception ex)
         {
-            realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {ex.Message}");
+            ReportListenerError(realm, ex.Message, JsValue.Undefined);
         }
+        finally
+        {
+            slot.Value = prevEvent;
+        }
+    }
+
+    /// <summary>Report an uncaught error thrown by a JS event listener. HTML
+    /// "report the exception": invoke the legacy <c>window.onerror</c> handler
+    /// (message, source, lineno, colno, error) if one is installed, then always
+    /// echo to the console. The boolean result of onerror (which can cancel) is
+    /// ignored here since there is no default error UI to suppress.</summary>
+    private static void ReportListenerError(JsRealm realm, string message, JsValue error)
+    {
+        var legacyMessage = "Uncaught " + message;
+        try
+        {
+            var onerror = realm.GlobalObject.Get("onerror");
+            if (AbstractOperations.IsCallable(onerror))
+            {
+                var vm = realm.ActiveVm ?? new JsVm(GetRuntimeForRealm(realm));
+                AbstractOperations.Call(vm, onerror, JsValue.Object(realm.GlobalObject), new[]
+                {
+                    JsValue.String(legacyMessage),
+                    JsValue.String(""),       // source URL — not tracked here
+                    JsValue.Number(0),        // lineno
+                    JsValue.Number(0),        // colno
+                    error,                    // the thrown value (undefined for host errors)
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            // An error inside onerror itself must not escape the dispatch loop.
+            EventTargetBindingLog.OnerrorHandlerThrew(Log, ex);
+        }
+        realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in event listener) {message}");
     }
 
     /// <summary>Resolve the runtime that owns the given realm. <see cref="JsRuntime"/>
@@ -552,6 +735,11 @@ public static class EventTargetBinding
 
     private static JsEventWrapper WrapHostEvent(JsRealm realm, Event ev)
     {
+        // Return the canonical wrapper if this host event already has one (e.g.
+        // a JS-constructed event passed to dispatchEvent) so listeners and
+        // window.event observe the same object identity.
+        if (EventWrappers.TryGetValue(ev, out var existing)) return existing;
+
         // When the host event is a CustomEvent that originated from JS (and
         // was therefore a JsCustomEventWrapper), we need to preserve the JS
         // detail value. The listener wrapper for the JS-created custom event
@@ -565,9 +753,12 @@ public static class EventTargetBinding
             // Try to locate the JS detail value that was stored when the event
             // was constructed. We stash it in CustomEventDetailCache.
             var detail = CustomEventDetailCache.TryGetValue(ce, out var box) ? box.Value : JsValue.Null;
-            return new JsCustomEventWrapper(ceProto ?? realm.EventPrototype ?? realm.ObjectPrototype, ce, detail);
+            return Track(new JsCustomEventWrapper(ceProto ?? realm.EventPrototype ?? realm.ObjectPrototype, ce, detail));
         }
-        return new JsEventWrapper(realm.EventPrototype ?? realm.ObjectPrototype, ev);
+        // Combine the branch's canonical-identity Track() with the host-aware
+        // prototype selection so a wrapped event both keeps a stable identity
+        // across dispatch and gets the right subtype prototype.
+        return Track(new JsEventWrapper(GetEventPrototypeForHost(realm, ev), ev));
     }
 
     // Cache: CustomEvent → JsValue detail. Populated when JS constructs new CustomEvent(...).
@@ -593,6 +784,16 @@ public static class EventTargetBinding
         return null;
     }
 
+    private static JsObject GetEventPrototypeForHost(JsRealm realm, Event ev) =>
+        ev switch
+        {
+            MouseEvent => realm.MouseEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            KeyboardEvent => realm.KeyboardEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            FocusEvent => realm.FocusEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            UiEvent => realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            _ => realm.EventPrototype ?? realm.ObjectPrototype,
+        };
+
     internal static bool TryGetHostEvent(JsValue v, out Event ev)
     {
         if (v.IsObject && v.AsObject is JsEventWrapper w) { ev = w.HostEvent; return true; }
@@ -603,19 +804,42 @@ public static class EventTargetBinding
     private static JsValue HostEventOr(JsValue thisV, Func<Event, JsValue> read, JsValue fallback)
         => TryGetHostEvent(thisV, out var e) ? read(e) : fallback;
 
-    private static (bool capture, bool once, bool passive) ParseListenerOptions(JsValue opt)
+    // passive is null when the `passive` member was omitted/undefined, so the
+    // caller can substitute the DOM default-passive value.
+    private static (bool capture, bool once, bool? passive) ParseListenerOptions(JsValue opt)
     {
-        if (opt.IsUndefined || opt.IsNull) return (false, false, false);
-        if (opt.IsBoolean) return (opt.AsBool, false, false);
+        // DOM §flatten options: an object form reads capture/once/passive; any
+        // other value (boolean, number, string, …) is coerced to the capture
+        // boolean (e.g. 2.3 → true, "" → false).
         if (opt.IsObject)
         {
             var o = opt.AsObject;
+            var passiveVal = o.Get("passive");
             return (
                 JsValue.ToBoolean(o.Get("capture")),
                 JsValue.ToBoolean(o.Get("once")),
-                JsValue.ToBoolean(o.Get("passive")));
+                passiveVal.IsUndefined ? null : JsValue.ToBoolean(passiveVal));
         }
-        return (false, false, false);
+        if (opt.IsUndefined || opt.IsNull) return (false, false, null);
+        return (JsValue.ToBoolean(opt), false, null);
+    }
+
+    /// <summary>DOM "default passive value": touch/wheel listeners on the Window,
+    /// the Document, the document element, or the body element are passive by
+    /// default. Everything else defaults to non-passive.</summary>
+    private static bool DefaultPassiveValue(EventTarget host, string type)
+    {
+        if (type is not ("touchstart" or "touchmove" or "wheel" or "mousewheel"))
+            return false;
+        if (WindowTargets.TryGetValue(host, out _)) return true;
+        if (host is Document) return true;
+        if (host is Node node)
+        {
+            var doc = node.OwnerDocument;
+            if (doc is not null && (ReferenceEquals(doc.DocumentElement, node) || ReferenceEquals(doc.Body, node)))
+                return true;
+        }
+        return false;
     }
 
     internal static void DefineMethod(JsRealm realm, JsObject target, string name,
@@ -643,7 +867,21 @@ public static class EventTargetBinding
 internal class JsEventWrapper : JsObject
 {
     public Event HostEvent { get; }
-    public JsEventWrapper(JsObject proto, Event hostEvent) : base(proto) { HostEvent = hostEvent; }
+    /// <summary>The raw JS init dictionary the event was constructed with, kept so
+    /// subtype accessors (view/buttons/deltaX/isComposing/location/data, …) that
+    /// have no host-class slot can read their value back. Undefined when none was
+    /// supplied (e.g. legacy createEvent or host-synthesized events).</summary>
+    public JsValue InitDict { get; }
+    public JsEventWrapper(JsObject proto, Event hostEvent) : base(proto)
+    {
+        HostEvent = hostEvent;
+        InitDict = JsValue.Undefined;
+    }
+    public JsEventWrapper(JsObject proto, Event hostEvent, JsValue initDict) : base(proto)
+    {
+        HostEvent = hostEvent;
+        InitDict = initDict;
+    }
 }
 
 /// <summary>Wrapper for <c>CustomEvent</c> that carries a JS-value
@@ -688,4 +926,17 @@ internal sealed class JsValueBox
 {
     public JsValue Value { get; }
     public JsValueBox(JsValue v) { Value = v; }
+}
+
+/// <summary>A mutable single-value slot for a <see cref="JsValue"/>, used as the
+/// per-realm legacy <c>window.event</c> holder.</summary>
+internal sealed class MutableJsValueSlot
+{
+    public JsValue Value { get; set; } = JsValue.Undefined;
+}
+
+internal static partial class EventTargetBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Debug, Message = "window.onerror handler threw (must not escape the dispatch loop)")]
+    public static partial void OnerrorHandlerThrew(ILogger logger, Exception ex);
 }

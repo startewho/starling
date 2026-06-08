@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <!-- Proof of the renderer-neutral seam: this project references no SixLabors
+       package and uses no SixLabors type. It implements the paint seam against
+       neutral types only, so its mere compilation proves a non-ImageSharp
+       backend (e.g. Vello) is expressible. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Starling.Paint.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Starling.Paint\Starling.Paint.csproj" />
+  </ItemGroup>
+</Project>

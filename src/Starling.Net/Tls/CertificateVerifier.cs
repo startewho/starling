@@ -1,6 +1,9 @@
 using Org.BouncyCastle.Asn1.X509;
+using Org.BouncyCastle.Pkix;
 using Org.BouncyCastle.Tls;
+using Org.BouncyCastle.Utilities.Collections;
 using Org.BouncyCastle.X509;
+using Org.BouncyCastle.X509.Store;
 
 namespace Starling.Net.Tls;
 
@@ -10,7 +13,8 @@ public static class CertificateVerifier
         Certificate certificate,
         string hostname,
         RootCertificates roots,
-        DateTimeOffset? validationTime = null)
+        DateTimeOffset? validationTime = null,
+        RevocationSet? revocations = null)
     {
         if (certificate is null) throw new ArgumentNullException(nameof(certificate));
         if (roots is null) throw new ArgumentNullException(nameof(roots));
@@ -19,12 +23,73 @@ public static class CertificateVerifier
         var chain = DecodeChain(certificate);
         if (chain.Count == 0) return false;
 
-        var now = (validationTime ?? DateTimeOffset.UtcNow).UtcDateTime;
-        if (!chain.All(c => c.IsValid(now))) return false;
+        // PKIX path validation does not match the hostname, so that stays ours.
+        // Everything else — path building to a trusted anchor, signatures,
+        // validity windows, basic constraints, key usage, name constraints — is
+        // delegated to BouncyCastle's RFC 5280 validator below.
         if (!CertificateHostNameMatcher.Matches(chain[0], hostname)) return false;
-        if (!VerifyPresentedChain(chain)) return false;
 
-        return ChainsToTrustedRoot(chain[^1], roots.Certificates);
+        var path = BuildTrustedPath(chain, roots.Certificates, validationTime);
+        if (path is null) return false;
+
+        // Local CRLSet-style blocklist check over the validated path. Empty by
+        // default, so this is a no-op until a revocation feed is loaded.
+        var revocationSet = revocations ?? RevocationSet.Empty;
+        if (!revocationSet.IsEmpty && PathContainsRevokedCert(path, revocationSet))
+            return false;
+
+        return true;
+    }
+
+    // Build and validate a path from the leaf (chain[0]) to any trusted root,
+    // using the presented certs as the pool of candidate intermediates. The
+    // builder picks the shortest valid path, so extra cross-sign certs the
+    // server appends above the real anchor (e.g. Google's GTS Root R1 trailed by
+    // a legacy GlobalSign root we don't bundle) no longer cause a rejection.
+    // Returns null when no valid path exists.
+    private static PkixCertPathBuilderResult? BuildTrustedPath(
+        List<X509Certificate> chain,
+        IReadOnlyList<X509Certificate> roots,
+        DateTimeOffset? validationTime)
+    {
+        var anchors = new HashSet<TrustAnchor>();
+        foreach (var root in roots)
+            anchors.Add(new TrustAnchor(root, null));
+
+        var target = new X509CertStoreSelector { Certificate = chain[0] };
+        var parameters = new PkixBuilderParameters(anchors, target)
+        {
+            // Live OCSP/CRL would add blocking network I/O on the handshake path.
+            // Revocation is handled out of band by the local blocklist below.
+            IsRevocationEnabled = false,
+            Date = (validationTime ?? DateTimeOffset.UtcNow).UtcDateTime,
+        };
+        parameters.AddStoreCert(CollectionUtilities.CreateStore(chain));
+
+        try
+        {
+            return new PkixCertPathBuilder().Build(parameters);
+        }
+        catch (PkixCertPathBuilderException)
+        {
+            return null;
+        }
+    }
+
+    // Walk the built path from leaf up to the trust anchor, checking each cert
+    // against the blocklist. The issuer of each cert is the next one up; the
+    // anchor is self-issued.
+    private static bool PathContainsRevokedCert(PkixCertPathBuilderResult path, RevocationSet revocations)
+    {
+        var ordered = new List<X509Certificate>(path.CertPath.Certificates) { path.TrustAnchor.TrustedCert };
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var issuer = i + 1 < ordered.Count ? ordered[i + 1] : ordered[i];
+            if (revocations.IsRevoked(ordered[i], issuer))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -63,61 +128,6 @@ public static class CertificateVerifier
         return certificate.GetCertificateList()
             .Select(tlsCertificate => parser.ReadCertificate(tlsCertificate.GetEncoded()))
             .ToList();
-    }
-
-    private static bool VerifyPresentedChain(List<X509Certificate> chain)
-    {
-        for (var i = 0; i < chain.Count - 1; i++)
-        {
-            if (!chain[i].IssuerDN.Equivalent(chain[i + 1].SubjectDN))
-                return false;
-            try
-            {
-                chain[i].Verify(chain[i + 1].GetPublicKey());
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ChainsToTrustedRoot(X509Certificate lastPresented, IReadOnlyList<X509Certificate> roots)
-    {
-        foreach (var root in roots)
-        {
-            if (lastPresented.SubjectDN.Equivalent(root.SubjectDN)
-                && SamePublicKey(lastPresented, root))
-                return true;
-
-            if (!lastPresented.IssuerDN.Equivalent(root.SubjectDN))
-                continue;
-
-            try
-            {
-                lastPresented.Verify(root.GetPublicKey());
-                return true;
-            }
-            catch
-            {
-                // Try the next root with the same subject; some stores have cross-signs.
-            }
-        }
-
-        return false;
-    }
-
-    private static bool SamePublicKey(X509Certificate left, X509Certificate right)
-    {
-        var leftKey = SubjectPublicKeyInfoFactory
-            .CreateSubjectPublicKeyInfo(left.GetPublicKey())
-            .GetEncoded();
-        var rightKey = SubjectPublicKeyInfoFactory
-            .CreateSubjectPublicKeyInfo(right.GetPublicKey())
-            .GetEncoded();
-        return leftKey.AsSpan().SequenceEqual(rightKey);
     }
 }
 

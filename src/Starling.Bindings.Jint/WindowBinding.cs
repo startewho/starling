@@ -1,6 +1,7 @@
 using System.Globalization;
 using Jint;
 using Jint.Native;
+using Microsoft.Extensions.Logging;
 
 namespace Starling.Bindings.Jint;
 
@@ -88,14 +89,14 @@ internal static class WindowBinding
         // reflected (HistoryBinding overrides via UrlFor). Shared with
         // document.location so `window.location === document.location` holds.
         var locationObj = LocationObjectFor(ctx);
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         JintInterop.DefineAccessor(engine, global, "location",
             (_, _) => locationObj,
             (_, args) =>
             {
                 var target = args.Length > 0 ? args[0].ToString() : "";
                 if (!HistoryBinding.NavigateSameDocument(ctx, target, replace: false))
-                    ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                        $"location assignment ignored (cross-document navigation not yet wired): {target}");
+                    WindowBindingLog.LocationAssignmentIgnored(jsLog, target);
                 return JsValue.Undefined;
             });
 
@@ -218,6 +219,7 @@ internal static class WindowBinding
     {
         var engine = ctx.Engine;
         var loc = new JsObject(engine);
+        var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
 
         JintInterop.DefineAccessor(engine, loc, "href",
             (_, _) => JintInterop.Str(UrlFor(ctx)),
@@ -225,8 +227,7 @@ internal static class WindowBinding
             {
                 var target = args.Length > 0 ? args[0].ToString() : "";
                 if (!HistoryBinding.NavigateSameDocument(ctx, target, replace: false))
-                    ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                        $"location.href assignment ignored (cross-document navigation not yet wired): {target}");
+                    WindowBindingLog.LocationHrefAssignmentIgnored(jsLog, target);
                 return JsValue.Undefined;
             });
         JintInterop.DefineAccessor(engine, loc, "protocol", (_, _) => JintInterop.Str(ParsedPart(ctx, p => p.Scheme + ":")));
@@ -251,22 +252,19 @@ internal static class WindowBinding
         {
             var target = args.Length > 0 ? args[0].ToString() : "";
             if (!HistoryBinding.NavigateSameDocument(ctx, target, replace: false))
-                ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                    $"location.assign ignored (cross-document navigation not yet wired): {target}");
+                WindowBindingLog.LocationAssignIgnored(jsLog, target);
             return JsValue.Undefined;
         }, length: 1);
         JintInterop.DefineMethod(engine, loc, "replace", (_, args) =>
         {
             var target = args.Length > 0 ? args[0].ToString() : "";
             if (!HistoryBinding.NavigateSameDocument(ctx, target, replace: true))
-                ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                    $"location.replace ignored (cross-document navigation not yet wired): {target}");
+                WindowBindingLog.LocationReplaceIgnored(jsLog, target);
             return JsValue.Undefined;
         }, length: 1);
         JintInterop.DefineMethod(engine, loc, "reload", (_, _) =>
         {
-            ctx.Diag.Log(Starling.Common.Diagnostics.DiagLevel.Warn, "engine.js",
-                "location.reload ignored (navigation not yet wired)");
+            WindowBindingLog.LocationReloadIgnored(jsLog);
             return JsValue.Undefined;
         }, length: 0);
 
@@ -357,4 +355,27 @@ internal static class WindowBinding
         }
         return sb.ToString();
     }
+}
+
+internal static partial class WindowBindingLog
+{
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "location assignment ignored (cross-document navigation not yet wired): {Target}")]
+    public static partial void LocationAssignmentIgnored(ILogger logger, string target);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "location.href assignment ignored (cross-document navigation not yet wired): {Target}")]
+    public static partial void LocationHrefAssignmentIgnored(ILogger logger, string target);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "location.assign ignored (cross-document navigation not yet wired): {Target}")]
+    public static partial void LocationAssignIgnored(ILogger logger, string target);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "location.replace ignored (cross-document navigation not yet wired): {Target}")]
+    public static partial void LocationReplaceIgnored(ILogger logger, string target);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "location.reload ignored (navigation not yet wired)")]
+    public static partial void LocationReloadIgnored(ILogger logger);
 }

@@ -7,9 +7,14 @@
          Headless CLI (plain Main entrypoint). The OTLP exporter reads
          OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_SERVICE_NAME from env; Aspire
          AppHost sets these automatically when it launches child resources. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->
+    <InternalsVisibleTo Include="Starling.Shell.Native" />
   </ItemGroup>
 </Project>

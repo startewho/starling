@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Starling.Codecs;
 using Starling.Common.Diagnostics;
 using Starling.Common.Image;
@@ -40,14 +41,16 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
     // Inline-<svg> rasters are decoded on demand (during layout) and aren't
     // keyed by URL, so track them separately for disposal.
     private readonly List<DecodedImage> _inlineSvg = [];
-    private readonly IDiagnostics _diag;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _log;
     private readonly Func<StarlingHttpClient> _httpFactory;
     private StarlingHttpClient? _sharedHttp;
     private readonly bool _ownsHttp;
 
-    public ImageFetcher(IDiagnostics diag, Func<StarlingHttpClient> httpFactory)
+    public ImageFetcher(ILoggerFactory loggerFactory, Func<StarlingHttpClient> httpFactory)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<ImageFetcher>();
         _httpFactory = httpFactory;
         _ownsHttp = true;
     }
@@ -58,9 +61,10 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
     /// transport instead of paying a fresh DNS+TCP+TLS handshake each time. The
     /// shared client is owned by the caller and is not disposed by this fetcher.
     /// </summary>
-    public ImageFetcher(IDiagnostics diag, StarlingHttpClient sharedHttp)
+    public ImageFetcher(ILoggerFactory loggerFactory, StarlingHttpClient sharedHttp)
     {
-        _diag = diag;
+        _loggerFactory = loggerFactory;
+        _log = _loggerFactory.CreateLogger<ImageFetcher>();
         _sharedHttp = sharedHttp;
         _httpFactory = () => sharedHttp;
         _ownsHttp = false;
@@ -92,20 +96,17 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         try
         {
             var doc = InlineSvgSerializer.Serialize(svg);
-            var srgb = currentColor.ToSrgb();
-            var color = SixLabors.ImageSharp.Color.FromPixel(
-                new SixLabors.ImageSharp.PixelFormats.Rgba32(srgb.R, srgb.G, srgb.B, srgb.A));
-            var decoded = SvgImageDecoder.DecodeText(doc, color);
+            var decoded = SvgImageDecoder.DecodeText(doc, currentColor);
             image = new ResolvedImage(decoded.Width, decoded.Height, decoded);
             _byElement[svg] = image;
             _inlineSvg.Add(decoded);
-            _diag.Counter("engine.inline_svg", 1);
+            StarlingTelemetry.Counter("engine.inline_svg", 1);
             return true;
         }
         catch (Exception ex) when (ex is SvgDecodeException or System.Xml.XmlException)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Inline <svg> decode failed: {ex.Message}");
-            _diag.Counter("engine.inline_svg.failed", 1);
+            ImageFetcherLog.InlineSvgDecodeFailed(_log, ex.Message);
+            StarlingTelemetry.Counter("engine.inline_svg.failed", 1);
             image = default;
             return false;
         }
@@ -167,7 +168,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
             var absolute = ResolveAbsolute(selectedUrl, baseUrl);
             if (absolute is null)
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Could not resolve <img src='{selectedUrl}'>");
+                ImageFetcherLog.CannotResolveImgSrc(_log, selectedUrl);
                 continue;
             }
 
@@ -266,12 +267,7 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         if (rule is Starling.Css.Parser.StyleRule sr)
         {
             foreach (var decl in sr.Declarations)
-            {
-                if (!decl.Name.Contains("background", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
-                    if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
-                        urls.Add(u.Value);
-            }
+                CollectFromDeclaration(decl, urls);
         }
         else if (rule is Starling.Css.Parser.AtRule at)
         {
@@ -280,21 +276,34 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
             foreach (var inner in at.Rules)
                 CollectFromRule(inner, urls);
             foreach (var decl in at.Declarations)
-            {
-                if (!decl.Name.Contains("background", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
-                    if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
-                        urls.Add(u.Value);
-            }
+                CollectFromDeclaration(decl, urls);
         }
     }
+
+    private static void CollectFromDeclaration(Starling.Css.Parser.CssDeclaration decl, HashSet<string> urls)
+    {
+        // Prefetch url() images referenced by background-image, mask-image (and
+        // the -webkit-mask-* aliases / mask shorthand), and custom properties.
+        // Custom properties are included because a mask-image: var(--x) reads its
+        // url() from the --x declaration, not from the mask-image declaration
+        // itself, so the raw url() only appears on the custom property.
+        if (!WantsImagePrefetch(decl.Name)) return;
+        foreach (var v in Starling.Css.Values.CssValueParser.ParseList(decl.Value))
+            if (v is Starling.Css.Values.CssUrl u && !string.IsNullOrEmpty(u.Value))
+                urls.Add(u.Value);
+    }
+
+    private static bool WantsImagePrefetch(string name)
+        => name.Contains("background", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("mask", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("--", StringComparison.Ordinal);
 
     private async Task<DecodedImage?> FetchAndDecodeAsync(StarlingUrl url, CancellationToken ct)
     {
         var key = url.ToString();
         if (_byUrl.TryGetValue(key, out var cached)) return cached;
 
-        using var _ = _diag.Span("engine", "fetch_image");
+        using var _ = StarlingTelemetry.Span("engine", "fetch_image");
         Activity.Current?.SetTag("url", key);
 
         try
@@ -305,8 +314,8 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 var path = url.ToFileSystemPath();
                 if (!File.Exists(path))
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Missing local image: {path}");
-                    _diag.Counter("engine.fetch.image.failed", 1);
+                    ImageFetcherLog.MissingLocalImage(_log, path);
+                    StarlingTelemetry.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
                 bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -317,16 +326,15 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 var response = await _sharedHttp.GetAsync(url, ct).ConfigureAwait(false);
                 if (response.IsErr)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Image fetch failed {url}: {response.Error}");
-                    _diag.Counter("engine.fetch.image.failed", 1);
+                    ImageFetcherLog.ImageFetchFailed(_log, url.ToString(), response.Error.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
                 Activity.Current?.SetTag("http.status_code", response.Value.StatusCode);
                 if (response.Value.StatusCode is < 200 or >= 400)
                 {
-                    _diag.Log(DiagLevel.Warn, "engine",
-                        $"Image fetch HTTP {response.Value.StatusCode} from {url}");
-                    _diag.Counter("engine.fetch.image.failed", 1);
+                    ImageFetcherLog.ImageFetchHttpError(_log, response.Value.StatusCode, url.ToString());
+                    StarlingTelemetry.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
                 bytes = response.Value.Body.ToArray();
@@ -339,16 +347,16 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 // every such <img> degrades to its alt-text fallback.
                 if (!DataUrl.TryDecode(url, out var payload))
                 {
-                    _diag.Log(DiagLevel.Warn, "engine", $"Malformed data: URL for image");
-                    _diag.Counter("engine.fetch.image.failed", 1);
+                    ImageFetcherLog.MalformedDataUrl(_log);
+                    StarlingTelemetry.Counter("engine.fetch.image.failed", 1);
                     return null;
                 }
                 bytes = payload.Bytes;
             }
             else
             {
-                _diag.Log(DiagLevel.Warn, "engine", $"Unsupported image scheme '{url.Scheme}' for {url}");
-                _diag.Counter("engine.fetch.image.failed", 1);
+                ImageFetcherLog.UnsupportedImageScheme(_log, url.Scheme, url.ToString());
+                StarlingTelemetry.Counter("engine.fetch.image.failed", 1);
                 return null;
             }
 
@@ -375,13 +383,13 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
                 decoded.Dispose();
                 return winner;
             }
-            _diag.Counter("engine.fetch.image", 1);
+            StarlingTelemetry.Counter("engine.fetch.image", 1);
             return decoded;
         }
         catch (Exception ex) when (ex is IOException or ImageDecodeException or SvgDecodeException)
         {
-            _diag.Log(DiagLevel.Warn, "engine", $"Image decode failed {url}: {ex.Message}");
-            _diag.Counter("engine.fetch.image.failed", 1);
+            ImageFetcherLog.ImageDecodeFailed(_log, ex, url.ToString());
+            StarlingTelemetry.Counter("engine.fetch.image.failed", 1);
             return null;
         }
     }
@@ -406,4 +414,31 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
         if (_ownsHttp) _sharedHttp?.Dispose();
         _sharedHttp = null;
     }
+}
+
+internal static partial class ImageFetcherLog
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inline <svg> decode failed: {Message}")]
+    public static partial void InlineSvgDecodeFailed(ILogger logger, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not resolve <img src='{Src}'>")]
+    public static partial void CannotResolveImgSrc(ILogger logger, string src);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Missing local image: {Path}")]
+    public static partial void MissingLocalImage(ILogger logger, string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Image fetch failed {Url}: {Error}")]
+    public static partial void ImageFetchFailed(ILogger logger, string url, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Image fetch HTTP {StatusCode} from {Url}")]
+    public static partial void ImageFetchHttpError(ILogger logger, int statusCode, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Malformed data: URL for image")]
+    public static partial void MalformedDataUrl(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Unsupported image scheme '{Scheme}' for {Url}")]
+    public static partial void UnsupportedImageScheme(ILogger logger, string scheme, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Image decode failed {Url}")]
+    public static partial void ImageDecodeFailed(ILogger logger, Exception ex, string url);
 }

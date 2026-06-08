@@ -346,6 +346,13 @@ public sealed class ModuleLoader
         // 2) Indirect re-export (export { x } from "..."; export { x as y } from).
         foreach (var e in module.ExportEntries)
         {
+            if (e.IsStar && e.ExportName == exportName && e.ModuleRequest is not null)
+            {
+                var dep = Resolve(e.ModuleRequest, module.Url);
+                var ns = GetOrBuildNamespace(dep);
+                return new Cell(JsValue.Object(ns));
+            }
+
             if (!e.IsLocal && !e.IsStar && e.ExportName == exportName && e.ImportName is not null)
             {
                 var dep = Resolve(e.ModuleRequest!, module.Url);
@@ -728,14 +735,16 @@ public sealed class ModuleLoader
         // from re-exported stars), each bound to its live cell. A name that fails
         // to resolve to a cell is dropped (it is not a usable binding).
         var exports = new Dictionary<string, Cell>(StringComparer.Ordinal);
+        var ns = new JsModuleNamespace(exports);
+        module.Namespace = ns;
+
         foreach (var name in ExportedNames(module, new HashSet<string>(StringComparer.Ordinal)))
         {
             var cell = ResolveExportCell(module, name, new HashSet<string>(StringComparer.Ordinal));
             if (cell is not null) exports[name] = cell;
         }
 
-        var ns = new JsModuleNamespace(exports);
-        module.Namespace = ns;
+        ns.RefreshExportNames();
         return ns;
     }
 

@@ -105,21 +105,41 @@ public static class MapCtor
         if (!ReferenceEquals(instProto, realm.MapPrototype)) map.SetPrototypeOf(instProto);
         if (args.Length == 0 || args[0].IsNullish) return map;
 
+        var adder = AbstractOperations.Get(realm.ActiveVm, map, "set");
+        if (!AbstractOperations.IsCallable(adder))
+            throw new JsThrow(realm.NewTypeError("Map constructor set method is not callable"));
         var iterable = args[0];
         var record = AbstractOperations.GetIterator(realm, realm.ActiveVm, iterable);
         while (true)
         {
             var next = AbstractOperations.IteratorStep(realm, realm.ActiveVm, ref record);
             if (next is null) break;
-            var entry = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
+            JsValue entry;
+            try
+            {
+                entry = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
+            }
+            catch
+            {
+                AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
+                throw;
+            }
             if (!entry.IsObject)
             {
                 AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
                 throw new JsThrow(realm.NewTypeError("Map iterable entry is not an object"));
             }
-            var key = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "0");
-            var value = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "1");
-            map.Set(key, value);
+            try
+            {
+                var key = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "0");
+                var value = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "1");
+                AbstractOperations.Call(realm.ActiveVm, adder, JsValue.Object(map), new[] { key, value });
+            }
+            catch
+            {
+                AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
+                throw;
+            }
         }
         return map;
     }

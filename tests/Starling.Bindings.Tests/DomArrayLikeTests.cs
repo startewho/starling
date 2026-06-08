@@ -50,12 +50,20 @@ public sealed class DomArrayLikeTests
     }
 
     [TestMethod]
-    public void Children_is_real_array()
+    public void Children_is_live_html_collection()
     {
         var (runtime, _) = BuildEnv();
         SeedThreeDivs(runtime);
-        Eval(runtime, "result = Array.isArray(document.body.children);")
-            .AsBool.Should().BeTrue();
+        // children is a live HTMLCollection (DOM §4.2.10), not a JS Array: it
+        // carries the HTMLCollection brand and is NOT Array.isArray, but stays
+        // indexable and length-bearing.
+        Eval(runtime, """
+            var c = document.body.children;
+            result = (Array.isArray(c) === false)
+                && Object.prototype.toString.call(c) === '[object HTMLCollection]'
+                && c.length === 3
+                && c[0].id === 'a' && c[2].id === 'c';
+        """).AsBool.Should().BeTrue();
     }
 
     [TestMethod]
@@ -82,18 +90,22 @@ public sealed class DomArrayLikeTests
     }
 
     [TestMethod]
-    public void GetElementsByTagName_returns_real_array()
+    public void GetElementsByTagName_returns_html_collection()
     {
         var (runtime, _) = BuildEnv();
         SeedThreeDivs(runtime);
+        // getElementsByTagName returns a live HTMLCollection. It is iterable
+        // (@@iterator only — no map/forEach), so collect ids via spread.
         Eval(runtime, """
             var list = document.getElementsByTagName('div');
-            result = Array.isArray(list) && list.length === 3 && list.map(function (e) { return e.id; }).join(',');
-        """).AsString.Should().Be("a,b,c");
+            result = Object.prototype.toString.call(list) === '[object HTMLCollection]'
+                && list.length === 3
+                && [...list].map(function (e) { return e.id; }).join(',') === 'a,b,c';
+        """).AsBool.Should().BeTrue();
     }
 
     [TestMethod]
-    public void GetElementsByClassName_returns_real_array()
+    public void GetElementsByClassName_returns_html_collection()
     {
         var (runtime, _) = BuildEnv();
         SeedThreeDivs(runtime);
@@ -101,7 +113,8 @@ public sealed class DomArrayLikeTests
             var b = document.getElementById('b');
             b.setAttribute('class', 'pick me');
             var list = document.getElementsByClassName('pick');
-            result = Array.isArray(list) && list.length === 1 && list[0].id === 'b';
+            result = Object.prototype.toString.call(list) === '[object HTMLCollection]'
+                && list.length === 1 && list[0].id === 'b';
         """).AsBool.Should().BeTrue();
     }
 

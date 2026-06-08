@@ -1,4 +1,8 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Common.Diagnostics;
 using Starling.Css.Cascade;
 using Starling.Html;
@@ -97,29 +101,37 @@ public sealed class LayoutVerifierTests
     [TestMethod]
     public void Engine_dual_run_records_ok_when_layout_is_deterministic()
     {
-        var diag = new CapturingDiagnostics();
-        var engine = new LayoutEngine(new StyleEngine(), diagnostics: diag) { VerifyLayout = true };
+        var rec = new RecordingLoggerProvider();
+        using var factory = new RecordingLoggerFactory(rec);
+        using var metrics = new MetricRecorder();
 
+        var baselineOk = metrics.CountOf("layout.verify.ok");
+        var baselineDivergent = metrics.CountOf("layout.verify.divergent");
+
+        var engine = new LayoutEngine(new StyleEngine(), loggerFactory: factory) { VerifyLayout = true };
         engine.LayoutDocument(
             HtmlParser.Parse("<body><h1>x</h1><p>words words words</p></body>"),
             new Size(320, 600));
 
-        diag.Counter("layout.verify.ok").Should().Be(1);
-        diag.Counter("layout.verify.divergent").Should().Be(0);
-        diag.Errors.Should().BeEmpty();
+        (metrics.CountOf("layout.verify.ok") - baselineOk).Should().Be(1);
+        (metrics.CountOf("layout.verify.divergent") - baselineDivergent).Should().Be(0);
+        rec.Entries.Where(e => e.Level >= LogLevel.Error).Should().BeEmpty();
     }
 
     [TestMethod]
     public void Engine_skips_verification_by_default()
     {
-        var diag = new CapturingDiagnostics();
-        var engine = new LayoutEngine(new StyleEngine(), diagnostics: diag) { VerifyLayout = false };
+        using var metrics = new MetricRecorder();
 
+        var baselineOk = metrics.CountOf("layout.verify.ok");
+        var baselineRuns = metrics.CountOf("layout.runs");
+
+        var engine = new LayoutEngine(new StyleEngine(), loggerFactory: NullLoggerFactory.Instance) { VerifyLayout = false };
         engine.LayoutDocument(HtmlParser.Parse("<body><p>x</p></body>"), new Size(320, 600));
 
-        diag.Counter("layout.verify.ok").Should().Be(0);
+        (metrics.CountOf("layout.verify.ok") - baselineOk).Should().Be(0);
         // Only a single layout run, not the dual run.
-        diag.Counter("layout.runs").Should().Be(1);
+        (metrics.CountOf("layout.runs") - baselineRuns).Should().Be(1);
     }
 
     // --- corpus: every site lays out deterministically ------------------------
@@ -170,32 +182,44 @@ public sealed class LayoutVerifierTests
         return null;
     }
 
-    private sealed class CapturingDiagnostics : IDiagnostics
+    private sealed class RecordingLoggerFactory(RecordingLoggerProvider provider) : ILoggerFactory
     {
-        private readonly Dictionary<string, double> _counters = new(StringComparer.Ordinal);
-        public List<string> Errors { get; } = new();
+        public ILogger CreateLogger(string categoryName) => provider.CreateLogger(categoryName);
+        public void AddProvider(ILoggerProvider p) { }
+        public void Dispose() { }
+    }
 
-        public double Counter(string name) => _counters.TryGetValue(name, out var v) ? v : 0;
-
-        void IDiagnostics.Counter(string name, double value)
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        public readonly List<(string Category, LogLevel Level, string Message)> Entries = new();
+        public ILogger CreateLogger(string categoryName) => new Rec(this, categoryName);
+        public void Dispose() { }
+        private sealed class Rec(RecordingLoggerProvider o, string cat) : ILogger
         {
-            _counters.TryGetValue(name, out var v);
-            _counters[name] = v + value;
+            public IDisposable? BeginScope<TState>(TState s) where TState : notnull => null;
+            public bool IsEnabled(LogLevel l) => true;
+            public void Log<TState>(LogLevel l, EventId id, TState s, Exception? ex,
+                Func<TState, Exception?, string> fmt)
+            { lock (o.Entries) o.Entries.Add((cat, l, fmt(s, ex))); }
+        }
+    }
+
+    private sealed class MetricRecorder : IDisposable
+    {
+        private readonly MeterListener _l = new();
+        private readonly ConcurrentDictionary<string, double> _v = new();
+
+        public MetricRecorder()
+        {
+            _l.InstrumentPublished = (inst, lst) =>
+            { if (inst.Meter.Name == StarlingTelemetry.SourceName) lst.EnableMeasurementEvents(inst); };
+            _l.SetMeasurementEventCallback<double>((inst, m, t, s) => Add(inst.Name, m));
+            _l.SetMeasurementEventCallback<long>((inst, m, t, s) => Add(inst.Name, m));
+            _l.Start();
         }
 
-        void IDiagnostics.Log(DiagLevel level, string area, string message)
-        {
-            if (level >= DiagLevel.Error) Errors.Add($"{area}: {message}");
-        }
-
-        IDisposable IDiagnostics.Span(string area, string operation) => NullSpan.Instance;
-        void IDiagnostics.Snapshot(string label, ReadOnlySpan<byte> bytes) { }
-        void IDiagnostics.LogException(string area, Exception exception, string? message) { }
-
-        private sealed class NullSpan : IDisposable
-        {
-            public static readonly NullSpan Instance = new();
-            public void Dispose() { }
-        }
+        private void Add(string n, double m) => _v.AddOrUpdate(n, m, (_, p) => p + m);
+        public double CountOf(string name) => _v.TryGetValue(name, out var x) ? x : 0d;
+        public void Dispose() => _l.Dispose();
     }
 }

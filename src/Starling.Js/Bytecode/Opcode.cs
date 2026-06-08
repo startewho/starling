@@ -174,6 +174,7 @@ public enum Opcode : byte
     // invoke an inherited/own setter). Stack: [obj, value] → [obj].
     DefineDataProperty,   // [u16 nameIdx]
     DefineDataComputed,   // stack: [obj, key, value] → [obj]
+    SetObjectPrototype,   // stack: [obj, value] → [obj] — object literal { __proto__: value }
 
     // ----- Calls -----
     Call,           // [u8 argc] callee + args on stack; this=Undefined
@@ -250,6 +251,7 @@ public enum Opcode : byte
     ThrowConstAssignment,
     RequireObjectCoercible, // peek top-of-stack; throw a TypeError if it is null/undefined (§7.2.1). Used before object-destructuring property access.
     SetFunctionName, // [u16 nameConst] peek top-of-stack; if it is an anonymous function/class (name===""), set its `name` own property to the constant string. §named-evaluation.
+    SetFunctionNameComputed, // stack: [..., key, value] — infer anonymous function/class name from a computed property key.
     SpreadInto,     // pop src and dst objects, copy own enumerable props from src onto dst (object-literal spread)
     RestArray,      // [u16 start] pop src, push Array-like object with src[start..length)
     RestObject,     // [u16 excludedCount] pop N keys + src, push own-enumerable copy excluding keys

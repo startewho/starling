@@ -2,6 +2,7 @@ using AwesomeAssertions;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
+using Starling.Spec;
 namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
@@ -193,6 +194,19 @@ public class JsOperatorsGapTests
         ").AsBool.Should().BeTrue();
     }
 
+    [TestMethod]
+    public void In_to_property_key_evaluates_left_operand_once()
+    {
+        Eval(@"
+            var key = {};
+            var calls = 0;
+            key[Symbol.toPrimitive] = function() { return calls++; };
+
+            key in {};
+            calls;
+        ").AsNumber.Should().Be(1);
+    }
+
     // -----------------------------------------------------------------
     //                            delete
     // -----------------------------------------------------------------
@@ -318,6 +332,67 @@ public class JsOperatorsGapTests
     }
 
     [TestMethod]
+    public void Bitwise_to_int32_and_uint32_wraps_like_jint_type_converter_cases()
+    {
+        (string Expression, int ExpectedInt32)[] cases =
+        [
+            ("0", 0),
+            ("-0", 0),
+            ("Number.MIN_VALUE", 0),
+            ("0.5", 0),
+            ("-0.5", 0),
+            ("0.9999999999999999", 0),
+            ("1", 1),
+            ("1.5", 1),
+            ("10", 10),
+            ("-12.3", -12),
+            ("1485772.6", 1485772),
+            ("-984737183.8", -984737183),
+            ("Math.pow(2, 31) - 1", int.MaxValue),
+            ("Math.pow(2, 31) - 0.5", int.MaxValue),
+            ("Math.pow(2, 32) - 1", -1),
+            ("Math.pow(2, 32) - 0.5", -1),
+            ("Math.pow(2, 32)", 0),
+            ("-Math.pow(2, 32)", 0),
+            ("-Math.pow(2, 32) - 0.5", 0),
+            ("Math.pow(2, 32) + 1", 1),
+            ("Math.pow(2, 45) + 17.56", 17),
+            ("Math.pow(2, 45) - 17.56", -18),
+            ("-Math.pow(2, 45) + 17.56", 18),
+            ("Math.pow(2, 51) + 17.5", 17),
+            ("Math.pow(2, 51) - 17.5", -18),
+            ("Math.pow(2, 53) - 1", -1),
+            ("-Math.pow(2, 53) + 1", 1),
+            ("Math.pow(2, 53)", 0),
+            ("-Math.pow(2, 53)", 0),
+            ("Math.pow(2, 53) + 12", 12),
+            ("-Math.pow(2, 53) - 12", -12),
+            ("(Math.pow(2, 53) - 1) * Math.pow(2, 1)", -2),
+            ("-(Math.pow(2, 53) - 1) * Math.pow(2, 3)", 8),
+            ("-(Math.pow(2, 53) - 1) * Math.pow(2, 11)", 1 << 11),
+            ("(Math.pow(2, 53) - 1) * Math.pow(2, 20)", -(1 << 20)),
+            ("(Math.pow(2, 53) - 1) * Math.pow(2, 31)", int.MinValue),
+            ("-(Math.pow(2, 53) - 1) * Math.pow(2, 31)", int.MinValue),
+            ("(Math.pow(2, 53) - 1) * Math.pow(2, 32)", 0),
+            ("-(Math.pow(2, 53) - 1) * Math.pow(2, 32)", 0),
+            ("(Math.pow(2, 53) - 1) * Math.pow(2, 36)", 0),
+            ("Number.MAX_VALUE", 0),
+            ("-Number.MAX_VALUE", 0),
+            ("Infinity", 0),
+            ("-Infinity", 0),
+            ("NaN", 0),
+        ];
+
+        foreach (var (expression, expectedInt32) in cases)
+        {
+            Eval($"({expression}) | 0").AsNumber.Should().Be(expectedInt32, "ToInt32({0})", expression);
+
+            var expectedUint32 = (double)unchecked((uint)expectedInt32);
+            Eval($"({expression}) >>> 0").AsNumber.Should().Be(expectedUint32, "ToUint32({0})", expression);
+        }
+    }
+
+    [TestMethod]
     public void Compound_on_computed_property()
     {
         Eval("var o = {x: 1}; var k = 'x'; o[k] += 5; o.x").AsNumber.Should().Be(6);
@@ -381,6 +456,111 @@ public class JsOperatorsGapTests
             holder.get().x += 10;
             holder.obj.x + ',' + calls
         ").AsString.Should().Be("11,1");
+    }
+
+    // -----------------------------------------------------------------
+    //                 primitive conversion and comparisons
+    // -----------------------------------------------------------------
+
+    [TestMethod]
+    public void Loose_equality_uses_ToPrimitive_with_default_hint()
+    {
+        Eval(@"
+            var calls = 0;
+            var o = { [Symbol.toPrimitive]: function(hint) {
+                calls++;
+                return hint === 'default' ? 1 : 0;
+            } };
+            (o == 1) + ',' + calls;
+        ").AsString.Should().Be("true,1");
+    }
+
+    [TestMethod]
+    public void Loose_equality_parses_hex_string_numbers()
+        => Eval("255 == '0xff';").AsBool.Should().BeTrue();
+
+    [TestMethod]
+    public void Relational_comparison_coerces_left_operand_first_for_greater_than()
+    {
+        Eval(@"
+            var log = '';
+            var left = { valueOf: function() { log += 'L'; return 2; } };
+            var right = { valueOf: function() { log += 'R'; return 1; } };
+            (left > right) + ',' + log;
+        ").AsString.Should().Be("true,LR");
+    }
+
+    [TestMethod]
+    public void Relational_comparison_returns_false_for_undefined_result()
+        => Eval("null >= undefined;").AsBool.Should().BeFalse();
+
+    [TestMethod]
+    public void Relational_comparison_coerces_boolean_when_compared_to_bigint()
+        => Eval("(2n > true) + ',' + (0n < true);").AsString.Should().Be("true,true");
+
+    [TestMethod]
+    public void Relational_comparison_with_symbol_throws_type_error()
+    {
+        var act = () => Eval("1n > Symbol('x');");
+        act.Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
+    public void Numeric_operator_ToNumeric_throws_before_rhs_coercion()
+    {
+        Eval(@"
+            var log = '';
+            var left = { valueOf: function() { log += 'L'; return Symbol('x'); } };
+            var right = { valueOf: function() { log += 'R'; throw new Error('no'); } };
+            var name = '';
+            try { left & right; } catch (e) { name = e.name; }
+            log + ',' + name;
+        ").AsString.Should().Be("L,TypeError");
+    }
+
+    // -----------------------------------------------------------------
+    //                    nullish property references
+    // -----------------------------------------------------------------
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-property-accessors", "13.3.2")]
+    [SpecFact]
+    public void Property_load_from_nullish_base_throws_type_error()
+    {
+        ((Action)(() => Eval("null.x;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("undefined.x;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-property-accessors", "13.3.3")]
+    [SpecFact]
+    public void Computed_property_load_from_nullish_base_throws_type_error()
+    {
+        ((Action)(() => Eval("null['x'];"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("undefined['x'];"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators-runtime-semantics-evaluation", "13.15.2")]
+    [SpecFact]
+    public void Property_store_to_nullish_base_throws_type_error_in_sloppy_mode()
+    {
+        ((Action)(() => Eval("var x = null; x.p = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("var x; x.p = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-assignment-operators-runtime-semantics-evaluation", "13.15.2")]
+    [SpecFact]
+    public void Computed_property_store_to_nullish_base_throws_type_error_in_sloppy_mode()
+    {
+        ((Action)(() => Eval("var x = null; x['p'] = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
+        ((Action)(() => Eval("var x; x['p'] = 1;"))).Should().Throw<JsThrow>()
+            .Which.Value.AsObject.Get("name").AsString.Should().Be("TypeError");
     }
 
     // -----------------------------------------------------------------

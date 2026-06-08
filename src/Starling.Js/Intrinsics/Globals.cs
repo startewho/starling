@@ -22,6 +22,8 @@ public static class Globals
         DefineGlobal(realm, "parseFloat", (_, args) => NumberCtor.ParseFloat(args), 1);
         DefineGlobal(realm, "isNaN", (_, args) => JsValue.Boolean(double.IsNaN(NumberCtor.ToNumber(args.Length > 0 ? args[0] : JsValue.Undefined))), 1);
         DefineGlobal(realm, "isFinite", (_, args) => JsValue.Boolean(double.IsFinite(NumberCtor.ToNumber(args.Length > 0 ? args[0] : JsValue.Undefined))), 1);
+        DefineGlobal(realm, "escape", (_, args) => JsValue.String(EscapeLegacy(args.Length > 0 ? args[0] : JsValue.Undefined)), 1);
+        DefineGlobal(realm, "unescape", (_, args) => JsValue.String(UnescapeLegacy(args.Length > 0 ? args[0] : JsValue.Undefined)), 1);
         DefineGlobal(realm, "encodeURI", (_, args) => JsValue.String(Encode(args.Length > 0 ? args[0] : JsValue.Undefined, UriReserved, realm)), 1);
         DefineGlobal(realm, "encodeURIComponent", (_, args) => JsValue.String(Encode(args.Length > 0 ? args[0] : JsValue.Undefined, string.Empty, realm)), 1);
         DefineGlobal(realm, "decodeURI", (_, args) => JsValue.String(Decode(args.Length > 0 ? args[0] : JsValue.Undefined, preserveReserved: true, realm)), 1);
@@ -71,6 +73,63 @@ public static class Globals
         if (realm.OwnerRuntime is { } owner)
             return owner.WithActiveVm(vm => vm.RunEval(chunk));
         throw new JsThrow(realm.NewTypeError("eval requires an active execution context"));
+    }
+
+    private static string EscapeLegacy(JsValue value)
+    {
+        var s = JsValue.ToStringValue(value);
+        var sb = new StringBuilder();
+        foreach (var c in s)
+        {
+            if (IsLegacyEscapeUnescaped(c))
+            {
+                sb.Append(c);
+            }
+            else if (c <= 0xFF)
+            {
+                sb.Append('%');
+                sb.Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                sb.Append("%u");
+                sb.Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string UnescapeLegacy(JsValue value)
+    {
+        var s = JsValue.ToStringValue(value);
+        var sb = new StringBuilder();
+        for (var i = 0; i < s.Length;)
+        {
+            if (s[i] == '%' && i + 5 < s.Length && s[i + 1] == 'u'
+                && IsHex(s[i + 2]) && IsHex(s[i + 3])
+                && IsHex(s[i + 4]) && IsHex(s[i + 5]))
+            {
+                var code = (HexValue(s[i + 2]) << 12)
+                    | (HexValue(s[i + 3]) << 8)
+                    | (HexValue(s[i + 4]) << 4)
+                    | HexValue(s[i + 5]);
+                sb.Append((char)code);
+                i += 6;
+                continue;
+            }
+
+            if (s[i] == '%' && i + 2 < s.Length && IsHex(s[i + 1]) && IsHex(s[i + 2]))
+            {
+                var code = (HexValue(s[i + 1]) << 4) | HexValue(s[i + 2]);
+                sb.Append((char)code);
+                i += 3;
+                continue;
+            }
+
+            sb.Append(s[i]);
+            i++;
+        }
+        return sb.ToString();
     }
 
     /// <summary>§19.2.6.4 Encode — percent-encode UTF-8 bytes, preserving encodeURI's reserved set.</summary>
@@ -127,6 +186,9 @@ public static class Globals
         }
         return sb.ToString();
     }
+
+    private static bool IsLegacyEscapeUnescaped(char c)
+        => char.IsAsciiLetterOrDigit(c) || c is '@' or '*' or '_' or '+' or '-' or '.' or '/';
 
     private static bool IsHex(char c) => char.IsAsciiHexDigit(c);
     private static int HexValue(char c) => c <= '9' ? c - '0' : (c <= 'F' ? c - 'A' + 10 : c - 'a' + 10);

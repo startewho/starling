@@ -4,8 +4,8 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using Starling.Common.Diagnostics;
 using Starling.Engine;
 using Starling.Gui.Controls;
 using Starling.Gui.Theme;
@@ -34,7 +34,7 @@ public class CaretDiagTests
         var input = doc.GetElementById("new-todo")!;
 
         using var panel = new WebviewPanel(
-            new ThemeManager(), NoopDiagnostics.Instance, _ => { }, (_, _) => { },
+            new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)));
         var window = new Window { Content = panel, Width = 800, Height = 600 };
         window.Show();
