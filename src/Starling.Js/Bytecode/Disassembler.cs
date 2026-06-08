@@ -38,8 +38,6 @@ public static class Disassembler
                 case Opcode.StoreGlobal:
                 case Opcode.DeclareGlobalVar:
                 case Opcode.SetFunctionName:
-                case Opcode.LoadProperty:
-                case Opcode.StoreProperty:
                 case Opcode.DefineGetter:
                 case Opcode.DefineSetter:
                 case Opcode.DefineDataProperty:
@@ -64,6 +62,18 @@ public static class Disassembler
                         sb.Append(op).Append(' ').Append(idx);
                         var c = chunk.Constants[idx];
                         sb.Append("  ; ").Append(FormatConstant(c));
+                        break;
+                    }
+                // named-property opcodes: [u16 nameIdx][u16 cacheId]
+                case Opcode.LoadProperty:
+                case Opcode.StoreProperty:
+                    {
+                        var idx = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
+                        var cacheId = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i + 2, 2));
+                        i += 4;
+                        sb.Append(op).Append(' ').Append(idx);
+                        sb.Append("  ; ").Append(FormatConstant(chunk.Constants[idx]));
+                        sb.Append(" [ic ").Append(cacheId).Append(']');
                         break;
                     }
                 // u16 local-slot operand opcodes (slots are addressed with a
@@ -149,14 +159,16 @@ public static class Disassembler
                           .Append(" upvalues=").Append(n);
                         break;
                     }
-                // u16 + u16 — LoadRegExp [srcIdx][flagsIdx]
+                // u16 + u16 + u16 — LoadRegExp [srcIdx][flagsIdx][cacheId]
                 case Opcode.LoadRegExp:
                     {
                         var srcIdx = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
                         i += 2;
                         var flagsIdx = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
                         i += 2;
-                        sb.Append(op).Append(' ').Append(srcIdx).Append(' ').Append(flagsIdx);
+                        var cacheId = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
+                        i += 2;
+                        sb.Append(op).Append(' ').Append(srcIdx).Append(' ').Append(flagsIdx).Append(' ').Append(cacheId);
                         sb.Append("  ; /").Append(FormatConstant(chunk.Constants[srcIdx]))
                           .Append('/').Append(FormatConstant(chunk.Constants[flagsIdx]));
                         break;

@@ -22,7 +22,7 @@ public enum Opcode : byte
     LoadThis,       // → push the current frame's `this` binding
     NewObject,      // → push a fresh empty JsObject
     NewArray,       // → push a fresh empty JsArray (B2-4)
-    LoadRegExp,     // [u16 srcIdx][u16 flagsIdx] → push a fresh JsRegExp built from constant-pool source/flags strings
+    LoadRegExp,     // [u16 srcIdx][u16 flagsIdx][u16 cacheId] → push a fresh JsRegExp; matcher cached per site in Chunk.RegexLiterals[cacheId]
     TemplateObject, // [u16 idx] → push the frozen, per-site-cached template strings array (cooked + .raw) for a tagged template
     LoadTrue,       // → push true
     LoadFalse,      // → push false

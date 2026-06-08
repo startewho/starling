@@ -5,7 +5,7 @@ using Starling.Js.Runtime;
 namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
-/// B5-3-followup-a — pins the <see cref="JsRuntime.WithActiveVm"/> contract:
+/// B5-3-followup-a — pins the <c>JsRuntime.WithActiveVm</c> contract:
 /// <list type="bullet">
 ///   <item>the helper publishes <c>realm.ActiveVm</c> for the duration of
 ///   <c>body</c> and restores the previous value on exit;</item>

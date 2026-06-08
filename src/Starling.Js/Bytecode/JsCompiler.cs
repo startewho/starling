@@ -2166,7 +2166,7 @@ public sealed partial class JsCompiler
         // close the iterator (the abrupt next()/value result is treated as
         // already closing it), so the finalizer must not fire for it. Stash the
         // value in a temp so the protected region starts/ends stack-balanced.
-        _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("value"));
+        _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant("value"));
         var valueSlot = _b.ReserveLocal();
         _b.EmitSlot(Opcode.StoreLocal, valueSlot);
 
@@ -2248,13 +2248,13 @@ public sealed partial class JsCompiler
         _b.Emit(Opcode.Suspend);
         _b.EmitU8Raw(1);                     // await → result object on top
         _b.Emit(Opcode.Dup);
-        _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("done"));
+        _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant("done"));
         var jExit = _b.EmitJump(Opcode.JumpIfTrue);
 
         if (perIterSlots is not null)
             foreach (var slot in perIterSlots)
                 _b.EmitSlot(Opcode.RefreshLetBinding, slot);
-        _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("value"));
+        _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant("value"));
         EmitForOfBinding(fo.Left);
         EmitStatement(fo.Body);
         foreach (var p in loop.ContinuePatches) PatchBackwardJump(p, loopStart);
@@ -2349,7 +2349,7 @@ public sealed partial class JsCompiler
         // if (i >= keys.length) break.
         _b.EmitSlot(Opcode.LoadLocal, iSlot);
         _b.EmitSlot(Opcode.LoadLocal, keysSlot);
-        _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length"));
+        _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant("length"));
         _b.Emit(Opcode.GtEq);
         var jExit = _b.EmitJump(Opcode.JumpIfTrue);
 
@@ -2578,6 +2578,7 @@ public sealed partial class JsCompiler
                 // gets an independent `lastIndex` slot (§13.2.7.3).
                 _b.EmitU16(Opcode.LoadRegExp, _b.AddConstant(rx.Source));
                 _b.EmitU16Raw(_b.AddConstant(rx.Flags));
+                _b.EmitU16Raw(_b.AllocateRegexCache());
                 return;
             case Identifier id:
                 EmitIdLoad(id);
@@ -2794,7 +2795,7 @@ public sealed partial class JsCompiler
             {
                 var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
                 RecordPos(me);
-                _b.EmitU16(Opcode.LoadProperty, nameIdx); // [obj, fn]
+                _b.EmitProperty(Opcode.LoadProperty, nameIdx); // [obj, fn]
             }
         }
         else
@@ -3255,11 +3256,11 @@ public sealed partial class JsCompiler
                 var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
                 EmitExpression(me.Object);                              // [obj]
                 _b.Emit(Opcode.Dup);                                    // [obj, obj]
-                _b.EmitU16(Opcode.LoadProperty, nameIdx);               // [obj, oldVal]
+                _b.EmitProperty(Opcode.LoadProperty, nameIdx);               // [obj, oldVal]
                 _b.Emit(Opcode.UnaryPlus);                              // [obj, oldNum]   ToNumber
                 _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));      // [obj, oldNum, 1]
                 _b.Emit(isIncrement ? Opcode.Add : Opcode.Sub);         // [obj, newVal]
-                _b.EmitU16(Opcode.StoreProperty, nameIdx);              // [newVal]
+                _b.EmitProperty(Opcode.StoreProperty, nameIdx);              // [newVal]
                 if (!up.Prefix)
                 {
                     // Postfix: result = oldNum = newVal ∓ 1 (reverse the ±1 step).
@@ -3531,10 +3532,10 @@ public sealed partial class JsCompiler
                 {
                     _b.Emit(Opcode.Dup);                  // base, base
                     var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
-                    _b.EmitU16(Opcode.LoadProperty, nameIdx); // base, oldVal
+                    _b.EmitProperty(Opcode.LoadProperty, nameIdx); // base, oldVal
                     EmitExpression(a.Value);              // base, oldVal, rhs
                     _b.Emit(CompoundOpToBinaryOpcode(a.Op)); // base, newVal
-                    _b.EmitU16(Opcode.StoreProperty, nameIdx); // newVal
+                    _b.EmitProperty(Opcode.StoreProperty, nameIdx); // newVal
                 }
                 return;
             }
@@ -3546,7 +3547,7 @@ public sealed partial class JsCompiler
             if (me.Computed) EmitExpression(me.Property);
             EmitExpression(a.Value);
             if (me.Computed) _b.Emit(Opcode.StoreComputed);
-            else _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(((Identifier)me.Property).Name));
+            else _b.EmitProperty(Opcode.StoreProperty, _b.AddConstant(((Identifier)me.Property).Name));
             return;
         }
         // Array/object destructuring assignment targets are handled by the
@@ -3706,14 +3707,14 @@ public sealed partial class JsCompiler
                 var nameIdx = _b.AddConstant(propName);
                 EmitExpression(me.Object);          // [obj]
                 _b.Emit(Opcode.Dup);                // [obj, obj]
-                _b.EmitU16(Opcode.LoadProperty, nameIdx); // [obj, cur]
+                _b.EmitProperty(Opcode.LoadProperty, nameIdx); // [obj, cur]
                 _b.Emit(Opcode.Dup);                // [obj, cur, cur]
                 var j = _b.EmitJump(jmp);           // pops one cur
                 // Assign path: [obj, cur]. Drop cur, eval RHS, store
                 // (StoreProperty pops obj,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj]
                 EmitNamedEvaluation(a.Value, propName); // [obj, rhs]
-                _b.EmitU16(Opcode.StoreProperty, nameIdx); // [rhs]
+                _b.EmitProperty(Opcode.StoreProperty, nameIdx); // [rhs]
                 var jEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: stack is [obj, cur]; drop the dup'd base
                 // from underneath, leaving cur. Use a temp to reorder.
@@ -3783,7 +3784,7 @@ public sealed partial class JsCompiler
             {
                 var optionalName = ((Identifier)m.Property).Name;
                 RecordPos(m);
-                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant(optionalName));
+                _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant(optionalName));
             }
             _b.PatchJump(done);
             return;
@@ -3798,7 +3799,7 @@ public sealed partial class JsCompiler
         {
             var name = ((Identifier)m.Property).Name;
             RecordPos(m);
-            _b.EmitU16(Opcode.LoadProperty, _b.AddConstant(name));
+            _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant(name));
         }
     }
 
@@ -3884,7 +3885,7 @@ public sealed partial class JsCompiler
             {
                 var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
                 RecordPos(me);
-                _b.EmitU16(Opcode.LoadProperty, nameIdx);  // [obj, fn]
+                _b.EmitProperty(Opcode.LoadProperty, nameIdx);  // [obj, fn]
             }
 
             // §13.3 OptionalChain — `obj.method?.(args)`. The CALL is optional: a
@@ -4084,7 +4085,7 @@ public sealed partial class JsCompiler
             {
                 _b.Emit(Opcode.Dup);            // [arr, arr]
                 EmitExpression(arg);            // [arr, arr, v]
-                _b.EmitU16(Opcode.StoreProperty,
+                _b.EmitProperty(Opcode.StoreProperty,
                     _b.AddConstant(nextIdx.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                 _b.Emit(Opcode.Pop);            // [arr]
                 nextIdx++;
@@ -4093,7 +4094,7 @@ public sealed partial class JsCompiler
             {
                 _b.Emit(Opcode.Dup);            // [arr, arr]
                 _b.Emit(Opcode.Dup);            // [arr, arr, arr]
-                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
+                _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
                 EmitExpression(arg);            // [arr, arr, len, v]
                 _b.Emit(Opcode.StoreComputed);  // [arr, v]
                 _b.Emit(Opcode.Pop);            // [arr]
@@ -4875,7 +4876,7 @@ public sealed partial class JsCompiler
         if (me.Computed) EmitExpression(me.Property);
         _b.EmitSlot(Opcode.LoadLocal, valueSlot);
         if (me.Computed) _b.Emit(Opcode.StoreComputed);
-        else _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(((Identifier)me.Property).Name));
+        else _b.EmitProperty(Opcode.StoreProperty, _b.AddConstant(((Identifier)me.Property).Name));
         _b.Emit(Opcode.Pop);
     }
 
@@ -5069,7 +5070,7 @@ public sealed partial class JsCompiler
             _b.EmitU16(Opcode.PrivateSet, _b.AddConstant(mangled));
         }
         else if (me.Computed) _b.Emit(Opcode.StoreComputed);
-        else _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(((Identifier)me.Property).Name));
+        else _b.EmitProperty(Opcode.StoreProperty, _b.AddConstant(((Identifier)me.Property).Name));
         _b.Emit(Opcode.Pop);
     }
 
@@ -5129,7 +5130,7 @@ public sealed partial class JsCompiler
         {
             var name = PropertyName(key);
             _b.EmitSlot(Opcode.LoadLocal, srcSlot);
-            _b.EmitU16(Opcode.LoadProperty, _b.AddConstant(name));
+            _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant(name));
             exclusions.Add(new RestExclusion(RestExclusionKind.Constant, name, -1));
         }
     }
@@ -5192,7 +5193,7 @@ public sealed partial class JsCompiler
                 // Append via CreateDataProperty(arr, arr.length, value).
                 _b.Emit(Opcode.Dup);            // [arr, arr]
                 _b.Emit(Opcode.Dup);            // [arr, arr, arr]
-                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
+                _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
                 EmitExpression(element);        // [arr, arr, len, value]
                 _b.Emit(Opcode.DefineDataComputed); // [arr, arr]
                 _b.Emit(Opcode.Pop);            // [arr]
@@ -5206,7 +5207,7 @@ public sealed partial class JsCompiler
         {
             _b.Emit(Opcode.Dup);
             _b.EmitU16(Opcode.LoadConst, _b.AddConstant((double)ae.Elements.Count));
-            _b.EmitU16(Opcode.StoreProperty, _b.AddConstant("length"));
+            _b.EmitProperty(Opcode.StoreProperty, _b.AddConstant("length"));
             _b.Emit(Opcode.Pop);
         }
     }
