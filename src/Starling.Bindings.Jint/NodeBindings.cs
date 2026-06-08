@@ -31,13 +31,26 @@ internal static class NodeBindings
 
         // ---- prototype chain -------------------------------------------------
         // Node => EventTarget if installed => Object.
-        // Element => Node, CharacterData => Node, Text => CharacterData,
-        // Document => Node.
+        // Element => Node, CharacterData => Node, Text/Comment/CDATA/PI =>
+        // CharacterData, DocumentFragment/DocumentType/Attr => Node, Document =>
+        // Node. Each slot is registered on ctx.Wrappers so JintDomWrapper.
+        // SelectPrototype routes a wrapped node to its most-derived prototype —
+        // without this, Text/Comment nodes wrap against the bare Node prototype
+        // and `.data`/`.length` (defined on CharacterData.prototype) are
+        // unreachable, and `instanceof Text`/`Comment`/… is always false.
         var nodeProto = NewProto(engine, ctx.Wrappers.EventTargetPrototype);
         ctx.Wrappers.NodePrototype = nodeProto;
 
         var charDataProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.CharacterDataPrototype = charDataProto;
         var textProto = NewProto(engine, charDataProto);
+        ctx.Wrappers.TextPrototype = textProto;
+        var commentProto = NewProto(engine, charDataProto);
+        ctx.Wrappers.CommentPrototype = commentProto;
+        var cdataProto = NewProto(engine, textProto); // CDATASection extends Text
+        ctx.Wrappers.CDataPrototype = cdataProto;
+        var piProto = NewProto(engine, charDataProto);
+        ctx.Wrappers.ProcessingInstructionPrototype = piProto;
 
         var elementProto = NewProto(engine, nodeProto);
         ctx.Wrappers.ElementPrototype = elementProto;
@@ -45,12 +58,21 @@ internal static class NodeBindings
         var documentProto = NewProto(engine, nodeProto);
         ctx.Wrappers.DocumentPrototype = documentProto;
 
+        var fragmentProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.DocumentFragmentPrototype = fragmentProto;
+        var docTypeProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.DocumentTypePrototype = docTypeProto;
+        var attrProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.AttrPrototype = attrProto;
+
         InstallNode(ctx, nodeProto);
         InstallCharacterData(ctx, charDataProto);
+        InstallAttr(ctx, attrProto);
         InstallElement(ctx, elementProto);
         InstallDocument(ctx, documentProto);
 
-        InstallConstructors(ctx, nodeProto, elementProto, documentProto, charDataProto, textProto);
+        InstallConstructors(ctx, nodeProto, elementProto, documentProto, charDataProto, textProto,
+            commentProto, cdataProto, piProto, fragmentProto, docTypeProto, attrProto);
 
         // Expose `document` on the global so scripts can reach the DOM.
         JintInterop.DefineDataProp(engine.Global, "document",
@@ -100,9 +122,7 @@ internal static class NodeBindings
         Accessor(ctx, proto, "childNodes", (t, _) =>
         {
             if (w.UnwrapNode(t) is not { } n) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var c in n.ChildNodes) items.Add(w.Wrap(c));
-            return Array(engine, items);
+            return CollectionsBinding.NodeList(ctx, () => n.ChildNodes is IReadOnlyList<Node> list ? list : n.ChildNodes.ToList());
         });
         Accessor(ctx, proto, "ownerDocument", (t, _) =>
         {
@@ -190,6 +210,37 @@ internal static class NodeBindings
             });
         Accessor(ctx, proto, "length",
             (t, _) => w.Unwrap(t) is CharacterData c ? JintInterop.Num(c.Data.Length) : JintInterop.Num(0));
+    }
+
+    // =====================================================================
+    //                               Attr
+    // =====================================================================
+    // DOM §4.9 Attr — minimal read surface so a wrapped AttrNode exposes its
+    // identity (name/value/ownerElement) and `instanceof Attr` resolves. Full
+    // Attr-node integration (element.attributes as a NamedNodeMap, setAttributeNode,
+    // …) is tracked separately as a Tier 2 family port.
+    private static void InstallAttr(JintBackendContext ctx, ObjectInstance proto)
+    {
+        var w = ctx.Wrappers;
+        Accessor(ctx, proto, "name",
+            (t, _) => w.Unwrap(t) is AttrNode a ? JintInterop.Str(a.Name) : JintInterop.Str(""));
+        Accessor(ctx, proto, "localName",
+            (t, _) => w.Unwrap(t) is AttrNode a ? JintInterop.Str(a.LocalName) : JintInterop.Str(""));
+        Accessor(ctx, proto, "prefix",
+            (t, _) => w.Unwrap(t) is AttrNode { Prefix: { } p } ? JintInterop.Str(p) : JsValue.Null);
+        Accessor(ctx, proto, "namespaceURI",
+            (t, _) => w.Unwrap(t) is AttrNode { Namespace: { } ns } ? JintInterop.Str(ns) : JsValue.Null);
+        Accessor(ctx, proto, "specified",
+            (t, _) => JintInterop.Bool(w.Unwrap(t) is AttrNode));
+        Accessor(ctx, proto, "ownerElement",
+            (t, _) => w.Unwrap(t) is AttrNode { OwnerElement: { } e } ? w.Wrap(e) : JsValue.Null);
+        Accessor(ctx, proto, "value",
+            (t, _) => w.Unwrap(t) is AttrNode a ? JintInterop.Str(a.Value) : JintInterop.Str(""),
+            (t, args) =>
+            {
+                if (w.Unwrap(t) is AttrNode a) a.Value = args.Length > 0 ? Str(args[0]) : "";
+                return JsValue.Undefined;
+            });
     }
 
     // =====================================================================
@@ -304,10 +355,7 @@ internal static class NodeBindings
         Accessor(ctx, proto, "children", (t, _) =>
         {
             if (w.UnwrapElement(t) is not { } e) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            for (var n = e.FirstChild; n is not null; n = n.NextSibling)
-                if (n is Element c) items.Add(w.Wrap(c));
-            return Array(engine, items);
+            return CollectionsBinding.HtmlCollection(ctx, () => ChildElements(e));
         });
         Accessor(ctx, proto, "firstElementChild", (t, _) =>
         {
@@ -456,9 +504,9 @@ internal static class NodeBindings
         Method(ctx, proto, "querySelectorAll", (t, args) =>
         {
             if (w.UnwrapElement(t) is not { } e || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var m in SelectorAll(engine, e, Str(args[0]))) items.Add(w.Wrap(m));
-            return Array(engine, items);
+            // querySelectorAll returns a STATIC NodeList (snapshot at call time).
+            var snapshot = SelectorAll(engine, e, Str(args[0]));
+            return CollectionsBinding.NodeList(ctx, () => snapshot);
         }, 1);
         Method(ctx, proto, "matches", (t, args) =>
         {
@@ -475,20 +523,13 @@ internal static class NodeBindings
         {
             if (w.UnwrapElement(t) is not { } e || args.Length == 0) return EmptyArray(engine);
             var name = Str(args[0]);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    items.Add(w.Wrap(d));
-            return Array(engine, items);
+            return CollectionsBinding.HtmlCollection(ctx, () => DescendantsByTag(e, name));
         }, 1);
         Method(ctx, proto, "getElementsByClassName", (t, args) =>
         {
             if (w.UnwrapElement(t) is not { } e || args.Length == 0) return EmptyArray(engine);
             var classes = Str(args[0]).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (classes.Length > 0 && classes.All(d.ClassList.Contains)) items.Add(w.Wrap(d));
-            return Array(engine, items);
+            return CollectionsBinding.HtmlCollection(ctx, () => DescendantsByClass(e, classes));
         }, 1);
 
         // ChildNode / ParentNode mixins.
@@ -801,16 +842,14 @@ internal static class NodeBindings
         Method(ctx, proto, "getElementsByTagName", (t, args) =>
         {
             if (w.UnwrapDocument(t) is not { } d || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByTagName(Str(args[0]))) items.Add(w.Wrap(e));
-            return Array(engine, items);
+            var name = Str(args[0]);
+            return CollectionsBinding.HtmlCollection(ctx, () => d.GetElementsByTagName(name).ToList());
         }, 1);
         Method(ctx, proto, "getElementsByClassName", (t, args) =>
         {
             if (w.UnwrapDocument(t) is not { } d || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByClassName(Str(args[0]))) items.Add(w.Wrap(e));
-            return Array(engine, items);
+            var name = Str(args[0]);
+            return CollectionsBinding.HtmlCollection(ctx, () => d.GetElementsByClassName(name).ToList());
         }, 1);
         Method(ctx, proto, "querySelector", (t, args) =>
         {
@@ -821,9 +860,8 @@ internal static class NodeBindings
         Method(ctx, proto, "querySelectorAll", (t, args) =>
         {
             if (w.UnwrapDocument(t) is not { } d || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var m in SelectorAll(engine, d, Str(args[0]))) items.Add(w.Wrap(m));
-            return Array(engine, items);
+            var snapshot = SelectorAll(engine, d, Str(args[0]));
+            return CollectionsBinding.NodeList(ctx, () => snapshot);
         }, 1);
         Method(ctx, proto, "createElement", (t, args) =>
         {
@@ -886,7 +924,9 @@ internal static class NodeBindings
     // Element.prototype`) work. Calling them throws (illegal constructor).
     private static void InstallConstructors(
         JintBackendContext ctx, ObjectInstance nodeProto, ObjectInstance elementProto,
-        ObjectInstance documentProto, ObjectInstance charDataProto, ObjectInstance textProto)
+        ObjectInstance documentProto, ObjectInstance charDataProto, ObjectInstance textProto,
+        ObjectInstance commentProto, ObjectInstance cdataProto, ObjectInstance piProto,
+        ObjectInstance fragmentProto, ObjectInstance docTypeProto, ObjectInstance attrProto)
     {
         var engine = ctx.Engine;
 
@@ -910,6 +950,16 @@ internal static class NodeBindings
         Global(engine, "Text", textCtor);
         Global(engine, "HTMLElement", htmlElementCtor);
 
+        // CharacterData subtypes + the other Node families, each with a real
+        // prototype chained per the DOM hierarchy so `instanceof` resolves and
+        // the inherited accessors are reachable on a wrapped node.
+        Global(engine, "Comment", MakeCtor(engine, "Comment", commentProto));
+        Global(engine, "CDATASection", MakeCtor(engine, "CDATASection", cdataProto));
+        Global(engine, "ProcessingInstruction", MakeCtor(engine, "ProcessingInstruction", piProto));
+        Global(engine, "DocumentFragment", MakeCtor(engine, "DocumentFragment", fragmentProto));
+        Global(engine, "DocumentType", MakeCtor(engine, "DocumentType", docTypeProto));
+        Global(engine, "Attr", MakeCtor(engine, "Attr", attrProto));
+
         // HTMLDocument is a legacy alias of Document; share its prototype so
         // `document instanceof HTMLDocument` resolves.
         Global(engine, "HTMLDocument", MakeCtor(engine, "HTMLDocument", documentProto));
@@ -922,11 +972,11 @@ internal static class NodeBindings
         // subclasses chain off Element.prototype.
         foreach (var name in new[]
         {
-            "HTMLCollection", "NodeList", "DOMTokenList", "NamedNodeMap", "DOMStringMap",
-            "CSSStyleDeclaration", "DOMRect", "DOMRectReadOnly", "DOMException",
+            "NamedNodeMap", "DOMStringMap",
+            "CSSStyleDeclaration", "DOMRect", "DOMRectReadOnly",
             // File API + misc interfaces used in `instanceof` / feature tests.
             "Blob", "File", "FileList", "FileReader", "DataTransfer",
-            "Comment", "DocumentType", "ShadowRoot", "MediaQueryList",
+            "ShadowRoot", "MediaQueryList",
             // SVG interfaces named in `instanceof` checks. Notably SVGAnimatedString:
             // an SVG element's `className` is an SVGAnimatedString (not a string), so
             // className helpers branch on `n instanceof SVGAnimatedString`. Our
@@ -963,11 +1013,15 @@ internal static class NodeBindings
     // =====================================================================
     //                      classList / dataset / style
     // =====================================================================
-    private static JsObject BuildDomTokenList(JintBackendContext ctx, Element element)
+    private static JintDomTokenListObject BuildDomTokenList(JintBackendContext ctx, Element element)
     {
         var engine = ctx.Engine;
-        var obj = new JsObject(engine);
         var cl = element.ClassList;
+        // Exotic backing object: integer indices resolve to tokens and the
+        // iteration surface (values/keys/entries/forEach/@@iterator) is inherited
+        // from %DOMTokenListPrototype%; the token-mutating methods below are own
+        // properties.
+        var obj = new JintDomTokenListObject(ctx, cl);
         var log = ctx.LoggerFactory.CreateLogger(typeof(NodeBindings));
 
         Accessor(ctx, obj, "length", (_, _) => JintInterop.Num(cl.Count));
@@ -1248,6 +1302,33 @@ internal static class NodeBindings
     {
         var ownerDocument = context.OwnerDocument ?? new Document();
         return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument);
+    }
+
+    // ---- live-collection snapshot helpers (re-walked on every read) ----------
+    private static List<Element> ChildElements(Element e)
+    {
+        var items = new List<Element>();
+        for (var n = e.FirstChild; n is not null; n = n.NextSibling)
+            if (n is Element c) items.Add(c);
+        return items;
+    }
+
+    private static List<Element> DescendantsByTag(Element e, string name)
+    {
+        var items = new List<Element>();
+        foreach (var d in e.DescendantElements())
+            if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                items.Add(d);
+        return items;
+    }
+
+    private static List<Element> DescendantsByClass(Element e, string[] classes)
+    {
+        var items = new List<Element>();
+        if (classes.Length == 0) return items;
+        foreach (var d in e.DescendantElements())
+            if (classes.All(d.ClassList.Contains)) items.Add(d);
+        return items;
     }
 
     private static void InsertAdjacent(JintDomWrapper w, Node parent, JsValue arg, Node? before)
