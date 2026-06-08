@@ -61,20 +61,23 @@ public static class FunctionCtor
             PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
 
         // Function.prototype.[[Prototype]] is already wired in JsRealm's
-        // bootstrap (chain to Object.prototype). Stamp `constructor` and a
-        // length of 0 + name "" per spec 20.2.3.
-        funcProto.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-        funcProto.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(0), writable: false, enumerable: false, configurable: true));
-        funcProto.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String(""), writable: false, enumerable: false, configurable: true));
-
-        // -------------------------------------------------------- Prototype methods
-        DefineMethod(realm, funcProto, "call", (thisV, args) => ProtoCall(realm, thisV, args), length: 1);
-        DefineMethod(realm, funcProto, "apply", (thisV, args) => ProtoApply(realm, thisV, args), length: 2);
-        DefineMethod(realm, funcProto, "bind", (thisV, args) => ProtoBind(realm, thisV, args), length: 1);
-        DefineMethod(realm, funcProto, "toString", ProtoToString, length: 0);
+        // bootstrap (chain to Object.prototype). Stamp `constructor`, a length of
+        // 0, a name of "" (spec 20.2.3), and the prototype methods.
+        // Bulk-install in the same creation order as the prior sequential install:
+        // constructor (W=true/C=true), then the non-writable length + name data
+        // properties (C=true only), then the four prototype methods. Mixed flags
+        // are carried per-member; the result is byte-identical and
+        // getOwnPropertyNames order is unchanged.
+        IntrinsicHelpers.BulkInstallBuiltins(realm, funcProto, new[]
+        {
+            new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
+            new IntrinsicHelpers.BulkMember("length", 0, null, JsValue.Number(0), Shape.Configurable),
+            new IntrinsicHelpers.BulkMember("name", 0, null, JsValue.String(""), Shape.Configurable),
+            new IntrinsicHelpers.BulkMember("call", 1, (thisV, args) => ProtoCall(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("apply", 2, (thisV, args) => ProtoApply(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("bind", 1, (thisV, args) => ProtoBind(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("toString", 0, ProtoToString),
+        });
 
         realm.FunctionConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Function",
@@ -179,16 +182,5 @@ public static class FunctionCtor
             JsBoundFunction => JsValue.String("function () { [native code] }"),
             _ => JsValue.String("function () { [native code] }"),
         };
-    }
-
-    // ====================================================================
-    //                                Helpers
-    // ====================================================================
-
-    private static void DefineMethod(JsRealm realm, JsObject target, string name,
-        Func<JsValue, JsValue[], JsValue> body, int length)
-    {
-        var fn = new JsNativeFunction(realm, name, length, body, isConstructor: false);
-        target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 }

@@ -1,3 +1,4 @@
+using System.Buffers;
 using Starling.RegExp;
 using Starling.Js.Runtime;
 
@@ -51,18 +52,26 @@ internal sealed class JsRegExpStringIterator : JsObject
     public JsValue Next(JsRealm realm)
     {
         if (_done) return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
-        var m = _regex.Compiled.Exec(_input, _cursor);
-        if (m is null)
+        int bufLen = 2 * (_regex.Compiled.CaptureCount + 1);
+        var spanBuffer = ArrayPool<int>.Shared.Rent(bufLen);
+        try
         {
-            _done = true;
-            return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
+            if (!_regex.Compiled.ExecSpans(_input, _cursor, spanBuffer, out var matchStart, out var matchEnd))
+            {
+                _done = true;
+                return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
+            }
+            // Advance cursor; guard against zero-width matches.
+            _cursor = matchEnd;
+            if (matchEnd == matchStart)
+                _cursor = RegExpCtor.AdvanceStringIndex(_input, _cursor, _unicode);
+            if (!_global) _done = true;
+            var matchArr = RegExpCtor.BuildMatchArrayForIterator(realm, _regex, _input, spanBuffer);
+            return IteratorIntrinsics.MakeResult(realm, JsValue.Object(matchArr), done: false);
         }
-        // Advance cursor; guard against zero-width matches.
-        _cursor = m.End;
-        if (m.End == m.Start)
-            _cursor = RegExpCtor.AdvanceStringIndex(_input, _cursor, _unicode);
-        if (!_global) _done = true;
-        var matchArr = RegExpCtor.BuildMatchArrayForIterator(realm, _regex, m);
-        return IteratorIntrinsics.MakeResult(realm, JsValue.Object(matchArr), done: false);
+        finally
+        {
+            ArrayPool<int>.Shared.Return(spanBuffer);
+        }
     }
 }

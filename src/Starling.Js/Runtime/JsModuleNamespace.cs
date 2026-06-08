@@ -43,6 +43,7 @@ public sealed class JsModuleNamespace : JsObject
     internal JsModuleNamespace(Dictionary<string, Cell> exports)
         : base(prototype: null)
     {
+        DisableInlineCache();
         _exports = exports;
         RefreshExportNames();
     }

@@ -1,5 +1,6 @@
 using Starling.Css.Values;
 using Starling.Layout;
+using Starling.Layout.Box;
 using PaintList = Starling.Paint.DisplayList.DisplayList;
 
 namespace Starling.Paint.Compositor;
@@ -29,7 +30,10 @@ internal sealed class CompositorLayer
         Rect? clip,
         IReadOnlyList<CompositorLayer> children,
         long contentHash = 0,
-        long layerId = 0)
+        long layerId = 0,
+        Box? sourceBox = null,
+        double originParentX = 0,
+        double originParentY = 0)
     {
         Items = items;
         Bounds = bounds;
@@ -39,7 +43,35 @@ internal sealed class CompositorLayer
         Children = children;
         ContentHash = contentHash;
         LayerId = layerId;
+        SourceBox = sourceBox;
+        OriginParentX = originParentX;
+        OriginParentY = originParentY;
     }
+
+    /// <summary>
+    /// The layout box this layer was built from (the layer-root box), or null for
+    /// layers with no backing box. Kept so the live renderer can rebuild just this
+    /// layer's node on an animation frame (see
+    /// <see cref="LayerTreeBuilder.RefreshAnimating"/>) instead of rebuilding the
+    /// whole tree.
+    /// </summary>
+    public Box? SourceBox { get; }
+
+    /// <summary>Page-coord content origin of the box that contains
+    /// <see cref="SourceBox"/> — the origin <see cref="LayerTreeBuilder"/> needs to
+    /// rebuild this layer node in isolation.</summary>
+    public double OriginParentX { get; }
+
+    /// <summary>See <see cref="OriginParentX"/>.</summary>
+    public double OriginParentY { get; }
+
+    /// <summary>Returns a copy of this layer with a different child list, reusing
+    /// every other field (slice, bounds, transform, hash). Used by the incremental
+    /// refresh to swap a refreshed descendant subtree without rebuilding this
+    /// layer's own slice.</summary>
+    public CompositorLayer WithChildren(IReadOnlyList<CompositorLayer> children)
+        => new(Items, Bounds, Transform, Opacity, Clip, children, ContentHash, LayerId,
+            SourceBox, OriginParentX, OriginParentY);
 
     /// <summary>Page-coord union of the painted items in this layer's slice.</summary>
     public Rect Bounds { get; }

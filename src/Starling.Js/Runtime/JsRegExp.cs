@@ -1,4 +1,5 @@
 using Starling.RegExp;
+using Starling.Js.Runtime.Regex;
 
 namespace Starling.Js.Runtime;
 
@@ -9,16 +10,23 @@ namespace Starling.Js.Runtime;
 /// </summary>
 public sealed class JsRegExp : JsObject
 {
-    public CompiledRegex Compiled { get; }
+    // §22.2.7.1: every RegExp has exactly one own property, lastIndex
+    // (writable, non-enumerable, non-configurable). Precompute that shape once
+    // so constructing a regex — frequent for a literal re-evaluated in a loop —
+    // adopts it with a single-slot array instead of running DefineOwnProperty
+    // (which would grow a fresh capacity-4 slot array per instance). The shape
+    // is byte-identical to the incremental one (same Root→{lastIndex} transition
+    // and flags), so inline caches and migration are unaffected.
+    internal static readonly Shape LastIndexShape = Shape.Root.Transition("lastIndex", Shape.Writable);
+
+    public IRegexMatcher Compiled { get; }
     public string Source => EscapeSource(Compiled.Source);
     public RegexFlags Flags => Compiled.Flags;
 
-    public JsRegExp(JsRealm realm, CompiledRegex compiled) : base(realm.RegExpPrototype)
+    public JsRegExp(JsRealm realm, IRegexMatcher compiled) : base(realm.RegExpPrototype)
     {
         Compiled = compiled;
-        // lastIndex is writable, non-enumerable, non-configurable per §22.2.7.1.
-        DefineOwnProperty("lastIndex",
-            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: false, configurable: false));
+        AdoptShape(LastIndexShape, new[] { JsValue.Number(0) });
     }
 
     public double LastIndex
@@ -30,6 +38,18 @@ public sealed class JsRegExp : JsObject
         }
         set => Set("lastIndex", JsValue.Number(value));
     }
+
+    /// <summary>True iff this regexp still carries the canonical single-slot
+    /// <c>lastIndex</c> shape — i.e. no own <c>exec</c>/<c>global</c>/<c>unicode</c>
+    /// (or any other) own property shadows the prototype, and <c>lastIndex</c>
+    /// lives at slot 0. The @@replace fast path uses this to skip the
+    /// instance-level guard walk and to write <c>lastIndex</c> directly.</summary>
+    internal bool HasPristineShape => ReferenceEquals(Shape, LastIndexShape);
+
+    /// <summary>Set <c>lastIndex</c> to 0 via a direct slot write, valid only when
+    /// <see cref="HasPristineShape"/> holds (lastIndex is slot 0). Avoids the
+    /// name lookup of the generic setter on the global-replace hot path.</summary>
+    internal void ResetLastIndexFast() => WriteSlot(0, JsValue.Number(0));
 
     public override string ToString() => $"/{Source}/{RegexFlagParser.ToFlagString(Flags)}";
 

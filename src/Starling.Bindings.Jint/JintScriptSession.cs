@@ -354,6 +354,12 @@ internal sealed class JintScriptSession : IScriptSession
         return _ctx.Document.MutationVersion != before;
     }
 
+    // The Jint observer binding delivers a single on-screen intersection record
+    // at observe() time (one-shot "render the whole page" semantics — see its
+    // ObserversBinding), so there is no scroll-driven re-evaluation to run here.
+    public bool UpdateIntersectionObservations(double viewportX, double viewportY, double viewportWidth, double viewportHeight)
+        => false;
+
     public void Dispose()
     {
         if (_disposed) return;

@@ -89,6 +89,27 @@ public sealed class JsRealm
     // B4-1: RegExp constructor — populated by RegExpCtor.Install.
     public JsObject? RegExpConstructor { get; internal set; }
 
+    // The built-in RegExp.prototype.exec and the global/unicode flag getters,
+    // captured at install time. The @@match global fast path checks identity
+    // against these to be sure the §22.2.7.1 RegExpExec delegation contract is
+    // unobserved (no user-overridden exec / flag getters) before short-circuiting.
+    public JsObject? RegExpBuiltinExec { get; internal set; }
+    public JsObject? RegExpGlobalGetter { get; internal set; }
+    public JsObject? RegExpUnicodeGetter { get; internal set; }
+    /// <summary>The built-in <c>RegExp.prototype[@@replace]</c>. String.replace
+    /// fast-paths to the engine's replace directly when a regex argument's
+    /// @@replace still resolves to this (i.e. is not user-overridden).</summary>
+    public JsObject? RegExpBuiltinSymbolReplace { get; internal set; }
+
+    /// <summary>Protector cache for the @@replace fast-path guard. The structural
+    /// <see cref="JsObject.ProtoEpoch"/> at which exec/global/unicode were last
+    /// confirmed to be the builtins, and that result. <c>global</c>/<c>unicode</c>
+    /// are accessors mutated only via defineProperty/delete (both bump the epoch),
+    /// so while the epoch matches only a plain <c>exec</c> value reassignment can
+    /// have slipped through — the guard re-probes that single property.</summary>
+    internal int RegExpGuardCachedEpoch = int.MinValue;
+    internal bool RegExpGuardCachedIntact;
+
     // B4-2: Date constructor — populated by DateCtor.Install.
     public JsObject? DateConstructor { get; internal set; }
 
@@ -330,7 +351,7 @@ public sealed class JsRealm
         AsyncIteratorPrototype = new JsObject(ObjectPrototype);
         AsyncGeneratorPrototype = new JsObject(AsyncIteratorPrototype);
 
-        GlobalObject = new JsObject(ObjectPrototype);
+        GlobalObject = new JsGlobalObject(ObjectPrototype);
     }
 
     /// <summary>Allocate a fresh ordinary object inheriting from

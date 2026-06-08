@@ -10,4 +10,9 @@
     <!-- Native shell reuses internal engine and render helpers to build its chrome (e.g. InlineSvgSerializer for inline svg icons). -->
     <InternalsVisibleTo Include="Starling.Shell.Native" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The regex-backend parity tests drive both backends explicitly via the
+         internal RegexBackendSelector.Compile(..., RegexBackendKind) overload. -->
+    <InternalsVisibleTo Include="Starling.Js.Tests" />
+  </ItemGroup>
 </Project>

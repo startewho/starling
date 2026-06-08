@@ -88,4 +88,3 @@ in the parser is the clearest path to closing it.
 One note on the budget: `04_HTML_PARSING.md` targets 1 MB in 50 ms or less.
 Starling lands at 51.7 ms on the 1 MB tree, right at the line. It meets its own
 budget, but a mature managed parser comes in over 1.5× under it.
-

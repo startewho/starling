@@ -19,9 +19,21 @@ public sealed class JsArray : JsObject
 {
     private readonly List<JsValue> _items = new();
 
-    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { }
+    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { DisableInlineCache(); }
+
+    /// <summary>Create an empty array whose dense backing is pre-sized to
+    /// <paramref name="capacity"/> slots, so a known number of subsequent
+    /// <see cref="Push(JsValue)"/> calls grow the list without reallocating.
+    /// Length stays 0 until items are added.</summary>
+    public JsArray(JsRealm realm, int capacity) : base(realm.ArrayPrototype)
+    {
+        DisableInlineCache();
+        if (capacity > 0) _items.Capacity = capacity;
+    }
+
     public JsArray(JsRealm realm, IReadOnlyList<JsValue> items) : base(realm.ArrayPrototype)
     {
+        DisableInlineCache();
         _items.AddRange(items);
     }
 

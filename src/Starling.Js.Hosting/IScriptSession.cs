@@ -170,6 +170,14 @@ public interface IScriptSession : IDisposable
     /// landed since the last call. Returns <c>true</c> when the DOM changed and
     /// the shell should re-render.</summary>
     bool PumpFrame(long elapsedMs);
+
+    /// <summary>Runs the IntersectionObserver "update intersection observations"
+    /// step against the given viewport (document CSS px — scroll offset as origin,
+    /// viewport size as extent), delivering records to observers whose targets
+    /// crossed a threshold. The shell calls this after layout and on scroll so
+    /// reveal-on-scroll content appears as it enters the viewport. Returns
+    /// <c>true</c> when a callback mutated the DOM (the shell should re-render).</summary>
+    bool UpdateIntersectionObservations(double viewportX, double viewportY, double viewportWidth, double viewportHeight);
 }
 
 /// <summary>

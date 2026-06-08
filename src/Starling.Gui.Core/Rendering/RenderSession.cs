@@ -59,11 +59,20 @@ public sealed class PageFrameRequest
     public Func<Box, ComputedStyle?>? StyleOverride { get; init; }
     public IImageResolver? Images { get; init; }
     public LayoutRect? Viewport { get; init; }
-    public int PageVersion { get; init; }
+    public long PageVersion { get; init; }
     public Func<Box, bool>? IsAnimatingLayerRoot { get; init; }
     public IReadOnlyList<SurfaceOverlayLayer>? DrawingOverlays { get; init; }
     public Func<Element, (double X, double Y)>? ScrollOffsets { get; init; }
     public bool UseLayerTree { get; init; }
+
+    /// <summary>
+    /// True when this present is a pure animation tick over an otherwise-unchanged
+    /// page (driven by the live timer, no DOM/layout/input change since the last
+    /// present). Lets the renderer refresh only the animating layers and reuse the
+    /// cached layer tree instead of rebuilding it. <see cref="PageVersion"/> guards
+    /// the reuse against any DOM/layout change that slipped through.
+    /// </summary>
+    public bool AnimationTick { get; init; }
 }
 
 public sealed class CompositedFrameRequest
@@ -330,7 +339,9 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.Viewport,
             request.IsAnimatingLayerRoot,
             request.DrawingOverlays,
-            request.ScrollOffsets);
+            request.ScrollOffsets,
+            request.PageVersion,
+            request.AnimationTick);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface renderer did not present the frame.");
