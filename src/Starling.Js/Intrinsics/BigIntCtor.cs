@@ -41,14 +41,16 @@ public static class BigIntCtor
         // Statics — BigInt.asIntN / asUintN per §21.2.2.
         IntrinsicHelpers.DefineMethod(realm, ctor, "asIntN", 2, (_, args) =>
         {
-            var bits = ToBitCount(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var bitIndex = ToBitCountIndex(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var value = BigIntOps.ToBigInt(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
+            var bits = ToSupportedBitCount(realm, bitIndex);
             return JsValue.BigInt(BigIntOps.AsIntN(realm, bits, value));
         });
         IntrinsicHelpers.DefineMethod(realm, ctor, "asUintN", 2, (_, args) =>
         {
-            var bits = ToBitCount(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var bitIndex = ToBitCountIndex(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var value = BigIntOps.ToBigInt(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
+            var bits = ToSupportedBitCount(realm, bitIndex);
             return JsValue.BigInt(BigIntOps.AsUintN(realm, bits, value));
         });
 
@@ -88,12 +90,22 @@ public static class BigIntCtor
         throw new JsThrow(realm.NewTypeError("BigInt.prototype method called on non-BigInt receiver"));
     }
 
-    private static int ToBitCount(JsRealm realm, JsValue value)
+    private static long ToBitCountIndex(JsRealm realm, JsValue value)
     {
+        const double MaxSafeInteger = 9007199254740991d;
+        if (value.IsUndefined) return 0;
         var n = JsValue.ToNumber(value);
-        if (double.IsNaN(n) || n < 0 || n != Math.Truncate(n) || n > int.MaxValue)
+        if (double.IsNaN(n) || n == 0) return 0;
+        if (double.IsInfinity(n) || n < 0 || n != Math.Truncate(n) || n > MaxSafeInteger)
             throw new JsThrow(realm.NewRangeError("Bit count must be a non-negative integer"));
-        return (int)n;
+        return (long)n;
+    }
+
+    private static int ToSupportedBitCount(JsRealm realm, long bits)
+    {
+        if (bits > int.MaxValue)
+            throw new JsThrow(realm.NewRangeError("Bit count is too large"));
+        return (int)bits;
     }
 
     private static void DefineData(JsObject target, string name, JsValue value,

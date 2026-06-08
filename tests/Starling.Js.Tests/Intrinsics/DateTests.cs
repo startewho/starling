@@ -38,6 +38,12 @@ public class DateTests
     }
 
     [TestMethod]
+    public void Date_parse_empty_string_is_NaN()
+    {
+        double.IsNaN(Run("Date.parse('');").AsNumber).Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Date_year_month_day_constructor()
     {
         Run("new Date(2024, 0, 15).getMonth();").AsNumber.Should().Be(0);
@@ -75,6 +81,12 @@ public class DateTests
     public void Date_json_stringify_emits_isoString()
     {
         Run("JSON.stringify(new Date(0));").AsString.Should().Be("\"1970-01-01T00:00:00.000Z\"");
+    }
+
+    [TestMethod]
+    public void Date_json_stringify_invalid_date_returns_null()
+    {
+        Run("JSON.stringify({ date: new Date(NaN) });").AsString.Should().Be("{\"date\":null}");
     }
 
     [TestMethod]
@@ -135,6 +147,17 @@ public class DateTests
         var s = Run("new Date(0).toTimeString();").AsString;
         s.Should().StartWith("00:00:00");
         s.Should().Contain("GMT+0000");
+    }
+
+    [TestMethod]
+    public void Date_invalid_date_string_methods_return_Invalid_Date()
+    {
+        Run("new Date(NaN).toString();").AsString.Should().Be("Invalid Date");
+        Run("new Date(NaN).toDateString();").AsString.Should().Be("Invalid Date");
+        Run("new Date(NaN).toTimeString();").AsString.Should().Be("Invalid Date");
+        Run("new Date(NaN).toLocaleString();").AsString.Should().Be("Invalid Date");
+        Run("new Date(NaN).toLocaleDateString();").AsString.Should().Be("Invalid Date");
+        Run("new Date(NaN).toLocaleTimeString();").AsString.Should().Be("Invalid Date");
     }
 
     [TestMethod]

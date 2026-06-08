@@ -112,6 +112,44 @@ public class RegExpTests
         Run("var r = new RegExp('foo', 'y'); r.lastIndex = 0; r.test('barfoo');").AsBool.Should().BeFalse();
     }
 
+    [TestMethod]
+    public void ToString_is_generic_and_reads_source_and_flags_properties()
+    {
+        Run("/./['toString'].call({});").AsString.Should().Be("/undefined/undefined");
+        Run("/./['toString'].call({ source: 'a', flags: 'b' });").AsString.Should().Be("/a/b");
+    }
+
+    [TestMethod]
+    public void ToString_with_real_RegExp_instance_uses_source_and_flags()
+    {
+        Run("/./['toString'].call(/test/g);").AsString.Should().Be("/test/g");
+    }
+
+    [TestMethod]
+    public void Source_escapes_constructor_slashes_and_line_terminators()
+    {
+        Run("new RegExp('/').source;").AsString.Should().Be("\\/");
+        Run("new RegExp('[/]').source;").AsString.Should().Be("[/]");
+        Run("new RegExp('\\n').source;").AsString.Should().Be("\\n");
+        Run("new RegExp('\\r').source;").AsString.Should().Be("\\r");
+        Run("new RegExp('\\u2028').source;").AsString.Should().Be("\\u2028");
+        Run("new RegExp('\\u2029').source;").AsString.Should().Be("\\u2029");
+    }
+
+    [TestMethod]
+    public void Source_preserves_literal_slash_escapes()
+    {
+        Run(@"/\/\//.source;").AsString.Should().Be("\\/\\/");
+        Run(@"/\/\//.toString();").AsString.Should().Be("/\\/\\//");
+    }
+
+    [TestMethod]
+    public void Empty_pattern_source_is_non_capturing_group()
+    {
+        Run("new RegExp().source;").AsString.Should().Be("(?:)");
+        Run("new RegExp().toString();").AsString.Should().Be("/(?:)/");
+    }
+
     // ---------------- String back-fills ----------------
 
     [TestMethod]
@@ -177,6 +215,13 @@ public class RegExpTests
     public void Match_with_string_pattern_wraps_in_regex()
     {
         Run("'hello'.match('l')[0];").AsString.Should().Be("l");
+    }
+
+    [TestMethod]
+    public void Match_global_empty_alternative_advances_without_infinite_loop()
+    {
+        Run("var m = 'x'.match(/|/g); m.length + ':' + JSON.stringify(m);")
+            .AsString.Should().Be("2:[\"\",\"\"]");
     }
 
     // ---------------- matchAll iterator (B4-1-followup-b) ----------------

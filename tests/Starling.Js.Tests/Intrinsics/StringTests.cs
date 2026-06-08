@@ -70,6 +70,38 @@ public class StringTests
     }
 
     [TestMethod]
+    public void IndexOf_empty_pattern_clamps_position_to_string_length()
+    {
+        Eval("''.indexOf('', 0);").AsNumber.Should().Be(0);
+        Eval("''.indexOf('', 1);").AsNumber.Should().Be(0);
+    }
+
+    [TestMethod]
+    public void Mixed_type_addition_evaluates_left_to_right()
+    {
+        Eval("2.0 + 3.0 + 'm';").AsString.Should().Be("5m");
+        Eval("2 + 3 + 'm';").AsString.Should().Be("5m");
+        Eval("2.0 + 3.0 + 'm' + 'x';").AsString.Should().Be("5mx");
+        Eval("1 + 2 + 3 + '4';").AsString.Should().Be("64");
+        Eval("'m' + 2 + 3;").AsString.Should().Be("m23");
+        Eval("2 + 'm' + 3;").AsString.Should().Be("2m3");
+    }
+
+    [TestMethod]
+    public void String_concatenation_compound_assignment_preserves_references()
+    {
+        var r = Eval(@"
+            var foo = 'foo';
+            foo += 'foo';
+            var bar = foo;
+            bar += 'bar';
+            foo + ',' + bar;
+        ");
+
+        r.AsString.Should().Be("foofoo,foofoobar");
+    }
+
+    [TestMethod]
     public void Slicing_and_substring_methods_clamp_and_swap_indices()
     {
         Eval("'abcdef'.slice(1, 4);").AsString.Should().Be("bcd");
@@ -99,6 +131,10 @@ public class StringTests
         Eval("'  hi  '.trim();").AsString.Should().Be("hi");
         Eval("'  hi  '.trimStart();").AsString.Should().Be("hi  ");
         Eval("'  hi  '.trimEnd();").AsString.Should().Be("  hi");
+        Eval("''.trimLeft === ''.trimStart;").AsBool.Should().BeTrue();
+        Eval("''.trimRight === ''.trimEnd;").AsBool.Should().BeTrue();
+        Eval("'  hi  '.trimLeft();").AsString.Should().Be("hi  ");
+        Eval("'  hi  '.trimRight();").AsString.Should().Be("  hi");
         Eval("'\uFEFFhi\uFEFF'.trim();").AsString.Should().Be("hi");
         Eval("'abc'.normalize();").AsString.Should().Be("abc");
         Eval("'abc'.normalize('NFD');").AsString.Should().Be("abc");
@@ -135,6 +171,35 @@ public class StringTests
         Eval("'a,b,c'.split(',').join('-');").AsString.Should().Be("a-b-c");
         Eval("'1,2,3'.split(',').map(function(x){return x+x;}).join('');").AsString.Should().Be("112233");
         Eval("'a,b,c'.split(',') instanceof Array;").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Template_literals_stringify_arrays()
+    {
+        Eval("var a = [1,2,'three',true]; 'test ' + a;").AsString.Should().Be("test 1,2,three,true");
+        Eval("var a = [1,2,'three',true]; `test ${a}`;").AsString.Should().Be("test 1,2,three,true");
+    }
+
+    [TestMethod]
+    public void Template_literal_can_be_computed_object_key()
+    {
+        Eval("({ [`key`]: 'value' }).key;").AsString.Should().Be("value");
+    }
+
+    [TestMethod]
+    public void String_iterator_has_proper_iterator_prototype_chain()
+    {
+        var r = Eval(@"
+            var iterator = ''[Symbol.iterator]();
+            var proto1 = Object.getPrototypeOf(iterator);
+            var proto2 = Object.getPrototypeOf(proto1);
+            proto2.hasOwnProperty(Symbol.iterator) + ','
+                + proto1.hasOwnProperty(Symbol.iterator) + ','
+                + iterator.hasOwnProperty(Symbol.iterator) + ','
+                + (iterator[Symbol.iterator]() === iterator);
+        ");
+
+        r.AsString.Should().Be("true,false,false,true");
     }
 
     private static JsValue Eval(string src)

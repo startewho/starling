@@ -43,6 +43,12 @@ public class JsModernSyntaxTests
         Eval("`one\ntwo`;").AsString.Should().Be("one\ntwo");
     }
 
+    [TestMethod]
+    public void Unicode_escape_in_identifier_resolves_same_binding()
+    {
+        Eval(@"const hello = 123; hell\u{6F};").AsNumber.Should().Be(123);
+    }
+
     // -------------------------------------------------------- Arrow functions
 
     [TestMethod]

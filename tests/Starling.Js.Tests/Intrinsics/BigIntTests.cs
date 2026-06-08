@@ -194,6 +194,32 @@ public class BigIntTests
     public void AsIntN_negative_bits_throws() =>
         ((Action)(() => Eval("BigInt.asIntN(-1, 0n)"))).Should().Throw<JsThrow>();
 
+    [TestMethod]
+    public void Fixed_width_helpers_reject_unsupported_bit_counts()
+    {
+        ((Action)(() => Eval("BigInt.asIntN(2147483648, 1n)"))).Should().Throw<JsThrow>();
+        ((Action)(() => Eval("BigInt.asUintN(2147483648, 1n)"))).Should().Throw<JsThrow>();
+    }
+
+    [TestMethod]
+    public void Fixed_width_helpers_convert_bigint_operand_before_rejecting_unsupported_bit_count()
+    {
+        var operations = new[] { "BigInt.asIntN", "BigInt.asUintN" };
+        foreach (var operation in operations)
+        {
+            Action act = () => Eval($@"
+                {operation}(2147483648, {{
+                    [Symbol.toPrimitive]: function() {{
+                        throw new Error('boom');
+                    }}
+                }});
+            ");
+
+            act.Should().Throw<JsThrow>().Where(ex =>
+                ex.Value.IsObject && ex.Value.AsObject.Get("message").AsString == "boom");
+        }
+    }
+
     // ------------------------------------------------------- JSON.stringify
     [TestMethod]
     public void Json_stringify_throws() =>

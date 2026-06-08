@@ -69,26 +69,41 @@ public static class WeakMapCtor
         if (!ReferenceEquals(instProto, realm.WeakMapPrototype)) m.SetPrototypeOf(instProto);
         if (args.Length == 0 || args[0].IsNullish) return m;
 
+        var adder = AbstractOperations.Get(realm.ActiveVm, m, "set");
+        if (!AbstractOperations.IsCallable(adder))
+            throw new JsThrow(realm.NewTypeError("WeakMap constructor set method is not callable"));
         var iterable = args[0];
         var record = AbstractOperations.GetIterator(realm, realm.ActiveVm, iterable);
         while (true)
         {
             var next = AbstractOperations.IteratorStep(realm, realm.ActiveVm, ref record);
             if (next is null) break;
-            var entry = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
+            JsValue entry;
+            try
+            {
+                entry = AbstractOperations.IteratorValue(realm.ActiveVm, next.Value);
+            }
+            catch
+            {
+                AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
+                throw;
+            }
             if (!entry.IsObject)
             {
                 AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
                 throw new JsThrow(realm.NewTypeError("WeakMap iterable entry is not an object"));
             }
-            var key = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "0");
-            var value = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "1");
-            if (!key.IsObject)
+            try
+            {
+                var key = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "0");
+                var value = AbstractOperations.Get(realm.ActiveVm, entry.AsObject, "1");
+                AbstractOperations.Call(realm.ActiveVm, adder, JsValue.Object(m), new[] { key, value });
+            }
+            catch
             {
                 AbstractOperations.IteratorClose(realm.ActiveVm, record, isThrowing: true);
-                throw new JsThrow(realm.NewTypeError("WeakMap key must be an object"));
+                throw;
             }
-            m.Set(key.AsObject, value);
         }
         return m;
     }

@@ -103,6 +103,38 @@ public class FunctionTests
     }
 
     [TestMethod]
+    public void Function_bind_combines_bound_arguments_before_call_arguments()
+    {
+        var r = Run(@"
+            var testFunc = function(a, b, c) {
+                return a + ', ' + b + ', ' + c + ', ' + JSON.stringify(arguments);
+            };
+            testFunc.bind('anything')('a', 1, 'a');
+        ");
+
+        r.AsString.Should().Be("a, 1, a, {\"0\":\"a\",\"1\":1,\"2\":\"a\"}");
+    }
+
+    [TestMethod]
+    public void Arrow_function_is_extensible()
+    {
+        var r = Run(@"
+            var a = () => null;
+            Object.defineProperty(a, 'hello', { enumerable: true, get: () => 'world' });
+            a.foo = 'bar';
+            a.hello + ',' + a.foo;
+        ");
+
+        r.AsString.Should().Be("world,bar");
+    }
+
+    [TestMethod]
+    public void Anonymous_arrow_function_has_own_name_property()
+    {
+        Run("(()=>{}).hasOwnProperty('name');").AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Bound_function_inherits_bind_so_chain_works()
     {
         // Prototype chain proof: every bound function must itself respond
@@ -126,6 +158,22 @@ public class FunctionTests
             b2();
         ");
         r.AsNumber.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void Bound_function_can_be_used_as_property_getter()
+    {
+        var r = Run(@"
+            var holder = {
+                x: 42,
+                getter: function() { return this.x; }
+            };
+            var target = {};
+            Object.defineProperty(target, 'prop', { get: holder.getter.bind(holder) });
+            target.prop;
+        ");
+
+        r.AsNumber.Should().Be(42);
     }
 
     [TestMethod]

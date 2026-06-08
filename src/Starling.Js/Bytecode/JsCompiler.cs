@@ -2106,7 +2106,10 @@ public sealed partial class JsCompiler
             }
             else
             {
-                foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+                // `var` loop-head bindings are function-scoped and were
+                // already hoisted. Declaring them again in this synthetic loop
+                // scope would shadow the hoisted binding, so assignment from
+                // the pattern must resolve through StoreBindingIdentifier.
             }
         }
 
@@ -2328,7 +2331,9 @@ public sealed partial class JsCompiler
             }
             else
             {
-                foreach (var d in vd0.Declarations) DeclarePatternBindings(d.Id);
+                // `var` loop-head bindings are function-scoped and were
+                // already hoisted. Do not shadow them in the synthetic loop
+                // scope used by for-in lowering.
             }
         }
 
@@ -3587,7 +3592,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.Dup);                // [cur, cur]
                 var j = _b.EmitJump(jmp);           // pops one cur; [cur] if short-circuit
                 _b.Emit(Opcode.Pop);                // assign path: drop cur → []
-                EmitExpression(a.Value);            // [rhs]
+                EmitNamedEvaluation(a.Value, id.Name); // [rhs]
                 _b.Emit(Opcode.Dup);                // [rhs, rhs] — keep result after store
                 EmitStoreLocalSlot(slot);           // [rhs]
                 _b.PatchJump(j);                    // merge: [cur] or [rhs]
@@ -3600,7 +3605,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.Dup);
                 var j = _b.EmitJump(jmp);
                 _b.Emit(Opcode.Pop);
-                EmitExpression(a.Value);
+                EmitNamedEvaluation(a.Value, id.Name);
                 _b.Emit(Opcode.Dup);
                 // §16.2.1.6.2 — `import ||= …` etc. writes to an immutable binding
                 // (only on the assign path; the short-circuit path skips it).
@@ -3619,7 +3624,7 @@ public sealed partial class JsCompiler
             _b.Emit(Opcode.Dup);
             var jg = _b.EmitJump(jmp);
             _b.Emit(Opcode.Pop);
-            EmitExpression(a.Value);
+            EmitNamedEvaluation(a.Value, id.Name);
             _b.Emit(Opcode.Dup);
             _b.EmitU16(Opcode.StoreGlobal, nameIdx);  // [rhs]
             _b.PatchJump(jg);
@@ -3648,7 +3653,7 @@ public sealed partial class JsCompiler
                 // Assign path: [obj, cur]. Drop cur, eval RHS, PrivateSet
                 // (PrivateSet pops obj,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj]
-                EmitExpression(a.Value);            // [obj, rhs]
+                EmitNamedEvaluation(a.Value, "#" + ppne.Name); // [obj, rhs]
                 _b.EmitU16(Opcode.PrivateSet, pmIdx); // [rhs]
                 var jpEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: [obj, cur]; drop the dup'd base from
@@ -3669,6 +3674,7 @@ public sealed partial class JsCompiler
                 // computed member-update lowering in EmitUpdate).
                 EmitExpression(me.Object);          // [obj]
                 EmitExpression(me.Property);        // [obj, key]
+                _b.Emit(Opcode.ResolveComputedKey); // [obj, key]
                 _b.Emit(Opcode.Dup2);               // [obj, key, obj, key]
                 _b.Emit(Opcode.LoadComputed);       // [obj, key, cur]
                 _b.Emit(Opcode.Dup);                // [obj, key, cur, cur]
@@ -3677,6 +3683,8 @@ public sealed partial class JsCompiler
                 // (StoreComputed pops obj,key,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj, key]
                 EmitExpression(a.Value);            // [obj, key, rhs]
+                if (IsAnonymousFunctionDefinition(a.Value))
+                    _b.Emit(Opcode.SetFunctionNameComputed); // [obj, key, rhs]
                 _b.Emit(Opcode.StoreComputed);      // [rhs]
                 var jEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: stack is [obj, key, cur]; discard the
@@ -3694,7 +3702,8 @@ public sealed partial class JsCompiler
             }
             else
             {
-                var nameIdx = _b.AddConstant(((Identifier)me.Property).Name);
+                var propName = ((Identifier)me.Property).Name;
+                var nameIdx = _b.AddConstant(propName);
                 EmitExpression(me.Object);          // [obj]
                 _b.Emit(Opcode.Dup);                // [obj, obj]
                 _b.EmitU16(Opcode.LoadProperty, nameIdx); // [obj, cur]
@@ -3703,7 +3712,7 @@ public sealed partial class JsCompiler
                 // Assign path: [obj, cur]. Drop cur, eval RHS, store
                 // (StoreProperty pops obj,rhs and RE-PUSHES rhs).
                 _b.Emit(Opcode.Pop);                // [obj]
-                EmitExpression(a.Value);            // [obj, rhs]
+                EmitNamedEvaluation(a.Value, propName); // [obj, rhs]
                 _b.EmitU16(Opcode.StoreProperty, nameIdx); // [rhs]
                 var jEnd = _b.EmitJump(Opcode.Jump);
                 // Short-circuit path: stack is [obj, cur]; drop the dup'd base
@@ -3756,6 +3765,29 @@ public sealed partial class JsCompiler
             return;
         }
         EmitExpression(m.Object);
+        if (m.Optional)
+        {
+            _b.Emit(Opcode.Dup);                  // [obj, obj]
+            var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one
+            _b.Emit(Opcode.Pop);                  // []
+            _b.Emit(Opcode.LoadUndefined);        // [undefined]
+            var done = _b.EmitJump(Opcode.Jump);
+            _b.PatchJump(notNullish);             // [obj]
+            if (m.Computed)
+            {
+                EmitExpression(m.Property);
+                RecordPos(m);
+                _b.Emit(Opcode.LoadComputed);
+            }
+            else
+            {
+                var optionalName = ((Identifier)m.Property).Name;
+                RecordPos(m);
+                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant(optionalName));
+            }
+            _b.PatchJump(done);
+            return;
+        }
         if (m.Computed)
         {
             EmitExpression(m.Property);
@@ -3814,7 +3846,7 @@ public sealed partial class JsCompiler
         // property, then args, then CallMethod which consumes
         // [receiver, callee, args...]. For plain calls, emit the callee
         // alone and route through Call (this=Undefined).
-        if (!call.Optional && call.Callee is MemberExpression me)
+        if (call.Callee is MemberExpression me)
         {
             EmitExpression(me.Object);          // [obj]
 
@@ -3854,6 +3886,24 @@ public sealed partial class JsCompiler
                 RecordPos(me);
                 _b.EmitU16(Opcode.LoadProperty, nameIdx);  // [obj, fn]
             }
+
+            // §13.3 OptionalChain — `obj.method?.(args)`. The CALL is optional: a
+            // nullish *method* short-circuits the whole call to undefined. `this`
+            // still binds to obj when the method IS present (the method-call form
+            // is preserved). This is distinct from me.Optional above, where a
+            // nullish *base* short-circuits before the property is even loaded.
+            int? methodOptCallDone = null;
+            if (call.Optional)
+            {
+                _b.Emit(Opcode.Dup);                                     // [obj, fn, fn]
+                var fnNotNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one → [obj, fn]
+                _b.Emit(Opcode.Pop);                                     // [obj]
+                _b.Emit(Opcode.Pop);                                     // []
+                _b.Emit(Opcode.LoadUndefined);                           // [undefined]
+                methodOptCallDone = _b.EmitJump(Opcode.Jump);            // skip the call
+                _b.PatchJump(fnNotNullish);                              // [obj, fn] (proceed)
+            }
+
             if (hasSpread)
             {
                 // Build args array first, then apply.
@@ -3861,12 +3911,14 @@ public sealed partial class JsCompiler
                 RecordPos(call);
                 _b.Emit(Opcode.CallApplyMethod);
                 if (optDone is { } optDoneSpread) _b.PatchJump(optDoneSpread);
+                if (methodOptCallDone is { } moSpread) _b.PatchJump(moSpread);
                 return;
             }
             foreach (var arg in call.Arguments) EmitExpression(arg);
             RecordPos(call);
             _b.Emit(Opcode.CallMethod, (byte)call.Arguments.Count);
             if (optDone is { } optDonePlain) _b.PatchJump(optDonePlain);
+            if (methodOptCallDone is { } moPlain) _b.PatchJump(moPlain);
             return;
         }
 
@@ -4193,6 +4245,7 @@ public sealed partial class JsCompiler
                 if (prop.Computed)
                 {
                     EmitComputedKey(prop.Key);  // [obj, key]
+                    _b.Emit(Opcode.ToPropertyKey); // [obj, key]
                     EmitExpression(prop.Value); // [obj, key, fn]
                     // wp:M3-64 — §13.2.5 MakeMethod: object-literal accessors get
                     // a [[HomeObject]] = the object so `super.x` resolves.
@@ -4226,7 +4279,10 @@ public sealed partial class JsCompiler
             if (prop.Computed)
             {
                 EmitComputedKey(prop.Key);           // [obj, key]
+                _b.Emit(Opcode.ToPropertyKey);       // [obj, key]
                 EmitExpression(prop.Value);          // [obj, key, value]
+                if (IsAnonymousFunctionDefinition(prop.Value))
+                    _b.Emit(Opcode.SetFunctionNameComputed); // [obj, key, value]
                 // wp:M3-64 — §13.2.5 MakeMethod: a concise method (`{ [k]() {} }`)
                 // gets a [[HomeObject]] = the object so `super.x` resolves; a plain
                 // data property (`{ [k]: fn }`) does NOT.
@@ -4243,6 +4299,12 @@ public sealed partial class JsCompiler
                     _ => throw new NotSupportedException(
                         $"object key kind '{prop.Key.GetType().Name}'"),
                 };
+                if (IsObjectLiteralProtoSetter(prop, propName))
+                {
+                    EmitExpression(prop.Value);          // [obj, value]
+                    _b.Emit(Opcode.SetObjectPrototype);  // [obj]
+                    continue;
+                }
                 var nameIdx = _b.AddConstant(propName);
                 // §named-evaluation — `{ x: function(){} }` names the function "x".
                 EmitNamedEvaluation(prop.Value, propName);       // [obj, value]
@@ -4254,7 +4316,12 @@ public sealed partial class JsCompiler
         }
     }
 
-
+    private static bool IsObjectLiteralProtoSetter(ObjectProperty prop, string propName)
+        => propName == "__proto__"
+            && !prop.Computed
+            && !prop.Shorthand
+            && !prop.IsMethod
+            && prop.Kind == MethodKind.Method;
 
     private enum RestExclusionKind { Constant, Local }
     private readonly record struct RestExclusion(RestExclusionKind Kind, string? Name, int Slot);
@@ -5083,11 +5150,12 @@ public sealed partial class JsCompiler
 
     private void EmitArrayLiteral(ArrayExpression ae)
     {
-        // B2-4: arrays are now dense JsArray exotics, so the magic length
-        // slot is derived from the indexed slots. We still walk each element
-        // and StoreProperty its index — JsArray's exotic [[Set]] routes
-        // indexed writes into the dense backing. B3-2: spread elements
-        // dispatch through SpreadIterable which walks @@iterator.
+        // B2-4: arrays are dense JsArray exotics, so the magic length slot is
+        // derived from indexed slots. Literal element creation uses
+        // CreateDataProperty semantics, not ordinary assignment, so inherited
+        // non-writable prototype indexes cannot block a fresh array's elements.
+        // B3-2: spread elements dispatch through SpreadIterable, which walks
+        // @@iterator and appends directly.
         _b.Emit(Opcode.NewArray);
         // Track the next dense index that a plain element should land at.
         // Once a spread runs, subsequent plain elements use Array.prototype.push
@@ -5116,17 +5184,17 @@ public sealed partial class JsCompiler
             {
                 _b.Emit(Opcode.Dup);
                 EmitExpression(element);
-                _b.EmitU16(Opcode.StoreProperty, _b.AddConstant(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                _b.EmitU16(Opcode.DefineDataProperty, _b.AddConstant(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                 _b.Emit(Opcode.Pop);
             }
             else
             {
-                // Push via length: arr[arr.length] = value
+                // Append via CreateDataProperty(arr, arr.length, value).
                 _b.Emit(Opcode.Dup);            // [arr, arr]
                 _b.Emit(Opcode.Dup);            // [arr, arr, arr]
                 _b.EmitU16(Opcode.LoadProperty, _b.AddConstant("length")); // [arr, arr, len]
                 EmitExpression(element);        // [arr, arr, len, value]
-                _b.Emit(Opcode.StoreComputed);  // [arr, value]
+                _b.Emit(Opcode.DefineDataComputed); // [arr, arr]
                 _b.Emit(Opcode.Pop);            // [arr]
             }
         }
