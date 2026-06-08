@@ -38,6 +38,12 @@ public class RegExpReplaceFastPathTests
     [TestMethod] public void DollarCapture() => Run("'2024-01'.replace(/(\\d+)-(\\d+)/, '$2/$1')").Should().Be("01/2024");
     [TestMethod] public void DollarDollar() => Run("'a'.replace(/a/, '$$')").Should().Be("$");
 
+    // $<name> is literal when the regex has no named captures (the fast-path case).
+    // The "<" must not be dropped — "$<x>" stays "$<x>", not "$x>".
+    [TestMethod] public void DollarAngleLiteralNoNamedCaptures() => Run("'abc'.replace(/b/, '$<x>')").Should().Be("a$<x>c");
+    [TestMethod] public void DollarAngleGlobalLiteral() => Run("'abab'.replace(/a/g, '$<n>')").Should().Be("$<n>b$<n>b");
+    [TestMethod] public void DollarAngleUnterminated() => Run("'abc'.replace(/b/, 'x$<')").Should().Be("ax$<c");
+
     // Functional replacement (fast path, no named captures).
     [TestMethod] public void Functional() => Run("'abc'.replace(/b/, function(m){ return m.toUpperCase(); })").Should().Be("aBc");
     [TestMethod] public void FunctionalGlobalCaptures() => Run("'a1b2'.replace(/([a-z])(\\d)/g, function(m,p1,p2){ return p2+p1; })").Should().Be("1a2b");
