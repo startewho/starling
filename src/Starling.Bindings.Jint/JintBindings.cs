@@ -21,8 +21,18 @@ public static class JintBindings
         // EventTarget + Event. Node.prototype inherits this.
         EventTargetBinding.Install(ctx);
 
+        // Live DOM collections (NodeList / HTMLCollection / DOMTokenList). Install
+        // before NodeBindings so the interface prototypes exist for the wrappers
+        // the Node bindings hand back.
+        CollectionsBinding.Install(ctx);
+
         // Node / Element / Document.
         NodeBindings.Install(ctx);
+
+        // DOMException — the error type DOM methods throw. Installed after
+        // NodeBindings (which no longer defines a DOMException marker) so the real
+        // constructible interface wins.
+        DomExceptionBinding.Install(ctx);
 
         // Window/global + companions.
         WindowBinding.Install(ctx);
