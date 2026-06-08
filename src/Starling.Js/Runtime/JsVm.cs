@@ -73,11 +73,30 @@ public sealed class JsVm
 
     private static string NullishLabel(JsValue value) => value.IsNull ? "null" : "undefined";
 
+    /// <summary>The prototype that hosts the methods of a primitive value, or
+    /// null if not a primitive with a wrapper prototype. Used to resolve a
+    /// property on a primitive without allocating a wrapper object.</summary>
+    private JsObject? PrimitivePrototype(JsValue v)
+    {
+        var r = _runtime.Realm;
+        if (v.IsString) return r.StringPrototype;
+        if (v.IsNumber) return r.NumberPrototype;
+        if (v.IsBoolean) return r.BooleanPrototype;
+        if (v.IsSymbol) return r.SymbolPrototype;
+        if (v.IsBigInt) return r.BigIntPrototype;
+        return null;
+    }
+
     public JsVm(JsRuntime runtime, ILogger<JsVm>? log = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _log = log ?? NullLogger<JsVm>.Instance;
     }
+
+    /// <summary>Per-opcode dispatch counts for this VM. Indexed by
+    /// <see cref="Opcode"/> byte value. Incremented once per dispatched
+    /// instruction inside <see cref="RunInner"/>.</summary>
+    public readonly long[] OpcodeCounts = new long[256];
 
     /// <summary>The realm this VM dispatches against.</summary>
     public JsRealm Realm => _runtime.Realm;
@@ -641,6 +660,7 @@ public sealed class JsVm
             try
             {
                 var op = (Opcode)code[ip++];
+                OpcodeCounts[(byte)op]++;
                 switch (op)
                 {
                     case Opcode.Halt:
@@ -1235,11 +1255,69 @@ public sealed class JsVm
                     case Opcode.LoadProperty:
                         {
                             var idx = ReadU16();
+                            var cacheId = ReadU16();
                             var name = (string)constants[idx]!;
                             _lastLoadName = name;
                             var obj = Pop();
-                            if (obj.IsObject) Push(AbstractOperations.Get(this, obj.AsObject, name));
-                            else if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
+                            if (obj.IsObject)
+                            {
+                                var o = obj.AsObject;
+                                var sh = o.Shape;
+                                if (cacheId != 0xFFFF)
+                                {
+                                    var ic = chunk.Caches[cacheId];
+                                    if (sh is not null && ReferenceEquals(sh, ic.Shape) && o.SupportsInlineCache)
+                                    {
+                                        // Own data property at a known slot.
+                                        if (ic.Holder is null) { Push(o.ReadSlot(ic.Slot)); break; }
+                                        // One-hop inherited data property. Same shape proves
+                                        // no own shadow; same direct prototype proves the
+                                        // same chain; unchanged epoch proves the holder
+                                        // still has the property at that slot.
+                                        if (ReferenceEquals(o.Prototype, ic.Holder) && ic.Epoch == JsObject.ProtoEpoch)
+                                        {
+                                            Push(ic.Holder.ReadSlot(ic.Slot));
+                                            break;
+                                        }
+                                    }
+                                    var result = AbstractOperations.Get(this, o, name);
+                                    if (sh is not null && o.SupportsInlineCache)
+                                    {
+                                        if (sh.TryGet(name, out var ownHit))
+                                            chunk.Caches[cacheId] = new InlineCache { Shape = sh, Slot = ownHit.Slot };
+                                        else if (o.Prototype is { Shape: { } dsh } dp && dp.SupportsInlineCache
+                                            && dsh.TryGet(name, out var pp))
+                                            // Property lives on the DIRECT prototype as fast
+                                            // data (one hop). Multi-hop and accessor/dict
+                                            // holders are left to the slow path.
+                                            chunk.Caches[cacheId] = new InlineCache
+                                            { Shape = sh, Slot = pp.Slot, Holder = dp, Epoch = JsObject.ProtoEpoch };
+                                    }
+                                    Push(result);
+                                    break;
+                                }
+                                Push(AbstractOperations.Get(this, o, name));
+                                break;
+                            }
+                            if (!obj.IsNullish)
+                            {
+                                // String "length" is just the code-unit count — read it
+                                // directly, no boxed String object. Every other primitive
+                                // property lives on the prototype chain, reached without a
+                                // wrapper: §6.2.5.5 runs [[Get]] with the primitive as the
+                                // receiver. A string's only other exotic own keys are
+                                // canonical indices, which arrive as computed access, never a
+                                // named LoadProperty, so no box is ever needed here.
+                                if (obj.IsString && name == "length")
+                                    Push(JsValue.Number(obj.AsString.Length));
+                                else
+                                {
+                                    var proto = PrimitivePrototype(obj);
+                                    Push(proto is not null
+                                        ? AbstractOperations.Get(this, proto, name, obj)
+                                        : AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
+                                }
+                            }
                             else throw new JsThrow(_runtime.Realm.NewTypeError(
                                 "Cannot read properties of " + NullishLabel(obj) + " (reading '" + name + "')"));
                             break;
@@ -1247,12 +1325,63 @@ public sealed class JsVm
                     case Opcode.StoreProperty:
                         {
                             var idx = ReadU16();
+                            var cacheId = ReadU16();
                             var name = (string)constants[idx]!;
                             var value = Pop();
                             var obj = Pop();
                             if (obj.IsObject)
                             {
-                                var ok = AbstractOperations.Set(this, obj.AsObject, name, value);
+                                var o = obj.AsObject;
+                                var sh = o.Shape;
+                                if (cacheId != 0xFFFF && sh is not null && o.SupportsInlineCache)
+                                {
+                                    var ic = chunk.Caches[cacheId];
+                                    if (ReferenceEquals(sh, ic.Shape))
+                                    {
+                                        // Write an existing own writable data slot — an own
+                                        // writable data property shadows the chain, so this
+                                        // is safe regardless of the prototype.
+                                        if (ic.NextShape is null)
+                                        {
+                                            o.WriteSlot(ic.Slot, value);
+                                            Push(value);
+                                            break;
+                                        }
+                                        // Add a new property via the cached transition.
+                                        // Valid only for the same direct prototype (same
+                                        // chain) with an unchanged epoch (no inherited
+                                        // setter / non-writable data appeared for this name).
+                                        if (ReferenceEquals(o.Prototype, ic.Holder) && ic.Epoch == JsObject.ProtoEpoch)
+                                        {
+                                            o.FastAdd(ic.NextShape, ic.Slot, value);
+                                            Push(value);
+                                            break;
+                                        }
+                                    }
+                                    // Miss: run the spec [[Set]], then cache an existing-slot
+                                    // write or an add transition.
+                                    var okIc = AbstractOperations.Set(this, o, name, value);
+                                    if (!okIc)
+                                    {
+                                        if (frameStrict)
+                                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                                "Cannot assign to read-only property '" + name + "'"));
+                                    }
+                                    else
+                                    {
+                                        var after = o.Shape;
+                                        if (after is not null && o.SupportsInlineCache
+                                            && after.TryGet(name, out var p) && p.Writable)
+                                        {
+                                            chunk.Caches[cacheId] = ReferenceEquals(after, sh)
+                                                ? new InlineCache { Shape = sh, Slot = p.Slot }
+                                                : new InlineCache { Shape = sh, Slot = p.Slot, NextShape = after, Holder = o.Prototype, Epoch = JsObject.ProtoEpoch };
+                                        }
+                                    }
+                                    Push(value);
+                                    break;
+                                }
+                                var ok = AbstractOperations.Set(this, o, name, value);
                                 // §10.1.9 / §13.15.2 — a strict assignment the [[Set]]
                                 // rejects (non-writable data prop, accessor without a
                                 // setter, or add to a non-extensible object) throws.
@@ -1594,19 +1723,29 @@ public sealed class JsVm
                         {
                             var srcIdx = ReadU16();
                             var flagsIdx = ReadU16();
-                            var source = (string)constants[srcIdx]!;
-                            var flagsStr = (string)constants[flagsIdx]!;
-                            if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
-                                throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
-                            CompiledRegex compiled;
-                            try
+                            var regexCacheId = ReadU16();
+                            // Per-site cache: a regex literal compiles once and the matcher
+                            // is reused across re-evaluations (e.g. in a loop), avoiding even
+                            // the (source, flags) dictionary lookup on the hot path. A fresh
+                            // JsRegExp wrapper is still created each time so each evaluation
+                            // gets an independent `lastIndex` slot, as the spec requires.
+                            var compiled = chunk.RegexLiterals[regexCacheId];
+                            if (compiled is null)
                             {
-                                compiled = CompiledRegex.Compile(source, flags);
-                            }
-                            catch (RegexSyntaxException ex)
-                            {
-                                throw new JsThrow(_runtime.Realm.NewSyntaxError(
-                                    $"Invalid regular expression: /{source}/: {ex.Message}"));
+                                var source = (string)constants[srcIdx]!;
+                                var flagsStr = (string)constants[flagsIdx]!;
+                                if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
+                                    throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
+                                try
+                                {
+                                    compiled = Starling.Js.Runtime.Regex.RegexBackendSelector.CompileCached(source, flags);
+                                }
+                                catch (RegexSyntaxException ex)
+                                {
+                                    throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                                        $"Invalid regular expression: /{source}/: {ex.Message}"));
+                                }
+                                chunk.RegexLiterals[regexCacheId] = compiled;
                             }
                             Push(JsValue.Object(new JsRegExp(_runtime.Realm, compiled)));
                             break;

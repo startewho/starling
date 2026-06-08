@@ -51,6 +51,15 @@ internal sealed class TileGrid
     private readonly Dictionary<Element, long> _layerIds = new();
     private long _nextLayerId = 1;
 
+    // Cache of the per-slice content-hash index (DisplayListContentHash.Prepare),
+    // keyed by the layer's slice content hash. Prepare walks every item in the slice
+    // and allocates an entry list, so for a static layer that is composited every
+    // frame (e.g. the page root behind a small animating element) recomputing it per
+    // frame is pure waste. Keyed by content hash: the same slice content yields the
+    // same prepared index, so a cache hit is exact. Bounded by the number of distinct
+    // layer contents (a handful for a static page); cleared with the tiles.
+    private readonly Dictionary<long, DisplayList.DisplayListContentHash.PreparedSlice> _preparedByContentHash = new();
+
     private sealed class Entry
     {
         public TileKey Key;
@@ -92,6 +101,24 @@ internal sealed class TileGrid
             _layerIds[element] = id;
         }
         return id;
+    }
+
+    /// <summary>
+    /// Returns the prepared content-hash index for a layer slice, reusing a cached
+    /// one when this slice content (<paramref name="contentHash"/>) was prepared
+    /// before. A <paramref name="contentHash"/> of 0 (no stable identity) is always
+    /// prepared fresh and not cached.
+    /// </summary>
+    public DisplayList.DisplayListContentHash.PreparedSlice GetOrPrepare(
+        long contentHash, DisplayList.DisplayList items)
+    {
+        if (contentHash == 0)
+            return DisplayList.DisplayListContentHash.Prepare(items);
+        if (_preparedByContentHash.TryGetValue(contentHash, out var cached))
+            return cached;
+        var prepared = DisplayList.DisplayListContentHash.Prepare(items);
+        _preparedByContentHash[contentHash] = prepared;
+        return prepared;
     }
 
     /// <summary>Current resident byte total — for tests/metrics.</summary>
@@ -209,5 +236,6 @@ internal sealed class TileGrid
         _lru.Clear();
         _bytes = 0;
         _layerIds.Clear();
+        _preparedByContentHash.Clear();
     }
 }

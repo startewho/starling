@@ -42,6 +42,23 @@ public sealed class NativeViewportRenderer : IDisposable
     private readonly TileGrid _tiles;
     private bool _disposed;
 
+    // Cross-frame layer-tree cache for the single-document page path. On a pure
+    // animation tick — same root, page version, viewport, and scale — the tree is
+    // refreshed in place (only animating layers rebuilt) instead of rebuilt whole.
+    // That skips the per-frame display-list rebuild + re-hash of the static page,
+    // which is the allocation churn that otherwise pins the GC at several cores
+    // while a single small element animates.
+    private CompositorLayer? _cachedTree;
+    private BlockBox? _cachedRoot;
+    private long _cachedPageVersion = long.MinValue;
+    private float _cachedScale;
+    private LayoutRect _cachedViewport;
+    // Escape hatch: set STARLING_DISABLE_TREE_REUSE=1 to force a full layer-tree
+    // rebuild every frame (the pre-optimization behaviour), for diagnosing any
+    // suspected reuse-vs-rebuild rendering difference.
+    private static readonly bool ReuseDisabled =
+        Environment.GetEnvironmentVariable("STARLING_DISABLE_TREE_REUSE") == "1";
+
     public NativeViewportRenderer(ILogger<NativeViewportRenderer>? log = null)
         : this(PaintBackendSelector.Create(FontResolver.Default, webFonts: null),
             log,
@@ -78,7 +95,9 @@ public sealed class NativeViewportRenderer : IDisposable
         LayoutRect? viewport = null,
         Func<Box, bool>? isAnimatingLayerRoot = null,
         IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null,
-        Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
+        Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null,
+        long pageVersion = 0,
+        bool animationTick = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -89,13 +108,42 @@ public sealed class NativeViewportRenderer : IDisposable
             // DIAG (open-time investigation): split the cold first present into
             // layer-tree build vs raster+GPU present. Logged only for slow frames.
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var tree = new LayerTreeBuilder(styleOverride, images,
-                isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
-                scrollOffsets: scrollOffsets).Build(root);
-            var tBuild = sw.ElapsedMilliseconds;
             var region = viewport ?? new LayoutRect(0, 0,
                 Math.Max(1, root.Frame.Width),
                 Math.Max(1, root.Frame.Height));
+
+            var builder = new LayerTreeBuilder(styleOverride, images,
+                isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
+                scrollOffsets: scrollOffsets);
+
+            // Pure animation tick over an unchanged page: refresh only the animating
+            // layers and reuse every static layer's cached slice/hash. Otherwise
+            // (any DOM/layout/viewport/scale change, or a non-animation present such
+            // as a hover or selection repaint) rebuild the whole tree, which also
+            // re-establishes the cache baseline.
+            CompositorLayer tree;
+            if (!ReuseDisabled
+                && animationTick
+                && _cachedTree is not null
+                && ReferenceEquals(root, _cachedRoot)
+                && pageVersion == _cachedPageVersion
+                && scale == _cachedScale
+                && RegionEquals(region, _cachedViewport))
+            {
+                tree = builder.RefreshAnimating(_cachedTree);
+            }
+            else
+            {
+                tree = builder.Build(root);
+            }
+
+            _cachedTree = tree;
+            _cachedRoot = root;
+            _cachedPageVersion = pageVersion;
+            _cachedScale = scale;
+            _cachedViewport = region;
+
+            var tBuild = sw.ElapsedMilliseconds;
             var compositor = new Compositor(_backend, _tiles);
             var ok = compositor.RenderToSurface(tree, region, scale, presenter, drawingOverlays);
             if (sw.ElapsedMilliseconds > 100)
@@ -283,7 +331,13 @@ public sealed class NativeViewportRenderer : IDisposable
     public void ResetForNavigation()
     {
         _tiles.Clear();
+        _cachedTree = null;
+        _cachedRoot = null;
+        _cachedPageVersion = long.MinValue;
     }
+
+    private static bool RegionEquals(LayoutRect a, LayoutRect b)
+        => a.X == b.X && a.Y == b.Y && a.Width == b.Width && a.Height == b.Height;
 
     public void Dispose()
     {

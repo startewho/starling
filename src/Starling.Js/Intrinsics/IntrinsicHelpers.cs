@@ -31,6 +31,68 @@ internal static class IntrinsicHelpers
         return fn;
     }
 
+    /// <summary>One string-keyed data property to bulk-install on a prototype:
+    /// either a builtin method created from <paramref name="Body"/>, or — when
+    /// <paramref name="Body"/> is null — a pre-built value (e.g. the
+    /// <c>constructor</c> back-reference, or <c>Function.prototype.length</c>)
+    /// carried in <paramref name="Value"/>. <paramref name="Flags"/> are the
+    /// data-property attributes (default builtin = W=true/E=false/C=true,
+    /// <see cref="PropertyDescriptor.BuiltinMethod"/>); pass an explicit value for
+    /// non-default data properties (e.g. a non-writable <c>length</c>/<c>name</c>).
+    /// Order in the caller's array is creation order.</summary>
+    internal readonly record struct BulkMember(
+        string Name,
+        int Length,
+        Func<JsValue, JsValue[], JsValue>? Body,
+        JsValue Value = default,
+        byte Flags = Shape.Writable | Shape.Configurable);
+
+    /// <summary>Bulk-install an ordered set of string-keyed builtin data
+    /// properties (methods + optional <c>constructor</c>) on a freshly-created
+    /// prototype by adopting ONE precomputed terminal <see cref="Shape"/> plus a
+    /// filled slot array, instead of N sequential <c>DefineOwnProperty</c> calls.
+    ///
+    /// <para>The terminal shape is built once via <see cref="Shape.Transition"/>
+    /// using each member's builtin attributes (W=true/E=false/C=true,
+    /// <see cref="PropertyDescriptor.BuiltinMethod"/>), so its identity is exactly
+    /// what the incremental path would have produced — inline caches and
+    /// dictionary migration see no difference, and <c>getOwnPropertyNames(proto)</c>
+    /// order is unchanged. The result is byte-identical to installing each member
+    /// with <see cref="DefineMethod"/> / a builtin-method <c>DefineOwnProperty</c>.</para>
+    ///
+    /// <para>HAZARDS the caller must respect: (1) every member must be a
+    /// string-keyed DATA property with builtin attributes — symbol-keyed members
+    /// (e.g. <c>@@iterator</c>) can never enter a shape and must be installed via
+    /// the dictionary path AFTER this call; (2) <paramref name="target"/> must
+    /// still be in its initial fast state (root shape, no own properties); (3) any
+    /// accessor or non-builtin-attribute property forces the incremental path.</para>
+    /// </summary>
+    internal static void BulkInstallBuiltins(JsRealm realm, JsObject target, System.ReadOnlySpan<BulkMember> members)
+    {
+        ArgumentNullException.ThrowIfNull(realm);
+        ArgumentNullException.ThrowIfNull(target);
+
+        var shape = Shape.Root;
+        var slots = new JsValue[members.Length];
+        for (var i = 0; i < members.Length; i++)
+        {
+            var m = members[i];
+            JsValue value;
+            if (m.Body is not null)
+            {
+                var fn = new JsNativeFunction(realm, m.Name, m.Length, m.Body, isConstructor: false);
+                value = JsValue.Object(fn);
+            }
+            else
+            {
+                value = m.Value;
+            }
+            slots[i] = value;
+            shape = shape.Transition(m.Name, m.Flags);
+        }
+        target.AdoptShape(shape, slots);
+    }
+
     /// <summary>Install a constant data property (non-writable, non-enumerable, non-configurable).</summary>
     public static void DefineConstant(JsObject target, string name, JsValue value)
     {

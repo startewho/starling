@@ -53,60 +53,59 @@ public static class ArrayCtor
         });
         IntrinsicHelpers.DefineMethod(realm, ctor, "from", 1, (_, args) => From(realm, args));
 
-        proto.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-
-        // -------- Prototype methods (mutating)
-        IntrinsicHelpers.DefineMethod(realm, proto, "push", 1, (thisV, args) => Push(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "pop", 0, (thisV, _) => Pop(realm, thisV));
-        IntrinsicHelpers.DefineMethod(realm, proto, "shift", 0, (thisV, _) => Shift(realm, thisV));
-        IntrinsicHelpers.DefineMethod(realm, proto, "unshift", 1, (thisV, args) => Unshift(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "splice", 2, (thisV, args) => Splice(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "reverse", 0, (thisV, _) => Reverse(realm, thisV));
-        IntrinsicHelpers.DefineMethod(realm, proto, "sort", 1, (thisV, args) => Sort(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "fill", 1, (thisV, args) => Fill(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "copyWithin", 2, (thisV, args) => CopyWithin(realm, thisV, args));
-
-        // -------- Prototype methods (non-mutating)
-        IntrinsicHelpers.DefineMethod(realm, proto, "concat", 1, (thisV, args) => Concat(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "slice", 2, (thisV, args) => Slice(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "join", 1, (thisV, args) => Join(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0, (thisV, _) => ToString(realm, thisV));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, _) => Join(realm, thisV, Array.Empty<JsValue>()));
-        IntrinsicHelpers.DefineMethod(realm, proto, "indexOf", 1, (thisV, args) => IndexOf(realm, thisV, args, fromEnd: false));
-        IntrinsicHelpers.DefineMethod(realm, proto, "lastIndexOf", 1, (thisV, args) => IndexOf(realm, thisV, args, fromEnd: true));
-        IntrinsicHelpers.DefineMethod(realm, proto, "includes", 1, (thisV, args) => Includes(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "forEach", 1, (thisV, args) => ForEach(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "map", 1, (thisV, args) => Map(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "filter", 1, (thisV, args) => Filter(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "reduce", 1, (thisV, args) => Reduce(realm, thisV, args, fromRight: false));
-        IntrinsicHelpers.DefineMethod(realm, proto, "reduceRight", 1, (thisV, args) => Reduce(realm, thisV, args, fromRight: true));
-        IntrinsicHelpers.DefineMethod(realm, proto, "every", 1, (thisV, args) => Every(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "some", 1, (thisV, args) => Some(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "find", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: false, indexOnly: false));
-        IntrinsicHelpers.DefineMethod(realm, proto, "findIndex", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: false, indexOnly: true));
-        IntrinsicHelpers.DefineMethod(realm, proto, "findLast", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: true, indexOnly: false));
-        IntrinsicHelpers.DefineMethod(realm, proto, "findLastIndex", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: true, indexOnly: true));
-        IntrinsicHelpers.DefineMethod(realm, proto, "flat", 0, (thisV, args) => Flat(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "flatMap", 1, (thisV, args) => FlatMap(realm, thisV, args));
-
-        // -------- ES2023 immutable methods
-        IntrinsicHelpers.DefineMethod(realm, proto, "toReversed", 0, (thisV, _) => ToReversed(realm, thisV));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toSorted", 1, (thisV, args) => ToSorted(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toSpliced", 2, (thisV, args) => ToSpliced(realm, thisV, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "with", 2, (thisV, args) => With(realm, thisV, args));
-
-        // -------- Iterators (B3-2: real %ArrayIteratorPrototype% instances).
-        var values = IntrinsicHelpers.DefineMethod(realm, proto, "values", 0,
-            (thisV, _) => IteratorIntrinsics.CreateArrayIterator(realm, thisV, ArrayIteratorKind.Value));
-        IntrinsicHelpers.DefineMethod(realm, proto, "keys", 0,
-            (thisV, _) => IteratorIntrinsics.CreateArrayIterator(realm, thisV, ArrayIteratorKind.Key));
-        IntrinsicHelpers.DefineMethod(realm, proto, "entries", 0,
-            (thisV, _) => IteratorIntrinsics.CreateArrayIterator(realm, thisV, ArrayIteratorKind.KeyAndValue));
-        // §23.1.3.36 Array.prototype[@@iterator] is the same function object as
-        // Array.prototype.values per spec.
+        // Bulk-install constructor + every string-keyed prototype method by
+        // adopting one precomputed shape. Order (and thus getOwnPropertyNames
+        // order) is unchanged: constructor, mutating methods, non-mutating
+        // methods, ES2023 immutable methods, then the iterator trio
+        // (values/keys/entries). All are string-keyed builtin data properties, so
+        // the result is byte-identical to the prior sequential DefineMethod chain.
+        IntrinsicHelpers.BulkInstallBuiltins(realm, proto, new[]
+        {
+            new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
+            new IntrinsicHelpers.BulkMember("push", 1, (thisV, args) => Push(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("pop", 0, (thisV, _) => Pop(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("shift", 0, (thisV, _) => Shift(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("unshift", 1, (thisV, args) => Unshift(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("splice", 2, (thisV, args) => Splice(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("reverse", 0, (thisV, _) => Reverse(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("sort", 1, (thisV, args) => Sort(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("fill", 1, (thisV, args) => Fill(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("copyWithin", 2, (thisV, args) => CopyWithin(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("concat", 1, (thisV, args) => Concat(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("slice", 2, (thisV, args) => Slice(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("join", 1, (thisV, args) => Join(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("toString", 0, (thisV, _) => ToString(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, _) => Join(realm, thisV, Array.Empty<JsValue>())),
+            new IntrinsicHelpers.BulkMember("indexOf", 1, (thisV, args) => IndexOf(realm, thisV, args, fromEnd: false)),
+            new IntrinsicHelpers.BulkMember("lastIndexOf", 1, (thisV, args) => IndexOf(realm, thisV, args, fromEnd: true)),
+            new IntrinsicHelpers.BulkMember("includes", 1, (thisV, args) => Includes(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("forEach", 1, (thisV, args) => ForEach(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("map", 1, (thisV, args) => Map(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("filter", 1, (thisV, args) => Filter(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("reduce", 1, (thisV, args) => Reduce(realm, thisV, args, fromRight: false)),
+            new IntrinsicHelpers.BulkMember("reduceRight", 1, (thisV, args) => Reduce(realm, thisV, args, fromRight: true)),
+            new IntrinsicHelpers.BulkMember("every", 1, (thisV, args) => Every(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("some", 1, (thisV, args) => Some(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("find", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: false, indexOnly: false)),
+            new IntrinsicHelpers.BulkMember("findIndex", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: false, indexOnly: true)),
+            new IntrinsicHelpers.BulkMember("findLast", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: true, indexOnly: false)),
+            new IntrinsicHelpers.BulkMember("findLastIndex", 1, (thisV, args) => Find(realm, thisV, args, fromEnd: true, indexOnly: true)),
+            new IntrinsicHelpers.BulkMember("flat", 0, (thisV, args) => Flat(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("flatMap", 1, (thisV, args) => FlatMap(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("toReversed", 0, (thisV, _) => ToReversed(realm, thisV)),
+            new IntrinsicHelpers.BulkMember("toSorted", 1, (thisV, args) => ToSorted(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("toSpliced", 2, (thisV, args) => ToSpliced(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("with", 2, (thisV, args) => With(realm, thisV, args)),
+            new IntrinsicHelpers.BulkMember("values", 0, (thisV, _) => IteratorIntrinsics.CreateArrayIterator(realm, thisV, ArrayIteratorKind.Value)),
+            new IntrinsicHelpers.BulkMember("keys", 0, (thisV, _) => IteratorIntrinsics.CreateArrayIterator(realm, thisV, ArrayIteratorKind.Key)),
+            new IntrinsicHelpers.BulkMember("entries", 0, (thisV, _) => IteratorIntrinsics.CreateArrayIterator(realm, thisV, ArrayIteratorKind.KeyAndValue)),
+        });
+        // §23.1.3.36 Array.prototype[@@iterator] is the SAME function object as
+        // Array.prototype.values per spec. Symbol-keyed — install via the
+        // dictionary path AFTER the string-method shape is adopted.
+        var values = proto.Get("values");
         proto.DefineOwnProperty(SymbolCtor.Iterator,
-            PropertyDescriptor.BuiltinMethod(JsValue.Object(values)));
+            PropertyDescriptor.BuiltinMethod(values));
 
         realm.ArrayConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Array",

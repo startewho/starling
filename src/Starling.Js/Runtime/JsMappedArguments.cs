@@ -40,6 +40,7 @@ public sealed class JsMappedArguments : JsObject
     internal JsMappedArguments(JsObject? prototype, JsValue[] locals, int[] slotForIndex)
         : base(prototype)
     {
+        DisableInlineCache();
         _locals = locals;
         _slotForIndex = slotForIndex;
         IsArgumentsExotic = true;

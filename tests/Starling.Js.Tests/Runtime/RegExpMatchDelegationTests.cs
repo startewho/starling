@@ -109,4 +109,46 @@ public class RegExpMatchDelegationTests
     {
         Eval(@"'abc'.match(/\d/g) === null").AsBool.Should().BeTrue();
     }
+
+    // --- @@match global fast-path guard ---------------------------------------
+    // The fast path may only fire when exec AND the global/unicode getters are
+    // still the realm built-ins. Overriding any one of them must fall back to
+    // the generic RegExpExec loop so the override is observed.
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-regexp.prototype-@@match", "22.2.6.8 RegExp.prototype [ @@match ]")]
+    [SpecFact]
+    public void Global_symbol_match_honors_overridden_global_getter()
+    {
+        // An own `global` getter that flips the regex to non-global must steer
+        // @@match into the non-global branch (single RegExpExec, returns the
+        // full match array — not the global string list).
+        var src = "var re = /a/g;\n"
+                + "Object.defineProperty(re, 'global', { get: function () { return false; } });\n"
+                + "var r = re[Symbol.match]('aaa');\n"
+                + "Array.isArray(r) + ':' + r.length + ':' + r[0] + ':' + r.index;\n";
+        Eval(src).AsString.Should().Be("true:1:a:0");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-regexp.prototype-@@match", "22.2.6.8 RegExp.prototype [ @@match ]")]
+    [SpecFact]
+    public void Global_symbol_match_reads_overridden_unicode_getter()
+    {
+        // A spy `unicode` getter on a genuine RegExp must still be consulted by
+        // @@match (the fast path is disqualified the moment unicode is shadowed).
+        var src = "var seen = false;\n"
+                + "var re = /a/g;\n"
+                + "Object.defineProperty(re, 'unicode', { get: function () { seen = true; return false; } });\n"
+                + "re[Symbol.match]('aaa');\n"
+                + "seen;\n";
+        Eval(src).AsBool.Should().BeTrue();
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-regexp.prototype-@@match", "22.2.6.8 RegExp.prototype [ @@match ]")]
+    [SpecFact]
+    public void Native_global_match_empty_pattern_advances_per_code_unit()
+    {
+        // The native fast path must advance over an empty match the same way the
+        // generic loop does, yielding one "" per index plus the final position.
+        Eval(@"'ab'.match(/(?:)/g).join('|')").AsString.Should().Be("||");
+    }
 }

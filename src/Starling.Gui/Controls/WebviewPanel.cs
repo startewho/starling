@@ -185,6 +185,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private readonly Func<LaidOutPage, bool>? _hasActiveAnimations;
     private long _animClockMs;
     private bool _animating;
+    // Set only around the live timer's pure-animation present (no relayout, no
+    // input/DOM change this frame). Lets the renderer reuse the cached layer tree
+    // and refresh just the animating layers — the rest of the page is unchanged.
+    private bool _animationTickPresent;
 
     public WebviewPanel(
         ThemeManager tm,
@@ -670,6 +674,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
                 DrawingOverlays = drawingOverlays,
                 ScrollOffsets = scrollLookup,
+                PageVersion = PageRenderVersion(),
+                AnimationTick = _animationTickPresent,
             }, _surfaceTarget))
             {
                 ok = frame.Presented;
@@ -802,6 +808,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
+        // Re-run IntersectionObservers for the new viewport before painting so
+        // reveal-on-scroll content that just entered view is part of this frame.
+        if (_currentPage?.Scripting is { } scripting)
+        {
+            var vp = CurrentViewportRect();
+            if (scripting.UpdateIntersectionObservations(vp.X, vp.Y, vp.Width, vp.Height))
+                ScheduleRelayout();
+        }
         RenderViewportRegion();
         if (e.ViewportDelta.X != 0 || e.ViewportDelta.Y != 0)
             ScheduleRelayout();
@@ -1704,7 +1718,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // decides what re-rasters, so a relayout-every-frame animation no longer
         // pays a full-viewport raster.
         if (needsRelayout || animating)
-            RenderViewportRegion();
+        {
+            // A present driven purely by the animation clock (no relayout this
+            // frame) can reuse the cached layer tree and refresh only the animating
+            // layers. A relayout frame must rebuild from the new boxes.
+            _animationTickPresent = animating && !needsRelayout;
+            try
+            {
+                RenderViewportRegion();
+            }
+            finally
+            {
+                _animationTickPresent = false;
+            }
+        }
 
         // Stop the timer once neither scripting nor animation needs it.
         if (scripting is null && !animating)
@@ -3022,6 +3049,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     /// box's small slice while the base layer stays cached. Boxes with no element
     /// (anonymous/text) are never promoted here.
     /// </summary>
+    // A version that bumps on any DOM mutation or layout-relevant change. Used by
+    // the renderer's layer-tree reuse: a pure animation tick keeps this stable, so
+    // the cached tree is reused; any real change bumps it and forces a full rebuild.
+    private long PageRenderVersion()
+    {
+        if (_currentPage is not { } page) return 0;
+        var doc = page.Document;
+        return unchecked(((long)doc.MutationVersion * 1000003L) + doc.LayoutInvalidationVersion);
+    }
+
     private bool IsElementAnimatingLayerRoot(LayoutBox box)
     {
         if (_currentPage is not { } page || box.Element is not { } el) return false;

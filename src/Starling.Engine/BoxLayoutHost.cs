@@ -256,8 +256,20 @@ internal sealed class BoxLayoutHost : ILayoutHost
         EnsureFresh("getBoundingClientRect");
         if (_boxByElement.TryGetValue(element, out var box))
         {
-            var frame = box.Frame;
-            rect = new LayoutRect(frame.X, frame.Y, frame.Width, frame.Height);
+            // box.Frame.X/Y is relative to the containing block's content origin;
+            // getBoundingClientRect is document-relative (viewport-relative at
+            // scroll 0). Accumulate each ancestor's frame offset plus its
+            // border+padding (the step from an ancestor's border-box origin to the
+            // content origin its children are measured from) — the same top-down
+            // origin walk DisplayListBuilder does, run bottom-up here.
+            var x = box.Frame.X;
+            var y = box.Frame.Y;
+            for (var p = box.Parent; p is not null; p = p.Parent)
+            {
+                x += p.Frame.X + p.Border.Left + p.Padding.Left;
+                y += p.Frame.Y + p.Border.Top + p.Padding.Top;
+            }
+            rect = new LayoutRect(x, y, box.Frame.Width, box.Frame.Height);
             return true;
         }
         rect = default;
