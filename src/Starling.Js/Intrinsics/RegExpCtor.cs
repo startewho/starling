@@ -688,7 +688,11 @@ public static class RegExpCtor
                 case '&': sb.Append(str, matchStart, matchEnd - matchStart); i++; break;
                 case '`': sb.Append(str, 0, position); i++; break;
                 case '\'': sb.Append(str, tailPos, str.Length - tailPos); i++; break;
-                case '<': sb.Append('$'); i++; break; // no named captures here → literal "$"
+                // No named captures here, so $<name> is literal $<name> (GetSubstitution
+                // §22.2.6.11.1: refReplacement is "$<" when namedCaptures is undefined).
+                // Emit "$<" and let the loop copy the rest of the token verbatim — emitting
+                // only "$" would drop the "<" and corrupt the replacement (e.g. "$<x>"→"$x>").
+                case '<': sb.Append('$').Append('<'); i++; break;
                 default:
                     if (next >= '0' && next <= '9')
                     {

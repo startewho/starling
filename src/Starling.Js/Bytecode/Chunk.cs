@@ -321,8 +321,18 @@ public sealed class ChunkBuilder
     private int _regexCacheCount;
 
     /// <summary>Allocate a per-site cache id for a <see cref="Opcode.LoadRegExp"/>
-    /// site so its compiled matcher is reused across re-evaluations.</summary>
-    public int AllocateRegexCache() => _regexCacheCount++;
+    /// site so its compiled matcher is reused across re-evaluations. The id is
+    /// emitted as a u16 operand, so past 65535 regex-literal sites we throw an
+    /// explicit, located error rather than letting <see cref="EmitU16Raw"/> raise
+    /// a bare "operand exceeds u16 range" — consistent with the local-slot and
+    /// upvalue limits below.</summary>
+    public int AllocateRegexCache()
+    {
+        if (_regexCacheCount > 0xFFFF)
+            throw new InvalidOperationException(
+                "regex-literal site count exceeds the u16 limit (65535); function has too many regex literals");
+        return _regexCacheCount++;
+    }
 
     /// <summary>Emit a local-slot opcode with a 16-bit slot operand. Local
     /// slots are addressed with a u16 (not u8) so functions with more than
