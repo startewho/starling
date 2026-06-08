@@ -310,6 +310,9 @@ public static class StringCtor
                 && (((JsRegExp)args[0].AsObject).Flags & Starling.RegExp.RegexFlags.Global) == 0)
                 throw new JsThrow(realm.NewTypeError("String.prototype.replaceAll called with a non-global RegExp"));
             var replaceFn = args[0].AsObject.Get(SymbolCtor.Replace);
+            if (args[0].AsObject is JsRegExp re && replaceFn.IsObject
+                && ReferenceEquals(replaceFn.AsObject, realm.RegExpBuiltinSymbolReplace))
+                return RegExpCtor.ReplaceString(realm, re, s, args.Length > 1 ? args[1] : JsValue.Undefined);
             if (AbstractOperations.IsCallable(replaceFn))
                 return AbstractOperations.Call(realm.ActiveVm, replaceFn, args[0],
                     new[] { JsValue.String(s), args.Length > 1 ? args[1] : JsValue.Undefined });

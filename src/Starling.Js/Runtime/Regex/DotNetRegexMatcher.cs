@@ -42,6 +42,20 @@ public sealed partial class DotNetRegexMatcher : IRegexMatcher
     public int CaptureCount => _captureCount;
     public IReadOnlyDictionary<string, int> NamedCaptures => _namedCaptures;
 
+    /// <summary>Delegate a literal whole-string replace to System.Text's
+    /// single-pass <see cref="NetRegex.Replace(string,string)"/> — the same
+    /// optimized path Jint uses, avoiding a per-match <c>Match</c> allocation.
+    /// Disabled for sticky regexes (Replace scans forward rather than anchoring
+    /// at lastIndex). The replacement is literal (no <c>$</c>), so .NET performs
+    /// no substitution and matches JS semantics exactly.</summary>
+    public string? TryReplaceLiteral(string input, string literalReplacement, bool global)
+    {
+        if (_sticky) return null;
+        return global
+            ? _regex.Replace(input, literalReplacement)
+            : _regex.Replace(input, literalReplacement, 1);
+    }
+
     private DotNetRegexMatcher(NetRegex regex, bool sticky, string[] groupKey, CompiledRegex pikeForm)
     {
         _regex = regex;

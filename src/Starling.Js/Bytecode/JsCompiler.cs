@@ -2578,6 +2578,7 @@ public sealed partial class JsCompiler
                 // gets an independent `lastIndex` slot (§13.2.7.3).
                 _b.EmitU16(Opcode.LoadRegExp, _b.AddConstant(rx.Source));
                 _b.EmitU16Raw(_b.AddConstant(rx.Flags));
+                _b.EmitU16Raw(_b.AllocateRegexCache());
                 return;
             case Identifier id:
                 EmitIdLoad(id);
@@ -3783,7 +3784,7 @@ public sealed partial class JsCompiler
             {
                 var optionalName = ((Identifier)m.Property).Name;
                 RecordPos(m);
-                _b.EmitU16(Opcode.LoadProperty, _b.AddConstant(optionalName));
+                _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant(optionalName));
             }
             _b.PatchJump(done);
             return;

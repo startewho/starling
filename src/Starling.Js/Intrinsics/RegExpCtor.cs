@@ -66,6 +66,8 @@ public static class RegExpCtor
         DefineSymbolMethod(realm, proto, SymbolCtor.Split, "[Symbol.split]", 2,
             (thisV, args) => SymbolSplit(realm, thisV, args));
 
+        realm.RegExpBuiltinSymbolReplace = proto.Get(SymbolCtor.Replace).AsObject;
+
         realm.RegExpConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("RegExp",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
@@ -348,9 +350,63 @@ public static class RegExpCtor
     // i.e. nothing on re or its prototype chain shadows them. Any override
     // disqualifies the fast path so the generic RegExpExec delegation runs.
     private static bool IsBuiltinExecAndFlags(JsRealm realm, JsRegExp re)
-        => ResolvesToBuiltin(re, "exec", realm.RegExpBuiltinExec, accessor: false)
-        && ResolvesToBuiltin(re, "global", realm.RegExpGlobalGetter, accessor: true)
-        && ResolvesToBuiltin(re, "unicode", realm.RegExpUnicodeGetter, accessor: true);
+    {
+        // Hot-path shortcut: a regexp that still carries the canonical
+        // single-lastIndex shape owns no exec/global/unicode of its own, so
+        // resolution falls straight to its prototype. If that prototype is the
+        // realm's pristine RegExp.prototype with the builtin exec + flag getters
+        // still in place, the guard holds without walking the chain or building a
+        // descriptor per name. Anything off this path (own shadowing prop,
+        // re-pointed __proto__, subclass) takes the full spec walk below.
+        if (re.HasPristineShape && ReferenceEquals(re.GetPrototypeOf(), realm.RegExpPrototype)
+            && ProtoBuiltinsIntact(realm))
+            return true;
+        return ResolvesToBuiltin(re, "exec", realm.RegExpBuiltinExec, accessor: false)
+            && ResolvesToBuiltin(re, "global", realm.RegExpGlobalGetter, accessor: true)
+            && ResolvesToBuiltin(re, "unicode", realm.RegExpUnicodeGetter, accessor: true);
+    }
+
+    // exec/global/unicode on RegExp.prototype still resolve to the builtins. The
+    // prototype is dictionary-mode, so each lookup is a single hash probe with no
+    // descriptor build beyond the returned struct; no prototype-chain walk.
+    private static bool ProtoBuiltinsIntact(JsRealm realm)
+    {
+        // Steady state: the structural prototype-mutation epoch is unchanged
+        // since we last confirmed the builtins intact. global/unicode are
+        // accessors and exec is a method on RegExp.prototype; the only ways to
+        // disturb them — defineProperty, delete, or migrating the prototype —
+        // all bump ProtoEpoch. The single exception is a plain value
+        // reassignment of the exec data property (`RegExp.prototype.exec = f`),
+        // which rewrites a dictionary slot in place without a structural change,
+        // so we re-probe exec (one hash lookup) even on an epoch hit. (We can't
+        // make that write bump the epoch without adding cost to the very hot
+        // generic dictionary-mode Set path, which globals in eval scope hit.)
+        int epoch = JsObject.ProtoEpoch;
+        if (epoch == realm.RegExpGuardCachedEpoch)
+            return realm.RegExpGuardCachedIntact && ExecStillBuiltin(realm);
+
+        bool fresh = ComputeProtoBuiltinsIntact(realm, realm.RegExpPrototype);
+        realm.RegExpGuardCachedEpoch = epoch;
+        realm.RegExpGuardCachedIntact = fresh;
+        return fresh;
+    }
+
+    private static bool ExecStillBuiltin(JsRealm realm)
+    {
+        var ed = realm.RegExpPrototype.GetOwnPropertyDescriptor("exec");
+        return ed is { IsAccessor: false } d && d.Value.IsObject
+            && ReferenceEquals(d.Value.AsObject, realm.RegExpBuiltinExec);
+    }
+
+    private static bool ComputeProtoBuiltinsIntact(JsRealm realm, JsObject p)
+    {
+        if (!ExecStillBuiltin(realm)) return false;
+        var g = p.GetOwnPropertyDescriptor("global");
+        if (g is not { IsAccessor: true } gd || !ReferenceEquals(gd.Getter, realm.RegExpGlobalGetter)) return false;
+        var u = p.GetOwnPropertyDescriptor("unicode");
+        if (u is not { IsAccessor: true } ud || !ReferenceEquals(ud.Getter, realm.RegExpUnicodeGetter)) return false;
+        return true;
+    }
 
     // Walk the own→prototype chain for `name`; the first object that owns it
     // wins. For an accessor property compare its getter to `expected`; for a
@@ -429,13 +485,37 @@ public static class RegExpCtor
         // and `global` we read), so we do not RequireRegExp here.
         if (!thisV.IsObject)
             throw new JsThrow(realm.NewTypeError("RegExp.prototype[Symbol.replace] called on non-object"));
-        var rx = thisV.AsObject;
-        var vm = realm.ActiveVm;
         var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
         var replacement = args.Length > 1 ? args[1] : JsValue.Undefined;
+        if (thisV.AsObject is JsRegExp re)
+            return ReplaceString(realm, re, s, replacement);
+        return ReplaceGeneric(realm, thisV.AsObject, s, replacement);
+    }
+
+    /// <summary>Direct entry for a genuine RegExp receiver — used by @@replace
+    /// and by <c>String.prototype.replace</c>'s fast path so a
+    /// <c>str.replace(/re/, "...")</c> call skips the @@replace lookup, the
+    /// per-call argument array, and the native Call dispatch. Takes the
+    /// span-based fast path when nothing is overridden, else the generic loop.</summary>
+    internal static JsValue ReplaceString(JsRealm realm, JsRegExp re, string s, JsValue replacement)
+    {
         bool functional = AbstractOperations.IsCallable(replacement);
         string replStr = functional ? null! : JsValue.ToStringValue(replacement);
+        if ((re.Flags & RegexFlags.Sticky) == 0 && re.Compiled.NamedCaptures.Count == 0
+            && IsBuiltinExecAndFlags(realm, re))
+        {
+            return ReplaceFast(realm, re, s, replacement, functional, replStr);
+        }
+        return ReplaceGeneric(realm, re, s, replacement);
+    }
 
+    // §22.2.6.11 generic path — honors a user-overridden exec or a non-RegExp
+    // receiver: gathers matches via RegExpExec, then applies GetSubstitution.
+    private static JsValue ReplaceGeneric(JsRealm realm, JsObject rx, string s, JsValue replacement)
+    {
+        var vm = realm.ActiveVm;
+        bool functional = AbstractOperations.IsCallable(replacement);
+        string replStr = functional ? null! : JsValue.ToStringValue(replacement);
         bool global = JsValue.ToBoolean(AbstractOperations.Get(vm, rx, "global"));
         if (global) rx.Set("lastIndex", JsValue.Number(0));
 
@@ -505,6 +585,133 @@ public static class RegExpCtor
         if (nextSourcePosition < s.Length)
             sb.Append(s, nextSourcePosition, s.Length - nextSourcePosition);
         return JsValue.String(sb.ToString());
+    }
+
+    // Fast @@replace for a built-in, non-sticky RegExp with no named captures.
+    // One forward scan via ExecSpans; the result is assembled in a single
+    // StringBuilder with no per-match allocation (no exec-result object, no
+    // captures list, no property-bag reads). Observable behavior is identical to
+    // the generic loop above for this class of receiver.
+    private static JsValue ReplaceFast(JsRealm realm, JsRegExp re, string s, JsValue replacement, bool functional, string? replStr)
+    {
+        var vm = realm.ActiveVm;
+        bool global = (re.Flags & RegexFlags.Global) != 0;
+        bool fullUnicode = (re.Flags & RegexFlags.Unicode) != 0;
+        int captureCount = re.Compiled.CaptureCount;
+        // §22.2.6.11 step 12: a global replace sets lastIndex to 0 (and the
+        // built-in scan leaves it 0 after the terminal no-match). Non-global,
+        // non-sticky exec never touches lastIndex. The pristine-shape case (the
+        // norm: this method is only reached when the builtin guard held) writes
+        // slot 0 directly, skipping the generic setter's name lookup.
+        if (global) { if (re.HasPristineShape) re.ResetLastIndexFast(); else re.LastIndex = 0; }
+
+        // Literal replacement (no '$' substitution tokens) on a backend that can
+        // do a single-pass whole-string replace (the .NET engine): delegate the
+        // whole operation, skipping the per-match scan and its allocations. The
+        // Pike VM returns null here so its (already light) scan runs below.
+        if (!functional && replStr is not null && replStr.IndexOf('$') < 0)
+        {
+            var whole = re.Compiled.TryReplaceLiteral(s, replStr, global);
+            if (whole is not null) return JsValue.String(whole);
+        }
+
+        var spans = ArrayPool<int>.Shared.Rent(2 * (captureCount + 1));
+        try
+        {
+            StringBuilder? sb = null;
+            int nextSourcePosition = 0;
+            int pos = 0;
+            while (re.Compiled.ExecSpans(s, pos, spans, out int matchStart, out int matchEnd))
+            {
+                int matchLen = matchEnd - matchStart;
+                string replacementText = functional
+                    ? CallReplaceFn(vm, replacement, s, matchStart, matchEnd, spans, captureCount)
+                    : GetSubstitutionFast(replStr!, s, matchStart, matchEnd, spans, captureCount);
+
+                // Forward scan ⇒ matchStart >= nextSourcePosition always.
+                sb ??= new StringBuilder(s.Length + 16);
+                sb.Append(s, nextSourcePosition, matchStart - nextSourcePosition);
+                sb.Append(replacementText);
+                nextSourcePosition = matchStart + matchLen;
+
+                if (!global) break;
+                pos = matchLen == 0 ? AdvanceStringIndex(s, matchEnd, fullUnicode) : matchEnd;
+                if (pos > s.Length) break;
+            }
+            if (sb is null) return JsValue.String(s); // no match → original string, no allocation
+            if (nextSourcePosition < s.Length)
+                sb.Append(s, nextSourcePosition, s.Length - nextSourcePosition);
+            return JsValue.String(sb.ToString());
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(spans);
+        }
+    }
+
+    // Build the (matched, cap1..capN, position, string) argument list for a
+    // functional replacement directly from spans (no named-captures arg — the
+    // fast path only runs when there are none).
+    private static string CallReplaceFn(JsVm? vm, JsValue replacement, string s, int matchStart, int matchEnd, int[] spans, int captureCount)
+    {
+        var fnArgs = new JsValue[captureCount + 3];
+        fnArgs[0] = JsValue.String(s.Substring(matchStart, matchEnd - matchStart));
+        for (var c = 1; c <= captureCount; c++)
+        {
+            int cs = spans[2 * c], ce = spans[2 * c + 1];
+            fnArgs[c] = cs < 0 ? JsValue.Undefined : JsValue.String(s.Substring(cs, ce - cs));
+        }
+        fnArgs[captureCount + 1] = JsValue.Number(matchStart);
+        fnArgs[captureCount + 2] = JsValue.String(s);
+        return JsValue.ToStringValue(AbstractOperations.Call(vm, replacement, JsValue.Undefined, fnArgs));
+    }
+
+    // §22.2.6.11.1 GetSubstitution working directly off match spans + the source
+    // string (no captures list, no exec-result object). $<name> is treated as
+    // literal — the fast path only runs when the regex has no named captures.
+    private static string GetSubstitutionFast(string replacement, string str, int matchStart, int matchEnd, int[] spans, int captureCount)
+    {
+        // No '$' ⇒ the replacement is literal (the common case, e.g. "0"); skip
+        // the StringBuilder entirely.
+        if (replacement.IndexOf('$') < 0) return replacement;
+
+        int position = matchStart;
+        int tailPos = matchEnd;
+        var sb = new StringBuilder(replacement.Length + 8);
+        for (var i = 0; i < replacement.Length; i++)
+        {
+            if (replacement[i] != '$' || i + 1 >= replacement.Length) { sb.Append(replacement[i]); continue; }
+            var next = replacement[i + 1];
+            switch (next)
+            {
+                case '$': sb.Append('$'); i++; break;
+                case '&': sb.Append(str, matchStart, matchEnd - matchStart); i++; break;
+                case '`': sb.Append(str, 0, position); i++; break;
+                case '\'': sb.Append(str, tailPos, str.Length - tailPos); i++; break;
+                case '<': sb.Append('$'); i++; break; // no named captures here → literal "$"
+                default:
+                    if (next >= '0' && next <= '9')
+                    {
+                        int n = next - '0';
+                        int consumed = 1;
+                        if (i + 2 < replacement.Length && replacement[i + 2] >= '0' && replacement[i + 2] <= '9')
+                        {
+                            var n2 = n * 10 + (replacement[i + 2] - '0');
+                            if (n2 >= 1 && n2 <= captureCount) { n = n2; consumed = 2; }
+                        }
+                        if (n >= 1 && n <= captureCount)
+                        {
+                            int cs = spans[2 * n], ce = spans[2 * n + 1];
+                            if (cs >= 0) sb.Append(str, cs, ce - cs);
+                            i += consumed;
+                        }
+                        else { sb.Append('$').Append(next); i++; }
+                    }
+                    else { sb.Append('$').Append(next); i++; }
+                    break;
+            }
+        }
+        return sb.ToString();
     }
 
     private static double ToLengthLocal(JsValue v)

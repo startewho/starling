@@ -73,11 +73,30 @@ public sealed class JsVm
 
     private static string NullishLabel(JsValue value) => value.IsNull ? "null" : "undefined";
 
+    /// <summary>The prototype that hosts the methods of a primitive value, or
+    /// null if not a primitive with a wrapper prototype. Used to resolve a
+    /// property on a primitive without allocating a wrapper object.</summary>
+    private JsObject? PrimitivePrototype(JsValue v)
+    {
+        var r = _runtime.Realm;
+        if (v.IsString) return r.StringPrototype;
+        if (v.IsNumber) return r.NumberPrototype;
+        if (v.IsBoolean) return r.BooleanPrototype;
+        if (v.IsSymbol) return r.SymbolPrototype;
+        if (v.IsBigInt) return r.BigIntPrototype;
+        return null;
+    }
+
     public JsVm(JsRuntime runtime, ILogger<JsVm>? log = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _log = log ?? NullLogger<JsVm>.Instance;
     }
+
+    /// <summary>Per-opcode dispatch counts for this VM. Indexed by
+    /// <see cref="Opcode"/> byte value. Incremented once per dispatched
+    /// instruction inside <see cref="RunInner"/>.</summary>
+    public readonly long[] OpcodeCounts = new long[256];
 
     /// <summary>The realm this VM dispatches against.</summary>
     public JsRealm Realm => _runtime.Realm;
@@ -641,6 +660,7 @@ public sealed class JsVm
             try
             {
                 var op = (Opcode)code[ip++];
+                OpcodeCounts[(byte)op]++;
                 switch (op)
                 {
                     case Opcode.Halt:
@@ -1279,7 +1299,25 @@ public sealed class JsVm
                                 Push(AbstractOperations.Get(this, o, name));
                                 break;
                             }
-                            if (!obj.IsNullish) Push(AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
+                            if (!obj.IsNullish)
+                            {
+                                // String "length" is just the code-unit count — read it
+                                // directly, no boxed String object. Every other primitive
+                                // property lives on the prototype chain, reached without a
+                                // wrapper: §6.2.5.5 runs [[Get]] with the primitive as the
+                                // receiver. A string's only other exotic own keys are
+                                // canonical indices, which arrive as computed access, never a
+                                // named LoadProperty, so no box is ever needed here.
+                                if (obj.IsString && name == "length")
+                                    Push(JsValue.Number(obj.AsString.Length));
+                                else
+                                {
+                                    var proto = PrimitivePrototype(obj);
+                                    Push(proto is not null
+                                        ? AbstractOperations.Get(this, proto, name, obj)
+                                        : AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), name, obj));
+                                }
+                            }
                             else throw new JsThrow(_runtime.Realm.NewTypeError(
                                 "Cannot read properties of " + NullishLabel(obj) + " (reading '" + name + "')"));
                             break;
@@ -1685,19 +1723,29 @@ public sealed class JsVm
                         {
                             var srcIdx = ReadU16();
                             var flagsIdx = ReadU16();
-                            var source = (string)constants[srcIdx]!;
-                            var flagsStr = (string)constants[flagsIdx]!;
-                            if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
-                                throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
-                            Starling.Js.Runtime.Regex.IRegexMatcher compiled;
-                            try
+                            var regexCacheId = ReadU16();
+                            // Per-site cache: a regex literal compiles once and the matcher
+                            // is reused across re-evaluations (e.g. in a loop), avoiding even
+                            // the (source, flags) dictionary lookup on the hot path. A fresh
+                            // JsRegExp wrapper is still created each time so each evaluation
+                            // gets an independent `lastIndex` slot, as the spec requires.
+                            var compiled = chunk.RegexLiterals[regexCacheId];
+                            if (compiled is null)
                             {
-                                compiled = Starling.Js.Runtime.Regex.RegexBackendSelector.Compile(source, flags);
-                            }
-                            catch (RegexSyntaxException ex)
-                            {
-                                throw new JsThrow(_runtime.Realm.NewSyntaxError(
-                                    $"Invalid regular expression: /{source}/: {ex.Message}"));
+                                var source = (string)constants[srcIdx]!;
+                                var flagsStr = (string)constants[flagsIdx]!;
+                                if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
+                                    throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
+                                try
+                                {
+                                    compiled = Starling.Js.Runtime.Regex.RegexBackendSelector.CompileCached(source, flags);
+                                }
+                                catch (RegexSyntaxException ex)
+                                {
+                                    throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                                        $"Invalid regular expression: /{source}/: {ex.Message}"));
+                                }
+                                chunk.RegexLiterals[regexCacheId] = compiled;
                             }
                             Push(JsValue.Object(new JsRegExp(_runtime.Realm, compiled)));
                             break;

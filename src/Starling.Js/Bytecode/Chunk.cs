@@ -111,7 +111,7 @@ public sealed class Chunk
 
     public Chunk(byte[] code, IReadOnlyList<object?> constants, int localCount, string? name,
         IReadOnlySet<int>? capturedSlots, IReadOnlyList<(int Offset, int Line, int Col)>? positions,
-        int inlineCacheCount = 0)
+        int inlineCacheCount = 0, int regexLiteralCount = 0)
     {
         Code = code ?? throw new ArgumentNullException(nameof(code));
         Constants = constants ?? throw new ArgumentNullException(nameof(constants));
@@ -120,11 +120,21 @@ public sealed class Chunk
         CapturedSlots = capturedSlots ?? EmptyCaptured;
         Positions = positions ?? EmptyPositions;
         Caches = inlineCacheCount == 0 ? EmptyCaches : new Runtime.InlineCache[inlineCacheCount];
+        RegexLiterals = regexLiteralCount == 0 ? EmptyRegexLiterals : new Runtime.Regex.IRegexMatcher[regexLiteralCount];
     }
 
     private static readonly IReadOnlySet<int> EmptyCaptured = new HashSet<int>();
     private static readonly IReadOnlyList<(int, int, int)> EmptyPositions = [];
     private static readonly Runtime.InlineCache[] EmptyCaches = System.Array.Empty<Runtime.InlineCache>();
+    private static readonly Runtime.Regex.IRegexMatcher[] EmptyRegexLiterals = System.Array.Empty<Runtime.Regex.IRegexMatcher>();
+
+    /// <summary>Per-site compiled regex literals, indexed by the <c>u16</c> cache
+    /// id operand on <see cref="Opcode.LoadRegExp"/>. A regex literal compiles
+    /// once and is reused across re-evaluations (e.g. in a loop); a fresh
+    /// <c>JsRegExp</c> wrapper is still created each time per spec. Write-once
+    /// from the VM; the matcher is immutable and realm-independent so sharing
+    /// across realms/threads is safe.</summary>
+    internal Runtime.Regex.IRegexMatcher?[] RegexLiterals { get; }
 
     /// <summary>Per-property-site inline caches, indexed by the <c>u16</c> cache
     /// id operand the compiler emits on <see cref="Opcode.LoadProperty"/> /
@@ -306,6 +316,14 @@ public sealed class ChunkBuilder
         else EmitU16Raw(0xFFFF);
     }
 
+    /// <summary>Number of regex-literal sites; becomes the size of
+    /// <see cref="Chunk.RegexLiterals"/>.</summary>
+    private int _regexCacheCount;
+
+    /// <summary>Allocate a per-site cache id for a <see cref="Opcode.LoadRegExp"/>
+    /// site so its compiled matcher is reused across re-evaluations.</summary>
+    public int AllocateRegexCache() => _regexCacheCount++;
+
     /// <summary>Emit a local-slot opcode with a 16-bit slot operand. Local
     /// slots are addressed with a u16 (not u8) so functions with more than
     /// 255 locals — common in large minified bundles such as Google Tag
@@ -439,6 +457,6 @@ public sealed class ChunkBuilder
 
     public Chunk Build(string? name = null)
         => new(_code.ToArray(), _constants.ToArray(), LocalCount, name, _capturedSlots,
-            _positions is null ? null : _positions.ToArray(), _cacheCount)
+            _positions is null ? null : _positions.ToArray(), _cacheCount, _regexCacheCount)
         { IsStrict = IsStrict, HasPrologue = HasPrologue, CapturesWith = CapturesWith, SourcePath = SourcePath, IsArrow = IsArrow, IsInitializer = IsInitializer, HasDirectEval = HasDirectEval, PrivateNameScope = PrivateNameScope };
 }
