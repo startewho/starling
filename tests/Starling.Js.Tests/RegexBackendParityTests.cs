@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using AwesomeAssertions;
 using Starling.Js.Runtime.Regex;
 using Starling.RegExp;

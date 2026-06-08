@@ -96,6 +96,19 @@ public sealed class JsRealm
     public JsObject? RegExpBuiltinExec { get; internal set; }
     public JsObject? RegExpGlobalGetter { get; internal set; }
     public JsObject? RegExpUnicodeGetter { get; internal set; }
+    /// <summary>The built-in <c>RegExp.prototype[@@replace]</c>. String.replace
+    /// fast-paths to the engine's replace directly when a regex argument's
+    /// @@replace still resolves to this (i.e. is not user-overridden).</summary>
+    public JsObject? RegExpBuiltinSymbolReplace { get; internal set; }
+
+    /// <summary>Protector cache for the @@replace fast-path guard. The structural
+    /// <see cref="JsObject.ProtoEpoch"/> at which exec/global/unicode were last
+    /// confirmed to be the builtins, and that result. <c>global</c>/<c>unicode</c>
+    /// are accessors mutated only via defineProperty/delete (both bump the epoch),
+    /// so while the epoch matches only a plain <c>exec</c> value reassignment can
+    /// have slipped through — the guard re-probes that single property.</summary>
+    internal int RegExpGuardCachedEpoch = int.MinValue;
+    internal bool RegExpGuardCachedIntact;
 
     // B4-2: Date constructor — populated by DateCtor.Install.
     public JsObject? DateConstructor { get; internal set; }

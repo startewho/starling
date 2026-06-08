@@ -60,6 +60,21 @@ public static class RegexBackendSelector
     public static IRegexMatcher Compile(string pattern, RegexFlags flags)
         => Compile(pattern, flags, Selected);
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string, RegexFlags), IRegexMatcher> _cache = new();
+
+    /// <summary>Compile with a process-wide cache keyed by (source, flags), for
+    /// the regex-literal hot path. A regex literal re-evaluated in a loop yields
+    /// a fresh <c>RegExp</c> object each time (the spec requires it) but the
+    /// expensive compiled form — the Pike VM parse plus any System.Text.Regex
+    /// construction — is built once and reused, the way real engines cache a
+    /// literal's compiled pattern. The matcher is realm-independent, immutable,
+    /// and thread-safe, so the cache is safe to share across realms and the
+    /// cooperative worker threads. Bounded by the program's distinct literals.</summary>
+    public static IRegexMatcher CompileCached(string pattern, RegexFlags flags)
+        => _cache.TryGetValue((pattern, flags), out var hit)
+            ? hit
+            : _cache.GetOrAdd((pattern, flags), Compile(pattern, flags, Selected));
+
     /// <summary>Compile with an explicit backend. Exposed so parity tests can
     /// drive both backends in one process without touching the env var (which
     /// the selector reads only once via <see cref="Lazy{T}"/>).</summary>

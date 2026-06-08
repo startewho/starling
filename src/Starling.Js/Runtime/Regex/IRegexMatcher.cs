@@ -43,6 +43,14 @@ public interface IRegexMatcher
     /// <see cref="Exec(string,int)"/>, and routes group indices through the same
     /// JS↔.NET resolution so numbering stays JS-correct.</summary>
     bool ExecSpans(string input, int start, int[] spanBuffer, out int matchStart, out int matchEnd);
+
+    /// <summary>Fast whole-string replace of a LITERAL replacement — the caller
+    /// guarantees <paramref name="literalReplacement"/> contains no <c>$</c>
+    /// substitution tokens — for a backend that can do it in a single optimized
+    /// pass (the same path Jint takes). Returns <c>null</c> when the backend has
+    /// no fast path, so the caller falls back to a per-match scan.
+    /// <paramref name="global"/> false replaces only the first match.</summary>
+    string? TryReplaceLiteral(string input, string literalReplacement, bool global);
 }
 
 /// <summary>A successful match from an <see cref="IRegexMatcher"/>.</summary>

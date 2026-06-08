@@ -159,14 +159,16 @@ public static class Disassembler
                           .Append(" upvalues=").Append(n);
                         break;
                     }
-                // u16 + u16 — LoadRegExp [srcIdx][flagsIdx]
+                // u16 + u16 + u16 — LoadRegExp [srcIdx][flagsIdx][cacheId]
                 case Opcode.LoadRegExp:
                     {
                         var srcIdx = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
                         i += 2;
                         var flagsIdx = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
                         i += 2;
-                        sb.Append(op).Append(' ').Append(srcIdx).Append(' ').Append(flagsIdx);
+                        var cacheId = BinaryPrimitives.ReadUInt16LittleEndian(code.AsSpan(i, 2));
+                        i += 2;
+                        sb.Append(op).Append(' ').Append(srcIdx).Append(' ').Append(flagsIdx).Append(' ').Append(cacheId);
                         sb.Append("  ; /").Append(FormatConstant(chunk.Constants[srcIdx]))
                           .Append('/').Append(FormatConstant(chunk.Constants[flagsIdx]));
                         break;

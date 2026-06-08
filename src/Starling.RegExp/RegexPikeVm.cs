@@ -143,6 +143,15 @@ public sealed class RegexPikeVm
         var initialSlots = new int[slotCount];
         for (var i = 0; i < slotCount; i++) initialSlots[i] = -1;
         AddThread(_curr, input, start, initialSlots);
+        // Threads queued into _next represent the next input position, so their
+        // epsilon-closure dedup must not share the generation used to build
+        // _curr. Sharing it suppresses loop-back states for greedy quantifiers
+        // like /a*/ after the first character.
+        if (++_currentGen == 0)
+        {
+            Array.Clear(_visitGen, 0, _visitGen.Length);
+            _currentGen = 1;
+        }
         RegexMatch? best = null;
         int pos = start;
         while (true)
