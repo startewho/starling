@@ -111,6 +111,60 @@ public class JsRecursionDepthTests
         result.AsBool.Should().BeTrue();
     }
 
+    [TestMethod]
+    public void Construct_coercion_throw_on_barrier_pop_does_not_poison_the_array_pool()
+    {
+        // A derived ctor that completes without running super() throws the
+        // coercion ReferenceError at pop. On a BARRIER pop (Reflect.construct,
+        // new through bind/Proxy) that throw must propagate to the construct
+        // site without the unwinder releasing the already-released frame —
+        // a double pool return hands the same operand stack to two later
+        // frames, and unrelated arithmetic afterwards goes wrong (h() was
+        // NaN under the bug).
+        var result = Eval(
+            "class A {}" +
+            "class B extends A { constructor() {} }" +
+            "var caught = false;" +
+            "try { Reflect.construct(B, []); } catch (e) { caught = e instanceof ReferenceError; }" +
+            "function g(){ return 2; }" +
+            "function h(){ return 1 + g(); }" +
+            "caught && h() === 3;");
+        result.AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Construct_coercion_throw_is_not_catchable_inside_the_completed_ctor_body()
+    {
+        // The coercion error belongs to the construct site, not the body —
+        // a try/catch wrapping the ctor's return must never observe it.
+        var result = Eval(
+            "class A {}" +
+            "class B extends A { constructor() { try { return; } catch (e) { globalThis.leaked = true; } } }" +
+            "var atSite = false;" +
+            "try { Reflect.construct(B, []); } catch (e) { atSite = e instanceof ReferenceError; }" +
+            "atSite && !globalThis.leaked;");
+        result.AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Native_reentrant_getter_recursion_reaches_a_minimum_barrier_depth()
+    {
+        // Pins the per-barrier native frame size. Pure JS recursion no longer
+        // touches the native stack, so without this floor a fat inlined helper
+        // in Dispatch could silently shrink usable barrier depth (getters,
+        // Proxy traps, ToPrimitive all live on it). A fixed 8 MB thread keeps
+        // the floor meaningful across Debug (fat JIT frames) and test hosts.
+        var depth = 0.0;
+        var t = new Thread(() => depth = Eval(
+            "var count = 0;" +
+            "var o = { get p() { count++; return o.p; } };" +
+            "try { o.p; } catch (e) {}" +
+            "count;").AsNumber, 8 * 1024 * 1024);
+        t.Start();
+        t.Join();
+        depth.Should().BeGreaterThanOrEqualTo(200);
+    }
+
     private static JsValue Eval(string source)
     {
         var program = new JsParser(source).ParseProgram();
