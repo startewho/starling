@@ -112,6 +112,38 @@ public class JsRecursionDepthTests
     }
 
     [TestMethod]
+    public void Webpack_style_module_graph_walk_2000_deep_succeeds()
+    {
+        // Reduced fixture for the bug that motivated wp:M3-84: x.com's
+        // webpack runtime walks __webpack_require__ → factory →
+        // __webpack_require__ in a deep chain of plain calls and method
+        // calls. Pins the fix without needing the live site.
+        var result = Eval(
+            "var cache = {};" +
+            "var factories = {};" +
+            "for (var i = 0; i < 2000; i++) {" +
+            "  (function (id) {" +
+            "    factories[id] = function (req) {" +
+            "      var exports = { id: id, next: 0 };" +
+            "      if (id + 1 < 2000) exports.next = req.require(id + 1).id;" +
+            "      return exports;" +
+            "    };" +
+            "  })(i);" +
+            "}" +
+            "var runtime = {" +
+            "  require: function (id) {" +
+            "    if (cache[id]) return cache[id];" +
+            "    var mod = factories[id](runtime);" +
+            "    cache[id] = mod;" +
+            "    return mod;" +
+            "  }" +
+            "};" +
+            "var root = runtime.require(0);" +
+            "root.id === 0 && root.next === 1 && runtime.require(1999).id === 1999;");
+        result.AsBool.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Construct_coercion_throw_on_barrier_pop_does_not_poison_the_array_pool()
     {
         // A derived ctor that completes without running super() throws the
