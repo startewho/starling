@@ -236,6 +236,23 @@ in one effort** — no big-stack-thread stopgap. Stage A is the internal
 prerequisite for Stage B. Stage C is optional and gated on the perf bench.
 
 ## Handoff log
+- 2026-06-09 — Stage A landed (agent-claude-cody). Added the heap `CallFrame`
+  and removed every closure-capturing local function from `RunInner`. The
+  measured cause of the tiny depth was not the closure display alone: RyuJIT
+  gives every IL local in `RunInner` its own stack slot (no slot packing in a
+  method this big), so the ~280 cold-arm locals cost ~7 KB per JS call frame.
+  Fixed by moving cold opcode arms into `DispatchCold` and the operator arms
+  into `ExecArith`/`ExecCompare`/`ExecYieldDelegate` — those frames are
+  transient, so they do not multiply with JS depth. Per-call native cost fell
+  from ~40 KB (~24 frames) to ~6 KB. Depth on the default Release test thread:
+  92 → 232. On a 2 MB thread: 320. On an 8 MB thread the native stack no
+  longer binds — recursion now hits the logical `MaxCallDepth` (1000) cap.
+  Test262 `language` is 95.61%. New regression test:
+  `JsRecursionDepthTests`. Note for Stage B: `SnapshotFrame` builds
+  `ContinuationFrameState` from the `CallFrame` (the snapshot could become the
+  parked frame itself), suspend sites flush ip/sp/maxSp to the frame first,
+  and the try stack is still `Stack<TryFrame>` — the `TryFrame[]` conversion
+  is still open.
 - 2026-06-09 — created (agent-claude-cody); persisted from the
   `~/.claude/plans/prancy-wobbling-dawn.md` plan-mode doc (session 475e6ac5,
   2026-06-08). Diagnostic prerequisite (`ScriptThrow.JsStack` passthrough) is on
