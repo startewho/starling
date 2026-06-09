@@ -486,7 +486,14 @@ public sealed class JsVm
             frame.Disposition = disposition;
             t_current = frame;
             t_frameDepth++;
-            var result = Dispatch(frame);
+            // Coerce OUTSIDE Dispatch's catch: the construct coercion can
+            // throw (derived ctor that never ran super), and that throw
+            // belongs to this construct site — the completed body's own
+            // try/catch must not see it, and the unwinder must not release
+            // the popped frame again. Matches the old post-RunInner model.
+            // Suspension exits are always Disposition.Call, so coercion is
+            // the identity for them.
+            var result = CoerceReturn(frame, Dispatch(frame));
             // Restore the chain head before draining: the barrier frame just
             // popped (its pooled arrays are released), so reaction jobs must
             // not see it as the current frame.
@@ -1389,13 +1396,19 @@ public sealed class JsVm
                     // wp:M3-84 Stage B — a return pops the frame: release its
                     // pooled arrays, restore the caller, apply the disposition's
                     // return coercion, and deliver the value to the caller's
-                    // operand stack. A barrier frame exits the dispatch loop.
+                    // operand stack. A barrier frame exits the dispatch loop
+                    // returning the RAW value — RunBarrier coerces outside this
+                    // try, so a coercion throw (derived ctor that never ran
+                    // super) propagates natively to the construct site instead
+                    // of being caught here, where the unwinder would release
+                    // the already-released frame a second time and poison the
+                    // array pool.
                     case Opcode.Return:
                         {
                             var rv = Pop(stack, ref sp);
                             if (DivertReturnThroughFinally(frame.TryStack, rv, ref ip)) break;
                             ReleaseFrame(frame, stack, maxSp);
-                            if (frame.IsBarrier) return CoerceReturn(frame, rv);
+                            if (frame.IsBarrier) return rv;
                             var popped = frame;
                             frame = popped.Caller!;
                             t_current = frame;
@@ -1407,7 +1420,7 @@ public sealed class JsVm
                         {
                             if (DivertReturnThroughFinally(frame.TryStack, JsValue.Undefined, ref ip)) break;
                             ReleaseFrame(frame, stack, maxSp);
-                            if (frame.IsBarrier) return CoerceReturn(frame, JsValue.Undefined);
+                            if (frame.IsBarrier) return JsValue.Undefined;
                             var popped = frame;
                             frame = popped.Caller!;
                             t_current = frame;
@@ -1474,7 +1487,7 @@ public sealed class JsVm
                                         var rv = tf.PendingValue;
                                         if (DivertReturnThroughFinally(frame.TryStack, rv, ref ip)) break;
                                         ReleaseFrame(frame, stack, maxSp);
-                                        if (frame.IsBarrier) return CoerceReturn(frame, rv);
+                                        if (frame.IsBarrier) return rv;
                                         var popped = frame;
                                         frame = popped.Caller!;
                                         t_current = frame;
@@ -1819,7 +1832,7 @@ public sealed class JsVm
                 if (!DivertReturnThroughFinally(frame.TryStack, rs.Value, ref ip))
                 {
                     ReleaseFrame(frame, stack, maxSp);
-                    return CoerceReturn(frame, rs.Value);
+                    return rs.Value;
                 }
             }
             if (rethrow is not null)
