@@ -81,6 +81,30 @@ internal sealed class BlockLayout
     {
         if (item.Kind == BoxKind.AnonymousBlock)
             return _inline.Layout(item, containerWidth, measure);
+
+        // Item-level reuse — the flex/grid measure→final choreography lays the
+        // same item several times per pass (basis measure, min measure, final
+        // contents), and each nested flex level multiplies that. A clean
+        // subtree relaid under identical constraints replays its content
+        // extent: measurement replay is return-value-only (callers that read
+        // frames don't pass reuseHeight), final replay leaves the
+        // parent-relative descendant frames exactly as the previous identical
+        // pass wrote them.
+        // Unlike the other reuse keys this one is NOT gated on _incremental:
+        // the one-shot path builds a fresh box tree per layout run, so a stamp
+        // can only ever be replayed within the same pass — where determinism
+        // makes it exact — and the within-pass replay is precisely what breaks
+        // the nested-flex exponential.
+        var cs = new ConstraintSpace(containerWidth, containerHeight, _viewport.Width, _viewport.Height);
+        if (!item.SubtreeDirty)
+        {
+            if (measure && reuseHeight && item.ItemMeasureConstraint == cs)
+                return item.ItemMeasuredContent;
+            if (!measure && item.ItemLaidConstraint == cs)
+                return item.ItemLaidContent;
+        }
+
+        double content;
         // A flex/grid item can itself be a flex container (nested flex — e.g. a
         // navbar's <ul> that is both an item of the nav row and a flex row of
         // its own <li>s). LayoutChildren would block-stack the inner items;
@@ -90,14 +114,32 @@ internal sealed class BlockLayout
         if (IsFlexContainer(item.Style))
         {
             var flex = new Starling.Layout.Flex.FlexLayout(this, _viewport);
-            return flex.Layout(item, containerWidth, containerHeight);
+            content = flex.Layout(item, containerWidth, containerHeight);
         }
-        if (IsGridContainer(item.Style))
+        else if (IsGridContainer(item.Style))
         {
             var grid = new Starling.Layout.Grid.GridLayout(this, _viewport);
-            return grid.Layout(item, containerWidth, containerHeight);
+            content = grid.Layout(item, containerWidth, containerHeight);
         }
-        return LayoutChildren(item, containerWidth, containerHeight, measure, reuseHeight);
+        else
+        {
+            content = LayoutChildren(item, containerWidth, containerHeight, measure, reuseHeight);
+        }
+
+        if (measure)
+        {
+            item.ItemMeasureConstraint = cs;
+            item.ItemMeasuredContent = content;
+        }
+        else
+        {
+            item.ItemLaidConstraint = cs;
+            item.ItemLaidContent = content;
+            // The final pass is authoritative for frames — descendants are
+            // clean from here on.
+            item.SubtreeDirty = false;
+        }
+        return content;
     }
 
     /// <summary>

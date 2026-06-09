@@ -93,6 +93,23 @@ public abstract class Box
     internal Starling.Layout.Incremental.ConstraintSpace? LaidConstraintMeasure;
     internal double MeasuredHeight;
 
+    /// <summary>
+    /// Flex/grid-item layout reuse keys (the <c>BlockLayout.LayoutItem</c>
+    /// seam). Flex items bypass <see cref="LaidConstraint"/>'s LayoutBlock
+    /// check — they dispatch straight to the nested formatting context — so
+    /// without their own keys every measure→final sequence re-lays the whole
+    /// subtree, and N nested flex levels cost ~3^N full passes (x.com's
+    /// ~40-deep all-flex DOM never finished). One slot each for the last
+    /// measurement-mode and last final-mode item layout: same constraints on a
+    /// clean subtree replay the content extent in O(1) (descendant frames are
+    /// parent-relative, so the subtree needs no touch-up). Gated on
+    /// <see cref="SubtreeDirty"/> like every other reuse key.
+    /// </summary>
+    internal Starling.Layout.Incremental.ConstraintSpace? ItemMeasureConstraint;
+    internal double ItemMeasuredContent;
+    internal Starling.Layout.Incremental.ConstraintSpace? ItemLaidConstraint;
+    internal double ItemLaidContent;
+
     public void AppendChild(Box child)
     {
         ArgumentNullException.ThrowIfNull(child);

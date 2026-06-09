@@ -167,6 +167,13 @@ internal sealed class StarlingScriptSession : IScriptSession
         {
             throw new ScriptThrow(DescribeThrow(ex.Value), jsStack: ExtractJsStack(ex.Value), ex);
         }
+        catch (Starling.Js.Parse.JsParseException ex)
+        {
+            // A source-level syntax error is a SyntaxError at the JS layer
+            // (HTML §4.12.1 fires `error`); it must never escape as a native
+            // exception that JS try/catch can't see.
+            throw new ScriptThrow($"SyntaxError: {ex.Message}", jsStack: null, ex);
+        }
     }
 
     /// <summary>Pull the JS-side <c>error.stack</c> string off a thrown Error
@@ -313,10 +320,30 @@ internal sealed class StarlingScriptSession : IScriptSession
 
     public bool HasPendingHostAsyncWork => FetchBinding.HasPendingFetches(_runtime);
 
+    /// <summary>HTML §4.12.1 step 8 — only a classic-JavaScript <c>type</c>
+    /// (empty/missing, or a JavaScript MIME essence) makes the element a
+    /// runnable classic script. Data blocks (<c>application/ld+json</c> and
+    /// friends, which React apps inject for structured data) and module
+    /// scripts must NOT be fed to the classic parser.</summary>
+    private static bool IsClassicJavascriptType(Element script)
+    {
+        var type = script.GetAttribute("type");
+        if (string.IsNullOrWhiteSpace(type))
+            return string.IsNullOrWhiteSpace(script.GetAttribute("language"));
+        var essence = type.Trim();
+        return essence.Equals("text/javascript", StringComparison.OrdinalIgnoreCase)
+            || essence.Equals("application/javascript", StringComparison.OrdinalIgnoreCase)
+            || essence.Equals("application/ecmascript", StringComparison.OrdinalIgnoreCase)
+            || essence.Equals("text/ecmascript", StringComparison.OrdinalIgnoreCase);
+    }
+
     public void OnScriptElementConnected(Node scriptEl)
     {
         ArgumentNullException.ThrowIfNull(scriptEl);
         if (scriptEl is not Element { LocalName: "script" } script) return;
+
+        // Data blocks (ld+json etc.) and non-classic types never run here.
+        if (!IsClassicJavascriptType(script)) return;
 
         // Script-inserted external scripts (and any async-flagged script) are
         // async by default — defer them to the dynamic-script pump rather than

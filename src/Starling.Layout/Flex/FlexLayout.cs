@@ -422,7 +422,9 @@ internal sealed class FlexLayout
             child.CachedMinContentWidth = min;
             return min;
         }
-        return _block.LayoutItem(child, containerWidth, null, measure: true);
+        // Column: the caller consumes only the returned content height, so a
+        // clean subtree may replay it (reuseHeight) instead of re-laying.
+        return _block.LayoutItem(child, containerWidth, null, measure: true, reuseHeight: true);
     }
 
     /// <summary>
@@ -439,8 +441,8 @@ internal sealed class FlexLayout
             return Math.Min(containerWidth, NaturalWidth(child, containerWidth));
         }
         // Column direction: measure the child's natural height at the
-        // container width.
-        return _block.LayoutItem(child, containerWidth, null, measure: true);
+        // container width. Return-value-only consumer → replayable.
+        return _block.LayoutItem(child, containerWidth, null, measure: true, reuseHeight: true);
     }
 
     /// <summary>
