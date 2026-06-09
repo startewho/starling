@@ -122,6 +122,7 @@ structure).
 | [wp:M3-18-regexp-match-delegation](M3/wp-M3-18-regexp-match-delegation.md) | 🟢 complete | agent-claude-cody | Starling.Js |
 | [wp:M3-20-js-arguments-object](M3/wp-M3-20-js-arguments-object.md) | 🟢 complete | agent-claude-cody | Starling.Js |
 | [wp:M3-21-js-named-function-expression-self-binding](M3/wp-M3-21-js-named-function-expression-self-binding.md) | 🟢 complete | agent-claude-cody | Starling.Js |
+| [wp:M3-84-js-stack-trampoline](M3/wp-M3-84-js-stack-trampoline.md) | 🟡 in_progress | agent-claude-cody | Starling.Js |
 
 > **M3-06 native interop pivot: COMPLETE (with one revert).** All 13 packages
 > (06a–06l + the 06g2 shim follow-up) shipped; full `dotnet build && dotnet test`
