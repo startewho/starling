@@ -197,6 +197,23 @@ public class JsRecursionDepthTests
         depth.Should().BeGreaterThanOrEqualTo(200);
     }
 
+    [TestMethod]
+    public void Deep_recursion_allocates_a_bounded_operand_stack_per_frame()
+    {
+        // wp:M3-84 follow-up — frames rent a small operand stack
+        // (InitialStackSlots) and grow on demand. With the old fixed
+        // 1024-slot rent, 9,000 live frames cost ~25 KB of transient array
+        // per frame (~250 MB total — the pool cannot hold that many arrays).
+        // Grow-on-demand measures ~1.1 KB per frame in Debug. The 4 KB bound
+        // leaves headroom for harness noise while catching any regression
+        // back to big up-front rents.
+        Eval("function w(n){ return n<=0 ? 0 : 1+w(n-1); } w(64);"); // warm JIT + pools
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        Eval("function f(n){ return n<=0 ? 0 : 1+f(n-1); } f(9000);");
+        var delta = GC.GetAllocatedBytesForCurrentThread() - before;
+        (delta / 9001.0).Should().BeLessThan(4096);
+    }
+
     private static JsValue Eval(string source)
     {
         var program = new JsParser(source).ParseProgram();
