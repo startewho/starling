@@ -66,14 +66,10 @@ public static class NodeBindings
         // Generated bindings: emitted from Web IDL by tools/Starling.IdlGen. These
         // overwrite the mechanical members (simple attributes and methods) defined
         // above with code generated from the spec. Members that need custom
-        // marshalling stay hand-written and are on the generator's skip list.
+        // marshalling stay with the Starling binding and are on the generator's
+        // skip list.
         // Behavioral equivalence is held by the binding + Web Platform Test suites.
-        Generated.CoreDomBindingsGenerated.InstallNode(realm);
-        Generated.CoreDomBindingsGenerated.InstallCharacterData(realm);
-        Generated.CoreDomBindingsGenerated.InstallElement(realm);
-        Generated.CoreDomBindingsGenerated.InstallDocument(realm);
-        Generated.CoreDomBindingsGenerated.InstallDocumentType(realm);
-        Generated.CoreDomBindingsGenerated.InstallProcessingInstruction(realm);
+        Generated.CoreDomBindingsGenerated.InstallAll(realm);
     }
 
     // =====================================================================

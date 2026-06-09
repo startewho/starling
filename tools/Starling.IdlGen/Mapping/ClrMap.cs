@@ -32,8 +32,15 @@ public sealed class ClrMap
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
     }
 
+    // IDL interface names whose CLR class is spelled differently. The Attr
+    // interface is implemented by the AttrNode class.
+    private static readonly Dictionary<string, string> IdlToClrName = new(StringComparer.Ordinal)
+    {
+        ["Attr"] = "AttrNode",
+    };
+
     public Type? FindType(string idlInterfaceName) =>
-        _typesByName.GetValueOrDefault(idlInterfaceName);
+        _typesByName.GetValueOrDefault(IdlToClrName.GetValueOrDefault(idlInterfaceName, idlInterfaceName));
 
     // Resolves an IDL attribute to a CLR property with a mechanically mappable
     // scalar type. Returns null when there is no matching property or its type
@@ -51,10 +58,11 @@ public sealed class ClrMap
         return new ClrProperty(prop.Name, scalar.Value, publicSetter);
     }
 
-    // Resolves an IDL operation to a CLR method whose parameters are all string
-    // or bool and whose return is void or a mappable scalar. Returns null when no
-    // such method matches by name and arity (so the operation needs a manual
-    // binding). Numeric and node parameters are deferred, so they fall through.
+    // Resolves an IDL operation to a CLR method whose parameters are all string,
+    // bool, or unsigned long (uint) and whose return is void or a mappable scalar.
+    // Returns null when no such method matches by name and arity (so the operation
+    // needs a manual binding). Other numeric widths and node parameters are
+    // deferred, so they fall through.
     public ClrMethod? FindScalarMethod(Type clrType, string idlName, int argCount)
     {
         string pascal = Pascal(idlName);
@@ -69,7 +77,11 @@ public sealed class ClrMap
             foreach (var p in pars)
             {
                 var s = Classify(p.ParameterType);
+                // string and bool convert directly. uint is the one numeric param
+                // the emitter handles today (Web IDL unsigned long); other numeric
+                // widths stay gaps until their marshalling lands.
                 if (s is ClrScalar.String or ClrScalar.Bool) ps.Add(s.Value);
+                else if (s is ClrScalar.Number && p.ParameterType == typeof(uint)) ps.Add(ClrScalar.Number);
                 else { ok = false; break; }
             }
             if (!ok) continue;

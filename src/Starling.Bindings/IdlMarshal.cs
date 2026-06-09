@@ -66,6 +66,61 @@ internal static class IdlMarshal
         return JsValue.ToStringValue(index < args.Length ? args[index] : JsValue.Undefined);
     }
 
+    /// <summary>Convert a required boolean argument via the spec ToBoolean.</summary>
+    public static bool RequireBool(JsRealm realm, JsValue[] args, int index, string op, int requiredCount)
+    {
+        if (args.Length < requiredCount)
+            throw new JsThrow(realm.NewTypeError(
+                $"Failed to execute '{op}': {requiredCount} argument{(requiredCount == 1 ? "" : "s")} required, but only {args.Length} present."));
+        return JsValue.ToBoolean(index < args.Length ? args[index] : JsValue.Undefined);
+    }
+
+    /// <summary>Convert a required <c>unsigned long</c> argument via the Web IDL
+    /// integer conversion (ToUint32: ToNumber, then truncate toward zero modulo
+    /// 2^32, with NaN and the infinities mapping to 0).</summary>
+    public static uint RequireUnsignedLong(JsRealm realm, JsValue[] args, int index, string op, int requiredCount)
+    {
+        if (args.Length < requiredCount)
+            throw new JsThrow(realm.NewTypeError(
+                $"Failed to execute '{op}': {requiredCount} argument{(requiredCount == 1 ? "" : "s")} required, but only {args.Length} present."));
+        return ToUint32(realm, index < args.Length ? args[index] : JsValue.Undefined, op);
+    }
+
+    // Web IDL ToUint32. Symbol and BigInt have no Number conversion and raise a
+    // TypeError; everything else goes through ToNumber.
+    private static uint ToUint32(JsRealm realm, JsValue v, string op)
+    {
+        if (v.IsSymbol || v.IsBigInt)
+            throw new JsThrow(realm.NewTypeError(
+                $"Failed to execute '{op}': Cannot convert a {(v.IsSymbol ? "Symbol" : "BigInt")} value to a number."));
+        double n = JsValue.ToNumber(v);
+        if (double.IsNaN(n) || double.IsInfinity(n)) return 0;
+        double mod = System.Math.Truncate(n) % 4294967296.0;   // 2^32
+        if (mod < 0) mod += 4294967296.0;
+        return (uint)mod;
+    }
+
+    /// <summary>Wrap a nullable string return as a JS string or null.</summary>
+    public static JsValue WrapString(string? value) =>
+        value is { } v ? JsValue.String(v) : JsValue.Null;
+
+    /// <summary>Wrap a boolean return.</summary>
+    public static JsValue WrapBool(bool value) => JsValue.Boolean(value);
+
+    /// <summary>Wrap a number return.</summary>
+    public static JsValue WrapNumber(double value) => JsValue.Number(value);
+
+    /// <summary>Wrap a nullable boolean return.</summary>
+    public static JsValue WrapNullableBool(bool? value) =>
+        value is { } v ? JsValue.Boolean(v) : JsValue.Null;
+
+    /// <summary>Wrap a nullable number return.</summary>
+    public static JsValue WrapNullableNumber(double? value) =>
+        value is { } v ? JsValue.Number(v) : JsValue.Null;
+
+    /// <summary>Return Web IDL undefined for void operations.</summary>
+    public static JsValue Void() => JsValue.Undefined;
+
     /// <summary>Wrap a node sequence as a static NodeList (a snapshot).</summary>
     public static JsValue WrapNodeList(JsRealm realm, IEnumerable<Node> nodes)
     {

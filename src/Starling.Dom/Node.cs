@@ -209,6 +209,79 @@ public abstract class Node : EventTarget
         return list;
     }
 
+    /// <summary>The parent node when it is an element, else null.
+    /// DOM §4.4 <c>parentElement</c>.</summary>
+    public Element? ParentElement => ParentNode as Element;
+
+    /// <summary>True when this node is connected to a document.
+    /// DOM §4.4 <c>isConnected</c>.</summary>
+    public bool IsConnected => IsConnectedToDocument;
+
+    /// <summary>True when this node has any children.
+    /// DOM §4.4 <c>hasChildNodes()</c>.</summary>
+    public bool HasChildNodes() => FirstChild is not null;
+
+    /// <summary>The first child that is an element, else null.
+    /// DOM §4.2.6 ParentNode <c>firstElementChild</c>.</summary>
+    public Element? FirstElementChild
+    {
+        get
+        {
+            for (var n = FirstChild; n is not null; n = n.NextSibling)
+                if (n is Element e) return e;
+            return null;
+        }
+    }
+
+    /// <summary>The last child that is an element, else null.
+    /// DOM §4.2.6 ParentNode <c>lastElementChild</c>.</summary>
+    public Element? LastElementChild
+    {
+        get
+        {
+            for (var n = LastChild; n is not null; n = n.PreviousSibling)
+                if (n is Element e) return e;
+            return null;
+        }
+    }
+
+    /// <summary>The number of element children.
+    /// DOM §4.2.6 ParentNode <c>childElementCount</c>.</summary>
+    public int ChildElementCount
+    {
+        get
+        {
+            int count = 0;
+            for (var n = FirstChild; n is not null; n = n.NextSibling)
+                if (n is Element) count++;
+            return count;
+        }
+    }
+
+    /// <summary>The next sibling that is an element, else null.
+    /// DOM §4.2.8 NonDocumentTypeChildNode <c>nextElementSibling</c>.</summary>
+    public Element? NextElementSibling
+    {
+        get
+        {
+            for (var n = NextSibling; n is not null; n = n.NextSibling)
+                if (n is Element e) return e;
+            return null;
+        }
+    }
+
+    /// <summary>The previous sibling that is an element, else null.
+    /// DOM §4.2.8 NonDocumentTypeChildNode <c>previousElementSibling</c>.</summary>
+    public Element? PreviousElementSibling
+    {
+        get
+        {
+            for (var n = PreviousSibling; n is not null; n = n.PreviousSibling)
+                if (n is Element e) return e;
+            return null;
+        }
+    }
+
     /// <summary>WHATWG DOM §4.4 "compareDocumentPosition": the position bitmask.
     /// Cross-root order is implementation-defined but internally consistent.</summary>
     public ushort CompareDocumentPosition(Node other)

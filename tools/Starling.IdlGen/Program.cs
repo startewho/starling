@@ -29,7 +29,7 @@ public static class Program
             "model" => RunModel(idlDir),
             "emit" => RunEmit(idlDir, repoRoot),
             "manifest" => RunManifest(idlDir, repoRoot),
-            "coverage" => RunCoverage(idlDir, repoRoot),
+            "coverage" => RunCoverage(idlDir, repoRoot, args.Contains("--notes")),
             _ => Help(),
         };
     }
@@ -42,7 +42,7 @@ public static class Program
 
     // Reports member coverage: handled (generated or deliberately marked) versus
     // gaps the generator cannot emit yet, by cause. Drives the 99% goal.
-    private static int RunCoverage(string idlDir, string repoRoot)
+    private static int RunCoverage(string idlDir, string repoRoot, bool notes = false)
     {
         var model = LoadModel(idlDir);
         string overridesPath = Path.Combine(repoRoot, "tools", "Starling.IdlGen", "overrides", "overrides.json");
@@ -73,10 +73,49 @@ public static class Program
         Console.WriteLine($"Coverage over {BindingsEmitter.CoreDomInterfaces.Length} interfaces:");
         Console.WriteLine($"  generated={generated} deliberate(skip/override)={deliberate} gaps={gap} total={total}");
         Console.WriteLine($"  COVERAGE: {coverage:F1}%  ({generated + deliberate}/{total} handled)");
+
+        // Per-interface coverage with the per-interface gates. A gate fails the
+        // command (non-zero exit) when an interface drops below its floor.
+        string gatesPath = CoverageGates.DefaultPath(repoRoot);
+        var gates = File.Exists(gatesPath) ? CoverageGates.Load(gatesPath) : null;
+        bool gateFailed = false;
+        Console.WriteLine("Per-interface coverage:");
+        foreach (var iface in stats.PerInterface)
+        {
+            int? min = gates?.MinPercent.TryGetValue(iface.Interface, out var m) == true ? m : null;
+            string status = min is null ? "(no gate)"
+                : iface.CoveragePercent + 1e-9 >= min ? $"gate {min}% OK"
+                : $"gate {min}% FAIL";
+            if (min is not null && iface.CoveragePercent + 1e-9 < min) gateFailed = true;
+            Console.WriteLine($"  {iface.CoveragePercent,5:F1}%  {iface.Interface,-22} (gen {iface.Generated}, deliberate {iface.Deliberate}, gap {iface.Gap})  {status}");
+        }
+        if (gates is not null)
+        {
+            var ungated = stats.PerInterface.Select(i => i.Interface)
+                .Where(n => !gates.MinPercent.ContainsKey(n)).ToList();
+            if (ungated.Count > 0)
+            {
+                Console.WriteLine($"  WARNING: target interfaces with no gate: {string.Join(", ", ungated)}");
+                gateFailed = true;
+            }
+        }
+
         Console.WriteLine("Gaps by cause:");
         foreach (var (cause, count) in gapByCause.OrderByDescending(kv => kv.Value))
             Console.WriteLine($"  {count,4}  {cause}");
-        return 0;
+
+        if (notes)
+        {
+            Console.WriteLine("Gap members:");
+            foreach (string note in stats.SkipNotes
+                         .Where(n => !n.Contains("override skip", StringComparison.Ordinal)
+                                  && !n.Contains(": not in model", StringComparison.Ordinal)
+                                  && !n.Contains(": no CLR type", StringComparison.Ordinal)
+                                  && !n.Contains(": no prototype slot", StringComparison.Ordinal))
+                         .OrderBy(n => n, StringComparer.Ordinal))
+                Console.WriteLine($"    {note}");
+        }
+        return gateFailed ? 1 : 0;
     }
 
     private static int RunEmit(string idlDir, string repoRoot)

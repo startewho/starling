@@ -29,6 +29,9 @@ dotnet run --project tools/Starling.IdlGen -- manifest
 
 # Report member coverage over the target interfaces, by cause.
 dotnet run --project tools/Starling.IdlGen -- coverage
+
+# Same report, plus the full list of gap members. Use it to pick what to add next.
+dotnet run --project tools/Starling.IdlGen -- coverage --notes
 ```
 
 ## What it generates
@@ -92,6 +95,21 @@ commit.
 bindings, so the generated members overwrite the mechanical Starling members.
 The binding tests and the Web Platform Tests hold behavioral equivalence.
 
+## Coverage gates
+
+`coverage-gates.json` sets a minimum member-coverage percent for each target
+interface in `BindingsEmitter.CoreDomInterfaces`. The gates ratchet coverage: if
+an interface drops below its floor, or a new target has no gate, both the
+`coverage` command (non-zero exit) and `CoverageGateTests` fail. After a coverage
+gain, raise the floor to lock it in. Read the current numbers with:
+
+```bash
+dotnet run --project tools/Starling.IdlGen -- coverage
+```
+
+An interface whose members are all inherited (for example `Comment`) reads as
+100% — it has nothing of its own to bind.
+
 ## Refreshing the IDL
 
 The IDL lives in `testdata/webref/idl/`, a pinned snapshot of `w3c/webref`. See
@@ -113,19 +131,188 @@ they need custom prototype selection.
 
 ## Todo
 
+Parallel markers:
+
+- `parallel-root` means the root item can run beside other root items once its
+  normal code dependencies are met.
+- `parallel-subtask` means the child item can be split from its siblings.
+
 - [x] Generate a backend-neutral IDL surface manifest and use it to check the
   Starling JS engine and Jint binding surfaces.
 - [x] Make the manifest the source of truth for backend parity.
-- [ ] Route every generated operation through `IdlMarshal`.
-- [ ] Fail when a generated installer is not wired into the runtime.
-- [ ] Add negative Web IDL conversion tests for generated members.
+- [x] Route every generated operation through `IdlMarshal`.
+- [x] Fail when a generated installer is not wired into the runtime.
+- [x] Add negative Web IDL conversion tests for generated members.
 - [ ] Teach the type mapper nullable strings, sequences, records, callbacks,
   dictionaries, unions, overloads, variadics, enums, and `[SameObject]`.
-- [ ] Move more DOM algorithms into `Starling.Dom`, then emit thin dispatch
-  bindings for them.
-- [ ] Expand the target interface set with per-interface coverage gates.
-- [ ] Add runtime IDL harness-style tests over the manifest.
-- [ ] Add baseline drift tests for every generated file.
-- [ ] Add Starling JS engine and Jint prototype parity tests.
+  (`parallel-root`, `parallel-subtask`)
+  - [ ] Parse and map nullable strings. (`parallel-subtask`)
+  - [ ] Parse and map `sequence<T>` and `record<K, V>`. (`parallel-subtask`)
+  - [ ] Generate dictionary and callback arguments. (`parallel-subtask`)
+  - [ ] Generate union inputs and returns. (`parallel-subtask`)
+  - [ ] Support enum conversion and validation. (`parallel-subtask`)
+  - [ ] Support overloads and variadic arguments. (`parallel-subtask`)
+  - [ ] Honor `[SameObject]` for cached wrapper identity. (`parallel-subtask`)
+- [x] Move more DOM algorithms into `Starling.Dom`, then emit thin dispatch
+  bindings for them. (`parallel-subtask`)
+  - [x] Move CharacterData mutators: `length`, `substringData`, `appendData`,
+    `insertData`, `deleteData`, and `replaceData`.
+  - [x] Move ParentNode and ChildNode traversal: `firstElementChild`,
+    `lastElementChild`, `childElementCount`, `nextElementSibling`, and
+    `previousElementSibling`.
+  - [x] Move `parentElement`, `isConnected`, `hasChildNodes`, `nodeType`,
+    `Text.wholeText`, `Text.splitText`, `Element.className`,
+    `Element.namespaceURI`, `Document.doctype`, and
+    `DocumentFragment.getElementById`.
+  - [ ] Move layout and CSSOM View members such as `clientHeight`, `scrollTop`,
+    and `getBoundingClientRect`. (`parallel-subtask`)
+  - [ ] Move stylesheet, animation, view-transition, shadow DOM, XPath, Range,
+    and tree-walker factory members. (`parallel-subtask`)
+- [x] Expand the target interface set with per-interface coverage gates. Added
+  `Attr` to the target set (the `AttrNode` .NET type, via an IDL-to-.NET name
+  map). `coverage-gates.json` holds a minimum coverage percent per target
+  interface. The `coverage` command and `CoverageGateTests` fail when an
+  interface drops below its floor or a target has no gate. (`Event` and
+  `CustomEvent` were tried but reverted: the event object uses a bespoke wrapper
+  the generic marshalling cannot unwrap.)
+  - [x] Add `Attr`.
+  - [x] Add `coverage-gates.json`.
+  - [x] Fail when a target interface has no gate.
+  - [x] Fail when an interface drops below its floor.
+  - [ ] Revisit `Event` and `CustomEvent` after the event wrapper can be
+    unwrapped by generated bindings. (`parallel-subtask`)
+- [ ] Add runtime IDL harness-style tests over the manifest. (`parallel-root`,
+  `parallel-subtask`)
+  - [ ] Load the surface manifest as the test source.
+  - [ ] Create fixture objects for each interface. (`parallel-subtask`)
+  - [ ] Check descriptors, constants, methods, and attributes.
+    (`parallel-subtask`)
+  - [ ] Check inheritance and prototype chains. (`parallel-subtask`)
+  - [ ] Track expected failures in the manifest or a sidecar file.
+    (`parallel-subtask`)
+- [ ] Add baseline drift tests for every generated file. (`parallel-root`,
+  `parallel-subtask`)
+  - [ ] `CoreDomBindings.g.cs`. (`parallel-subtask`)
+  - [ ] `Unions.g.cs`. (`parallel-subtask`)
+  - [ ] `Dictionaries.g.cs`. (`parallel-subtask`)
+  - [ ] `Enums.g.cs`. (`parallel-subtask`)
+  - [ ] `Callbacks.g.cs`. (`parallel-subtask`)
+  - [ ] `core-dom-surface.json`. (`parallel-subtask`)
+- [ ] Add Starling JS engine and Jint prototype parity tests. (`parallel-root`,
+  `parallel-subtask`)
+  - [ ] Compare constructors and prototype objects. (`parallel-subtask`)
+  - [ ] Compare `constructor` links. (`parallel-subtask`)
+  - [ ] Compare method and attribute descriptors. (`parallel-subtask`)
+  - [ ] Compare constants on constructors and prototypes. (`parallel-subtask`)
+  - [ ] Compare `instanceof` results. (`parallel-subtask`)
 - [ ] Require each `skip` entry to have a reason and a test for the matching
-  Starling binding.
+  Starling binding. (`parallel-root`)
+  - [ ] Require a reason.
+  - [ ] Require a category.
+  - [ ] Require a matching Starling binding test.
+  - [ ] Require a work item or removal condition.
+
+### Full coverage gaps
+
+- [ ] Define an extended-attributes policy. Handle or reject `[Exposed]`,
+  `[LegacyUnforgeable]`, `[NewObject]`, `[PutForwards]`, `[Reflect]`,
+  `[CEReactions]`, `[HTMLConstructor]`, `[SecureContext]`, and other attributes
+  used by target interfaces. (`parallel-root`, `parallel-subtask`)
+  - [ ] Exposure rules: `[Exposed]` and `[SecureContext]`. (`parallel-subtask`)
+  - [ ] Constructor rules: `[HTMLConstructor]`. (`parallel-subtask`)
+  - [ ] Reflection rules: `[Reflect]` and `[PutForwards]`. (`parallel-subtask`)
+  - [ ] Object identity rules: `[SameObject]` and `[NewObject]`.
+    (`parallel-subtask`)
+  - [ ] Custom element reactions: `[CEReactions]`. (`parallel-subtask`)
+  - [ ] Property placement rules: `[LegacyUnforgeable]`. (`parallel-subtask`)
+- [ ] Generate and validate interface objects and constructors: globals,
+  `prototype`, `constructor`, constants, illegal constructors, and global
+  exposure rules. (`parallel-root`, `parallel-subtask`)
+  - [ ] Generate globals. (`parallel-subtask`)
+  - [ ] Generate `prototype` and `constructor` links. (`parallel-subtask`)
+  - [ ] Put constants on constructors and prototypes. (`parallel-subtask`)
+  - [ ] Generate illegal constructor behavior. (`parallel-subtask`)
+  - [ ] Check `instanceof`. (`parallel-subtask`)
+  - [ ] Apply global exposure rules. (`parallel-subtask`)
+- [ ] Validate IDL inheritance and prototype chains for every target interface.
+  (`parallel-root`)
+- [ ] Implement Web IDL overload resolution, including nullable values,
+  dictionaries, callbacks, primitives, and platform objects. (`parallel-root`,
+  `parallel-subtask`)
+  - [ ] Dispatch by argument count. (`parallel-subtask`)
+  - [ ] Dispatch by nullable values. (`parallel-subtask`)
+  - [ ] Dispatch by dictionary and callback inputs. (`parallel-subtask`)
+  - [ ] Dispatch by primitive and platform-object inputs. (`parallel-subtask`)
+  - [ ] Add tie-break tests. (`parallel-subtask`)
+- [ ] Implement optional arguments and default values. (`parallel-root`,
+  `parallel-subtask`)
+  - [ ] Optional primitive args. (`parallel-subtask`)
+  - [ ] Optional dictionaries. (`parallel-subtask`)
+  - [ ] Default values. (`parallel-subtask`)
+  - [ ] Method `length` after optional args. (`parallel-subtask`)
+- [ ] Expand negative conversion tests into a table-driven matrix for missing
+  args, `undefined`, `null`, symbols, BigInts, objects, arrays, functions, wrong
+  receivers, and cross-realm wrappers. (`parallel-root`, `parallel-subtask`)
+  - [ ] Missing args, `undefined`, and `null`. (`parallel-subtask`)
+  - [ ] Symbols and BigInts. (`parallel-subtask`)
+  - [ ] Objects, arrays, and functions. (`parallel-subtask`)
+  - [ ] Wrong receivers. (`parallel-subtask`)
+  - [ ] Cross-realm wrappers. (`parallel-subtask`)
+- [ ] Make unsupported IDL features fail for target interfaces unless a skip
+  entry explains the gap. (`parallel-root`)
+- [ ] Add a skip category for each skipped member, such as custom prototype,
+  missing DOM algorithm, missing type mapper support, or backend-specific.
+  (`parallel-root`)
+- [ ] Decide whether Jint stays manually bound and manifest-tested, or whether
+  the generator also emits Jint bindings.
+  - [ ] Document the chosen strategy.
+  - [ ] If Jint stays manual, keep manifest parity as the gate.
+  - [ ] If Jint is generated, share the IDL model and test matrix.
+
+### Mission-critical gates
+
+- [ ] Run or mirror WPT `idlharness.js` checks for generated interfaces.
+  (`parallel-root`, `parallel-subtask`)
+  - [ ] Load the same IDL snapshot.
+  - [ ] Build JS fixtures for each interface. (`parallel-subtask`)
+  - [ ] Track expected failures. (`parallel-subtask`)
+  - [ ] Run checks for both Starling JS and Jint where possible.
+    (`parallel-subtask`)
+- [ ] Require every target IDL member to be classified as generated, covered by a
+  Starling binding, blocked by type support, blocked by a missing DOM algorithm,
+  or out of scope. (`parallel-root`, `parallel-subtask`)
+  - [ ] `generated`.
+  - [ ] `starling-binding`.
+  - [ ] `blocked-type-support`.
+  - [ ] `blocked-dom-algorithm`.
+  - [ ] `out-of-scope`.
+- [ ] Add hard per-interface coverage gates and ratchet them upward.
+  (`parallel-root`)
+- [ ] Add differential oracle tests that run selected snippets in Starling JS,
+  Jint, and a real browser. (`parallel-root`, `parallel-subtask`)
+  - [ ] Choose representative snippets per interface. (`parallel-subtask`)
+  - [ ] Run Starling JS. (`parallel-subtask`)
+  - [ ] Run Jint. (`parallel-subtask`)
+  - [ ] Run a browser oracle. (`parallel-subtask`)
+  - [ ] Store expected differences. (`parallel-subtask`)
+- [ ] Add a generated install registry and compare it to the manifest at runtime
+  or test time. (`parallel-root`, `parallel-subtask`)
+  - [ ] Record each generated installer call. (`parallel-subtask`)
+  - [ ] Record each installed member. (`parallel-subtask`)
+  - [ ] Compare installed members to required manifest rows. (`parallel-subtask`)
+- [ ] Add cross-realm tests for wrappers, constructors, prototypes, and object
+  identity. (`parallel-root`, `parallel-subtask`)
+  - [ ] Cross-realm wrappers. (`parallel-subtask`)
+  - [ ] Cross-realm constructors and prototypes. (`parallel-subtask`)
+  - [ ] Cross-realm `instanceof`. (`parallel-subtask`)
+  - [ ] Cross-realm object identity. (`parallel-subtask`)
+- [ ] Add performance and allocation checks for hot generated bindings such as
+  `getAttribute`, `setAttribute`, `querySelector`, `appendChild`, and property
+  reads. (`parallel-root`, `parallel-subtask`)
+  - [ ] `getAttribute` and `setAttribute`. (`parallel-subtask`)
+  - [ ] `querySelector` and `querySelectorAll`. (`parallel-subtask`)
+  - [ ] `appendChild`, `insertBefore`, and `removeChild`. (`parallel-subtask`)
+  - [ ] Common attribute reads. (`parallel-subtask`)
+- [ ] Add a CI regeneration gate that runs `dotnet run --project
+  tools/Starling.IdlGen -- emit` and fails if generated files or manifests drift.
+  (`parallel-root`)
