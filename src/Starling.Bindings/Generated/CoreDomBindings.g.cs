@@ -144,7 +144,7 @@ internal static class CoreDomBindingsGenerated
         EventTargetBinding.DefineMethod(realm, proto, "lookupPrefix", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "lookupPrefix");
-            var a0 = IdlMarshal.RequireString(realm, args, 0, "lookupPrefix", 1);
+            var a0 = IdlMarshal.RequireNullableString(realm, args, 0, "lookupPrefix", 1);
             try
             {
                 return IdlMarshal.WrapString(receiver.LookupPrefix(a0));
@@ -154,7 +154,7 @@ internal static class CoreDomBindingsGenerated
         EventTargetBinding.DefineMethod(realm, proto, "lookupNamespaceURI", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "lookupNamespaceURI");
-            var a0 = IdlMarshal.RequireString(realm, args, 0, "lookupNamespaceURI", 1);
+            var a0 = IdlMarshal.RequireNullableString(realm, args, 0, "lookupNamespaceURI", 1);
             try
             {
                 return IdlMarshal.WrapString(receiver.LookupNamespaceURI(a0));
@@ -164,7 +164,7 @@ internal static class CoreDomBindingsGenerated
         EventTargetBinding.DefineMethod(realm, proto, "isDefaultNamespace", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "isDefaultNamespace");
-            var a0 = IdlMarshal.RequireString(realm, args, 0, "isDefaultNamespace", 1);
+            var a0 = IdlMarshal.RequireNullableString(realm, args, 0, "isDefaultNamespace", 1);
             try
             {
                 return IdlMarshal.WrapBool(receiver.IsDefaultNamespace(a0));

@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "comment": "Known gaps where the Starling runtime does not yet match the IDL surface manifest. Each member entry lists an interface, a member name, the check that fails (member, shape, length, accessor, constant, or chain), and a short reason. Each chain entry lists an interface and a reason. The harness asserts every required member is present and correctly shaped, and every prototype chain follows IDL inheritance, EXCEPT these listed gaps. A gap that is unexpectedly fixed, or a new gap that is not listed, fails the test so this list cannot rot. The list is empty because the Starling runtime currently matches the manifest for all required members, constants, and chains.",
+  "members": [],
+  "chains": []
+}

@@ -230,6 +230,39 @@ public sealed class GeneratedBindingsRuntimeTests
     }
 
     [TestMethod]
+    public void Generated_namespace_lookups_take_a_nullable_string_argument()
+    {
+        var (runtime, _) = BuildEnvWithGenerated();
+
+        // lookupNamespaceURI, isDefaultNamespace, and lookupPrefix are generated
+        // methods whose DOMString? argument routes through RequireNullableString.
+        // A JS null becomes a C# null (the default namespace), not the string
+        // "null". An HTML element resolves the HTML namespace as its default.
+        Eval(runtime, """
+            var e = document.createElement('div');
+            result = [
+                e.lookupNamespaceURI(null),
+                e.isDefaultNamespace('http://www.w3.org/1999/xhtml'),
+                e.lookupPrefix(null)
+            ].join('/');
+        """).AsString.Should().Be("http://www.w3.org/1999/xhtml/true/");
+    }
+
+    [TestMethod]
+    public void Generated_namespace_lookup_requires_its_argument()
+    {
+        var (runtime, _) = BuildEnvWithGenerated();
+
+        // The DOMString? argument is nullable but still required: calling with no
+        // argument throws a TypeError, like other required-argument operations.
+        Eval(runtime, """
+            var e = document.createElement('div');
+            try { e.lookupNamespaceURI(); result = 'no-throw'; }
+            catch (x) { result = x.name; }
+        """).AsString.Should().Be("TypeError");
+    }
+
+    [TestMethod]
     public void Generated_dotnet11_union_type_works()
     {
         // NodeOrString is a generated .NET 11 union type from IDL (Node or DOMString).

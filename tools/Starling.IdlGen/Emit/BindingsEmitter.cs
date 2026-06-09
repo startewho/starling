@@ -191,7 +191,7 @@ public sealed class BindingsEmitter(WebIdlModel model, ClrMap clr, OverrideSet o
                 { skipNotes.Add($"{ifaceName}.{op.Name}: override skip ({opSkipReason})"); skipped++; Cov(ifaceName)[1]++; continue; }
                 if (emittedOps.Contains(op.Name)) { skipNotes.Add($"{ifaceName}.{op.Name}: overload (todo)"); skipped++; Cov(ifaceName)[2]++; continue; }
 
-                var m = clr.FindScalarMethod(clrType, op.Name, op.Arguments.Count);
+                var m = clr.FindScalarMethod(clrType, op.Name, op.Arguments);
                 if (m is null) { skipNotes.Add($"{ifaceName}.{op.Name}: no IdlMarshal dispatch"); skipped++; Cov(ifaceName)[2]++; continue; }
 
                 EmitMethod(sb, clrType.Name, op.Name, m);
@@ -368,13 +368,16 @@ public sealed class BindingsEmitter(WebIdlModel model, ClrMap clr, OverrideSet o
             string conversion = m.Params[i] switch
             {
                 ClrScalar.String => "RequireString",
+                // A nullable DOMString? argument: present-but-null becomes null
+                // rather than the string "null", but the argument is still required.
+                ClrScalar.NullableString => "RequireNullableString",
                 ClrScalar.Bool => "RequireBool",
                 // ClrMap only admits uint among numeric params (Web IDL unsigned long).
                 ClrScalar.Number => "RequireUnsignedLong",
                 _ => throw new InvalidOperationException($"Unsupported generated operation parameter scalar: {m.Params[i]}")
             };
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"            var a{i} = IdlMarshal.{conversion}(realm, args, {i}, \"{idlName}\", {m.Params.Count});");
+                $"            var a{i} = IdlMarshal.{conversion}(realm, args, {i}, \"{idlName}\", {m.RequiredCount});");
             callArgs.Add($"a{i}");
         }
 
@@ -387,6 +390,7 @@ public sealed class BindingsEmitter(WebIdlModel model, ClrMap clr, OverrideSet o
             ClrScalar.Number => $"return IdlMarshal.WrapNumber((double)({call}));",
             ClrScalar.NullableBool => $"return IdlMarshal.WrapNullableBool({call});",
             ClrScalar.NullableNumber => $"return IdlMarshal.WrapNullableNumber({call} is {{ }} __n ? (double)__n : null);",
+            ClrScalar.NullableString => $"return IdlMarshal.WrapString({call});",
             ClrScalar.Node => $"return IdlMarshal.Wrap(realm, {call});",
             _ => "return IdlMarshal.Void();",
         };

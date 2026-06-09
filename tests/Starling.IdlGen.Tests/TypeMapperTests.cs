@@ -45,6 +45,16 @@ public class TypeMapperTests
     }
 
     [TestMethod]
+    public void Nullable_string_gets_question_mark()
+    {
+        string idl = "interface I { undefined f(DOMString? x); };";
+        var m = MapperFor(idl).Map(ArgType(idl), TypePosition.Parameter);
+        m.CSharp.Should().Be("string?");
+        m.Kind.Should().Be(TypeKind.String);
+        m.Nullable.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Sequence_position_changes_collection_type()
     {
         string idl = "interface I { undefined f(sequence<DOMString> x); };";

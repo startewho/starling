@@ -91,6 +91,21 @@ public class BindingsEmitterTests
     }
 
     [TestMethod]
+    public void Nullable_string_operation_argument_marshals_as_nullable_string()
+    {
+        string code = EmitCoreDom();
+        // Node.lookupPrefix(DOMString? namespace) is mechanical: the CLR
+        // Node.LookupPrefix(string?) takes a nullable string. A nullable DOMString?
+        // argument routes through RequireNullableString so a JS null becomes a C#
+        // null rather than the string "null", while staying a required argument.
+        code.Should().Contain("IdlMarshal.RequireNullableString(realm, args, 0, \"lookupPrefix\", 1)");
+        code.Should().Contain("IdlMarshal.RequireNullableString(realm, args, 0, \"lookupNamespaceURI\", 1)");
+        code.Should().Contain("IdlMarshal.RequireNullableString(realm, args, 0, \"isDefaultNamespace\", 1)");
+        // A required (non-nullable) DOMString argument still uses RequireString.
+        code.Should().Contain("IdlMarshal.RequireString(realm, args, 0, \"appendData\", 1)");
+    }
+
+    [TestMethod]
     public void Generated_install_all_calls_every_target_interface()
     {
         string code = EmitCoreDom();
