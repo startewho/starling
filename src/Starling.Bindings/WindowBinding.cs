@@ -145,6 +145,13 @@ public static class WindowBinding
             PropertyDescriptor.Data(JsValue.Number(options.InnerHeight), writable: true, enumerable: true, configurable: true));
         global.DefineOwnProperty("devicePixelRatio",
             PropertyDescriptor.Data(JsValue.Number(1), writable: true, enumerable: true, configurable: true));
+        // CSSOM-View §4 window.screen. The headless/embedded "screen" is the
+        // viewport: real pages only use it for sizing heuristics (React Native
+        // Web's Dimensions reads screen.height at boot and throws when the
+        // object is absent).
+        global.DefineOwnProperty("screen",
+            PropertyDescriptor.Data(JsValue.Object(BuildScreen(realm, options.InnerWidth, options.InnerHeight)),
+                writable: true, enumerable: true, configurable: true));
         // HTML §6.6.2 window.scrollX / scrollY. No scrolled content yet — return 0.
         global.DefineOwnProperty("scrollX",
             PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
@@ -483,6 +490,40 @@ public static class WindowBinding
         var url = UrlFor(realm, doc);
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "";
         try { return select(uri); } catch { return ""; }
+    }
+
+    /// <summary>CSSOM-View §4 Screen. Width/height mirror the viewport (the
+    /// embedded engine has no physical screen); colorDepth/pixelDepth are the
+    /// universal 24; orientation is a minimal ScreenOrientation-shaped object
+    /// (landscape/portrait derived from the aspect ratio, listener methods are
+    /// accepted and never fire).</summary>
+    private static JsObject BuildScreen(JsRealm realm, double width, double height)
+    {
+        var screen = new JsObject(realm.ObjectPrototype);
+        void Num(string name, double v) => screen.DefineOwnProperty(name,
+            PropertyDescriptor.Data(JsValue.Number(v), writable: false, enumerable: true, configurable: true));
+        Num("width", width);
+        Num("height", height);
+        Num("availWidth", width);
+        Num("availHeight", height);
+        Num("availLeft", 0);
+        Num("availTop", 0);
+        Num("colorDepth", 24);
+        Num("pixelDepth", 24);
+
+        var orientation = new JsObject(realm.ObjectPrototype);
+        orientation.DefineOwnProperty("type",
+            PropertyDescriptor.Data(JsValue.String(width >= height ? "landscape-primary" : "portrait-primary"),
+                writable: false, enumerable: true, configurable: true));
+        orientation.DefineOwnProperty("angle",
+            PropertyDescriptor.Data(JsValue.Number(0), writable: false, enumerable: true, configurable: true));
+        foreach (var m in new[] { "addEventListener", "removeEventListener" })
+            orientation.DefineOwnProperty(m, PropertyDescriptor.Data(
+                JsValue.Object(new JsNativeFunction(realm, m, 2, (_, _) => JsValue.Undefined, isConstructor: false)),
+                writable: true, enumerable: false, configurable: true));
+        screen.DefineOwnProperty("orientation",
+            PropertyDescriptor.Data(JsValue.Object(orientation), writable: false, enumerable: true, configurable: true));
+        return screen;
     }
 
     private static JsObject BuildNavigator(JsRealm realm, string? userAgent)
