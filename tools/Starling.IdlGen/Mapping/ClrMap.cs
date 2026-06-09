@@ -1,6 +1,7 @@
 using System.Reflection;
 using Starling.Dom;
 using Starling.Dom.Events;
+using Starling.IdlGen.Model;
 
 namespace Starling.IdlGen.Mapping;
 
@@ -14,8 +15,11 @@ public sealed record ClrProperty(string Name, ClrScalar Scalar, bool HasPublicSe
 
 // A CLR method the emitter can bind mechanically. Params are restricted to the
 // scalar kinds the emitter knows how to convert from a JsValue (string, bool).
-// Return is one scalar kind, or null for void.
-public sealed record ClrMethod(string Name, IReadOnlyList<ClrScalar> Params, ClrScalar? Return);
+// Return is one scalar kind, or null for void. RequiredCount is the count of
+// required arguments, which is what the JS function .length reports and what the
+// argument marshallers enforce. It is the parameter count minus any trailing
+// optional and variadic arguments.
+public sealed record ClrMethod(string Name, IReadOnlyList<ClrScalar> Params, ClrScalar? Return, int RequiredCount);
 
 // Reflects over the Starling DOM assembly to resolve the CLR type and members an
 // IDL interface and its attributes bind to. Name mapping is camelCase to
@@ -63,24 +67,38 @@ public sealed class ClrMap
     // Returns null when no such method matches by name and arity (so the operation
     // needs a manual binding). Other numeric widths and node parameters are
     // deferred, so they fall through.
-    public ClrMethod? FindScalarMethod(Type clrType, string idlName, int argCount)
+    //
+    // The IDL arguments carry per-argument nullability and optional/variadic flags
+    // that reflection cannot recover. A nullable DOMString? argument backed by a
+    // CLR string parameter marshals as a nullable string (null for null and
+    // undefined) rather than a required string. Trailing optional and variadic
+    // arguments are excluded from the required-argument count.
+    public ClrMethod? FindScalarMethod(Type clrType, string idlName, IReadOnlyList<IdlArgument> idlArgs)
     {
         string pascal = Pascal(idlName);
+        // A variadic argument is not yet supported by the mechanical path; defer it
+        // to a dispatch binding (see the NodeOrString variadic helpers).
+        if (idlArgs.Any(a => a.Variadic)) return null;
+
         foreach (var m in clrType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
         {
             if (m.IsSpecialName || !string.Equals(m.Name, pascal, StringComparison.Ordinal)) continue;
             var pars = m.GetParameters();
-            if (pars.Length != argCount) continue;
+            if (pars.Length != idlArgs.Count) continue;
 
             var ps = new List<ClrScalar>(pars.Length);
             bool ok = true;
-            foreach (var p in pars)
+            for (int i = 0; i < pars.Length; i++)
             {
+                var p = pars[i];
                 var s = Classify(p.ParameterType);
-                // string and bool convert directly. uint is the one numeric param
-                // the emitter handles today (Web IDL unsigned long); other numeric
-                // widths stay gaps until their marshalling lands.
-                if (s is ClrScalar.String or ClrScalar.Bool) ps.Add(s.Value);
+                // string and bool convert directly. A nullable DOMString? string
+                // argument marshals as a nullable string. uint is the one numeric
+                // param the emitter handles today (Web IDL unsigned long); other
+                // numeric widths stay gaps until their marshalling lands.
+                if (s is ClrScalar.String)
+                    ps.Add(idlArgs[i].Type.Nullable ? ClrScalar.NullableString : ClrScalar.String);
+                else if (s is ClrScalar.Bool) ps.Add(ClrScalar.Bool);
                 else if (s is ClrScalar.Number && p.ParameterType == typeof(uint)) ps.Add(ClrScalar.Number);
                 else { ok = false; break; }
             }
@@ -90,9 +108,23 @@ public sealed class ClrMap
             if (m.ReturnType == typeof(void)) ret = null;
             else { var rs = Classify(m.ReturnType); if (rs is null) continue; ret = rs; }
 
-            return new ClrMethod(m.Name, ps, ret);
+            return new ClrMethod(m.Name, ps, ret, RequiredCount(idlArgs));
         }
         return null;
+    }
+
+    // The count of required arguments: every argument up to the first trailing
+    // optional or variadic argument. This is the JS function .length and the count
+    // the argument marshallers enforce.
+    private static int RequiredCount(IReadOnlyList<IdlArgument> idlArgs)
+    {
+        int count = 0;
+        foreach (var a in idlArgs)
+        {
+            if (a.Optional || a.Variadic) break;
+            count++;
+        }
+        return count;
     }
 
     private static ClrScalar? Classify(Type t)

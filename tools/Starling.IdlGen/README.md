@@ -135,7 +135,8 @@ Parallel markers:
 
 - `parallel-root` means the root item can run beside other root items once its
   normal code dependencies are met.
-- `parallel-subtask` means the child item can be split from its siblings.
+- `parallel-subtask` means the item can be split from sibling tasks under the
+  same parent. On a parent row, it means at least some child rows can split.
 
 - [x] Generate a backend-neutral IDL surface manifest and use it to check the
   Starling JS engine and Jint binding surfaces.
@@ -146,13 +147,39 @@ Parallel markers:
 - [ ] Teach the type mapper nullable strings, sequences, records, callbacks,
   dictionaries, unions, overloads, variadics, enums, and `[SameObject]`.
   (`parallel-root`, `parallel-subtask`)
-  - [ ] Parse and map nullable strings. (`parallel-subtask`)
-  - [ ] Parse and map `sequence<T>` and `record<K, V>`. (`parallel-subtask`)
+  - [x] Parse and map nullable strings. (`parallel-subtask`) The type mapper maps
+    `DOMString?` to `string?`. `ClrMap.FindScalarMethod` now reads per-argument
+    IDL nullability so a nullable string argument backed by a CLR `string`
+    parameter marshals through `IdlMarshal.RequireNullableString` (a JS null
+    becomes a C# null, the argument stays required) instead of `RequireString`.
+    This fixes the generated `Node.lookupPrefix`, `lookupNamespaceURI`, and
+    `isDefaultNamespace`. Nullable string returns already work through
+    `WrapString`.
+  - [x] Parse and map `sequence<T>` and `record<K, V>`. (`parallel-subtask`) The
+    type mapper maps these (see `TypeMapperTests`). No target interface has a CLR
+    member of these shapes that the mechanical path can bind yet, so this is
+    mapping-ready with no current binding yield. The variadic `(Node or
+    DOMString)...` sequence is handled by the dispatch layer.
   - [ ] Generate dictionary and callback arguments. (`parallel-subtask`)
-  - [ ] Generate union inputs and returns. (`parallel-subtask`)
+    Mapping-ready (the type mapper classifies them and the dictionary/callback
+    emitters emit the C# types), but no target interface exposes a CLR member that
+    takes a dictionary or callback yet, so there is no binding yield.
+  - [ ] Generate union inputs and returns. (`parallel-subtask`) Mapping-ready. The
+    type mapper produces the generated union name. The only union argument a
+    target interface needs today is the `(Node or DOMString)...` variadic, which
+    the dispatch layer already converts.
   - [ ] Support enum conversion and validation. (`parallel-subtask`)
-  - [ ] Support overloads and variadic arguments. (`parallel-subtask`)
+    Mapping-ready (the type mapper classifies IDL enums and the enum emitter emits
+    the wire-string maps), but no target interface has an enum-typed CLR member
+    backing an IDL enum attribute, so there is no binding yield.
+  - [ ] Support overloads and variadic arguments. (`parallel-subtask`) The
+    required-argument count and JS `.length` for mechanical methods now exclude
+    trailing optional and variadic arguments (threaded from the IDL operation),
+    matching the dispatch layer. Variadic arguments stay deferred to the dispatch
+    layer. Overload resolution is still open.
   - [ ] Honor `[SameObject]` for cached wrapper identity. (`parallel-subtask`)
+    Untouched. `[SameObject]` getters such as `Element.attributes` and
+    `Element.classList` already cache their wrapper through the override layer.
 - [x] Move more DOM algorithms into `Starling.Dom`, then emit thin dispatch
   bindings for them. (`parallel-subtask`)
   - [x] Move CharacterData mutators: `length`, `substringData`, `appendData`,
@@ -181,15 +208,25 @@ Parallel markers:
   - [x] Fail when an interface drops below its floor.
   - [ ] Revisit `Event` and `CustomEvent` after the event wrapper can be
     unwrapped by generated bindings. (`parallel-subtask`)
-- [ ] Add runtime IDL harness-style tests over the manifest. (`parallel-root`,
-  `parallel-subtask`)
-  - [ ] Load the surface manifest as the test source.
-  - [ ] Create fixture objects for each interface. (`parallel-subtask`)
-  - [ ] Check descriptors, constants, methods, and attributes.
-    (`parallel-subtask`)
-  - [ ] Check inheritance and prototype chains. (`parallel-subtask`)
-  - [ ] Track expected failures in the manifest or a sidecar file.
-    (`parallel-subtask`)
+- [x] Add runtime IDL harness-style tests over the manifest. (`parallel-root`,
+  `parallel-subtask`) Done in
+  `tests/Starling.BindingSurface.Tests/IdlRuntimeHarnessTests.cs`. Drives the
+  Starling JS engine with the Starling DOM bindings.
+  - [x] Load the surface manifest as the test source. Reads
+    `testdata/webref/core-dom-surface.json`.
+  - [x] Create fixture objects for each interface. (`parallel-subtask`) A JS
+    fixture expression per interface, for example `document.createElement('div')`
+    for Element and `document.createTextNode('x')` for Text.
+  - [x] Check descriptors, constants, methods, and attributes.
+    (`parallel-subtask`) Accessor versus method versus data shape, method
+    `.length`, and Node constants on both the constructor and the prototype.
+  - [x] Check inheritance and prototype chains. (`parallel-subtask`) Walks each
+    instance prototype chain and matches it to the IDL inheritance, ending at
+    Object.
+  - [x] Track expected failures in the manifest or a sidecar file.
+    (`parallel-subtask`) Sidecar `testdata/webref/surface-expected-failures.json`.
+    The list is empty today because the runtime matches the manifest, and a new
+    gap or a stale entry fails the test.
 - [ ] Add baseline drift tests for every generated file. (`parallel-root`,
   `parallel-subtask`)
   - [ ] `CoreDomBindings.g.cs`. (`parallel-subtask`)

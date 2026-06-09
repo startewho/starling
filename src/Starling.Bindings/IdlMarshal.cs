@@ -66,6 +66,19 @@ internal static class IdlMarshal
         return JsValue.ToStringValue(index < args.Length ? args[index] : JsValue.Undefined);
     }
 
+    /// <summary>Convert a required nullable <c>DOMString?</c> argument: the
+    /// argument must be present, but a null or undefined value becomes a C# null
+    /// rather than the string "null". Everything else goes through the spec
+    /// ToString.</summary>
+    public static string? RequireNullableString(JsRealm realm, JsValue[] args, int index, string op, int requiredCount)
+    {
+        if (args.Length < requiredCount)
+            throw new JsThrow(realm.NewTypeError(
+                $"Failed to execute '{op}': {requiredCount} argument{(requiredCount == 1 ? "" : "s")} required, but only {args.Length} present."));
+        if (index >= args.Length || args[index].IsNullish) return null;
+        return JsValue.ToStringValue(args[index]);
+    }
+
     /// <summary>Convert a required boolean argument via the spec ToBoolean.</summary>
     public static bool RequireBool(JsRealm realm, JsValue[] args, int index, string op, int requiredCount)
     {
