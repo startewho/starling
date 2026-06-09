@@ -235,7 +235,40 @@ Scope decided with the user: implement the **full trampoline (Stage A + Stage B)
 in one effort** — no big-stack-thread stopgap. Stage A is the internal
 prerequisite for Stage B. Stage C is optional and gated on the perf bench.
 
+Two Stage B choices that differ from the design sketch above:
+- The try stack stays `Stack<TryFrame>`. The explicit unwinder reuses the
+  Stage A catch/finally logic verbatim, so the `TryFrame[]`+`TryCount`
+  conversion would not simplify it. Revisit in Stage C if the per-frame
+  allocation shows up in the bench.
+- The suspension snapshot stays `ContinuationFrameState`. Parking the
+  `CallFrame` itself was the other option. The snapshot path was already
+  correct and the smaller change won.
+- `Disposition.SuperCtor` coerces exactly like `Construct`. A `super(...)`
+  call is a [[Construct]] of the parent, and the derived-vs-base split is
+  read off the callee's `ConstructorKind` at pop. The enum value only marks
+  how the frame was entered.
+
 ## Handoff log
+- 2026-06-09 — Stage B landed (agent-claude-cody). JS→JS calls no longer
+  recurse on the native stack. The dispatch loop (`Dispatch`) switches heap
+  `CallFrame`s on call/return: `Call`/`CallMethod`/`New`/`CallApply`/
+  `CallApplyMethod`/`NewApply`/`CallSuperCtor` push a trampolined frame for an
+  ordinary same-realm plain `JsFunction`, and `Return`/`ReturnUndefined`/
+  return-through-finally pop it. Native→JS entries go through `RunBarrier`
+  (the old private `Run`), which pushes an `IsBarrier` frame and runs the
+  loop until that frame pops. The in-loop `catch (JsThrow)` is now an
+  explicit unwinder that walks the frame chain, runs each frame's
+  try/finally machinery, releases its pooled arrays, and rethrows natively
+  at the barrier. The construct return coercion (and the derived-class
+  bound `this`, now `CallFrame.DerivedThis`) runs at frame pop, shared by
+  the trampoline and the barrier. Depth caps: `MaxFrameDepth` 10,000
+  (catchable RangeError, no native cost) and `MaxBarrierDepth` 1,000 plus
+  the execution-stack probe. All three counters are thread-static. Measured:
+  pure JS recursion on the default test thread went 232 → 9,998 (the cap).
+  Unit suite 2,232 green (6 new depth tests). Test262 `language` 95.61% —
+  unchanged from Stage A. fib(20) ×20 went 152 ms → 114 ms in Release (the
+  trampoline is ~25% faster than native call recursion). End-to-end x.com
+  re-test still pending (needs the GUI host rebuilt).
 - 2026-06-09 — Stage A landed (agent-claude-cody). Added the heap `CallFrame`
   and removed every closure-capturing local function from `RunInner`. The
   measured cause of the tiny depth was not the closure display alone: RyuJIT
