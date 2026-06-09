@@ -280,6 +280,23 @@ Two choices that differ from the final plan revision (the
   the same lifetime the old recursive model had.
 
 ## Handoff log
+- 2026-06-09 — follow-up: grow-on-demand operand stacks (agent-claude-cody).
+  Every frame rented a fixed 1024-slot operand stack. At trampoline depth
+  that meant ~491 MB of peak heap, because the array pool cannot hold
+  10,000 arrays of one size. Frames now rent 32 slots and double on demand,
+  up to the same 1024 ceiling with the same overflow error. The grow helper
+  is NoInlining and writes the new array to both the dispatch loop's cached
+  local (by ref) and `frame.Stack`. Push takes the frame and the stack by
+  ref, and DispatchCold / ExecArith / ExecCompare / ExecYieldDelegate take
+  the stack by ref so a grow propagates. The unwinder's catch-value push
+  routes through Push because a try frame's StackBase can equal the array
+  length. Measured at 9,998 frames in Debug: peak heap delta 491 MB → 20 MB,
+  allocation 248 MB → 11 MB (about 24,800 → 1,140 bytes per frame). A new
+  regression test pins per-frame allocation under 4 KB. Unit suite 2,237
+  green. Test262 unchanged at 95.61%. fib gate 540.5 µs after vs 574.0 µs
+  before (ShortRun). Both sides used BenchmarkDotNet's in-process toolchain
+  on the same machine — stale copies under `.claude/worktrees` break the
+  default toolchain's project lookup.
 - 2026-06-09 — gates passed, P0 review finding fixed, task complete
   (agent-claude-cody, commit `5494fb24`). An adversarial review of the full
   diff found one real bug: a derived constructor that finishes without
