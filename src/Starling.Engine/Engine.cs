@@ -1453,7 +1453,11 @@ public sealed class StarlingEngine
         catch (ScriptThrow ex)
         {
             StarlingTelemetry.Counter("engine.script.failed", 1);
-            StarlingEngineLog.UncaughtScriptError(_jsConsoleLog, label, ex.Message);
+            // The JS-side stack (when the backend produced one) rides in its own
+            // structured field so it stays queryable instead of being mashed into
+            // the message. "(no JS stack)" makes a missing stack explicit.
+            StarlingEngineLog.UncaughtScriptError(_jsConsoleLog, label, ex.Message,
+                string.IsNullOrEmpty(ex.JsStack) ? "(no JS stack)" : ex.JsStack);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2070,8 +2074,8 @@ internal static partial class StarlingEngineLog
         Message = "deferred.summary: parser={ParserMs}ms async={AsyncMs}ms pump1={Pump1Ms}ms fireLoad={FireLoadMs}ms pump2={Pump2Ms}ms total={TotalMs}ms")]
     public static partial void DeferredSummary(ILogger logger, long parserMs, long asyncMs, long pump1Ms, long fireLoadMs, long pump2Ms, long totalMs);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught script error ({Label}): {Message}")]
-    public static partial void UncaughtScriptError(ILogger logger, string label, string message);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Uncaught script error ({Label}): {Message}\n{JsStack}")]
+    public static partial void UncaughtScriptError(ILogger logger, string label, string message, string jsStack);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Script compile/run failure ({Label}): {Message}")]
     public static partial void ScriptRunFailure(ILogger logger, string label, string message);

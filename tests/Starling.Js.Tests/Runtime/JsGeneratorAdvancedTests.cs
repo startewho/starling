@@ -86,6 +86,35 @@ public class JsGeneratorAdvancedTests
     }
 
     [TestMethod]
+    public void YieldStar_return_during_inner_yielding_finally_preserves_outer_completion()
+    {
+        var r = Eval(@"
+            function* inner() {
+                try {
+                    yield 'first';
+                } finally {
+                    yield 'cleanup';
+                }
+            }
+            function* outer() {
+                var r = yield* inner();
+                yield 'after:' + r;
+            }
+            var it = outer();
+            var a = it.next();
+            var b = it.return('done');
+            var c = it.next();
+            var d = it.next();
+            a.value + ':' + a.done + '|' +
+                b.value + ':' + b.done + '|' +
+                c.value + ':' + c.done + '|' +
+                d.value + ':' + d.done;
+        ");
+
+        r.AsString.Should().Be("first:false|cleanup:false|done:true|undefined:true");
+    }
+
+    [TestMethod]
     public void YieldStar_forwards_throw_to_inner_catch()
     {
         var r = Eval(@"
@@ -99,6 +128,34 @@ public class JsGeneratorAdvancedTests
             t.value
         ");
         r.AsString.Should().Be("caught err");
+    }
+
+    [TestMethod]
+    public void YieldStar_throw_into_delegate_then_resume_outer_state()
+    {
+        var r = Eval(@"
+            function* inner() {
+                try {
+                    yield 'first';
+                } catch (e) {
+                    return 'caught:' + e;
+                }
+            }
+            function* outer() {
+                var r = yield* inner();
+                yield 'after:' + r;
+                return 'done';
+            }
+            var it = outer();
+            var a = it.next();
+            var b = it.throw('boom');
+            var c = it.next();
+            a.value + ':' + a.done + '|' +
+                b.value + ':' + b.done + '|' +
+                c.value + ':' + c.done;
+        ");
+
+        r.AsString.Should().Be("first:false|after:caught:boom:false|done:true");
     }
 
     [TestMethod]

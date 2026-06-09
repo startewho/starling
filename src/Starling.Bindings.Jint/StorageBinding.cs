@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Jint;
 using Jint.Native;
 using Jint.Native.Object;
 
@@ -102,16 +103,14 @@ internal static class StorageBinding
         return proto;
     }
 
-    private static JsObject BuildStorageObject(global::Jint.Engine engine,
+    private static JintStorageObject BuildStorageObject(global::Jint.Engine engine,
         ObjectInstance proto, StorageStore store)
     {
-        // We don't model Storage as a true named-property exotic (HTML §12.3.2)
-        // because hooking Jint's [[Get]]/[[Set]] for arbitrary string indices
-        // requires a custom ObjectInstance subclass; for v1 the explicit
-        // getItem/setItem path covers the overwhelming majority of usage. We
-        // do install a per-instance back-pointer so the prototype methods can
-        // recover the store from `this`.
-        var obj = new JsObject(engine) { Prototype = proto };
+        // HTML §12.3.2 — Storage is a named-property exotic: arbitrary string keys
+        // read/write storage items (storage.foo = x persists, delete storage.foo,
+        // for-in over keys). Interface members (length/getItem/…) on the prototype
+        // are never shadowed.
+        var obj = new JintStorageObject(engine, store, InterfaceNames) { Prototype = proto };
         StorageBackings.Add(obj, store);
         return obj;
     }
@@ -131,6 +130,72 @@ internal static class StorageBinding
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "about:blank";
         var port = uri.IsDefaultPort ? "" : $":{uri.Port}";
         return $"{uri.Scheme}://{uri.Host}{port}".ToLowerInvariant();
+    }
+}
+
+/// <summary>HTML §12.3.2 named-property exotic for localStorage/sessionStorage:
+/// string keys that are not interface members resolve to storage items.</summary>
+internal sealed class JintStorageObject : ObjectInstance
+{
+    private readonly StorageStore _store;
+    private readonly HashSet<string> _interfaceNames;
+
+    public JintStorageObject(global::Jint.Engine engine, StorageStore store, HashSet<string> interfaceNames) : base(engine)
+    {
+        _store = store;
+        _interfaceNames = interfaceNames;
+    }
+
+    private bool IsItemKey(JsValue p, out string key)
+    {
+        key = "";
+        if (!p.IsString()) return false;
+        key = p.AsString();
+        return !_interfaceNames.Contains(key);
+    }
+
+    public override JsValue Get(JsValue property, JsValue receiver)
+    {
+        if (IsItemKey(property, out var key) && _store.TryGet(key, out var v)) return JintInterop.Str(v);
+        return base.Get(property, receiver);
+    }
+
+    public override bool Set(JsValue property, JsValue value, JsValue receiver)
+    {
+        if (IsItemKey(property, out var key))
+        {
+            _store.Set(key, value.IsUndefined() ? "undefined" : value.ToString());
+            return true;
+        }
+        return base.Set(property, value, receiver);
+    }
+
+    public override global::Jint.Runtime.Descriptors.PropertyDescriptor GetOwnProperty(JsValue property)
+    {
+        if (IsItemKey(property, out var key) && _store.TryGet(key, out var v))
+            return new global::Jint.Runtime.Descriptors.PropertyDescriptor(JintInterop.Str(v), writable: true, enumerable: true, configurable: true);
+        return base.GetOwnProperty(property);
+    }
+
+    public override bool HasProperty(JsValue property)
+    {
+        if (IsItemKey(property, out var key) && _store.TryGet(key, out _)) return true;
+        return base.HasProperty(property);
+    }
+
+    public override bool Delete(JsValue property)
+    {
+        if (IsItemKey(property, out var key) && _store.Remove(key)) return true;
+        return base.Delete(property);
+    }
+
+    public override List<JsValue> GetOwnPropertyKeys(global::Jint.Runtime.Types types = global::Jint.Runtime.Types.String | global::Jint.Runtime.Types.Symbol)
+    {
+        var keys = new List<JsValue>();
+        if ((types & global::Jint.Runtime.Types.String) != 0)
+            foreach (var k in _store.Keys) keys.Add(JintInterop.Str(k));
+        keys.AddRange(base.GetOwnPropertyKeys(types));
+        return keys;
     }
 }
 
@@ -157,4 +222,5 @@ internal sealed class StorageStore
 
     public void Clear() { _map.Clear(); _order.Clear(); }
     public string? KeyAt(int index) => index >= 0 && index < _order.Count ? _order[index] : null;
+    public IReadOnlyList<string> Keys => _order;
 }

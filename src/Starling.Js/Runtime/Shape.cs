@@ -22,13 +22,12 @@ namespace Starling.Js.Runtime;
 /// (<see cref="AddedSlot"/>). Slot indices are stable across the transition
 /// tree — a child never moves a parent's slots — so a cached (shape, slot) pair
 /// stays valid for the life of that shape.</para>
-/// <para><b>Thread-safety.</b> Shapes are shared across threads (generator/async
-/// bodies run on worker threads against the same compiled functions, which build
-/// the same shapes). The lazily-built transition cache and flattened lookup
-/// table are guarded by <see cref="_gate"/>; the immutable per-shape data
-/// (parent, key, flags, slot count) needs no lock. Inline-cache hot reads never
-/// touch a Shape's mutable state — they only compare references and index the
-/// object's slot array.</para>
+/// <para><b>Thread-safety.</b> Shapes can be shared across host callbacks and
+/// realms. The lazily-built transition cache and flattened lookup table are
+/// guarded by <see cref="_gate"/>; the immutable per-shape data (parent, key,
+/// flags, slot count) needs no lock. Inline-cache hot reads never touch a
+/// Shape's mutable state — they only compare references and index the object's
+/// slot array.</para>
 /// </remarks>
 internal sealed class Shape
 {
@@ -171,9 +170,8 @@ internal readonly struct ShapeProp
 /// null <see cref="Shape"/> is an empty (never-filled) cache.
 /// </summary>
 /// <remarks>Stored as a value type in <c>Chunk.Caches</c> (no per-entry
-/// allocation). The engine's generator/async worker threads execute a shared
-/// chunk cooperatively — only one thread runs at a time, handed off through
-/// event barriers — so cache reads and refills never truly race.</remarks>
+/// allocation). Continuation frames resume on the same thread, so cache reads
+/// and refills from suspendable bodies are ordinary interpreter work.</remarks>
 internal struct InlineCache
 {
     /// <summary>Shape the receiver must have for this cache to hit (the read

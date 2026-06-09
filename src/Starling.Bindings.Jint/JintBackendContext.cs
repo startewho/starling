@@ -43,6 +43,12 @@ public sealed class JintBackendContext
     /// <summary>Per-engine Dom↔JS wrapper identity map + prototype slots.</summary>
     public JintDomWrapper Wrappers { get; }
 
+    /// <summary>Session cookie store backing <c>document.cookie</c>. In-memory and
+    /// per-context for now (the hosting seam does not yet hand the Jint backend the
+    /// HTTP client's jar, so script-set cookies are not shared with fetch/XHR
+    /// <c>Cookie</c>/<c>Set-Cookie</c> headers — tracked in PARITY_GAPS Tier 3).</summary>
+    public Starling.Net.Http.Cookies.CookieJar Cookies { get; } = new();
+
     /// <summary>Simulated event loop driving timers, requestAnimationFrame, and the pump.
     /// The session advances it in PumpOnce.</summary>
     public WebEventLoop Loop { get; }

@@ -57,11 +57,55 @@ public sealed class JintDomWrapper
     /// <summary>%DocumentPrototype%. Inherits Node.prototype.</summary>
     public ObjectInstance? DocumentPrototype { get; set; }
 
+    /// <summary>%CharacterDataPrototype%. Inherits Node.prototype.</summary>
+    public ObjectInstance? CharacterDataPrototype { get; set; }
+
+    /// <summary>%TextPrototype%. Inherits CharacterData.prototype.</summary>
+    public ObjectInstance? TextPrototype { get; set; }
+
+    /// <summary>%CommentPrototype%. Inherits CharacterData.prototype.</summary>
+    public ObjectInstance? CommentPrototype { get; set; }
+
+    /// <summary>%CDATASectionPrototype%. Inherits Text.prototype.</summary>
+    public ObjectInstance? CDataPrototype { get; set; }
+
+    /// <summary>%ProcessingInstructionPrototype%. Inherits CharacterData.prototype.</summary>
+    public ObjectInstance? ProcessingInstructionPrototype { get; set; }
+
+    /// <summary>%DocumentFragmentPrototype%. Inherits Node.prototype.</summary>
+    public ObjectInstance? DocumentFragmentPrototype { get; set; }
+
+    /// <summary>%DocumentTypePrototype%. Inherits Node.prototype.</summary>
+    public ObjectInstance? DocumentTypePrototype { get; set; }
+
+    /// <summary>%AttrPrototype%. Inherits Node.prototype.</summary>
+    public ObjectInstance? AttrPrototype { get; set; }
+
+    /// <summary>%NodeListPrototype% — set by <see cref="CollectionsBinding"/>.</summary>
+    public ObjectInstance? NodeListPrototype { get; set; }
+
+    /// <summary>%HTMLCollectionPrototype% — set by <see cref="CollectionsBinding"/>.</summary>
+    public ObjectInstance? HtmlCollectionPrototype { get; set; }
+
+    /// <summary>%DOMTokenListPrototype% — set by <see cref="CollectionsBinding"/>.</summary>
+    public ObjectInstance? DomTokenListPrototype { get; set; }
+
+    /// <summary>%NamedNodeMapPrototype% — set by <see cref="AttrBinding"/>.</summary>
+    public ObjectInstance? NamedNodeMapPrototype { get; set; }
+
+    /// <summary>%MutationRecordPrototype% — set by <see cref="MutationObserverBinding"/>.</summary>
+    public ObjectInstance? MutationRecordPrototype { get; set; }
+
     /// <summary>%WindowPrototype%. Inherits EventTarget.prototype.</summary>
     public ObjectInstance? WindowPrototype { get; set; }
 
     /// <summary>%EventPrototype%.</summary>
     public ObjectInstance? EventPrototype { get; set; }
+
+    /// <summary>%DOMExceptionPrototype% — set by <see cref="DomExceptionBinding"/>.
+    /// Bindings reach it via <c>DomExceptionBinding.Make</c>/<c>Throw</c> to mint a
+    /// real DOMException value.</summary>
+    public ObjectInstance? DomExceptionPrototype { get; set; }
 
     // ---- identity-mapped wrapping ----
 
@@ -129,10 +173,22 @@ public sealed class JintDomWrapper
     /// <summary>Pick the most-derived installed prototype for a backing object,
     /// falling back up the inheritance chain (Document/Element → Node →
     /// EventTarget) so partial installs still yield usable wrappers.</summary>
+    // Order matters: switch arms are evaluated top-to-bottom, so the most-derived
+    // host types must precede their bases (Text/Comment/… before CharacterData
+    // before Node; Document/Element before Node). Each arm falls back up its
+    // inheritance chain so a partial install still yields a usable wrapper.
     private ObjectInstance? SelectPrototype(EventTarget backing) => backing switch
     {
         Document => DocumentPrototype ?? NodePrototype ?? EventTargetPrototype,
         Element => ElementPrototype ?? NodePrototype ?? EventTargetPrototype,
+        CData => CDataPrototype ?? TextPrototype ?? CharacterDataPrototype ?? NodePrototype ?? EventTargetPrototype,
+        Text => TextPrototype ?? CharacterDataPrototype ?? NodePrototype ?? EventTargetPrototype,
+        Comment => CommentPrototype ?? CharacterDataPrototype ?? NodePrototype ?? EventTargetPrototype,
+        ProcessingInstruction => ProcessingInstructionPrototype ?? CharacterDataPrototype ?? NodePrototype ?? EventTargetPrototype,
+        CharacterData => CharacterDataPrototype ?? NodePrototype ?? EventTargetPrototype,
+        DocumentFragment => DocumentFragmentPrototype ?? NodePrototype ?? EventTargetPrototype,
+        DocumentType => DocumentTypePrototype ?? NodePrototype ?? EventTargetPrototype,
+        AttrNode => AttrPrototype ?? NodePrototype ?? EventTargetPrototype,
         Node => NodePrototype ?? EventTargetPrototype,
         _ => EventTargetPrototype,
     };

@@ -68,22 +68,30 @@ public static class GeneratorIntrinsics
         if (!thisV.IsObject || thisV.AsObject is not JsGenerator gen)
             throw new JsThrow(realm.NewTypeError("Generator.prototype.next called on non-Generator"));
         if (gen.Done) return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
-        if (!gen.Started)
+        if (!gen.TryEnterResume()) throw new JsThrow(realm.NewTypeError("Generator is already running"));
+        try
         {
-            gen.Started = true;
-            gen.Frame.Resume(JsValue.Undefined); // sent value on first call is ignored
+            if (!gen.Started)
+            {
+                gen.Started = true;
+                gen.Frame.Resume(JsValue.Undefined); // sent value on first call is ignored
+            }
+            else
+            {
+                gen.Frame.Resume(sent);
+            }
+            if (gen.Frame.Completed)
+            {
+                gen.Done = true;
+                if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
+                return IteratorIntrinsics.MakeResult(realm, gen.Frame.ReturnValue, done: true);
+            }
+            return IteratorIntrinsics.MakeResult(realm, gen.Frame.YieldedValue, done: false);
         }
-        else
+        finally
         {
-            gen.Frame.Resume(sent);
+            gen.ExitResume();
         }
-        if (gen.Frame.Completed)
-        {
-            gen.Done = true;
-            if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
-            return IteratorIntrinsics.MakeResult(realm, gen.Frame.ReturnValue, done: true);
-        }
-        return IteratorIntrinsics.MakeResult(realm, gen.Frame.YieldedValue, done: false);
     }
 
     private static JsValue GeneratorReturn(JsRealm realm, JsValue thisV, JsValue sent)
@@ -95,24 +103,27 @@ public static class GeneratorIntrinsics
             gen.Done = true;
             return IteratorIntrinsics.MakeResult(realm, sent, done: true);
         }
-        // Signal the worker to perform an early Return at the current
+        if (!gen.TryEnterResume()) throw new JsThrow(realm.NewTypeError("Generator is already running"));
+        // Signal the suspended frame to perform an early Return at the current
         // suspension point. The Suspend opcode handler raises a
         // JsReturnSentinel which walks any enclosing try/finally frames
         // before the body returns sent (or, if a finally overrides the
-        // completion via throw, the worker reports ThrewUncaught).
-        gen.Frame.Resume(sent, withReturn: true);
-        gen.Done = true;
-        if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
-        // The worker may have observed the return at a yield inside an
-        // intermediate yield point (e.g. finally yields) — but our model
-        // is single-step: after Resume(withReturn), the body either
-        // completes or it yielded again. If it yielded again (rare —
-        // would require yield inside finally), still report done with
-        // sent: spec lets finally hijack the completion via further
-        // yields, but the simpler interpretation is to honor the caller's
-        // sent value as the return-completion value.
-        var v = gen.Frame.Completed ? gen.Frame.ReturnValue : sent;
-        return IteratorIntrinsics.MakeResult(realm, v, done: true);
+        // completion via throw, the frame reports ThrewUncaught).
+        try
+        {
+            gen.Frame.Resume(sent, withReturn: true);
+            if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
+            if (gen.Frame.Completed)
+            {
+                gen.Done = true;
+                return IteratorIntrinsics.MakeResult(realm, gen.Frame.ReturnValue, done: true);
+            }
+            return IteratorIntrinsics.MakeResult(realm, gen.Frame.YieldedValue, done: false);
+        }
+        finally
+        {
+            gen.ExitResume();
+        }
     }
 
     private static JsValue GeneratorThrow(JsRealm realm, JsValue thisV, JsValue err)
@@ -124,14 +135,22 @@ public static class GeneratorIntrinsics
             gen.Done = true;
             throw new JsThrow(err);
         }
-        gen.Frame.Resume(err, withThrow: true);
-        if (gen.Frame.Completed)
+        if (!gen.TryEnterResume()) throw new JsThrow(realm.NewTypeError("Generator is already running"));
+        try
         {
-            gen.Done = true;
-            if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
-            return IteratorIntrinsics.MakeResult(realm, gen.Frame.ReturnValue, done: true);
+            gen.Frame.Resume(err, withThrow: true);
+            if (gen.Frame.Completed)
+            {
+                gen.Done = true;
+                if (gen.Frame.ThrewUncaught) throw new JsThrow(gen.Frame.ReturnValue);
+                return IteratorIntrinsics.MakeResult(realm, gen.Frame.ReturnValue, done: true);
+            }
+            return IteratorIntrinsics.MakeResult(realm, gen.Frame.YieldedValue, done: false);
         }
-        return IteratorIntrinsics.MakeResult(realm, gen.Frame.YieldedValue, done: false);
+        finally
+        {
+            gen.ExitResume();
+        }
     }
 
     // ---- wp:M3-04g — async-generator next/return/throw -----------------------

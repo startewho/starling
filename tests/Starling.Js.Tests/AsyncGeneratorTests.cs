@@ -348,6 +348,74 @@ public class AsyncGeneratorTests
     }
 
     [TestMethod]
+    public void AsyncYieldStar_return_awaits_inner_return_and_runs_outer_finally()
+    {
+        var (runtime, _) = Eval(@"
+            globalThis.log = '';
+            var iterable = {
+                [Symbol.asyncIterator]() {
+                    var first = true;
+                    return {
+                        next() {
+                            if (first) {
+                                first = false;
+                                return Promise.resolve({ value: 'first', done: false });
+                            }
+                            return Promise.resolve({ value: undefined, done: true });
+                        },
+                        return(value) {
+                            globalThis.log += 'return;';
+                            return Promise.resolve({ value: value, done: true });
+                        }
+                    };
+                }
+            };
+            async function* outer() {
+                try {
+                    yield* iterable;
+                } finally {
+                    globalThis.log += 'outer;';
+                }
+            }
+            var it = outer();
+            it.next().then(function(r) { globalThis.r1 = r.value + ':' + r.done; });
+            it.return(7).then(function(r) { globalThis.r2 = r.value + ':' + r.done; });
+        ");
+
+        runtime.GetGlobal("r1").AsString.Should().Be("first:false");
+        runtime.GetGlobal("r2").AsString.Should().Be("7:true");
+        runtime.GetGlobal("log").AsString.Should().Be("return;outer;");
+    }
+
+    [TestMethod]
+    public void AsyncYieldStar_rejected_inner_next_rejects_head_request()
+    {
+        var (runtime, _) = Eval(@"
+            var iterable = {
+                [Symbol.asyncIterator]() {
+                    return {
+                        next() {
+                            return Promise.reject('boom');
+                        }
+                    };
+                }
+            };
+            async function* outer() {
+                yield* iterable;
+                yield 'unreached';
+            }
+            var it = outer();
+            it.next().then(
+                function() { globalThis.r1 = 'resolved'; },
+                function(e) { globalThis.r1 = 'rejected:' + e; });
+            it.next().then(function(r) { globalThis.r2 = r.value + ':' + r.done; });
+        ");
+
+        runtime.GetGlobal("r1").AsString.Should().Be("rejected:boom");
+        runtime.GetGlobal("r2").AsString.Should().Be("undefined:true");
+    }
+
+    [TestMethod]
     public void Yield_rejected_promise_rejects_the_next_request()
     {
         // wp:M3-62b — §27.6.3.8 AsyncGeneratorYield: a plain `yield x` must

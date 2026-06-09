@@ -31,13 +31,26 @@ internal static class NodeBindings
 
         // ---- prototype chain -------------------------------------------------
         // Node => EventTarget if installed => Object.
-        // Element => Node, CharacterData => Node, Text => CharacterData,
-        // Document => Node.
+        // Element => Node, CharacterData => Node, Text/Comment/CDATA/PI =>
+        // CharacterData, DocumentFragment/DocumentType/Attr => Node, Document =>
+        // Node. Each slot is registered on ctx.Wrappers so JintDomWrapper.
+        // SelectPrototype routes a wrapped node to its most-derived prototype —
+        // without this, Text/Comment nodes wrap against the bare Node prototype
+        // and `.data`/`.length` (defined on CharacterData.prototype) are
+        // unreachable, and `instanceof Text`/`Comment`/… is always false.
         var nodeProto = NewProto(engine, ctx.Wrappers.EventTargetPrototype);
         ctx.Wrappers.NodePrototype = nodeProto;
 
         var charDataProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.CharacterDataPrototype = charDataProto;
         var textProto = NewProto(engine, charDataProto);
+        ctx.Wrappers.TextPrototype = textProto;
+        var commentProto = NewProto(engine, charDataProto);
+        ctx.Wrappers.CommentPrototype = commentProto;
+        var cdataProto = NewProto(engine, textProto); // CDATASection extends Text
+        ctx.Wrappers.CDataPrototype = cdataProto;
+        var piProto = NewProto(engine, charDataProto);
+        ctx.Wrappers.ProcessingInstructionPrototype = piProto;
 
         var elementProto = NewProto(engine, nodeProto);
         ctx.Wrappers.ElementPrototype = elementProto;
@@ -45,12 +58,28 @@ internal static class NodeBindings
         var documentProto = NewProto(engine, nodeProto);
         ctx.Wrappers.DocumentPrototype = documentProto;
 
+        var fragmentProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.DocumentFragmentPrototype = fragmentProto;
+        var docTypeProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.DocumentTypePrototype = docTypeProto;
+        // DOM §4.7 DocumentType — name / publicId / systemId.
+        Accessor(ctx, docTypeProto, "name",
+            (t, _) => ctx.Wrappers.Unwrap(t) is DocumentType d ? JintInterop.Str(d.Name) : JintInterop.Str(""));
+        Accessor(ctx, docTypeProto, "publicId",
+            (t, _) => ctx.Wrappers.Unwrap(t) is DocumentType d ? JintInterop.Str(d.PublicId) : JintInterop.Str(""));
+        Accessor(ctx, docTypeProto, "systemId",
+            (t, _) => ctx.Wrappers.Unwrap(t) is DocumentType d ? JintInterop.Str(d.SystemId) : JintInterop.Str(""));
+        var attrProto = NewProto(engine, nodeProto);
+        ctx.Wrappers.AttrPrototype = attrProto;
+
         InstallNode(ctx, nodeProto);
         InstallCharacterData(ctx, charDataProto);
+        InstallAttr(ctx, attrProto);
         InstallElement(ctx, elementProto);
         InstallDocument(ctx, documentProto);
 
-        InstallConstructors(ctx, nodeProto, elementProto, documentProto, charDataProto, textProto);
+        InstallConstructors(ctx, nodeProto, elementProto, documentProto, charDataProto, textProto,
+            commentProto, cdataProto, piProto, fragmentProto, docTypeProto, attrProto);
 
         // Expose `document` on the global so scripts can reach the DOM.
         JintInterop.DefineDataProp(engine.Global, "document",
@@ -100,9 +129,7 @@ internal static class NodeBindings
         Accessor(ctx, proto, "childNodes", (t, _) =>
         {
             if (w.UnwrapNode(t) is not { } n) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var c in n.ChildNodes) items.Add(w.Wrap(c));
-            return Array(engine, items);
+            return CollectionsBinding.NodeList(ctx, () => n.ChildNodes is IReadOnlyList<Node> list ? list : n.ChildNodes.ToList());
         });
         Accessor(ctx, proto, "ownerDocument", (t, _) =>
         {
@@ -171,8 +198,224 @@ internal static class NodeBindings
             return JsBoolean.False;
         }, 1);
 
+        // DOM §4.4 getRootNode — topmost node up the parent chain.
+        Method(ctx, proto, "getRootNode", (t, _) =>
+        {
+            if (w.UnwrapNode(t) is not { } n) return JsValue.Null;
+            var root = n;
+            while (root.ParentNode is { } p) root = p;
+            return w.Wrap(root);
+        }, 0);
+        // DOM §4.4 baseURI — the document base URL.
+        Accessor(ctx, proto, "baseURI", (t, _) =>
+        {
+            var n = w.UnwrapNode(t);
+            var d = n as Document ?? n?.OwnerDocument;
+            return d is null ? JintInterop.Str("") : JintInterop.Str(WindowBinding.UrlFor(ctx));
+        });
+        // DOM §4.4 namespace lookups.
+        Method(ctx, proto, "lookupNamespaceURI", (t, args) =>
+        {
+            if (w.UnwrapNode(t) is not { } n) return JsValue.Null;
+            var prefix = args.Length > 0 && !args[0].IsNull() && !args[0].IsUndefined() ? Str(args[0]) : null;
+            var r = n.LookupNamespaceURI(prefix);
+            return r is null ? JsValue.Null : JintInterop.Str(r);
+        }, 1);
+        Method(ctx, proto, "lookupPrefix", (t, args) =>
+        {
+            if (w.UnwrapNode(t) is not { } n) return JsValue.Null;
+            var ns = args.Length > 0 && !args[0].IsNull() && !args[0].IsUndefined() ? Str(args[0]) : null;
+            var r = n.LookupPrefix(ns);
+            return r is null ? JsValue.Null : JintInterop.Str(r);
+        }, 1);
+        Method(ctx, proto, "isDefaultNamespace", (t, args) =>
+        {
+            if (w.UnwrapNode(t) is not { } n) return JsBoolean.False;
+            var ns = args.Length > 0 && !args[0].IsNull() && !args[0].IsUndefined() ? Str(args[0]) : null;
+            return JintInterop.Bool(n.IsDefaultNamespace(ns));
+        }, 1);
+        // DOM §4.4.3 isSameNode — identity (=== ).
+        Method(ctx, proto, "isSameNode", (t, args) =>
+            JintInterop.Bool(w.UnwrapNode(t) is { } s && ReferenceEquals(s, w.UnwrapNode(Arg(args, 0)))), 1);
+        // DOM §4.4.3 isEqualNode — structural equality.
+        Method(ctx, proto, "isEqualNode", (t, args) =>
+            JintInterop.Bool(AreEqual(w.UnwrapNode(t), w.UnwrapNode(Arg(args, 0)))), 1);
+        // DOM §4.4.4 compareDocumentPosition — relative position bitmask.
+        Method(ctx, proto, "compareDocumentPosition", (t, args) =>
+        {
+            var self = w.UnwrapNode(t);
+            var other = w.UnwrapNode(Arg(args, 0));
+            if (self is null || other is null || ReferenceEquals(self, other)) return JintInterop.Num(0);
+            if (!ReferenceEquals(NodeRoot(self), NodeRoot(other)))
+            {
+                var selfHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(self);
+                var otherHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(other);
+                var precOrFollow = (otherHash < selfHash || (otherHash == selfHash && self.GetHashCode() < other.GetHashCode())) ? 2 : 4;
+                return JintInterop.Num(1 | 32 | precOrFollow); // DISCONNECTED | IMPLEMENTATION_SPECIFIC | (PRECEDING|FOLLOWING)
+            }
+            var bits = 0;
+            if (IsAncestor(self, other)) bits |= 16; // CONTAINED_BY
+            if (IsAncestor(other, self)) bits |= 8;  // CONTAINS
+            bits |= IsBeforeInTreeOrder(other, self) ? 2 : 4; // PRECEDING : FOLLOWING
+            return JintInterop.Num(bits);
+        }, 1);
+
         // Node type constants (Node.ELEMENT_NODE, etc.) on the prototype.
         DefineNodeConstants(proto);
+    }
+
+    // ---- DOM tree helpers (compareDocumentPosition / isEqualNode) ------------
+
+    private static Node NodeRoot(Node n)
+    {
+        while (n.ParentNode is { } p) n = p;
+        return n;
+    }
+
+    // A namespace argument: null/undefined → null, otherwise the string.
+    private static string? NsArg(JsValue[] args, int i)
+        => i < args.Length && !args[i].IsNull() && !args[i].IsUndefined() ? Str(args[i]) : null;
+
+    // DOM §4.5.1 DOMImplementation — createHTMLDocument / createDocumentType /
+    // createDocument / hasFeature (legacy, always true).
+    private static JsObject BuildDomImplementation(JintBackendContext ctx, Document? ownerDoc)
+    {
+        var engine = ctx.Engine;
+        var w = ctx.Wrappers;
+        var impl = new JsObject(engine);
+
+        Method(ctx, impl, "hasFeature", (_, _) => JsBoolean.True, 0);
+        Method(ctx, impl, "createHTMLDocument", (_, args) =>
+        {
+            string? title = args.Length > 0 && !args[0].IsUndefined() ? Str(args[0]) : null;
+            return w.Wrap(Document.CreateHtmlDocument(title));
+        }, 1);
+        Method(ctx, impl, "createDocumentType", (_, args) =>
+        {
+            var qname = args.Length > 0 ? Str(args[0]) : "";
+            var publicId = args.Length > 1 ? Str(args[1]) : "";
+            var systemId = args.Length > 2 ? Str(args[2]) : "";
+            if (qname.Any(c => c is '>' or ' ' or '\t' or '\n' or '\r' or '\f'))
+                throw DomExceptionBinding.Throw(ctx, "InvalidCharacterError", $"'{qname}' is not a valid doctype name");
+            var dt = ownerDoc is { } d ? d.CreateDocumentType(qname, publicId, systemId) : new DocumentType(qname, publicId, systemId);
+            return w.Wrap(dt);
+        }, 3);
+        Method(ctx, impl, "createDocument", (_, args) =>
+        {
+            var ns = NsArg(args, 0);
+            var qnameVal = args.Length > 1 ? args[1] : JsValue.Undefined;
+            var qname = qnameVal.IsNull() ? "" : Str(qnameVal);
+            var contentType = ns switch
+            {
+                "http://www.w3.org/1999/xhtml" => "application/xhtml+xml",
+                "http://www.w3.org/2000/svg" => "image/svg+xml",
+                _ => "application/xml",
+            };
+            var doc = new Document { IsHtml = false, ContentType = contentType };
+            if (args.Length > 2 && w.Unwrap(args[2]) is DocumentType dt) doc.AppendChild(dt);
+            if (!string.IsNullOrEmpty(qname)) doc.AppendChild(doc.CreateElementNS(ns, qname));
+            return w.Wrap(doc);
+        }, 3);
+
+        return impl;
+    }
+
+    // DOM — insert `node` relative to element `e` per a position keyword.
+    private static bool InsertAdjacent(JintBackendContext ctx, Element e, string position, Node node)
+    {
+        switch (position.ToLowerInvariant())
+        {
+            case "beforebegin":
+                if (e.ParentNode is { } pb) { pb.InsertBefore(node, e); return true; }
+                return false;
+            case "afterbegin":
+                e.InsertBefore(node, e.FirstChild); return true;
+            case "beforeend":
+                e.AppendChild(node); return true;
+            case "afterend":
+                if (e.ParentNode is { } pa) { pa.InsertBefore(node, e.NextSibling); return true; }
+                return false;
+            default:
+                throw DomExceptionBinding.Throw(ctx, "SyntaxError", $"The value provided ('{position}') is not one of 'beforebegin', 'afterbegin', 'beforeend', or 'afterend'.");
+        }
+    }
+
+    private static bool IsAncestor(Node ancestor, Node descendant)
+    {
+        for (var cur = descendant; cur is not null; cur = cur.ParentNode)
+            if (ReferenceEquals(cur, ancestor)) return true;
+        return false;
+    }
+
+    private static bool IsBeforeInTreeOrder(Node a, Node b)
+    {
+        static List<Node> Path(Node n)
+        {
+            var path = new List<Node>();
+            for (var cur = n; cur is not null; cur = cur.ParentNode) path.Insert(0, cur);
+            return path;
+        }
+        var pa = Path(a);
+        var pb = Path(b);
+        var min = Math.Min(pa.Count, pb.Count);
+        for (var i = 0; i < min; i++)
+        {
+            if (!ReferenceEquals(pa[i], pb[i]))
+            {
+                var parent = i > 0 ? pa[i - 1] : null;
+                if (parent is null) return false;
+                for (var child = parent.FirstChild; child is not null; child = child.NextSibling)
+                {
+                    if (ReferenceEquals(child, pa[i])) return true;
+                    if (ReferenceEquals(child, pb[i])) return false;
+                }
+                return false;
+            }
+        }
+        return pa.Count < pb.Count;
+    }
+
+    private static bool AreEqual(Node? a, Node? b)
+    {
+        if (a is null && b is null) return true;
+        if (a is null || b is null) return false;
+        if (a.Kind != b.Kind) return false;
+        switch (a)
+        {
+            case Element ea when b is Element eb:
+                if (ea.TagName != eb.TagName || ea.Namespace != eb.Namespace) return false;
+                var attrsA = ea.Attributes;
+                var attrsB = eb.Attributes;
+                if (attrsA.Count != attrsB.Count) return false;
+                for (var i = 0; i < attrsA.Count; i++)
+                {
+                    var atA = attrsA[i];
+                    var atB = eb.GetAttributeNS(atA.Namespace, NamedNodeMap.LocalNameOf(atA.Name));
+                    if (atB is null || atA.Value != atB) return false;
+                }
+                break;
+            case Text ta when b is Text tb:
+                if (ta.Data != tb.Data) return false;
+                break;
+            case Comment ca when b is Comment cb:
+                if (ca.Data != cb.Data) return false;
+                break;
+            case ProcessingInstruction pia when b is ProcessingInstruction pib:
+                if (pia.Target != pib.Target || pia.Data != pib.Data) return false;
+                break;
+            case DocumentType dta when b is DocumentType dtb:
+                if (dta.Name != dtb.Name) return false;
+                break;
+        }
+        var ac = a.FirstChild;
+        var bc = b.FirstChild;
+        while (ac is not null && bc is not null)
+        {
+            if (!AreEqual(ac, bc)) return false;
+            ac = ac.NextSibling;
+            bc = bc.NextSibling;
+        }
+        return ac is null && bc is null;
     }
 
     // =====================================================================
@@ -190,6 +433,106 @@ internal static class NodeBindings
             });
         Accessor(ctx, proto, "length",
             (t, _) => w.Unwrap(t) is CharacterData c ? JintInterop.Num(c.Data.Length) : JintInterop.Num(0));
+
+        // DOM §4.10 CharacterData mutation methods (string ops over .Data).
+        Method(ctx, proto, "substringData", (t, args) =>
+        {
+            if (w.Unwrap(t) is not CharacterData c) return JintInterop.Str("");
+            var data = c.Data;
+            var offset = args.Length > 0 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[0]) : 0;
+            var count = args.Length > 1 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[1]) : 0;
+            if (offset < 0 || offset > data.Length) throw DomExceptionBinding.Throw(ctx, "IndexSizeError", "offset is out of bounds");
+            count = Math.Min(count, data.Length - offset);
+            return JintInterop.Str(count <= 0 ? "" : data.Substring(offset, count));
+        }, 2);
+        Method(ctx, proto, "appendData", (t, args) =>
+        {
+            if (w.Unwrap(t) is CharacterData c) c.Data += args.Length > 0 ? Str(args[0]) : "";
+            return JsValue.Undefined;
+        }, 1);
+        Method(ctx, proto, "insertData", (t, args) =>
+        {
+            if (w.Unwrap(t) is not CharacterData c) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[0]) : 0;
+            if (offset < 0 || offset > c.Data.Length) throw DomExceptionBinding.Throw(ctx, "IndexSizeError", "offset is out of bounds");
+            c.Data = c.Data.Insert(offset, args.Length > 1 ? Str(args[1]) : "");
+            return JsValue.Undefined;
+        }, 2);
+        Method(ctx, proto, "deleteData", (t, args) =>
+        {
+            if (w.Unwrap(t) is not CharacterData c) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[0]) : 0;
+            var count = args.Length > 1 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[1]) : 0;
+            if (offset < 0 || offset > c.Data.Length) throw DomExceptionBinding.Throw(ctx, "IndexSizeError", "offset is out of bounds");
+            count = Math.Min(count, c.Data.Length - offset);
+            if (count > 0) c.Data = c.Data.Remove(offset, count);
+            return JsValue.Undefined;
+        }, 2);
+        Method(ctx, proto, "replaceData", (t, args) =>
+        {
+            if (w.Unwrap(t) is not CharacterData c) return JsValue.Undefined;
+            var offset = args.Length > 0 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[0]) : 0;
+            var count = args.Length > 1 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[1]) : 0;
+            var data = args.Length > 2 ? Str(args[2]) : "";
+            if (offset < 0 || offset > c.Data.Length) throw DomExceptionBinding.Throw(ctx, "IndexSizeError", "offset is out of bounds");
+            count = Math.Min(count, c.Data.Length - offset);
+            c.Data = c.Data.Remove(offset, count).Insert(offset, data);
+            return JsValue.Undefined;
+        }, 3);
+
+        // DOM §4.11 Text — splitText / wholeText (only meaningful on Text nodes).
+        Method(ctx, proto, "splitText", (t, args) =>
+        {
+            if (w.Unwrap(t) is not Text txt) return JsValue.Null;
+            var offset = args.Length > 0 ? (int)global::Jint.Runtime.TypeConverter.ToNumber(args[0]) : 0;
+            if (offset < 0 || offset > txt.Data.Length) throw DomExceptionBinding.Throw(ctx, "IndexSizeError", "offset is out of bounds");
+            var rest = txt.Data[offset..];
+            txt.Data = txt.Data[..offset];
+            var newNode = (txt.OwnerDocument ?? ctx.Document).CreateTextNode(rest);
+            if (txt.ParentNode is { } parent) parent.InsertBefore(newNode, txt.NextSibling);
+            return w.Wrap(newNode);
+        }, 1);
+        Accessor(ctx, proto, "wholeText", (t, _) =>
+        {
+            if (w.Unwrap(t) is not Text txt) return JintInterop.Str("");
+            // Concatenate the contiguous run of Text siblings containing this node.
+            var first = txt;
+            while (first.PreviousSibling is Text p) first = p;
+            var sb = new System.Text.StringBuilder();
+            for (Node? n = first; n is Text tn; n = n.NextSibling) sb.Append(tn.Data);
+            return JintInterop.Str(sb.ToString());
+        });
+    }
+
+    // =====================================================================
+    //                               Attr
+    // =====================================================================
+    // DOM §4.9 Attr — minimal read surface so a wrapped AttrNode exposes its
+    // identity (name/value/ownerElement) and `instanceof Attr` resolves. Full
+    // Attr-node integration (element.attributes as a NamedNodeMap, setAttributeNode,
+    // …) is tracked separately as a Tier 2 family port.
+    private static void InstallAttr(JintBackendContext ctx, ObjectInstance proto)
+    {
+        var w = ctx.Wrappers;
+        Accessor(ctx, proto, "name",
+            (t, _) => w.Unwrap(t) is AttrNode a ? JintInterop.Str(a.Name) : JintInterop.Str(""));
+        Accessor(ctx, proto, "localName",
+            (t, _) => w.Unwrap(t) is AttrNode a ? JintInterop.Str(a.LocalName) : JintInterop.Str(""));
+        Accessor(ctx, proto, "prefix",
+            (t, _) => w.Unwrap(t) is AttrNode { Prefix: { } p } ? JintInterop.Str(p) : JsValue.Null);
+        Accessor(ctx, proto, "namespaceURI",
+            (t, _) => w.Unwrap(t) is AttrNode { Namespace: { } ns } ? JintInterop.Str(ns) : JsValue.Null);
+        Accessor(ctx, proto, "specified",
+            (t, _) => JintInterop.Bool(w.Unwrap(t) is AttrNode));
+        Accessor(ctx, proto, "ownerElement",
+            (t, _) => w.Unwrap(t) is AttrNode { OwnerElement: { } e } ? w.Wrap(e) : JsValue.Null);
+        Accessor(ctx, proto, "value",
+            (t, _) => w.Unwrap(t) is AttrNode a ? JintInterop.Str(a.Value) : JintInterop.Str(""),
+            (t, args) =>
+            {
+                if (w.Unwrap(t) is AttrNode a) a.Value = args.Length > 0 ? Str(args[0]) : "";
+                return JsValue.Undefined;
+            });
     }
 
     // =====================================================================
@@ -200,8 +543,12 @@ internal static class NodeBindings
         var engine = ctx.Engine;
         var w = ctx.Wrappers;
 
+        // tagName: HTML-namespace elements upper-case; SVG/MathML/other namespaces
+        // preserve the original case (DOM §4.9).
         Accessor(ctx, proto, "tagName",
-            (t, _) => w.UnwrapElement(t) is { } e ? JintInterop.Str(e.TagName.ToUpperInvariant()) : JintInterop.Str(""));
+            (t, _) => w.UnwrapElement(t) is { } e
+                ? JintInterop.Str(e.Namespace == Element.HtmlNamespace ? e.TagName.ToUpperInvariant() : e.TagName)
+                : JintInterop.Str(""));
         Accessor(ctx, proto, "localName",
             (t, _) => w.UnwrapElement(t) is { } e ? JintInterop.Str(e.LocalName) : JintInterop.Str(""));
         Accessor(ctx, proto, "namespaceURI",
@@ -304,10 +651,7 @@ internal static class NodeBindings
         Accessor(ctx, proto, "children", (t, _) =>
         {
             if (w.UnwrapElement(t) is not { } e) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            for (var n = e.FirstChild; n is not null; n = n.NextSibling)
-                if (n is Element c) items.Add(w.Wrap(c));
-            return Array(engine, items);
+            return CollectionsBinding.HtmlCollection(ctx, () => ChildElements(e));
         });
         Accessor(ctx, proto, "firstElementChild", (t, _) =>
         {
@@ -431,20 +775,75 @@ internal static class NodeBindings
             return JintInterop.Bool(result);
         }, 1);
 
-        // attributes — snapshot NamedNodeMap-shaped array of {name,value}.
+        // attributes — live NamedNodeMap (DOM §4.9). Backed by AttrBinding so
+        // indexed/named access yields real wrapped Attr nodes.
         Accessor(ctx, proto, "attributes", (t, _) =>
+            w.UnwrapElement(t) is { } e ? AttrBinding.WrapAttributes(ctx, e) : EmptyArray(engine));
+
+        // DOM §4.9 hasAttributes — true when the element has ≥1 attribute.
+        Method(ctx, proto, "hasAttributes",
+            (t, _) => JintInterop.Bool(w.UnwrapElement(t) is { } e && e.Attributes.Count > 0), 0);
+        // HTMLElement.click() — fire a synthetic click MouseEvent.
+        Method(ctx, proto, "click", (t, _) =>
         {
-            if (w.UnwrapElement(t) is not { } e) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var a in e.Attributes)
-            {
-                var obj = new JsObject(engine);
-                JintInterop.DefineDataProp(obj, "name", JintInterop.Str(a.Name));
-                JintInterop.DefineDataProp(obj, "value", JintInterop.Str(a.Value));
-                items.Add(obj);
-            }
-            return Array(engine, items);
-        });
+            if (w.UnwrapElement(t) is { } e)
+                e.DispatchEvent(new Starling.Dom.Events.MouseEvent("click",
+                    new Starling.Dom.Events.EventInit(Bubbles: true, Cancelable: true)));
+            return JsValue.Undefined;
+        }, 0);
+        // CSS Typed OM 1 §6 — element.attributeStyleMap (mutable, over inline style)
+        // and element.computedStyleMap() (read-only, over computed style).
+        Accessor(ctx, proto, "attributeStyleMap",
+            (t, _) => w.UnwrapElement(t) is { } e ? BuildInlineStyleMap(ctx, e) : JsValue.Null);
+        Method(ctx, proto, "computedStyleMap",
+            (t, _) => w.UnwrapElement(t) is { } e ? BuildComputedStyleMap(ctx, e) : JsValue.Null, 0);
+
+        // DOM §4.9 Element.prefix.
+        Accessor(ctx, proto, "prefix",
+            (t, _) => w.UnwrapElement(t) is { Prefix: { } p } ? JintInterop.Str(p) : JsValue.Null);
+        // DOM §4.9 namespaced attribute methods.
+        Method(ctx, proto, "getAttributeNS", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is not { } e || args.Length < 2) return JsValue.Null;
+            var v = e.GetAttributeNS(NsArg(args, 0), Str(args[1]));
+            return v is null ? JsValue.Null : JintInterop.Str(v);
+        }, 2);
+        Method(ctx, proto, "setAttributeNS", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is { } e && args.Length >= 3)
+                e.SetAttributeNS(NsArg(args, 0), Str(args[1]), Str(args[2]));
+            return JsValue.Undefined;
+        }, 3);
+        Method(ctx, proto, "hasAttributeNS", (t, args) =>
+            JintInterop.Bool(w.UnwrapElement(t) is { } e && args.Length >= 2 && e.HasAttributeNS(NsArg(args, 0), Str(args[1]))), 2);
+        Method(ctx, proto, "removeAttributeNS", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is { } e && args.Length >= 2)
+                e.RemoveAttributeNS(NsArg(args, 0), Str(args[1]));
+            return JsValue.Undefined;
+        }, 2);
+        Method(ctx, proto, "getElementsByTagNameNS", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is not { } e || args.Length < 2) return EmptyArray(engine);
+            var ns = NsArg(args, 0);
+            var local = Str(args[1]);
+            return CollectionsBinding.HtmlCollection(ctx, () => e.GetElementsByTagNameNS(ns, local).ToList());
+        }, 2);
+
+        // DOM — insertAdjacentElement(position, element) / insertAdjacentText(position, data).
+        Method(ctx, proto, "insertAdjacentElement", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is not { } e || args.Length < 2) return JsValue.Null;
+            if (w.UnwrapNode(args[1]) is not { } node) throw TypeError(engine, "insertAdjacentElement: argument 2 must be a Node");
+            return InsertAdjacent(ctx, e, Str(args[0]), node) ? w.Wrap(node) : JsValue.Null;
+        }, 2);
+        Method(ctx, proto, "insertAdjacentText", (t, args) =>
+        {
+            if (w.UnwrapElement(t) is not { } e || args.Length < 2) return JsValue.Undefined;
+            var node = (e.OwnerDocument ?? ctx.Document).CreateTextNode(Str(args[1]));
+            InsertAdjacent(ctx, e, Str(args[0]), node);
+            return JsValue.Undefined;
+        }, 2);
 
         // Selector engine — querySelector / querySelectorAll / matches / closest.
         Method(ctx, proto, "querySelector", (t, args) =>
@@ -456,9 +855,9 @@ internal static class NodeBindings
         Method(ctx, proto, "querySelectorAll", (t, args) =>
         {
             if (w.UnwrapElement(t) is not { } e || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var m in SelectorAll(engine, e, Str(args[0]))) items.Add(w.Wrap(m));
-            return Array(engine, items);
+            // querySelectorAll returns a STATIC NodeList (snapshot at call time).
+            var snapshot = SelectorAll(engine, e, Str(args[0]));
+            return CollectionsBinding.NodeList(ctx, () => snapshot);
         }, 1);
         Method(ctx, proto, "matches", (t, args) =>
         {
@@ -475,20 +874,13 @@ internal static class NodeBindings
         {
             if (w.UnwrapElement(t) is not { } e || args.Length == 0) return EmptyArray(engine);
             var name = Str(args[0]);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    items.Add(w.Wrap(d));
-            return Array(engine, items);
+            return CollectionsBinding.HtmlCollection(ctx, () => DescendantsByTag(e, name));
         }, 1);
         Method(ctx, proto, "getElementsByClassName", (t, args) =>
         {
             if (w.UnwrapElement(t) is not { } e || args.Length == 0) return EmptyArray(engine);
             var classes = Str(args[0]).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var items = new List<JsValue>();
-            foreach (var d in e.DescendantElements())
-                if (classes.Length > 0 && classes.All(d.ClassList.Contains)) items.Add(w.Wrap(d));
-            return Array(engine, items);
+            return CollectionsBinding.HtmlCollection(ctx, () => DescendantsByClass(e, classes));
         }, 1);
 
         // ChildNode / ParentNode mixins.
@@ -792,6 +1184,68 @@ internal static class NodeBindings
             (t, _) => w.UnwrapDocument(t) is null ? JintInterop.Str("") : JintInterop.Str(WindowBinding.UrlFor(ctx)));
         Accessor(ctx, proto, "defaultView",
             (t, _) => w.UnwrapDocument(t) is null ? JsValue.Null : engine.Global);
+        // DOM §4.5 document.doctype — the DocumentType child, or null.
+        Accessor(ctx, proto, "doctype",
+            (t, _) => w.UnwrapDocument(t) is { DocType: { } dt } ? w.Wrap(dt) : JsValue.Null);
+
+        // DOM §4.5 — node factories + namespace + import/adopt.
+        Method(ctx, proto, "createCDATASection", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is not { } d) throw TypeError(engine, "createCDATASection called on non-Document");
+            var data = args.Length > 0 ? Str(args[0]) : "";
+            if (data.Contains("]]>", StringComparison.Ordinal))
+                throw DomExceptionBinding.Throw(ctx, "InvalidCharacterError", "CDATA section data must not contain ']]>'");
+            return w.Wrap(d.CreateCDataSection(data));
+        }, 1);
+        Method(ctx, proto, "createProcessingInstruction", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is not { } d) throw TypeError(engine, "createProcessingInstruction called on non-Document");
+            var target = args.Length > 0 ? Str(args[0]) : "";
+            var data = args.Length > 1 ? Str(args[1]) : "";
+            if (data.Contains("?>", StringComparison.Ordinal))
+                throw DomExceptionBinding.Throw(ctx, "InvalidCharacterError", "PI data must not contain '?>'");
+            return w.Wrap(d.CreateProcessingInstruction(target, data));
+        }, 2);
+        Method(ctx, proto, "createAttributeNS", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is not { } d) throw TypeError(engine, "createAttributeNS called on non-Document");
+            var ns = NsArg(args, 0);
+            var qn = args.Length > 1 ? Str(args[1]) : "";
+            if (qn.Length == 0) throw DomExceptionBinding.Throw(ctx, "InvalidCharacterError", "createAttributeNS: empty name");
+            return w.Wrap(d.CreateAttributeNS(ns, qn));
+        }, 2);
+        Method(ctx, proto, "adoptNode", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is null || args.Length == 0 || w.UnwrapNode(args[0]) is not { } node)
+                throw TypeError(engine, "adoptNode requires a Node argument");
+            node.RemoveFromParent();
+            return args[0];
+        }, 1);
+        Method(ctx, proto, "importNode", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is null || args.Length == 0 || w.UnwrapNode(args[0]) is not { } src)
+                throw TypeError(engine, "importNode requires a Node argument");
+            var deep = args.Length > 1 && Bool(args[1]);
+            return w.Wrap(CloneNode(src, deep));
+        }, 1);
+        Method(ctx, proto, "getElementsByTagNameNS", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is not { } d || args.Length < 2) return EmptyArray(engine);
+            var ns = NsArg(args, 0);
+            var local = Str(args[1]);
+            return CollectionsBinding.HtmlCollection(ctx, () => d.GetElementsByTagNameNS(ns, local).ToList());
+        }, 2);
+        // DOM §4.5 document.implementation — DOMImplementation (cached per wrapper).
+        Accessor(ctx, proto, "implementation", (t, _) =>
+        {
+            if (t is not ObjectInstance wrapper) return JsValue.Null;
+            const string cacheKey = "__domImpl__";
+            var cached = wrapper.Get(cacheKey);
+            if (!cached.IsUndefined()) return cached;
+            var impl = BuildDomImplementation(ctx, w.UnwrapDocument(t));
+            wrapper.Set(cacheKey, impl);
+            return impl;
+        });
 
         Method(ctx, proto, "getElementById", (t, args) =>
         {
@@ -801,16 +1255,21 @@ internal static class NodeBindings
         Method(ctx, proto, "getElementsByTagName", (t, args) =>
         {
             if (w.UnwrapDocument(t) is not { } d || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByTagName(Str(args[0]))) items.Add(w.Wrap(e));
-            return Array(engine, items);
+            var name = Str(args[0]);
+            return CollectionsBinding.HtmlCollection(ctx, () => d.GetElementsByTagName(name).ToList());
         }, 1);
         Method(ctx, proto, "getElementsByClassName", (t, args) =>
         {
             if (w.UnwrapDocument(t) is not { } d || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var e in d.GetElementsByClassName(Str(args[0]))) items.Add(w.Wrap(e));
-            return Array(engine, items);
+            var name = Str(args[0]);
+            return CollectionsBinding.HtmlCollection(ctx, () => d.GetElementsByClassName(name).ToList());
+        }, 1);
+        Method(ctx, proto, "getElementsByName", (t, args) =>
+        {
+            if (w.UnwrapDocument(t) is not { } d || args.Length == 0)
+                return CollectionsBinding.NodeList(ctx, () => new List<Node>());
+            var name = Str(args[0]);
+            return CollectionsBinding.NodeList(ctx, () => DescendantsByName(d, name));
         }, 1);
         Method(ctx, proto, "querySelector", (t, args) =>
         {
@@ -821,9 +1280,8 @@ internal static class NodeBindings
         Method(ctx, proto, "querySelectorAll", (t, args) =>
         {
             if (w.UnwrapDocument(t) is not { } d || args.Length == 0) return EmptyArray(engine);
-            var items = new List<JsValue>();
-            foreach (var m in SelectorAll(engine, d, Str(args[0]))) items.Add(w.Wrap(m));
-            return Array(engine, items);
+            var snapshot = SelectorAll(engine, d, Str(args[0]));
+            return CollectionsBinding.NodeList(ctx, () => snapshot);
         }, 1);
         Method(ctx, proto, "createElement", (t, args) =>
         {
@@ -853,28 +1311,11 @@ internal static class NodeBindings
             if (w.UnwrapDocument(t) is not { } d) throw TypeError(engine, "createDocumentFragment called on non-Document");
             return w.Wrap(d.CreateDocumentFragment());
         }, 0);
-        // Minimal createEvent — returns a plain object carrying a settable type +
-        // initEvent. Full Event semantics live in EventTargetBinding; this keeps legacy
-        // document.createEvent('Event') call sites from throwing.
-        // TODO: route through EventTargetBinding's Event prototype once available.
-        Method(ctx, proto, "createEvent", (_, _) =>
-        {
-            var ev = new JsObject(engine);
-            JintInterop.DefineDataProp(ev, "type", JintInterop.Str(""));
-            JintInterop.DefineDataProp(ev, "bubbles", JsBoolean.False);
-            JintInterop.DefineDataProp(ev, "cancelable", JsBoolean.False);
-            JintInterop.DefineMethod(engine, ev, "initEvent", (self, a) =>
-            {
-                if (self is ObjectInstance o && a.Length > 0)
-                {
-                    o.Set("type", JintInterop.Str(Str(a[0])));
-                    if (a.Length > 1) o.Set("bubbles", JintInterop.Bool(Bool(a[1])));
-                    if (a.Length > 2) o.Set("cancelable", JintInterop.Bool(Bool(a[2])));
-                }
-                return JsValue.Undefined;
-            }, 3);
-            return ev;
-        }, 1);
+        // document.createEvent(interface) — a real uninitialized host event of the
+        // requested legacy interface (dispatchable; instanceof resolves). Unknown
+        // interfaces throw NotSupportedError. See EventTargetBinding.CreateLegacyEvent.
+        Method(ctx, proto, "createEvent", (_, a) =>
+            EventTargetBinding.CreateLegacyEvent(ctx, a.Length > 0 ? Str(a[0]) : ""), 1);
     }
 
     // =====================================================================
@@ -886,7 +1327,9 @@ internal static class NodeBindings
     // Element.prototype`) work. Calling them throws (illegal constructor).
     private static void InstallConstructors(
         JintBackendContext ctx, ObjectInstance nodeProto, ObjectInstance elementProto,
-        ObjectInstance documentProto, ObjectInstance charDataProto, ObjectInstance textProto)
+        ObjectInstance documentProto, ObjectInstance charDataProto, ObjectInstance textProto,
+        ObjectInstance commentProto, ObjectInstance cdataProto, ObjectInstance piProto,
+        ObjectInstance fragmentProto, ObjectInstance docTypeProto, ObjectInstance attrProto)
     {
         var engine = ctx.Engine;
 
@@ -910,6 +1353,16 @@ internal static class NodeBindings
         Global(engine, "Text", textCtor);
         Global(engine, "HTMLElement", htmlElementCtor);
 
+        // CharacterData subtypes + the other Node families, each with a real
+        // prototype chained per the DOM hierarchy so `instanceof` resolves and
+        // the inherited accessors are reachable on a wrapped node.
+        Global(engine, "Comment", MakeCtor(engine, "Comment", commentProto));
+        Global(engine, "CDATASection", MakeCtor(engine, "CDATASection", cdataProto));
+        Global(engine, "ProcessingInstruction", MakeCtor(engine, "ProcessingInstruction", piProto));
+        Global(engine, "DocumentFragment", MakeCtor(engine, "DocumentFragment", fragmentProto));
+        Global(engine, "DocumentType", MakeCtor(engine, "DocumentType", docTypeProto));
+        Global(engine, "Attr", MakeCtor(engine, "Attr", attrProto));
+
         // HTMLDocument is a legacy alias of Document; share its prototype so
         // `document instanceof HTMLDocument` resolves.
         Global(engine, "HTMLDocument", MakeCtor(engine, "HTMLDocument", documentProto));
@@ -922,11 +1375,13 @@ internal static class NodeBindings
         // subclasses chain off Element.prototype.
         foreach (var name in new[]
         {
-            "HTMLCollection", "NodeList", "DOMTokenList", "NamedNodeMap", "DOMStringMap",
-            "CSSStyleDeclaration", "DOMRect", "DOMRectReadOnly", "DOMException",
+            // NamedNodeMap is installed as a real interface by AttrBinding.
+            "DOMStringMap",
+            "CSSStyleDeclaration", "DOMRect", "DOMRectReadOnly",
             // File API + misc interfaces used in `instanceof` / feature tests.
-            "Blob", "File", "FileList", "FileReader", "DataTransfer",
-            "Comment", "DocumentType", "ShadowRoot", "MediaQueryList",
+            // Blob/File are real classes installed by BlobFileFormDataBinding.
+            "FileList", "FileReader", "DataTransfer",
+            "ShadowRoot", "MediaQueryList",
             // SVG interfaces named in `instanceof` checks. Notably SVGAnimatedString:
             // an SVG element's `className` is an SVGAnimatedString (not a string), so
             // className helpers branch on `n instanceof SVGAnimatedString`. Our
@@ -963,11 +1418,15 @@ internal static class NodeBindings
     // =====================================================================
     //                      classList / dataset / style
     // =====================================================================
-    private static JsObject BuildDomTokenList(JintBackendContext ctx, Element element)
+    private static JintDomTokenListObject BuildDomTokenList(JintBackendContext ctx, Element element)
     {
         var engine = ctx.Engine;
-        var obj = new JsObject(engine);
         var cl = element.ClassList;
+        // Exotic backing object: integer indices resolve to tokens and the
+        // iteration surface (values/keys/entries/forEach/@@iterator) is inherited
+        // from %DOMTokenListPrototype%; the token-mutating methods below are own
+        // properties.
+        var obj = new JintDomTokenListObject(ctx, cl);
         var log = ctx.LoggerFactory.CreateLogger(typeof(NodeBindings));
 
         Accessor(ctx, obj, "length", (_, _) => JintInterop.Num(cl.Count));
@@ -1174,7 +1633,7 @@ internal static class NodeBindings
             return JintInterop.Str(old);
         }, 1);
 
-        foreach (var kebab in StyleProperties)
+        foreach (var kebab in AllStyleProperties)
         {
             var k = kebab;
             var camel = KebabToCamel(k);
@@ -1248,6 +1707,41 @@ internal static class NodeBindings
     {
         var ownerDocument = context.OwnerDocument ?? new Document();
         return HtmlParsing.Backend.ParseFragment(markup, context, ownerDocument);
+    }
+
+    // ---- live-collection snapshot helpers (re-walked on every read) ----------
+    private static List<Element> ChildElements(Element e)
+    {
+        var items = new List<Element>();
+        for (var n = e.FirstChild; n is not null; n = n.NextSibling)
+            if (n is Element c) items.Add(c);
+        return items;
+    }
+
+    private static List<Element> DescendantsByTag(Element e, string name)
+    {
+        var items = new List<Element>();
+        foreach (var d in e.DescendantElements())
+            if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                items.Add(d);
+        return items;
+    }
+
+    private static List<Element> DescendantsByClass(Element e, string[] classes)
+    {
+        var items = new List<Element>();
+        if (classes.Length == 0) return items;
+        foreach (var d in e.DescendantElements())
+            if (classes.All(d.ClassList.Contains)) items.Add(d);
+        return items;
+    }
+
+    private static List<Node> DescendantsByName(Document d, string name)
+    {
+        var items = new List<Node>();
+        foreach (var e in d.DescendantElements())
+            if (e.GetAttribute("name") == name) items.Add(e);
+        return items;
     }
 
     private static void InsertAdjacent(JintDomWrapper w, Node parent, JsValue arg, Node? before)
@@ -1346,6 +1840,125 @@ internal static class NodeBindings
     };
 
     // ---- inline style attribute parse/serialize -------------------------
+    // ---- CSS Typed OM 1 §6 — StylePropertyMap[ReadOnly] ---------------------
+
+    // Parse a declared value into a CSSStyleValue via the global CSSStyleValue.parse;
+    // falls back to the raw string if parse is unavailable/throws.
+    private static JsValue ParseCssValue(JintBackendContext ctx, string prop, string text)
+    {
+        var parse = ctx.Engine.Global.Get("CSSStyleValue");
+        if (parse is ObjectInstance pc && pc.Get("parse").IsCallable())
+        {
+            try { return pc.Get("parse").Call(pc, new JsValue[] { JintInterop.Str(prop), JintInterop.Str(text) }); }
+            catch { /* fall through to string */ }
+        }
+        return JintInterop.Str(text);
+    }
+
+    private static List<(string Name, string Value)> InlineStyleEntries(Element element)
+    {
+        var list = new List<(string, string)>();
+        var style = element.GetAttribute("style");
+        if (string.IsNullOrEmpty(style)) return list;
+        foreach (var decl in style.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var colon = decl.IndexOf(':');
+            if (colon < 0) continue;
+            list.Add((decl[..colon].Trim().ToLowerInvariant(), decl[(colon + 1)..].Trim()));
+        }
+        return list;
+    }
+
+    private static JsObject BuildInlineStyleMap(JintBackendContext ctx, Element element)
+    {
+        var engine = ctx.Engine;
+        var map = new JsObject(engine);
+        string Prop(JsValue[] a) => a.Length > 0 ? Str(a[0]).Trim().ToLowerInvariant() : "";
+
+        Method(ctx, map, "get", (_, a) =>
+        {
+            if (a.Length == 0) return JsValue.Undefined;
+            var text = ReadStyleProp(element, Prop(a));
+            return string.IsNullOrEmpty(text) ? JsValue.Undefined : ParseCssValue(ctx, Prop(a), text);
+        }, 1);
+        Method(ctx, map, "getAll", (_, a) =>
+        {
+            if (a.Length == 0) return EmptyArray(engine);
+            var text = ReadStyleProp(element, Prop(a));
+            return string.IsNullOrEmpty(text) ? EmptyArray(engine) : new JsArray(engine, new[] { ParseCssValue(ctx, Prop(a), text) });
+        }, 1);
+        Method(ctx, map, "has", (_, a) => JintInterop.Bool(a.Length > 0 && !string.IsNullOrEmpty(ReadStyleProp(element, Prop(a)))), 1);
+        Method(ctx, map, "set", (_, a) => { if (a.Length >= 2) WriteStyleProp(element, Prop(a), CoerceCss(a[1])); return JsValue.Undefined; }, 2);
+        Method(ctx, map, "append", (_, a) =>
+        {
+            if (a.Length >= 2)
+            {
+                var existing = ReadStyleProp(element, Prop(a));
+                var add = CoerceCss(a[1]);
+                WriteStyleProp(element, Prop(a), string.IsNullOrEmpty(existing) ? add : existing + ", " + add);
+            }
+            return JsValue.Undefined;
+        }, 2);
+        Method(ctx, map, "delete", (_, a) => { if (a.Length > 0) WriteStyleProp(element, Prop(a), null); return JsValue.Undefined; }, 1);
+        Method(ctx, map, "clear", (_, _) => { element.RemoveAttribute("style"); return JsValue.Undefined; }, 0);
+        Accessor(ctx, map, "size", (_, _) => JintInterop.Num(InlineStyleEntries(element).Count));
+        Method(ctx, map, "forEach", (_, a) =>
+        {
+            if (a.Length == 0 || !a[0].IsCallable()) return JsValue.Undefined;
+            foreach (var (name, value) in InlineStyleEntries(element))
+                a[0].Call(JsValue.Undefined, new[] { ParseCssValue(ctx, name, value), JintInterop.Str(name), map });
+            return JsValue.Undefined;
+        }, 1);
+        return map;
+    }
+
+    private static JsObject BuildComputedStyleMap(JintBackendContext ctx, Element element)
+    {
+        var engine = ctx.Engine;
+        var host = ctx.LayoutHost;
+        var map = new JsObject(engine);
+        string Prop(JsValue[] a) => a.Length > 0 ? Str(a[0]).Trim().ToLowerInvariant() : "";
+        string Resolve(string p) => host?.GetComputedProperty(element, p) ?? "";
+
+        Method(ctx, map, "get", (_, a) =>
+        {
+            if (a.Length == 0) return JsValue.Undefined;
+            var v = Resolve(Prop(a));
+            return string.IsNullOrEmpty(v) ? JsValue.Undefined : ParseCssValue(ctx, Prop(a), v);
+        }, 1);
+        Method(ctx, map, "getAll", (_, a) =>
+        {
+            if (a.Length == 0) return EmptyArray(engine);
+            var v = Resolve(Prop(a));
+            return string.IsNullOrEmpty(v) ? EmptyArray(engine) : new JsArray(engine, new[] { ParseCssValue(ctx, Prop(a), v) });
+        }, 1);
+        Method(ctx, map, "has", (_, a) => JintInterop.Bool(a.Length > 0 && !string.IsNullOrEmpty(Resolve(Prop(a)))), 1);
+        Accessor(ctx, map, "size", (_, _) => JintInterop.Num(ComputedEntries(host, element).Count));
+        Method(ctx, map, "forEach", (_, a) =>
+        {
+            if (a.Length == 0 || !a[0].IsCallable()) return JsValue.Undefined;
+            foreach (var (name, value) in ComputedEntries(host, element))
+                a[0].Call(JsValue.Undefined, new[] { ParseCssValue(ctx, name, value), JintInterop.Str(name), map });
+            return JsValue.Undefined;
+        }, 1);
+        return map;
+    }
+
+    private static List<(string Name, string Value)> ComputedEntries(global::Starling.Bindings.ILayoutHost? host, Element element)
+    {
+        var list = new List<(string, string)>();
+        if (host is null) return list;
+        foreach (var prop in StyleProperties)
+        {
+            var v = host.GetComputedProperty(element, prop);
+            if (!string.IsNullOrEmpty(v)) list.Add((prop, v));
+        }
+        return list;
+    }
+
+    // Coerce a CSSStyleValue (or string) argument to its CSS text.
+    private static string CoerceCss(JsValue v) => v.IsString() ? v.AsString() : v.ToString();
+
     private static string ReadStyleProp(Element element, string kebabProp)
     {
         var style = element.GetAttribute("style");
@@ -1375,6 +1988,13 @@ internal static class NodeBindings
         if (pairs.Count == 0) element.RemoveAttribute("style");
         else element.SetAttribute("style", string.Join("; ", pairs.Select(p => $"{p.Key}: {p.Value}")));
     }
+
+    /// <summary>The inline-style property names exposed as camel/kebab accessors,
+    /// shared with <see cref="CssomBinding"/> for CSSOM declaration blocks.</summary>
+    internal static IReadOnlyList<string> StylePropertyNames => StyleProperties;
+
+    /// <summary>Public kebab→camel conversion, shared with CSSOM.</summary>
+    internal static string KebabToCamelPublic(string kebab) => KebabToCamel(kebab);
 
     private static string KebabToCamel(string kebab)
     {
@@ -1593,30 +2213,10 @@ internal static class NodeBindings
                 return new JsArray(engine, pairs);
             }, 1),
             writable: false, enumerable: false, configurable: true);
-
-        engine.Execute("""
-            (function(){
-              function pair(n, v) { return [String(n), String(v)]; }
-              function FormData(form) {
-                this.__entries = [];
-                if (form !== undefined && form !== null) {
-                  var items = __starlingFormDataEntries(form);
-                  for (var i = 0; i < items.length; i++) this.__entries.push(pair(items[i][0], items[i][1]));
-                }
-              }
-              FormData.prototype.append = function(n, v) { this.__entries.push(pair(n, v)); };
-              FormData.prototype.get = function(n) {
-                n = String(n);
-                for (var i = 0; i < this.__entries.length; i++) if (this.__entries[i][0] === n) return this.__entries[i][1];
-                return null;
-              };
-              FormData.prototype.entries = function*() {
-                for (var i = 0; i < this.__entries.length; i++) yield [this.__entries[i][0], this.__entries[i][1]];
-              };
-              FormData.prototype[Symbol.iterator] = FormData.prototype.entries;
-              globalThis.FormData = FormData;
-            })();
-            """);
+        // The complete FormData class (append/set/delete/getAll/has/forEach/keys/
+        // values/iterator + Blob/File values) is installed by
+        // BlobFileFormDataBinding; it reuses the __starlingFormDataEntries hook above
+        // for `new FormData(formElement)`.
     }
 
     // HTML §4.8.5 — `new Image(width?, height?)` constructs a detached
@@ -1690,6 +2290,13 @@ internal static class NodeBindings
         C("DOCUMENT_NODE", 9);
         C("DOCUMENT_TYPE_NODE", 10);
         C("DOCUMENT_FRAGMENT_NODE", 11);
+        // DOM §4.4.4 compareDocumentPosition bitmask constants.
+        C("DOCUMENT_POSITION_DISCONNECTED", 1);
+        C("DOCUMENT_POSITION_PRECEDING", 2);
+        C("DOCUMENT_POSITION_FOLLOWING", 4);
+        C("DOCUMENT_POSITION_CONTAINS", 8);
+        C("DOCUMENT_POSITION_CONTAINED_BY", 16);
+        C("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 32);
     }
 
     private static JavaScriptException TypeError(global::Jint.Engine engine, string message)
@@ -1728,6 +2335,15 @@ internal static class NodeBindings
         "zoom",
         "content", "list-style", "list-style-type",
     ];
+
+    // element.style exposes every registered CSS property (curated common names ∪
+    // the full PropertyRegistry) so uncommon longhands read "" instead of undefined,
+    // matching the canonical backend's AllInlineStyleProperties.
+    private static readonly string[] AllStyleProperties =
+        StyleProperties
+            .Concat(Starling.Css.Properties.PropertyRegistry.All.Select(Starling.Css.Properties.PropertyRegistry.Name))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 }
 
 /// <summary>

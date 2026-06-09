@@ -165,7 +165,30 @@ internal sealed class StarlingScriptSession : IScriptSession
         }
         catch (JsThrow ex)
         {
-            throw new ScriptThrow(DescribeThrow(ex.Value), jsStack: null, ex);
+            throw new ScriptThrow(DescribeThrow(ex.Value), jsStack: ExtractJsStack(ex.Value), ex);
+        }
+    }
+
+    /// <summary>Pull the JS-side <c>error.stack</c> string off a thrown Error
+    /// object so it can ride along in <see cref="ScriptThrow.JsStack"/> and be
+    /// logged at the engine's fail-soft path. The Starling VM builds this string
+    /// via <c>FormatJsStack</c>. Mirrors the Jint backend's stack passthrough so
+    /// uncaught-error diagnostics are identical across engines. Returns
+    /// <see langword="null"/> when the thrown value is not an object or has no
+    /// <c>stack</c>.</summary>
+    internal static string? ExtractJsStack(JsValue v)
+    {
+        if (!v.IsObject) return null;
+        try
+        {
+            var stack = v.AsObject.Get("stack");
+            return stack.IsUndefined ? null : JsValue.ToStringValue(stack);
+        }
+        catch (Exception ex)
+        {
+            // best-effort: a getter on `stack` could throw; fall back to no stack
+            StarlingScriptSessionLog.ExtractJsStackFailed(NullLogger<StarlingScriptSession>.Instance, ex);
+            return null;
         }
     }
 
@@ -198,7 +221,7 @@ internal sealed class StarlingScriptSession : IScriptSession
             }
             catch (JsThrow ex)
             {
-                captured = new ScriptThrow(DescribeThrow(ex.Value), jsStack: null, ex);
+                captured = new ScriptThrow(DescribeThrow(ex.Value), jsStack: ExtractJsStack(ex.Value), ex);
             }
         });
 
@@ -448,4 +471,7 @@ internal static partial class StarlingScriptSessionLog
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "failed to extract name/message from thrown JS object (falling back to ToString)")]
     public static partial void DescribeThrowFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "failed to read stack from thrown JS object (no JS stack attached)")]
+    public static partial void ExtractJsStackFailed(ILogger logger, Exception ex);
 }

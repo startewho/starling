@@ -40,7 +40,9 @@ internal static class ObserversBinding
     {
         ArgumentNullException.ThrowIfNull(ctx);
 
-        InstallObserver(ctx, "MutationObserver", takeRecords: true, fireIntersecting: false);
+        // MutationObserver is installed by the dedicated MutationObserverBinding
+        // (a real implementation that queues records). Here we only do the
+        // surface-level Intersection/Resize observers.
         InstallObserver(ctx, "IntersectionObserver", takeRecords: true, fireIntersecting: true);
         InstallObserver(ctx, "ResizeObserver", takeRecords: false, fireIntersecting: false);
     }
@@ -52,23 +54,62 @@ internal static class ObserversBinding
 
         JintInterop.DefineMethod(engine, proto, "observe", (thisV, args) =>
         {
-            if (fireIntersecting && thisV is ObjectInstance obs && args.Length > 0 && !args[0].IsUndefined())
+            if (thisV is not ObjectInstance obs || args.Length == 0 || args[0].IsUndefined()) return JsValue.Undefined;
+            var target = args[0];
+
+            // ResizeObserver §box option validation.
+            if (!fireIntersecting && args.Length > 1 && args[1] is ObjectInstance opts)
             {
-                var target = args[0];
-                var cb = obs.Get("_callback");
-                if (cb is global::Jint.Native.Function.Function)
-                    ctx.Post(() => DeliverIntersecting(ctx, cb, obs, target));
+                var box = opts.Get("box");
+                if (box.IsString() && box.AsString() is var b
+                    && b is not ("content-box" or "border-box" or "device-pixel-content-box"))
+                    throw new JavaScriptException(engine.Intrinsics.TypeError,
+                        $"Failed to execute 'observe' on 'ResizeObserver': The provided value '{b}' is not a valid enum value of type ResizeObserverBoxOptions.");
+            }
+
+            // Track the target.
+            if (obs.Get("_targets") is JsArray targets)
+            {
+                var found = false;
+                for (uint i = 0; i < targets.Length; i++) if (ReferenceEquals(targets[(int)i], target)) { found = true; break; }
+                if (!found) targets.Push(target);
+            }
+
+            // IntersectionObserver delivers one fully-intersecting record per observe
+            // (the documented one-shot headless-render model).
+            if (fireIntersecting && obs.Get("_callback") is global::Jint.Native.Function.Function cb)
+                ctx.Post(() => DeliverIntersecting(ctx, cb, obs, target));
+            return JsValue.Undefined;
+        }, length: 1);
+        JintInterop.DefineMethod(engine, proto, "unobserve", (thisV, args) =>
+        {
+            if (thisV is ObjectInstance obs && args.Length > 0 && obs.Get("_targets") is JsArray targets)
+            {
+                var kept = new List<JsValue>();
+                for (uint i = 0; i < targets.Length; i++)
+                    if (!ReferenceEquals(targets[(int)i], args[0])) kept.Add(targets[(int)i]);
+                obs.FastSetProperty("_targets", new PropertyDescriptor(new JsArray(engine, kept.ToArray()), writable: false, enumerable: false, configurable: false));
             }
             return JsValue.Undefined;
         }, length: 1);
-        JintInterop.DefineMethod(engine, proto, "unobserve",
-            (_, _) => JsValue.Undefined, length: 1);
-        JintInterop.DefineMethod(engine, proto, "disconnect",
-            (_, _) => JsValue.Undefined, length: 0);
+        JintInterop.DefineMethod(engine, proto, "disconnect", (thisV, _) =>
+        {
+            if (thisV is ObjectInstance obs)
+                obs.FastSetProperty("_targets", new PropertyDescriptor(new JsArray(engine, System.Array.Empty<JsValue>()), writable: false, enumerable: false, configurable: false));
+            return JsValue.Undefined;
+        }, length: 0);
         if (takeRecords)
         {
             JintInterop.DefineMethod(engine, proto, "takeRecords",
                 (_, _) => new JsArray(engine, []), length: 0);
+        }
+
+        // IntersectionObserver reflects root / rootMargin / thresholds from options.
+        if (fireIntersecting)
+        {
+            JintInterop.DefineAccessor(engine, proto, "root", (t, _) => (t as ObjectInstance)?.Get("_root") ?? JsValue.Null);
+            JintInterop.DefineAccessor(engine, proto, "rootMargin", (t, _) => (t as ObjectInstance)?.Get("_rootMargin") ?? JintInterop.Str("0px 0px 0px 0px"));
+            JintInterop.DefineAccessor(engine, proto, "thresholds", (t, _) => (t as ObjectInstance)?.Get("_thresholds") ?? new JsArray(engine, new JsValue[] { JintInterop.Num(0) }));
         }
 
         var ctor = new NativeConstructor(engine, name, 1, (args, _) =>
@@ -79,6 +120,9 @@ internal static class ObserversBinding
             var inst = new JsObject(engine) { Prototype = proto };
             JintInterop.DefineDataProp(inst, "_callback", args[0],
                 writable: false, enumerable: false, configurable: false);
+            JintInterop.DefineDataProp(inst, "_targets", new JsArray(engine, System.Array.Empty<JsValue>()),
+                writable: false, enumerable: false, configurable: false);
+            if (fireIntersecting) CaptureIntersectionOptions(ctx, inst, args.Length > 1 ? args[1] : JsValue.Undefined);
             return inst;
         });
 
@@ -91,6 +135,35 @@ internal static class ObserversBinding
 
         JintInterop.DefineDataProp(engine.Global, name, ctor,
             writable: true, enumerable: false, configurable: true);
+    }
+
+    // Capture IntersectionObserver root / rootMargin / thresholds from the options
+    // dictionary onto the instance so the accessors read them back.
+    private static void CaptureIntersectionOptions(JintBackendContext ctx, ObjectInstance inst, JsValue optionsVal)
+    {
+        var engine = ctx.Engine;
+        JsValue root = JsValue.Null, rootMargin = JintInterop.Str("0px 0px 0px 0px");
+        var thresholds = new List<double> { 0 };
+        if (optionsVal is ObjectInstance o)
+        {
+            var r = o.Get("root");
+            if (r is ObjectInstance) root = r;
+            var rm = o.Get("rootMargin");
+            if (rm.IsString() && rm.AsString().Length > 0) rootMargin = JintInterop.Str(rm.AsString());
+            var th = o.Get("threshold");
+            if (th is JsArray ta)
+            {
+                thresholds.Clear();
+                for (uint i = 0; i < ta.Length; i++) thresholds.Add(global::Jint.Runtime.TypeConverter.ToNumber(ta[(int)i]));
+                if (thresholds.Count == 0) thresholds.Add(0);
+            }
+            else if (th.IsNumber()) { thresholds.Clear(); thresholds.Add(th.AsNumber()); }
+        }
+        JintInterop.DefineDataProp(inst, "_root", root, writable: false, enumerable: false, configurable: false);
+        JintInterop.DefineDataProp(inst, "_rootMargin", rootMargin, writable: false, enumerable: false, configurable: false);
+        JintInterop.DefineDataProp(inst, "_thresholds",
+            new JsArray(engine, thresholds.Select(t => (JsValue)JintInterop.Num(t)).ToArray()),
+            writable: false, enumerable: false, configurable: false);
     }
 
     /// <summary>Invoke an IntersectionObserver callback with one
