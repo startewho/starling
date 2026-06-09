@@ -90,6 +90,12 @@ public sealed class JintDomWrapper
     /// <summary>%DOMTokenListPrototype% — set by <see cref="CollectionsBinding"/>.</summary>
     public ObjectInstance? DomTokenListPrototype { get; set; }
 
+    /// <summary>%NamedNodeMapPrototype% — set by <see cref="AttrBinding"/>.</summary>
+    public ObjectInstance? NamedNodeMapPrototype { get; set; }
+
+    /// <summary>%MutationRecordPrototype% — set by <see cref="MutationObserverBinding"/>.</summary>
+    public ObjectInstance? MutationRecordPrototype { get; set; }
+
     /// <summary>%WindowPrototype%. Inherits EventTarget.prototype.</summary>
     public ObjectInstance? WindowPrototype { get; set; }
 

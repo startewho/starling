@@ -3,6 +3,8 @@ using System.Globalization;
 using Jint;
 using Jint.Native;
 using Jint.Runtime;
+using StarlingUrl = global::Starling.Url.Url;
+using StarlingUrlParser = global::Starling.Url.UrlParser;
 
 namespace Starling.Bindings.Jint;
 
@@ -48,36 +50,27 @@ internal static class UrlBinding
             return Components(engine, uri);
         }, 2);
 
-        // reparse(href, scheme|null, host|null, ...) — apply one component change
-        // by rebuilding from the current href, then return the new components.
-        // The single entry point keeps URL-mutation semantics in C#.
+        // reparse(href, which, value) — apply one component change by rebuilding the
+        // WHATWG URL record, then return the new components. The single entry point
+        // keeps URL-mutation semantics in C# (and WHATWG-correct).
         Fn("withComponent", (_, a) =>
         {
             var href = Str(a, 0);
             var which = Str(a, 1);
             var value = Str(a, 2);
-            var uri = Parse(engine, href, null);
-            var builder = new UriBuilder(uri);
-            switch (which)
+            var url = Parse(engine, href, null);
+            url = which switch
             {
-                case "protocol": builder.Scheme = value.TrimEnd(':'); break;
-                case "hostname": builder.Host = value; break;
-                case "host":
-                    var hp = value.Split(':', 2);
-                    builder.Host = hp[0];
-                    if (hp.Length > 1 && int.TryParse(hp[1], NumberStyles.None, CultureInfo.InvariantCulture, out var hpp))
-                        builder.Port = hpp;
-                    break;
-                case "port":
-                    if (value.Length == 0) builder.Port = -1;
-                    else if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var p) && p is >= 0 and <= 65535)
-                        builder.Port = p;
-                    break;
-                case "pathname": builder.Path = value.Length == 0 || value[0] == '/' ? value : "/" + value; break;
-                case "search": builder.Query = value.TrimStart('?'); break;
-                case "hash": builder.Fragment = value.TrimStart('#'); break;
-            }
-            return Components(engine, builder.Uri);
+                "protocol" => url with { Scheme = value.TrimEnd(':').ToLowerInvariant() },
+                "hostname" => url with { Host = value.Length == 0 ? url.Host : value },
+                "host" => ApplyHost(url, value),
+                "port" => ApplyPort(url, value),
+                "pathname" => url with { Path = value.Length == 0 || value[0] == '/' || !url.IsSpecial ? value : "/" + value },
+                "search" => url with { Query = NormalizeQuery(value) },
+                "hash" => url with { Fragment = NormalizeFragment(value) },
+                _ => url,
+            };
+            return Components(engine, url);
         }, 3);
 
         JintInterop.DefineDataProp(engine.Global, "__surl", bridge,
@@ -90,39 +83,69 @@ internal static class UrlBinding
     private static string Str(JsValue[] a, int i) =>
         i < a.Length && !a[i].IsUndefined() && !a[i].IsNull() ? a[i].ToString() : "";
 
-    private static Uri Parse(Engine engine, string input, string? baseUrl)
+    private static StarlingUrl Parse(Engine engine, string input, string? baseUrl)
     {
-        if (baseUrl is null)
-        {
-            if (Uri.TryCreate(input, UriKind.Absolute, out var abs)) return abs;
-        }
-        else if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var b) && Uri.TryCreate(b, input, out var rel))
-        {
-            return rel;
-        }
+        var baseParsed = baseUrl is null ? (StarlingUrl?)null
+            : (StarlingUrlParser.Parse(baseUrl) is { IsOk: true } br ? br.Value : null);
+        var result = baseParsed is null ? StarlingUrlParser.Parse(input) : StarlingUrlParser.Parse(input, baseParsed);
+        if (result.IsOk) return result.Value;
         throw new JavaScriptException(engine.Intrinsics.TypeError, "Invalid URL");
     }
 
-    private static JsObject Components(Engine engine, Uri uri)
+    private static StarlingUrl ApplyHost(StarlingUrl url, string value)
     {
-        var port = uri.IsDefaultPort ? "" : uri.Port.ToString(CultureInfo.InvariantCulture);
-        var host = uri.IsDefaultPort ? uri.Host : uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
-        var origin = uri.IsDefaultPort
-            ? $"{uri.Scheme}://{uri.Host}"
-            : $"{uri.Scheme}://{uri.Host}:{uri.Port.ToString(CultureInfo.InvariantCulture)}";
+        if (value.Length == 0) return url;
+        var hp = value.Split(':', 2);
+        var host = hp[0];
+        int? port = url.Port;
+        if (hp.Length > 1 && int.TryParse(hp[1], NumberStyles.None, CultureInfo.InvariantCulture, out var p) && p is >= 0 and <= 65535)
+            port = p == url.DefaultPort ? null : p;
+        return url with { Host = host, Port = port };
+    }
+
+    private static StarlingUrl ApplyPort(StarlingUrl url, string value)
+    {
+        if (value.Length == 0) return url with { Port = null };
+        if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var p) && p is >= 0 and <= 65535)
+            return url with { Port = p == url.DefaultPort ? null : p };
+        return url;
+    }
+
+    private static string? NormalizeQuery(string value)
+    {
+        var v = value.StartsWith('?') ? value[1..] : value;
+        return v.Length == 0 ? null : v;
+    }
+
+    private static string? NormalizeFragment(string value)
+    {
+        var v = value.StartsWith('#') ? value[1..] : value;
+        return v.Length == 0 ? null : v;
+    }
+
+    private static JsObject Components(Engine engine, StarlingUrl url)
+    {
+        var hostname = url.Host ?? "";
+        var port = url.Port?.ToString(CultureInfo.InvariantCulture) ?? "";
+        var host = port.Length == 0 ? hostname : hostname + ":" + port;
+        var search = url.Query is { Length: > 0 } q ? "?" + q : "";
+        var hash = url.Fragment is { Length: > 0 } f ? "#" + f : "";
+        // Tuple origin for http(s)/ws(s)/ftp; opaque "null" otherwise (file/data/blob/…).
+        var tupleOrigin = url.Scheme is "http" or "https" or "ws" or "wss" or "ftp";
+        var origin = tupleOrigin ? $"{url.Scheme}://{host}" : "null";
 
         var o = new JsObject(engine);
         void Set(string k, string v) =>
             JintInterop.DefineDataProp(o, k, new JsString(v), writable: true, enumerable: true, configurable: true);
-        Set("href", uri.AbsoluteUri);
+        Set("href", url.ToString());
         Set("origin", origin);
-        Set("protocol", uri.Scheme + ":");
+        Set("protocol", url.Scheme + ":");
         Set("host", host);
-        Set("hostname", uri.Host);
+        Set("hostname", hostname);
         Set("port", port);
-        Set("pathname", uri.AbsolutePath);
-        Set("search", uri.Query);
-        Set("hash", uri.Fragment);
+        Set("pathname", url.Path);
+        Set("search", search);
+        Set("hash", hash);
         return o;
     }
 

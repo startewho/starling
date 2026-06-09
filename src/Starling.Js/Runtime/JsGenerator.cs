@@ -8,8 +8,8 @@ namespace Starling.Js.Runtime;
 /// </summary>
 public sealed class JsGenerator : JsObject
 {
-    /// <summary>Underlying suspended frame — owns the worker thread that
-    /// runs the generator body to its next yield/return.</summary>
+    /// <summary>Underlying heap-backed frame that runs the generator body to
+    /// its next yield or return.</summary>
     public SuspendedFrame Frame { get; }
 
     /// <summary>True after the generator completes (normally or via
@@ -17,10 +17,19 @@ public sealed class JsGenerator : JsObject
     /// <c>{value: undefined, done: true}</c>.</summary>
     public bool Done { get; internal set; }
 
-    /// <summary>True after the worker thread has been kicked off the first
-    /// time. Generators don't run their body until the first
-    /// <c>.next()</c>.</summary>
+    /// <summary>True after the body has been resumed the first time.
+    /// Generators don't run their body until the first <c>.next()</c>.</summary>
     public bool Started { get; internal set; }
+
+    private int _running;
+
+    /// <summary>Enter a resume operation. Reentrant resume must throw instead
+    /// of deadlocking or corrupting the parked frame.</summary>
+    internal bool TryEnterResume()
+        => Interlocked.CompareExchange(ref _running, 1, 0) == 0;
+
+    internal void ExitResume()
+        => Volatile.Write(ref _running, 0);
 
     public JsGenerator(JsRealm realm, SuspendedFrame frame)
         : base(realm.GeneratorPrototype)
@@ -30,8 +39,8 @@ public sealed class JsGenerator : JsObject
 }
 
 /// <summary>
-/// B1b-2c — Async function wrapper. Tracks the worker thread executing
-/// the body and the outer Promise the caller observes.
+/// B1b-2c — Async function wrapper. Tracks the continuation frame and the
+/// outer Promise the caller observes.
 /// </summary>
 public sealed class JsAsyncFunctionState
 {
@@ -95,8 +104,8 @@ public sealed class AsyncGeneratorRequest
 /// </summary>
 public sealed class JsAsyncGenerator : JsObject
 {
-    /// <summary>Underlying suspended frame — owns the worker thread that runs
-    /// the async-generator body across yield and await suspensions.</summary>
+    /// <summary>Underlying heap-backed frame that runs the async-generator body
+    /// across yield and await suspensions.</summary>
     public SuspendedFrame Frame { get; }
 
     /// <summary>True after the body has completed (return / throw / fall-off).
@@ -104,8 +113,8 @@ public sealed class JsAsyncGenerator : JsObject
     /// (or, for <c>throw</c> on a not-yet-started generator, reject).</summary>
     public bool Done { get; set; }
 
-    /// <summary>True once the worker has been kicked off the first time. The
-    /// body does not run until the first request is processed.</summary>
+    /// <summary>True once the body has been resumed the first time. The body
+    /// does not run until the first request is processed.</summary>
     public bool Started { get; set; }
 
     /// <summary>True while a request is being driven to its next yield/await

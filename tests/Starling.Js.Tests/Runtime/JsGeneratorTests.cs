@@ -5,9 +5,9 @@ using Starling.Js.Runtime;
 namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
-/// B1b-2c — Generator tests. Generators run on a worker thread; the
-/// dispatcher loop in the VM consults the SuspendedFrame on each .next()
-/// to read the yielded value and resume.
+/// B1b-2c — Generator tests. Generators park a heap-backed frame; the
+/// dispatcher loop consults the SuspendedFrame on each .next() to read the
+/// yielded value and resume.
 /// </summary>
 [TestClass]
 public class JsGeneratorTests
@@ -287,6 +287,80 @@ public class JsGeneratorTests
         ");
 
         r.AsString.Should().Be("[\"a\",\"b\",\"c\",\"d\"]");
+    }
+
+    [TestMethod]
+    public void Generator_resume_preserves_nested_try_finally_stack()
+    {
+        var r = Eval(@"
+            var log = '';
+            function* g() {
+                try {
+                    try {
+                        yield 'pause';
+                    } finally {
+                        log += 'inner';
+                    }
+                } finally {
+                    log += '>outer';
+                }
+            }
+            var it = g();
+            var first = it.next();
+            var ret = it.return('x');
+            var done = it.next();
+            first.value + ':' + first.done + '|' +
+                log + '|' +
+                ret.value + ':' + ret.done + '|' +
+                done.value + ':' + done.done;
+        ");
+
+        r.AsString.Should().Be("pause:false|inner>outer|x:true|undefined:true");
+    }
+
+    [TestMethod]
+    public void Generator_resume_preserves_operand_stack_across_nested_expression()
+    {
+        var r = Eval(@"
+            function* g() {
+                let i = 0;
+                const result = ((++i) * (yield 'pause')) + (++i);
+                return result + ':' + i;
+            }
+            var it = g();
+            var first = it.next();
+            var second = it.next(10);
+            first.value + ':' + first.done + '|' +
+                second.value + ':' + second.done;
+        ");
+
+        r.AsString.Should().Be("pause:false|12:2:true");
+    }
+
+    [TestMethod]
+    public void Generator_throw_after_suspend_preserves_catch_scope()
+    {
+        var r = Eval(@"
+            function* g() {
+                let after = 'later';
+                try {
+                    yield 'pause';
+                } catch (e) {
+                    let local = 'caught:' + e;
+                    yield local + ':' + after;
+                }
+                return 'done';
+            }
+            var it = g();
+            var first = it.next();
+            var second = it.throw('boom');
+            var third = it.next();
+            first.value + ':' + first.done + '|' +
+                second.value + ':' + second.done + '|' +
+                third.value + ':' + third.done;
+        ");
+
+        r.AsString.Should().Be("pause:false|caught:boom:later:false|done:true");
     }
 
     [TestMethod]

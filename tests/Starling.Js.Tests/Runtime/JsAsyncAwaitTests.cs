@@ -5,8 +5,8 @@ using Starling.Js.Runtime;
 namespace Starling.Js.Tests.Runtime;
 
 /// <summary>
-/// B1b-2c — Async/await tests. Async function invocation returns a
-/// Promise immediately and runs the body on a worker thread; each await
+/// B1b-2c — Async/await tests. Async function invocation returns a Promise
+/// immediately and parks the body in a heap-backed frame; each await
 /// re-suspends until the awaited promise settles.
 /// </summary>
 [TestClass]
@@ -163,6 +163,84 @@ public class JsAsyncAwaitTests
 
         runtime.GetGlobal("returned").AsNumber.Should().Be(2);
         runtime.GetGlobal("thrown").AsNumber.Should().Be(4);
+    }
+
+    [TestMethod]
+    public void Await_preserves_finally_pending_return()
+    {
+        var (runtime, _) = Eval(@"
+            async function f() {
+                try {
+                    return 'value';
+                } finally {
+                    await Promise.resolve('cleanup');
+                }
+            }
+            f().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("value");
+    }
+
+    [TestMethod]
+    public void Await_preserves_finally_pending_throw()
+    {
+        var (runtime, _) = Eval(@"
+            async function f() {
+                try {
+                    throw 'boom';
+                } finally {
+                    await Promise.resolve('cleanup');
+                }
+            }
+            f().then(
+                function() { globalThis.r = 'resolved'; },
+                function(e) { globalThis.r = 'rejected:' + e; });
+        ");
+
+        runtime.GetGlobal("r").AsString.Should().Be("rejected:boom");
+    }
+
+    [TestMethod]
+    public void Await_inside_direct_eval_preserves_caller_binding()
+    {
+        var (runtime, _) = Eval(@"
+            async function f() {
+                let x = 1;
+                eval('x = x + 1');
+                await Promise.resolve();
+                return x;
+            }
+            f().then(function(v) { globalThis.r = v; });
+        ");
+
+        runtime.GetGlobal("r").AsNumber.Should().Be(2);
+    }
+
+    [TestMethod]
+    public void Await_resume_uses_same_realm_active_virtual_machine()
+    {
+        var host = new JsRuntime();
+        var foreign = new JsRuntime();
+        var foreignEval = foreign.GetGlobal("eval");
+        var hostVm = new JsVm(host);
+
+        AbstractOperations.Call(hostVm, foreignEval, JsValue.Undefined, new[]
+        {
+            JsValue.String(@"
+                (async function foreignAsync() {
+                    await Promise.resolve();
+                    try {
+                        throw new TypeError('foreign');
+                    } catch (e) {
+                        return Object.getPrototypeOf(e) === TypeError.prototype;
+                    }
+                })().then(function(v) { globalThis.same = v; });
+            "),
+        });
+        foreign.WithActiveVm(() => { });
+
+        foreign.GetGlobal("same").AsBool.Should().BeTrue();
     }
 
     [TestMethod]

@@ -53,24 +53,75 @@ internal static class EncodingBinding
             return engine.Intrinsics.ArrayBuffer.Construct(Encoding.UTF8.GetBytes(s));
         }, 1);
 
-        // decode(bufferSource, ignoreBOM) -> string. Reads bytes from an
-        // ArrayBuffer or any typed-array/DataView view.
+        // decode(bufferSource, ignoreBOM, fatal, label) -> string. Reads bytes from
+        // an ArrayBuffer or any typed-array/DataView view, decodes with the label's
+        // encoding; when fatal, malformed input throws a TypeError (§10.2.1).
         Fn("decode", (_, a) =>
         {
             var bytes = ExtractBytes(a.Length > 0 ? a[0] : JsValue.Undefined);
             var ignoreBom = a.Length > 1 && TypeConverter.ToBoolean(a[1]);
-            var text = Encoding.UTF8.GetString(bytes);
-            // §10.2.1 — strip a leading BOM unless ignoreBOM was requested.
-            if (!ignoreBom && text.Length > 0 && text[0] == '﻿')
-                text = text[1..];
-            return JintInterop.Str(text);
-        }, 2);
+            var fatal = a.Length > 2 && TypeConverter.ToBoolean(a[2]);
+            var label = a.Length > 3 && a[3].IsString() ? a[3].AsString() : "utf-8";
+            var enc = ResolveEncoding(label) ?? Encoding.UTF8;
+            if (fatal)
+                enc = (Encoding)enc.Clone();
+            if (fatal)
+            {
+                enc.DecoderFallback = DecoderFallback.ExceptionFallback;
+                try { return JintInterop.Str(StripBom(enc.GetString(bytes), ignoreBom)); }
+                catch (DecoderFallbackException)
+                {
+                    throw new JavaScriptException(engine.Intrinsics.TypeError, "The encoded data was not valid.");
+                }
+            }
+            return JintInterop.Str(StripBom(enc.GetString(bytes), ignoreBom));
+        }, 4);
+
+        // canonicalEncoding(label) -> WHATWG name; throws RangeError on an unknown label.
+        Fn("canonicalEncoding", (_, a) =>
+        {
+            var label = a.Length > 0 && !a[0].IsUndefined() ? a[0].ToString().Trim().ToLowerInvariant() : "utf-8";
+            var name = CanonicalName(label)
+                ?? throw new JavaScriptException(engine.Construct("RangeError",
+                    new JsValue[] { JintInterop.Str($"The encoding label provided ('{label}') is invalid.") }));
+            return JintInterop.Str(name);
+        }, 1);
 
         JintInterop.DefineDataProp(engine.Global, "__senc", bridge,
             writable: false, enumerable: false, configurable: true);
 
         engine.Execute(Bootstrap, "<encoding-bootstrap>");
         engine.Execute("delete globalThis.__senc;", "<encoding-bootstrap-cleanup>");
+    }
+
+    private static string StripBom(string text, bool ignoreBom)
+        => !ignoreBom && text.Length > 0 && text[0] == '﻿' ? text[1..] : text;
+
+    // WHATWG Encoding §4 — a useful subset of labels → canonical name.
+    private static string? CanonicalName(string label) => label switch
+    {
+        "utf-8" or "utf8" or "unicode-1-1-utf-8" or "unicode11utf8" or "unicode20utf8"
+            or "x-unicode20utf8" => "utf-8",
+        "utf-16" or "utf-16le" or "csunicode" or "unicodefeff" or "iso-10646-ucs-2" or "ucs-2"
+            or "unicode" => "utf-16le",
+        "utf-16be" or "unicodefffe" => "utf-16be",
+        "iso-8859-1" or "latin1" or "l1" or "ascii" or "us-ascii" or "cp819" or "ibm819"
+            or "iso-ir-100" or "iso8859-1" or "iso88591" or "iso_8859-1" or "windows-1252"
+            or "cp1252" or "x-cp1252" => "windows-1252",
+        _ => null,
+    };
+
+    private static Encoding? ResolveEncoding(string label)
+    {
+        var name = CanonicalName(label.Trim().ToLowerInvariant());
+        return name switch
+        {
+            "utf-8" => Encoding.UTF8,
+            "utf-16le" => Encoding.Unicode,
+            "utf-16be" => Encoding.BigEndianUnicode,
+            "windows-1252" => Encoding.Latin1,
+            _ => null,
+        };
     }
 
     /// <summary>Read the raw bytes out of an ArrayBuffer or an ArrayBuffer view
@@ -128,8 +179,9 @@ internal static class EncodingBinding
       class TextDecoder {
         #fatal; #ignoreBOM; #encoding;
         constructor(label, options) {
-          // Only UTF-8 is implemented; any label is treated as utf-8.
-          this.#encoding = 'utf-8';
+          // Resolve the label to its WHATWG canonical name (RangeError if unknown);
+          // utf-8/utf-16le/utf-16be/windows-1252 are backed by a real decoder.
+          this.#encoding = B.canonicalEncoding(label === undefined ? 'utf-8' : String(label));
           this.#fatal = !!(options && options.fatal);
           this.#ignoreBOM = !!(options && options.ignoreBOM);
         }
@@ -137,7 +189,7 @@ internal static class EncodingBinding
         get fatal() { return this.#fatal; }
         get ignoreBOM() { return this.#ignoreBOM; }
         decode(input, options) {
-          return B.decode(input, this.#ignoreBOM);
+          return B.decode(input, this.#ignoreBOM, this.#fatal, this.#encoding);
         }
       }
 

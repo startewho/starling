@@ -34,6 +34,30 @@ public sealed class NodeBindingsTests
     }
 
     [TestMethod]
+    public void Document_getElementsByName_returns_a_live_NodeList()
+    {
+        var (engine, _) = NewSession("""
+            <!doctype html><html><body>
+              <input name="failedScript" value="vendor">
+              <span name="failedScript">fallback</span>
+              <input name="other" value="main">
+            </body></html>
+            """);
+
+        engine.Evaluate("var failed = document.getElementsByName('failedScript');");
+        engine.Evaluate("failed instanceof NodeList").AsBoolean().Should().BeTrue();
+        engine.Evaluate("failed.length").AsNumber().Should().Be(2);
+        engine.Evaluate("failed[0].tagName + ':' + failed[1].textContent").AsString().Should().Be("INPUT:fallback");
+
+        engine.Evaluate("""
+            var added = document.createElement('input');
+            added.setAttribute('name', 'failedScript');
+            document.body.appendChild(added);
+            failed.length;
+            """).AsNumber().Should().Be(3);
+    }
+
+    [TestMethod]
     public void Template_content_exposes_parsed_fragment_not_children()
     {
         var (engine, _) = NewSession("<body><template id='t'><div>hi</div></template></body>");
