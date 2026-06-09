@@ -95,6 +95,23 @@ public sealed class NodeBindingsTests
     }
 
     [TestMethod]
+    public void Document_body_setter_replaces_the_real_body()
+    {
+        var (engine, doc) = NewSession(Html);
+
+        engine.Evaluate("""
+            var next = document.createElement('body');
+            next.id = 'next';
+            document.body = next;
+            document.body.id;
+            """).AsString().Should().Be("next");
+
+        doc.Body.Should().NotBeNull();
+        doc.Body!.Id.Should().Be("next");
+        doc.GetElementById("main").Should().BeNull();
+    }
+
+    [TestMethod]
     public void ClassList_add_remove_toggle_contains()
     {
         var (engine, doc) = NewSession(Html);

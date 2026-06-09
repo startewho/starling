@@ -28,6 +28,7 @@ public static class Program
             "parse" => RunParse(idlDir),
             "model" => RunModel(idlDir),
             "emit" => RunEmit(idlDir, repoRoot),
+            "manifest" => RunManifest(idlDir, repoRoot),
             "coverage" => RunCoverage(idlDir, repoRoot),
             _ => Help(),
         };
@@ -35,7 +36,7 @@ public static class Program
 
     private static int Help()
     {
-        Console.WriteLine("usage: starling-idlgen <parse|model|emit|coverage>");
+        Console.WriteLine("usage: starling-idlgen <parse|model|emit|manifest|coverage>");
         return 0;
     }
 
@@ -111,13 +112,34 @@ public static class Program
         string callbacksPath = Path.Combine(genDir, "Callbacks.g.cs");
         File.WriteAllText(callbacksPath, callbacks);
 
+        string manifestPath = WriteSurfaceManifest(model, repoRoot, overridesPath);
+
         Console.WriteLine($"Wrote {outPath}");
         Console.WriteLine($"  accessors={stats.Accessors} setters={stats.Setters} methods={stats.Methods} constants={stats.Constants} skipped={stats.SkippedMembers}");
         Console.WriteLine($"Wrote {unionsPath}  unions={unionCount}");
         Console.WriteLine($"Wrote {enumsPath}  enums={enumCount}");
         Console.WriteLine($"Wrote {dictsPath}  dictionaries={dictCount}");
         Console.WriteLine($"Wrote {callbacksPath}  callbacks={callbackCount}");
+        Console.WriteLine($"Wrote {manifestPath}");
         return 0;
+    }
+
+    private static int RunManifest(string idlDir, string repoRoot)
+    {
+        var model = LoadModel(idlDir);
+        string overridesPath = Path.Combine(repoRoot, "tools", "Starling.IdlGen", "overrides", "overrides.json");
+        string manifestPath = WriteSurfaceManifest(model, repoRoot, overridesPath);
+        Console.WriteLine($"Wrote {manifestPath}");
+        return 0;
+    }
+
+    private static string WriteSurfaceManifest(WebIdlModel model, string repoRoot, string overridesPath)
+    {
+        string manifest = new SurfaceManifestEmitter(model, OverrideSet.Load(overridesPath))
+            .Emit(BindingsEmitter.CoreDomInterfaces);
+        string manifestPath = Path.Combine(repoRoot, "testdata", "webref", "core-dom-surface.json");
+        File.WriteAllText(manifestPath, manifest);
+        return manifestPath;
     }
 
     private static WebIdlModel LoadModel(string idlDir) =>

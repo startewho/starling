@@ -29,16 +29,18 @@ public sealed record DispatchSpec(
 public sealed class OverrideSet
 {
     private readonly HashSet<string> _skip;
+    private readonly HashSet<string> _requiredSurface;
     private readonly Dictionary<string, string> _reasons;
     private readonly Dictionary<string, AttributeOverride> _attrOverrides;
     private readonly Dictionary<string, List<string>> _adds;
     private readonly Dictionary<string, DispatchSpec> _dispatch;
 
-    private OverrideSet(HashSet<string> skip, Dictionary<string, string> reasons,
+    private OverrideSet(HashSet<string> skip, HashSet<string> requiredSurface, Dictionary<string, string> reasons,
         Dictionary<string, AttributeOverride> attrOverrides, Dictionary<string, List<string>> adds,
         Dictionary<string, DispatchSpec> dispatch)
     {
         _skip = skip;
+        _requiredSurface = requiredSurface;
         _reasons = reasons;
         _attrOverrides = attrOverrides;
         _adds = adds;
@@ -46,7 +48,7 @@ public sealed class OverrideSet
     }
 
     public static OverrideSet Empty { get; } =
-        new([], new Dictionary<string, string>(StringComparer.Ordinal),
+        new([], [], new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, AttributeOverride>(StringComparer.Ordinal),
             new Dictionary<string, List<string>>(StringComparer.Ordinal),
             new Dictionary<string, DispatchSpec>(StringComparer.Ordinal));
@@ -72,6 +74,11 @@ public sealed class OverrideSet
         return false;
     }
 
+    public bool IsSurfaceRequired(string iface, string member) =>
+        _requiredSurface.Contains($"{iface}.{member}");
+
+    public IReadOnlySet<string> RequiredSurface => _requiredSurface;
+
     // A custom attribute binding supplied in the override file, used instead of
     // the mechanical CLR mapping.
     public AttributeOverride? AttributeOverrideFor(string iface, string member) =>
@@ -84,6 +91,7 @@ public sealed class OverrideSet
     {
         var file = JsonSerializer.Deserialize<OverridesFile>(json, JsonOpts) ?? new OverridesFile();
         var skip = new HashSet<string>(file.Skip ?? [], StringComparer.Ordinal);
+        var requiredSurface = new HashSet<string>(file.RequiredSurface ?? [], StringComparer.Ordinal);
         var reasons = new Dictionary<string, string>(StringComparer.Ordinal);
         if (file.SkipReason is not null)
             foreach (var kv in file.SkipReason)
@@ -105,7 +113,7 @@ public sealed class OverrideSet
                         impl, kv.Value.Params ?? [], kv.Value.Trailing ?? [],
                         kv.Value.Raises ?? false, kv.Value.Returns ?? "void",
                         kv.Value.Static ?? false, kv.Value.PassRealm ?? false);
-        return new OverrideSet(skip, reasons, attrOverrides, adds, dispatch);
+        return new OverrideSet(skip, requiredSurface, reasons, attrOverrides, adds, dispatch);
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -118,6 +126,7 @@ public sealed class OverrideSet
     private sealed class OverridesFile
     {
         [JsonPropertyName("skip")] public List<string>? Skip { get; set; }
+        [JsonPropertyName("requiredSurface")] public List<string>? RequiredSurface { get; set; }
         [JsonPropertyName("skipReason")] public Dictionary<string, string>? SkipReason { get; set; }
         [JsonPropertyName("override")] public Dictionary<string, OverrideEntry>? Override { get; set; }
         [JsonPropertyName("add")] public Dictionary<string, List<string>>? Add { get; set; }
