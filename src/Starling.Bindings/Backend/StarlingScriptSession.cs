@@ -280,18 +280,23 @@ internal sealed class StarlingScriptSession : IScriptSession
             return true;
         }
 
-        if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
-        {
-            _loop.AdvanceBy(SimulatedStepMs);
-            return true;
-        }
-
+        // Dynamic <script src> fetches run BEFORE the clock advances: a real
+        // browser's network wins the race against watchdog timers (webpack's
+        // chunk loader arms a 120 s timeout per injected script — advancing
+        // the simulated clock first fires that timeout before the script ever
+        // executes, and every chunk load "times out").
         if (_dynamicRunner.HasPending)
         {
             // Synchronous drain of the queued dynamic scripts. Each fetch+run
             // can enqueue more work (chained loaders) or kick more microtasks,
             // observed on the next PumpOnce iteration.
             _dynamicRunner.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
+            return true;
+        }
+
+        if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
+        {
+            _loop.AdvanceBy(SimulatedStepMs);
             return true;
         }
 

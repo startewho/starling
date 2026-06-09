@@ -130,6 +130,38 @@ public sealed class JsRuntime
         // pipe lands with B5-1.
         Realm.Microtasks.UncaughtHandler = ex =>
             Realm.ConsoleSink(ConsoleLevel.Error, $"Uncaught (in promise) {ex.Message}");
+
+        // HostPromiseRejectionTracker (§27.2.1.9 / HTML §8.1.7.4): queue
+        // rejections that have no handler; a late .then/.catch retracts the
+        // entry; whatever is left when a microtask drain settles is reported
+        // through the console sink. Without this, a page whose boot chain
+        // dies inside a promise callback fails completely silently.
+        Realm.OnUnhandledRejection = p => _pendingUnhandledRejections.Add(p);
+        Realm.OnRejectionHandled = p => _pendingUnhandledRejections.Remove(p);
+    }
+
+    /// <summary>Rejected-without-handler promises awaiting the end-of-drain
+    /// report. Entries retract on a late handler attach (the common
+    /// reject-then-catch-in-the-same-turn pattern never reports).</summary>
+    private readonly List<JsPromise> _pendingUnhandledRejections = new();
+
+    /// <summary>Report (then forget) every still-unhandled rejected promise.
+    /// Mirrors the browser behaviour of firing <c>unhandledrejection</c> at
+    /// the end of the event-loop turn: the report includes the rejection
+    /// value's <c>stack</c> when one exists, else its string form.</summary>
+    private void ReportUnhandledRejections()
+    {
+        if (_pendingUnhandledRejections.Count == 0) return;
+        // Swap-out before reporting: the sink may run JS-adjacent code; new
+        // rejections recorded while reporting belong to the next flush.
+        var batch = _pendingUnhandledRejections.ToArray();
+        _pendingUnhandledRejections.Clear();
+        foreach (var promise in batch)
+        {
+            if (promise.State != PromiseState.Rejected || promise.IsHandled) continue;
+            Realm.ConsoleSink(ConsoleLevel.Error,
+                $"Uncaught (in promise) {DescribeRejectionReason(promise.Result)}");
+        }
     }
 
     /// <summary>Drain any queued microtasks against the realm. Called
@@ -154,6 +186,30 @@ public sealed class JsRuntime
         RunFinalizationCleanupPass();
         Realm.Microtasks.DrainAll();
         Realm.KeptAlive.Clear();
+        ReportUnhandledRejections();
+    }
+
+    /// <summary>Best human-readable form of a rejection value: the error's
+    /// <c>stack</c> when present (attached during throw unwinding), else
+    /// "name: message" for error-shaped objects (a constructed-but-never-thrown
+    /// Error has no stack), else the value's string form.</summary>
+    private static string DescribeRejectionReason(JsValue reason)
+    {
+        if (reason.IsObject)
+        {
+            var obj = reason.AsObject;
+            if (obj.Get("stack") is { IsString: true } stack)
+                return stack.AsString;
+            var name = obj.Get("name");
+            var message = obj.Get("message");
+            if (name.IsString || message.IsString)
+            {
+                var n = name.IsUndefined ? "Error" : JsValue.ToStringValue(name);
+                var m = message.IsUndefined ? "" : JsValue.ToStringValue(message);
+                return m.Length == 0 ? n : $"{n}: {m}";
+            }
+        }
+        return JsValue.ToStringValue(reason);
     }
 
     /// <summary>Walk every live <see cref="JsFinalizationRegistry"/> attached

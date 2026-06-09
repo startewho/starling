@@ -519,6 +519,12 @@ public static class NodeBindings
         var elProto = new JsObject(realm.NodePrototype);
         realm.ElementPrototype = elProto;
 
+        // HTML §8.1.8 — IDL `on*` event-handler attributes. One accessor pair
+        // per GlobalEventHandlers member; the slot machinery lives in
+        // EventTargetBinding.
+        foreach (var type in EventTargetBinding.ElementEventHandlerTypes)
+            EventTargetBinding.DefineEventHandlerAccessor(realm, elProto, type);
+
         EventTargetBinding.DefineAccessor(realm, elProto, "tagName",
             (thisV, _) =>
             {
@@ -1616,6 +1622,10 @@ public static class NodeBindings
             (_, _) => JsValue.False);
         EventTargetBinding.DefineAccessor(realm, docProto, "visibilityState",
             (_, _) => JsValue.String("visible"));
+        // HTML §6.5 document.hasFocus(). Same single-document model: the page
+        // is always the focused, foreground document.
+        EventTargetBinding.DefineMethod(realm, docProto, "hasFocus",
+            (_, _) => JsValue.True, length: 0);
 
         // CSSOM §6.1 — document.styleSheets returns a StyleSheetList over the
         // document's <style>/<link rel=stylesheet> elements in tree order.
