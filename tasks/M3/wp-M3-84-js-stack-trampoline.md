@@ -47,14 +47,18 @@ never reached. Raising it does nothing.
 
 ## Inputs
 - `wp:M3-04g-js-async-generators` complete: generators/async suspend **on the
-  calling thread**. The `Suspend` opcode snapshots the live frame into a
-  `ContinuationFrameState` and returns natively out of `RunInner`. `Resume`
-  re-enters `Run` and restores the snapshot
-  (`src/Starling.Js/Runtime/SuspendedFrame.cs`, `SnapshotFrame` ~657,
-  `RunContinuationPrelude` ~839). There are **no worker threads** — an older
-  revision used them, and stale doc XML under `bin/` still describes that model.
-  Ignore it. This puts `SuspendedFrame.cs` **in scope**: the snapshot/restore
-  code must track the CallFrame refactor (see Outputs).
+  calling thread** *on this branch lineage*. The `Suspend` opcode snapshots the
+  live frame into a `ContinuationFrameState` and returns natively out of
+  `RunInner`. `Resume` re-enters `Run` and restores the snapshot
+  (`src/Starling.Js/Runtime/SuspendedFrame.cs`). **The threading model splits
+  by branch** (verified 2026-06-09): `main` still runs generator bodies on a
+  dedicated worker thread (`SuspendedFrame.Start()` spawns a `Thread`, with
+  `_resume`/`_yield` handoff) — the `feat/jint-tier1-parity` lineage replaced
+  that with the same-thread continuation model this work builds on. **Merge
+  constraint:** the trampoline must reach `main` through the parity lineage.
+  A direct cherry-pick onto main's worker-thread `SuspendedFrame` will not
+  work. This puts `SuspendedFrame.cs` **in scope**: the snapshot/restore code
+  must track the CallFrame refactor (see Outputs).
 - Diagnostic prerequisite (commit `a22a7219`, branch
   `fix/js-uncaught-stack-passthrough`) is **already merged into
   `feat/jint-tier1-parity`** (verified 2026-06-09; not yet in main): the JS
@@ -247,6 +251,33 @@ Two Stage B choices that differ from the design sketch above:
   call is a [[Construct]] of the parent, and the derived-vs-base split is
   read off the callee's `ConstructorKind` at pop. The enum value only marks
   how the frame was entered.
+
+Two choices that differ from the final plan revision (the
+`prancy-wobbling-dawn` plan-mode doc), reviewed against it 2026-06-09:
+- **Execution state is `[ThreadStatic]` static, not a per-VM
+  `ThreadLocal<ExecState>`.** The plan wanted per-(VM, thread) state for two
+  reasons. Both dissolve here. Generators have no worker threads on this
+  lineage (and `[ThreadStatic]` is per-thread anyway). Cross-realm — a second
+  VM on the same thread — is safe because every cross-VM entry is a barrier
+  that saves and absolutely restores `t_current`/`t_frameDepth`/
+  `t_barrierDepth`, `IsTrampolinable` rejects foreign-realm callees, and a
+  barrier frame's `Caller` link is never traversed (pop exits the loop, the
+  unwinder rethrows natively). Net difference: depth caps pool per thread
+  instead of per VM — the stricter direction. Validated by
+  `CrossRealmExecutionTests` (including the plan's named
+  `Function_from_foreign_eval_runs_with_foreign_realm_active`) and the
+  cross-realm Test262 scope.
+- **Trampoline scope is wide, not the plan's narrow default.** The plan
+  recommended pushing only `Call`/`CallMethod`/`New` in v1 and leaving
+  `CallApply`/`CallApplyMethod`/`NewApply`/`CallSuperCtor` on the barrier,
+  pending confirmation. The implementation converted all seven. The wide set
+  passed every gate, and it is what makes deep spread-call and super-chain
+  recursion work (narrow would still RangeError on those at barrier depth).
+- The plan's "copy args into `Locals` then return the pooled buffer at push"
+  instruction was found unsafe and not followed: `frame.Args` is read after
+  entry by rest-param materialization, `arguments` creation, and spread
+  collection, so the buffer is parked on the frame and released at pop —
+  the same lifetime the old recursive model had.
 
 ## Handoff log
 - 2026-06-09 — gates passed, P0 review finding fixed, task complete
