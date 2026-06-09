@@ -32,14 +32,33 @@ public sealed class JsVm
     private readonly ILogger _log;
     private const int MaxStack = 1024;
 
-    /// <summary>Maximum nested JS call depth before a <c>RangeError</c> is
-    /// thrown. Each JS call recurses through <c>Run</c> in C#, so an
-    /// unbounded JS recursion would otherwise overflow the native stack and
-    /// crash the process. The spec leaves the limit implementation-defined as
-    /// long as recursion fails with a <c>RangeError</c>. Deep recursion support
-    /// will need a trampoline or a dedicated large-stack execution path.</summary>
-    private const int MaxCallDepth = 1000;
-    private int _callDepth;
+    /// <summary>wp:M3-84 Stage B — logical cap on the JS frame chain. A JS→JS
+    /// call pushes a heap <see cref="CallFrame"/> (no native recursion), so
+    /// this cap costs no native stack and an over-deep recursion surfaces as a
+    /// catchable <c>RangeError</c>. The spec leaves the limit
+    /// implementation-defined as long as recursion fails with a RangeError.</summary>
+    private const int MaxFrameDepth = 10_000;
+
+    /// <summary>wp:M3-84 Stage B — cap on nested native→JS re-entries
+    /// (getters/setters, ToPrimitive, iterator next, Proxy traps, super-ctor
+    /// through non-plain callees, cross-realm). Each barrier recurses on the
+    /// native C# stack, so this cap pairs with
+    /// <c>RuntimeHelpers.TryEnsureSufficientExecutionStack()</c> to surface a
+    /// catchable RangeError before the thread stack overflows.</summary>
+    private const int MaxBarrierDepth = 1_000;
+
+    /// <summary>Head of this thread's JS frame chain. Thread-static is
+    /// mandatory: other threads run VMs concurrently (the WASM invocation
+    /// thread, tests) and must not share one chain. Multiple VMs on one thread
+    /// interleave safely — every barrier saves and restores the head.</summary>
+    [ThreadStatic] private static CallFrame? t_current;
+
+    /// <summary>Number of live JS frames on this thread's chain (trampolined
+    /// frames and barrier frames both count).</summary>
+    [ThreadStatic] private static int t_frameDepth;
+
+    /// <summary>Number of nested native→JS barrier entries on this thread.</summary>
+    [ThreadStatic] private static int t_barrierDepth;
 
     // Exact-size pool of call-argument arrays. A JS call previously allocated a
     // fresh JsValue[argc] on every invocation — the hottest allocation in the
@@ -96,7 +115,7 @@ public sealed class JsVm
 
     /// <summary>Per-opcode dispatch counts for this VM. Indexed by
     /// <see cref="Opcode"/> byte value. Incremented once per dispatched
-    /// instruction inside <see cref="RunInner"/>.</summary>
+    /// instruction inside <see cref="Dispatch"/>.</summary>
     public readonly long[] OpcodeCounts = new long[256];
 
     /// <summary>The realm this VM dispatches against.</summary>
@@ -122,7 +141,7 @@ public sealed class JsVm
         // object (modules — evaluated via CallFunction, not this entry — keep
         // `this` = undefined). Real-world UMD wrappers do `}(this, factory)` and
         // read `this._` / `this.Backbone`, so top-level `this` MUST be global.
-        Run(chunk, args: [], thisValue: JsValue.Object(_runtime.Realm.GlobalObject),
+        RunBarrier(chunk, args: [], thisValue: JsValue.Object(_runtime.Realm.GlobalObject),
             upvalues: Array.Empty<JsValue>(), drainMicrotasks: true,
             currentFunction: null, newTarget: null);
 
@@ -132,7 +151,7 @@ public sealed class JsVm
     /// object, WITHOUT draining microtasks (the outermost frame owns the drain).
     /// Returns the completion value the chunk left on the stack.</summary>
     public JsValue RunEval(Chunk chunk) =>
-        Run(chunk, args: Array.Empty<JsValue>(),
+        RunBarrier(chunk, args: Array.Empty<JsValue>(),
             thisValue: JsValue.Object(_runtime.Realm.GlobalObject),
             upvalues: Array.Empty<JsValue>(), drainMicrotasks: false,
             currentFunction: null, newTarget: null);
@@ -146,7 +165,7 @@ public sealed class JsVm
     /// microtasks (the outermost frame owns the drain).</summary>
     internal JsValue RunDirectEval(Chunk chunk, EvalScope evalScope, JsFunction? caller,
         JsValue callerThis, JsObject? callerNewTarget, EvalVarStore? callerVarStore = null) =>
-        Run(chunk, args: Array.Empty<JsValue>(),
+        RunBarrier(chunk, args: Array.Empty<JsValue>(),
             thisValue: callerThis,
             upvalues: Array.Empty<JsValue>(), drainMicrotasks: false,
             currentFunction: caller, newTarget: callerNewTarget,
@@ -308,7 +327,7 @@ public sealed class JsVm
             return StartAsyncBody(fn, thisValue, args);
         if (fn.Kind == JsFunctionKind.AsyncGenerator)
             return StartAsyncGeneratorBody(fn, thisValue, args);
-        return Run(fn.Body, args, thisValue, fn.Upvalues, drainMicrotasks: false,
+        return RunBarrier(fn.Body, args, thisValue, fn.Upvalues, drainMicrotasks: false,
                currentFunction: fn, newTarget: null,
                // wp:M3-73 — inherit the eval-introduced var store this closure
                // captured at creation so its free identifiers resolve through the
@@ -336,52 +355,32 @@ public sealed class JsVm
 
     private JsValue ConstructFunctionLocal(JsFunction fn, JsValue[] args, JsObject newTarget)
     {
-        // Derived class constructor — <c>this</c> is uninitialized until
-        // super(...) runs (§10.2.1.1). Pass the realm's sentinel so
-        // LoadThisChecked throws ReferenceError if the user touches it
-        // before super.
-        if (fn.ConstructorKind == ClassConstructorKind.Derived)
-        {
-            var sentinel = JsValue.Object(_runtime.Realm.UninitializedThisSentinel);
-            // Save/restore the side-channel slot across nested ConstructFunction
-            // calls so a derived ctor that itself constructs another derived
-            // class doesn't clobber the outer frame's bound-this.
-            var prevDerivedThis = _currentDerivedThis;
-            _currentDerivedThis = null;
-            try
-            {
-                var result = Run(fn.Body, args, sentinel, fn.Upvalues,
-                    drainMicrotasks: false, currentFunction: fn, newTarget: newTarget,
-                    frameVarStore: fn.CapturedEvalVarStore); // wp:M3-73
-                if (result.IsObject) return result;
-                return _currentDerivedThis ?? throw new JsThrow(_runtime.Realm.NewReferenceError(
-                    "Must call super constructor in derived class before returning from derived constructor"));
-            }
-            finally
-            {
-                _currentDerivedThis = prevDerivedThis;
-            }
-        }
-        // OrdinaryCreateFromConstructor: prototype is newTarget.prototype if it's
-        // an object, else the realm's Object.prototype.
-        var protoSlot = newTarget.Get("prototype");
-        var proto = protoSlot.IsObject ? protoSlot.AsObject : _runtime.Realm.ObjectPrototype;
-        var instance = _runtime.Realm.NewObjectWithProto(proto);
-        var thisVal = JsValue.Object(instance);
-        var resultBase = Run(fn.Body, args, thisVal, fn.Upvalues,
+        // wp:M3-84 Stage B — the [[Construct]] return-value coercion (and the
+        // derived-class DerivedThis rules) now run at frame pop (see
+        // CoerceConstructReturn), keyed off the frame's Disposition. This
+        // keeps the barrier path and the trampolined New/CallSuperCtor path
+        // on one code path.
+        var thisVal = ComputeConstructThis(fn, newTarget);
+        return RunBarrier(fn.Body, args, thisVal, fn.Upvalues,
             drainMicrotasks: false, currentFunction: fn, newTarget: newTarget,
-            frameVarStore: fn.CapturedEvalVarStore); // wp:M3-73
-        // Class constructors implicit return their own `this`; an explicit
-        // return of a non-object is ignored (matching §10.2.1.4).
-        return resultBase.IsObject ? resultBase : thisVal;
+            frameVarStore: fn.CapturedEvalVarStore, // wp:M3-73
+            disposition: FrameDisposition.Construct);
     }
 
-    /// <summary>Carries the bound-this for a derived constructor across the
-    /// final return-value coercion. Read by the outer
-    /// <see cref="ConstructFunction"/> immediately after the inner Run
-    /// returns; protected by the JS call stack (we never recurse without
-    /// saving/restoring it).</summary>
-    private JsValue? _currentDerivedThis;
+    /// <summary>The <c>this</c> a [[Construct]] invocation binds at frame
+    /// entry. A derived class constructor gets the uninitialized-this sentinel
+    /// (§10.2.1.1: <c>this</c> is dead until <c>super(...)</c> runs;
+    /// LoadThisChecked throws ReferenceError before then). Anything else gets
+    /// a fresh ordinary object via OrdinaryCreateFromConstructor: prototype is
+    /// newTarget.prototype if that is an object, else Object.prototype.</summary>
+    private JsValue ComputeConstructThis(JsFunction fn, JsObject newTarget)
+    {
+        if (fn.ConstructorKind == ClassConstructorKind.Derived)
+            return JsValue.Object(_runtime.Realm.UninitializedThisSentinel);
+        var protoSlot = newTarget.Get("prototype");
+        var proto = protoSlot.IsObject ? protoSlot.AsObject : _runtime.Realm.ObjectPrototype;
+        return JsValue.Object(_runtime.Realm.NewObjectWithProto(proto));
+    }
 
     /// <summary>DIAG: name of the most recent property/global load, used to
     /// enrich "not a function" errors with the callee identifier.</summary>
@@ -439,46 +438,60 @@ public sealed class JsVm
     }
 
     /// <summary>
-    /// Internal entry. Copies <paramref name="args"/> into the first N
-    /// local slots and stashes <paramref name="thisValue"/> for the
-    /// frame's <c>LoadThis</c> instruction. <paramref name="upvalues"/>
-    /// is the closure's snapshot table — empty for top-level scripts
-    /// and for plain (non-capturing) functions. <c>Opcode.Call</c> for
-    /// a user <see cref="JsFunction"/> recurses through this entry, so
-    /// the .NET call stack mirrors the JS call stack.
+    /// wp:M3-84 Stage B — the native→JS barrier. Every native entry into JS
+    /// (host Run/RunEval, AbstractOperations.Call/Construct via
+    /// CallFunction/ConstructFunction, direct eval, generator/async resume,
+    /// cross-realm dispatch) lands here: it pushes one barrier-marked
+    /// <see cref="CallFrame"/> onto the thread's frame chain and runs
+    /// <see cref="Dispatch"/> until that frame pops. JS→JS calls inside the
+    /// dispatch loop push trampolined frames instead and never recurse
+    /// natively — only barrier entries consume native stack, bounded by
+    /// <see cref="MaxBarrierDepth"/> plus the execution-stack probe.
     /// </summary>
-    private JsValue Run(Chunk chunk, JsValue[] args, JsValue thisValue,
+    private JsValue RunBarrier(Chunk chunk, JsValue[] args, JsValue thisValue,
         IReadOnlyList<JsValue> upvalues, bool drainMicrotasks,
         JsFunction? currentFunction, JsObject? newTarget,
         SuspendedFrame? suspension = null, EvalScope? evalScope = null,
-        EvalVarStore? frameVarStore = null)
+        EvalVarStore? frameVarStore = null,
+        FrameDisposition disposition = FrameDisposition.Call)
     {
-        // Publish this VM on the realm so native intrinsics (JSON.parse
-        // reviver, JSON.stringify replacer/toJSON, etc.) can dispatch JS
-        // callables. Save/restore in case of reentry from a nested host
-        // invocation chain.
-        // Guard the native stack: each nested JS call recurses through here, so
+        // Guard the native stack: each nested barrier recurses through here, so
         // cap the depth and surface a catchable RangeError instead of a fatal
-        // StackOverflowException.
-        // Coarse logical cap, plus a probe of the *actual* remaining native
-        // stack. The logical cap alone is unreliable: native frames-per-JS-call
-        // vary (calls routed through native intrinsics like String.prototype.
-        // replace / Function.prototype.call burn several extra native frames),
-        // so a fixed depth can overflow the thread stack before the cap is hit.
-        // TryEnsureSufficientExecutionStack() reports true while enough stack
-        // remains for a typical call chain; when it goes false we surface a
-        // catchable RangeError instead of an uncatchable StackOverflowException
-        // that would crash the whole process.
-        if (_callDepth >= MaxCallDepth ||
+        // StackOverflowException. The logical cap alone is unreliable: native
+        // frames-per-barrier vary (calls routed through native intrinsics like
+        // String.prototype.replace / Function.prototype.call burn several extra
+        // native frames), so TryEnsureSufficientExecutionStack() probes the
+        // actual remaining stack as well. The frame-depth cap also applies —
+        // a barrier frame is a JS frame on the chain like any other.
+        if (t_barrierDepth >= MaxBarrierDepth || t_frameDepth >= MaxFrameDepth ||
             !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new JsThrow(_runtime.Realm.NewRangeError("Maximum call stack size exceeded"));
 
+        // Publish this VM on the realm so native intrinsics (JSON.parse
+        // reviver, JSON.stringify replacer/toJSON, etc.) can dispatch JS
+        // callables. Save/restore in case of reentry from a nested host
+        // invocation chain. Trampolined JS→JS calls are same-VM/same-realm by
+        // construction, so only barriers touch ActiveVm.
         var prevVm = _runtime.Realm.ActiveVm;
         _runtime.Realm.ActiveVm = this;
-        _callDepth++;
+        var prevCurrent = t_current;
+        var prevFrameDepth = t_frameDepth;
+        t_barrierDepth++;
         try
         {
-            var result = RunInner(chunk, args, thisValue, upvalues, currentFunction, newTarget, suspension, evalScope, frameVarStore);
+            var frame = CreateFrame(chunk, args, thisValue, upvalues, currentFunction,
+                newTarget, suspension, evalScope, frameVarStore);
+            frame.Caller = prevCurrent;
+            frame.IsBarrier = true;
+            frame.Disposition = disposition;
+            t_current = frame;
+            t_frameDepth++;
+            var result = Dispatch(frame);
+            // Restore the chain head before draining: the barrier frame just
+            // popped (its pooled arrays are released), so reaction jobs must
+            // not see it as the current frame.
+            t_current = prevCurrent;
+            t_frameDepth = prevFrameDepth;
             // Drain microtasks while ActiveVm still points to this VM so
             // reaction jobs that dispatch JS handlers find a usable VM
             // (AbstractOperations.Call needs one for JsFunction). Only the
@@ -489,15 +502,20 @@ public sealed class JsVm
         }
         finally
         {
-            _callDepth--;
+            t_barrierDepth--;
+            t_frameDepth = prevFrameDepth;
+            t_current = prevCurrent;
             _runtime.Realm.ActiveVm = prevVm;
         }
     }
 
-    private JsValue RunInner(Chunk chunk, JsValue[] args, JsValue thisValue,
+    /// <summary>Build the heap <see cref="CallFrame"/> for one JS activation —
+    /// shared by the barrier entry and the JS→JS trampoline push. NoInlining
+    /// keeps its temporaries off the dispatch loop's native frame.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private CallFrame CreateFrame(Chunk chunk, JsValue[] args, JsValue thisValue,
         IReadOnlyList<JsValue> upvalues, JsFunction? currentFunction, JsObject? newTarget,
-        SuspendedFrame? suspension = null, EvalScope? evalScope = null,
-        EvalVarStore? frameVarStore = null)
+        SuspendedFrame? suspension, EvalScope? evalScope, EvalVarStore? frameVarStore)
     {
         var restored = suspension?.State;
         if (restored is not null)
@@ -585,10 +603,21 @@ public sealed class JsVm
             if (!frame.FrameStrict && chunk.HasDirectEval)
                 frame.FrameVarStore = new EvalVarStore { Parent = frameVarStore };
         }
+        return frame;
+    }
 
+    /// <summary>wp:M3-84 Stage B — the single dispatch loop. Runs the current
+    /// frame's bytecode, switching frames in place on JS→JS call/return (the
+    /// trampoline), and exits only when <paramref name="frame"/>'s barrier
+    /// frame pops (return value), parks (generator/async suspension), or
+    /// throws an unhandled <see cref="JsThrow"/> past the barrier.</summary>
+    private JsValue Dispatch(CallFrame frame)
+    {
         // Hot-field cache — touched per opcode. ip/sp/maxSp are flushed to the
-        // frame before any operation that can suspend (the snapshot reads the
-        // frame, not these locals).
+        // frame before any operation that can suspend or push a callee frame
+        // (the snapshot and the unwinder read the frame, not these locals).
+        // Reloaded via LoadFrameCache on every frame switch.
+        var chunk = frame.Chunk;
         var stack = frame.Stack;
         var locals = frame.Locals;
         var code = frame.Code;
@@ -600,7 +629,7 @@ public sealed class JsVm
         // Host-driven abort (Stop button, navigation supersede). Checked at a
         // ~1-in-1024 cadence so the interpreter pays at most one cheap mask + a
         // very-rarely-taken branch per opcode. The token lives on the runtime so
-        // every nested RunInner frame observes the same signal; the throw
+        // every frame and barrier observes the same signal; the throw
         // unwinds through the C# stack and out of Run(), where the engine's
         // navigation catch picks it up. The check sits OUTSIDE the JsThrow
         // try/catch below so cancellation never masquerades as a script throw.
@@ -1175,6 +1204,14 @@ public sealed class JsVm
                             var callee = Pop(stack, ref sp);
                             if (!IsCallableValue(callee))
                                 throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: '{_lastLoadName}')")));
+                            // wp:M3-84 Stage B — ordinary same-realm JsFunction:
+                            // push a trampolined frame, no native recursion.
+                            if (TryPushCall(callee, JsValue.Undefined, callArgs, frame, ip, sp, maxSp, out var pushed))
+                            {
+                                frame = pushed;
+                                LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                break;
+                            }
                             var callResult = AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs);
                             ReturnArgs(callArgs);
                             Push(stack, ref sp, ref maxSp, callResult);
@@ -1189,6 +1226,12 @@ public sealed class JsVm
                             var receiver = Pop(stack, ref sp);
                             if (!IsCallableValue(callee))
                                 throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (method hint: '{_lastLoadName}')")));
+                            if (TryPushCall(callee, receiver, callArgs, frame, ip, sp, maxSp, out var pushed))
+                            {
+                                frame = pushed;
+                                LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                break;
+                            }
                             var methodResult = AbstractOperations.Call(this, callee, receiver, callArgs);
                             ReturnArgs(callArgs);
                             Push(stack, ref sp, ref maxSp, methodResult);
@@ -1307,6 +1350,13 @@ public sealed class JsVm
                             var ctor = Pop(stack, ref sp);
                             if (!ctor.IsObject)
                                 throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
+                            if (TryPushConstruct(ctor, newArgs, newTarget: null, frame, ip, sp, maxSp,
+                                    FrameDisposition.Construct, out var pushed))
+                            {
+                                frame = pushed;
+                                LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                break;
+                            }
                             var newResult = AbstractOperations.Construct(this, ctor, newArgs);
                             ReturnArgs(newArgs);
                             Push(stack, ref sp, ref maxSp, newResult);
@@ -1336,16 +1386,34 @@ public sealed class JsVm
 
                     // ----- Returns -----
                     // §14.15: divert through any enclosing finalizer first.
+                    // wp:M3-84 Stage B — a return pops the frame: release its
+                    // pooled arrays, restore the caller, apply the disposition's
+                    // return coercion, and deliver the value to the caller's
+                    // operand stack. A barrier frame exits the dispatch loop.
                     case Opcode.Return:
                         {
                             var rv = Pop(stack, ref sp);
                             if (DivertReturnThroughFinally(frame.TryStack, rv, ref ip)) break;
-                            return Finish(stack, maxSp, rv);
+                            ReleaseFrame(frame, stack, maxSp);
+                            if (frame.IsBarrier) return CoerceReturn(frame, rv);
+                            var popped = frame;
+                            frame = popped.Caller!;
+                            t_current = frame;
+                            LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                            Push(stack, ref sp, ref maxSp, CoerceReturn(popped, rv));
+                            break;
                         }
                     case Opcode.ReturnUndefined:
                         {
                             if (DivertReturnThroughFinally(frame.TryStack, JsValue.Undefined, ref ip)) break;
-                            return Finish(stack, maxSp, JsValue.Undefined);
+                            ReleaseFrame(frame, stack, maxSp);
+                            if (frame.IsBarrier) return CoerceReturn(frame, JsValue.Undefined);
+                            var popped = frame;
+                            frame = popped.Caller!;
+                            t_current = frame;
+                            LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                            Push(stack, ref sp, ref maxSp, CoerceReturn(popped, JsValue.Undefined));
+                            break;
                         }
 
                     // ----- Throw -----
@@ -1400,9 +1468,19 @@ public sealed class JsVm
                                     throw new JsThrow(tf.PendingValue);
                                 case PendingCompletion.Return:
                                     {
+                                        // wp:M3-84 Stage B — a return completing its
+                                        // finalizers pops the frame exactly like the
+                                        // Return opcode above.
                                         var rv = tf.PendingValue;
                                         if (DivertReturnThroughFinally(frame.TryStack, rv, ref ip)) break;
-                                        return Finish(stack, maxSp, rv);
+                                        ReleaseFrame(frame, stack, maxSp);
+                                        if (frame.IsBarrier) return CoerceReturn(frame, rv);
+                                        var popped = frame;
+                                        frame = popped.Caller!;
+                                        t_current = frame;
+                                        LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                        Push(stack, ref sp, ref maxSp, CoerceReturn(popped, rv));
+                                        break;
                                     }
                                 case PendingCompletion.Break:
                                     {
@@ -1514,6 +1592,12 @@ public sealed class JsVm
                             var argsArrV = Pop(stack, ref sp);
                             var callee = Pop(stack, ref sp);
                             var applyArgs = ExtractApplyArgs(argsArrV);
+                            if (TryPushCall(callee, JsValue.Undefined, applyArgs, frame, ip, sp, maxSp, out var pushed))
+                            {
+                                frame = pushed;
+                                LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                break;
+                            }
                             var applyResult = AbstractOperations.Call(this, callee, JsValue.Undefined, applyArgs);
                             ReturnArgs(applyArgs);
                             Push(stack, ref sp, ref maxSp, applyResult);
@@ -1526,6 +1610,12 @@ public sealed class JsVm
                             var callee = Pop(stack, ref sp);
                             var receiver = Pop(stack, ref sp);
                             var applyArgs = ExtractApplyArgs(argsArrV);
+                            if (TryPushCall(callee, receiver, applyArgs, frame, ip, sp, maxSp, out var pushed))
+                            {
+                                frame = pushed;
+                                LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                break;
+                            }
                             var applyResult = AbstractOperations.Call(this, callee, receiver, applyArgs);
                             ReturnArgs(applyArgs);
                             Push(stack, ref sp, ref maxSp, applyResult);
@@ -1537,6 +1627,13 @@ public sealed class JsVm
                             var argsArrV = Pop(stack, ref sp);
                             var ctor = Pop(stack, ref sp);
                             var applyArgs = ExtractApplyArgs(argsArrV);
+                            if (TryPushConstruct(ctor, applyArgs, newTarget: null, frame, ip, sp, maxSp,
+                                    FrameDisposition.Construct, out var pushed))
+                            {
+                                frame = pushed;
+                                LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                                break;
+                            }
                             var applyResult = AbstractOperations.Construct(this, ctor, applyArgs);
                             ReturnArgs(applyArgs);
                             Push(stack, ref sp, ref maxSp, applyResult);
@@ -1564,8 +1661,11 @@ public sealed class JsVm
                         }
                     case Opcode.BindThis:
                         {
+                            // wp:M3-84 Stage B — the derived-ctor bound-this lives
+                            // on the frame (was a VM-wide side channel); the frame
+                            // pop's construct coercion reads it.
                             frame.ThisV = Pop(stack, ref sp);
-                            _currentDerivedThis = frame.ThisV;
+                            frame.DerivedThis = frame.ThisV;
                             break;
                         }
 
@@ -1639,42 +1739,73 @@ public sealed class JsVm
                         // locals don't enlarge this frame (see DispatchCold).
                         if (!DispatchCold(op, frame, stack, locals, ref ip, ref sp, ref maxSp))
                             throw new InvalidOperationException($"opcode {op} not implemented in VM");
+                        // wp:M3-84 Stage B — CallSuperCtor (inside DispatchCold)
+                        // may have pushed a trampolined callee frame; detect the
+                        // switch and reload the hot cache.
+                        if (!ReferenceEquals(t_current, frame))
+                        {
+                            frame = t_current!;
+                            LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
+                        }
                         break;
                 }
             }
             catch (JsThrow ex)
             {
-                CaptureJsStack(ex, chunk, ip, frame.CurrentFunction);
-                JsValue thrown = ex.Value;
-                bool handled = false;
-                while (frame.TryStack.Count > 0)
+                // wp:M3-84 Stage B — explicit multi-frame unwind. Walk the
+                // frame chain from the current frame toward the barrier: for
+                // each frame, record its JS stack entry (same order the old
+                // per-native-frame catch produced), try its try-stack (the
+                // TryBody→catch / finally-as-PendingCompletion.Throw logic is
+                // verbatim Stage A), and if unhandled release the frame's
+                // pooled arrays and step to its caller. At the barrier frame
+                // the JsThrow rethrows natively to the barrier's caller.
+                while (true)
                 {
-                    var tf = frame.TryStack.Peek();
-                    if (tf.Phase == TryPhase.TryBody && tf.CatchPc != -1)
+                    CaptureJsStack(ex, chunk, ip, frame.CurrentFunction);
+                    JsValue thrown = ex.Value;
+                    bool handled = false;
+                    while (frame.TryStack.Count > 0)
                     {
-                        sp = tf.StackBase;
-                        stack[sp++] = thrown;
-                        if (sp > maxSp) maxSp = sp;
-                        ip = tf.CatchPc;
-                        tf.Phase = TryPhase.CatchBody;
-                        frame.TryStack.Pop(); frame.TryStack.Push(tf);
-                        handled = true;
+                        var tf = frame.TryStack.Peek();
+                        if (tf.Phase == TryPhase.TryBody && tf.CatchPc != -1)
+                        {
+                            sp = tf.StackBase;
+                            stack[sp++] = thrown;
+                            if (sp > maxSp) maxSp = sp;
+                            ip = tf.CatchPc;
+                            tf.Phase = TryPhase.CatchBody;
+                            frame.TryStack.Pop(); frame.TryStack.Push(tf);
+                            handled = true;
+                            break;
+                        }
+                        if (tf.Phase != TryPhase.RunningFinally && tf.FinallyPc != -1)
+                        {
+                            sp = tf.StackBase;
+                            tf.Phase = TryPhase.RunningFinally;
+                            tf.Pending = PendingCompletion.Throw;
+                            tf.PendingValue = thrown;
+                            frame.TryStack.Pop(); frame.TryStack.Push(tf);
+                            ip = tf.FinallyPc;
+                            handled = true;
+                            break;
+                        }
+                        frame.TryStack.Pop();
+                    }
+                    if (handled) break;
+                    // Unhandled in this frame — release it. A barrier frame
+                    // rethrows to the native caller; a trampolined frame
+                    // unwinds into its JS caller and keeps walking.
+                    ReleaseFrame(frame, stack, maxSp);
+                    if (frame.IsBarrier)
+                    {
+                        rethrow = ex;
                         break;
                     }
-                    if (tf.Phase != TryPhase.RunningFinally && tf.FinallyPc != -1)
-                    {
-                        sp = tf.StackBase;
-                        tf.Phase = TryPhase.RunningFinally;
-                        tf.Pending = PendingCompletion.Throw;
-                        tf.PendingValue = thrown;
-                        frame.TryStack.Pop(); frame.TryStack.Push(tf);
-                        ip = tf.FinallyPc;
-                        handled = true;
-                        break;
-                    }
-                    frame.TryStack.Pop();
+                    frame = frame.Caller!;
+                    t_current = frame;
+                    LoadFrameCache(frame, ref chunk, ref stack, ref locals, ref code, ref constants, ref ip, ref sp, ref maxSp);
                 }
-                if (!handled) rethrow = ex;
             }
             catch (JsReturnSentinel rs)
             {
@@ -1682,28 +1813,30 @@ public sealed class JsVm
                 // walk enclosing try/finally frames as a Return completion
                 // (mirrors DivertReturnThroughFinally for the synchronous
                 // Return opcode). If nothing diverts it, exit the body
-                // with rs.Value as the return value.
+                // with rs.Value as the return value. The sentinel only fires
+                // on a frame with a live Suspension, which is always this
+                // dispatch's barrier frame (trampolined callees never suspend).
                 if (!DivertReturnThroughFinally(frame.TryStack, rs.Value, ref ip))
-                    return Finish(stack, maxSp, rs.Value);
+                {
+                    ReleaseFrame(frame, stack, maxSp);
+                    return CoerceReturn(frame, rs.Value);
+                }
             }
             if (rethrow is not null)
-            {
-                Finish(stack, maxSp, JsValue.Undefined);
                 throw rethrow;
-            }
         }
     }
 
 
-    /// <summary>wp:M3-84 Stage A — cold opcode arms moved out of RunInner.
-    /// RyuJIT gives every IL local in RunInner a distinct stack slot (the
+    /// <summary>wp:M3-84 Stage A — cold opcode arms moved out of the dispatch loop.
+    /// RyuJIT gives every IL local in the dispatch method a distinct stack slot (the
     /// method is too large for slot sharing), so keeping these arms' ~280
     /// locals inline cost ~7 KB of native stack on every JS call frame. This
     /// method's frame is transient — it returns before any JS->JS recursion
     /// continues — so its size does not multiply with JS call depth.
     /// NoInlining is load-bearing: inlining would put the locals right back
-    /// into RunInner's frame. Returns false when the opcode is not handled
-    /// here (RunInner then reports the unimplemented opcode).</summary>
+    /// into the dispatch frame. Returns false when the opcode is not handled
+    /// here (the dispatch loop then reports the unimplemented opcode).</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private bool DispatchCold(Opcode op, CallFrame frame, JsValue[] stack, JsValue[] locals,
         ref int ip, ref int sp, ref int maxSp)
@@ -2578,6 +2711,14 @@ public sealed class JsVm
                     throw new JsThrow(_runtime.Realm.NewTypeError(
                         "Super constructor is not a constructor"));
                 var nt = frame.NewTarget ?? frame.CurrentFunction;
+                // wp:M3-84 Stage B — a plain same-realm parent constructor is
+                // trampolined like New. The dispatch loop detects the frame
+                // switch after DispatchCold returns (t_current changed) and
+                // reloads its hot cache; the refs must not be touched after
+                // the push, so return immediately.
+                if (TryPushConstruct(JsValue.Object(superCtor), ctorArgs, nt, frame,
+                        ip, sp, maxSp, FrameDisposition.SuperCtor, out _))
+                    return true;
                 var constructed = AbstractOperations.Construct(this,
                     JsValue.Object(superCtor), ctorArgs, nt);
                 Push(stack, ref sp, ref maxSp, constructed);
@@ -2886,7 +3027,7 @@ public sealed class JsVm
 
     /// <summary>wp:M3-84 Stage A — numeric/bitwise operator arms, out-of-line
     /// for the same reason as <see cref="DispatchCold"/>: every IL local in
-    /// RunInner costs a permanent stack slot on each JS call frame, and these
+    /// the dispatch method costs a permanent native stack slot per barrier, and these
     /// arms hold ~40 of them. This frame is transient, so the temporaries no
     /// longer multiply with JS call depth. NoInlining is load-bearing.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -3173,12 +3314,12 @@ public sealed class JsVm
         return false;
     }
 
-    // ---- wp:M3-84 Stage A — de-closured RunInner helpers --------------------
-    // These were nested local functions inside RunInner. As locals-capturing
-    // local functions they forced one large closure display per RunInner
+    // ---- wp:M3-84 Stage A — de-closured dispatch-loop helpers --------------------
+    // These were nested local functions inside the old RunInner. As locals-capturing
+    // local functions they forced one large closure display per dispatch
     // activation (~20-50 KB of native frame), which capped pure JS->JS
     // recursion at ~26 native frames. They take explicit state instead, so
-    // RunInner keeps no closure at all.
+    // the dispatch loop keeps no closure at all.
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void Push(JsValue[] stack, ref int sp, ref int maxSp, JsValue v)
@@ -3218,6 +3359,143 @@ public sealed class JsVm
         if (maxSp > 0) System.Array.Clear(stack, 0, maxSp);
         ArrayPool<JsValue>.Shared.Return(stack);
         return result;
+    }
+
+    // ---- wp:M3-84 Stage B — trampoline push/pop helpers ---------------------
+
+    /// <summary>Reload the dispatch loop's hot-field cache from
+    /// <paramref name="frame"/> after a frame switch (push, pop, or unwind).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void LoadFrameCache(CallFrame frame, ref Chunk chunk, ref JsValue[] stack,
+        ref JsValue[] locals, ref byte[] code, ref IReadOnlyList<object?> constants,
+        ref int ip, ref int sp, ref int maxSp)
+    {
+        chunk = frame.Chunk;
+        stack = frame.Stack;
+        locals = frame.Locals;
+        code = frame.Code;
+        constants = frame.Constants;
+        ip = frame.Ip;
+        sp = frame.Sp;
+        maxSp = frame.MaxSp;
+    }
+
+    /// <summary>True when <paramref name="callee"/> is an ordinary same-realm
+    /// plain <see cref="JsFunction"/> the dispatch loop may run on a
+    /// trampolined frame. Native/bound/Proxy callables and foreign-realm
+    /// functions stay on the AbstractOperations barrier path; generator /
+    /// async / async-generator bodies start via StartGeneratorBody /
+    /// StartAsyncBody and stay native calls.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsTrampolinable(JsValue callee, out JsFunction fn)
+    {
+        fn = null!;
+        if (!callee.IsObject || callee.AsObject is not JsFunction f) return false;
+        if (f.Kind != JsFunctionKind.Normal) return false;
+        if (f.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)) return false;
+        fn = f;
+        return true;
+    }
+
+    /// <summary>Push a trampolined [[Call]] frame for an ordinary same-realm
+    /// <see cref="JsFunction"/>. Returns false (without consuming anything)
+    /// when the callee must take the barrier path instead. On true, the
+    /// caller's hot fields are flushed and <paramref name="pushed"/> is the
+    /// new current frame — the dispatch loop reloads its cache and continues.
+    /// The callee frame owns <paramref name="args"/> and returns it to the
+    /// arg pool when it pops.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool TryPushCall(JsValue callee, JsValue thisValue, JsValue[] args,
+        CallFrame caller, int ip, int sp, int maxSp, out CallFrame pushed)
+    {
+        pushed = null!;
+        if (!IsTrampolinable(callee, out var fn)) return false;
+        if (t_frameDepth >= MaxFrameDepth)
+            throw new JsThrow(_runtime.Realm.NewRangeError("Maximum call stack size exceeded"));
+        // §10.2.1.2 OrdinaryCallBindThis — same sloppy-this coercion as
+        // CallFunctionLocal: a sloppy function called with nullish `this`
+        // binds the global object.
+        if (thisValue.IsNullish && fn.ConstructorKind == ClassConstructorKind.None
+            && !fn.Body.IsStrict)
+            thisValue = JsValue.Object(_runtime.Realm.GlobalObject);
+        var callee_frame = CreateFrame(fn.Body, args, thisValue, fn.Upvalues, fn,
+            newTarget: null, suspension: null, evalScope: null,
+            frameVarStore: fn.CapturedEvalVarStore); // wp:M3-73
+        caller.Ip = ip;
+        caller.Sp = sp;
+        caller.MaxSp = maxSp;
+        callee_frame.Caller = caller;
+        callee_frame.Disposition = FrameDisposition.Call;
+        callee_frame.ReleaseArgsOnPop = true;
+        t_current = callee_frame;
+        t_frameDepth++;
+        pushed = callee_frame;
+        return true;
+    }
+
+    /// <summary>Push a trampolined [[Construct]] frame (New / NewApply /
+    /// CallSuperCtor). Mirrors <see cref="TryPushCall"/>; the construct
+    /// return coercion runs at pop via <see cref="CoerceReturn"/>.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool TryPushConstruct(JsValue ctor, JsValue[] args, JsObject? newTarget,
+        CallFrame caller, int ip, int sp, int maxSp, FrameDisposition disposition,
+        out CallFrame pushed)
+    {
+        pushed = null!;
+        if (!IsTrampolinable(ctor, out var fn)) return false;
+        if (t_frameDepth >= MaxFrameDepth)
+            throw new JsThrow(_runtime.Realm.NewRangeError("Maximum call stack size exceeded"));
+        newTarget ??= fn;
+        var thisVal = ComputeConstructThis(fn, newTarget);
+        var callee_frame = CreateFrame(fn.Body, args, thisVal, fn.Upvalues, fn,
+            newTarget, suspension: null, evalScope: null,
+            frameVarStore: fn.CapturedEvalVarStore); // wp:M3-73
+        caller.Ip = ip;
+        caller.Sp = sp;
+        caller.MaxSp = maxSp;
+        callee_frame.Caller = caller;
+        callee_frame.Disposition = disposition;
+        callee_frame.ReleaseArgsOnPop = true;
+        t_current = callee_frame;
+        t_frameDepth++;
+        pushed = callee_frame;
+        return true;
+    }
+
+    /// <summary>Release a popping frame's pooled resources — exactly the old
+    /// exit path: return the operand stack to the array pool (clearing the
+    /// touched region) and, for a trampolined frame, return its rented args
+    /// array. Never called on the suspend path (the suspension snapshot keeps
+    /// the pooled arrays until the body completes).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ReleaseFrame(CallFrame frame, JsValue[] stack, int maxSp)
+    {
+        Finish(stack, maxSp, JsValue.Undefined);
+        if (frame.ReleaseArgsOnPop) ReturnArgs(frame.Args);
+        t_frameDepth--;
+    }
+
+    /// <summary>Apply the frame's return-value coercion at pop. A [[Call]]
+    /// frame returns the value unchanged; construct dispositions defer to
+    /// <see cref="CoerceConstructReturn"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private JsValue CoerceReturn(CallFrame frame, JsValue rv)
+        => frame.Disposition == FrameDisposition.Call ? rv : CoerceConstructReturn(frame, rv);
+
+    /// <summary>§10.2.1.4 / §10.2.1.1 — the [[Construct]] return coercion
+    /// (shared by New, NewApply, super(...) and the ConstructFunction
+    /// barrier). An object return wins; otherwise a derived-class constructor
+    /// yields its super-bound <see cref="CallFrame.DerivedThis"/> (or throws
+    /// if super never ran), and any other constructor yields its own
+    /// <c>this</c>.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private JsValue CoerceConstructReturn(CallFrame frame, JsValue rv)
+    {
+        if (rv.IsObject) return rv;
+        if (frame.CurrentFunction is { ConstructorKind: ClassConstructorKind.Derived })
+            return frame.DerivedThis ?? throw new JsThrow(_runtime.Realm.NewReferenceError(
+                "Must call super constructor in derived class before returning from derived constructor"));
+        return frame.ThisV;
     }
 
     /// <summary>wp:M3-23 — append "(at line:col)" to a runtime-error message
@@ -3482,7 +3760,7 @@ public sealed class JsVm
 
     /// <summary>Generator/async resume prelude. Runs with the hot locals
     /// flushed to the frame (it pushes resume values or re-parks the frame).
-    /// Returns true when the frame parked again and RunInner must return
+    /// Returns true when the frame parked again and Dispatch must return
     /// <paramref name="result"/>.</summary>
     private bool RunContinuationPrelude(CallFrame frame, out JsValue result)
     {
@@ -4314,7 +4592,7 @@ public sealed class JsVm
         var fnCopy = fn;
         frame.Start(() =>
         {
-            var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+            var rv = RunBarrier(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
                 drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
                 suspension: frame);
             if (!frame.Suspended)
@@ -4362,7 +4640,7 @@ public sealed class JsVm
         var thisCopy = thisValue;
         frame.Start(() =>
         {
-            var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+            var rv = RunBarrier(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
                 drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
                 suspension: frame);
             if (!frame.Suspended)
@@ -4493,7 +4771,7 @@ public sealed class JsVm
         var thisCopy = thisValue;
         frame.Start(() =>
         {
-            var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+            var rv = RunBarrier(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
                 drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
                 suspension: frame);
             if (!frame.Suspended)
@@ -4810,8 +5088,8 @@ internal struct TryFrame
 }
 
 /// <summary>wp:M3-84 Stage A — heap-resident per-call state for one
-/// <see cref="JsVm"/> RunInner activation. One CallFrame is allocated per JS
-/// call; everything that used to be a captured local of RunInner lives here so
+/// <see cref="JsVm"/> JS activation. One CallFrame is allocated per JS
+/// call; everything that used to be a captured local of the dispatch loop lives here so
 /// the native frame stays small (deep JS→JS recursion previously tripped the
 /// native stack guard at ~26 frames). The hot fields (Ip/Sp/MaxSp plus the
 /// array references) are cached in dispatch-loop locals and flushed back
@@ -4843,6 +5121,47 @@ internal sealed class CallFrame
     public int Sp;
     public int MaxSp;
     public int InitDepth;
+
+    // ---- wp:M3-84 Stage B — frame-chain bookkeeping -------------------------
+
+    /// <summary>The frame that pushed this one. For a trampolined JS→JS frame
+    /// the pop/unwind paths step back through it; for a barrier frame it is
+    /// the frame that was current when the native re-entry began (the chain
+    /// stays walkable across barriers).</summary>
+    public CallFrame? Caller;
+
+    /// <summary>True for a frame pushed by <see cref="JsVm.RunBarrier"/> —
+    /// popping it exits the dispatch loop back to the native caller, and an
+    /// unhandled <see cref="JsThrow"/> rethrows natively here.</summary>
+    public bool IsBarrier;
+
+    /// <summary>True when this frame owns its <see cref="Args"/> array (a
+    /// trampolined call rented it from the arg pool); the pop/unwind paths
+    /// return it. Barrier frames never own their args — the native caller
+    /// does.</summary>
+    public bool ReleaseArgsOnPop;
+
+    /// <summary>How this frame was entered — governs the return coercion at
+    /// pop (see <see cref="JsVm.CoerceReturn"/>).</summary>
+    public FrameDisposition Disposition;
+
+    /// <summary>Derived-class constructor only: the <c>this</c> bound by
+    /// <c>super(...)</c> (the BindThis opcode). Read by the construct return
+    /// coercion when the body returns a non-object. Was the VM-wide
+    /// <c>_currentDerivedThis</c> side channel before Stage B.</summary>
+    public JsValue? DerivedThis;
+}
+
+/// <summary>wp:M3-84 Stage B — how a <see cref="CallFrame"/> was entered.
+/// Governs the return-value coercion when the frame pops.
+/// <see cref="SuperCtor"/> coerces exactly like <see cref="Construct"/> (a
+/// super(...) call IS a [[Construct]] of the parent); it exists to keep the
+/// frame's provenance visible.</summary>
+internal enum FrameDisposition : byte
+{
+    Call,
+    Construct,
+    SuperCtor,
 }
 
 internal static partial class JsVmLog
