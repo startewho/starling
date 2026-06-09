@@ -62,6 +62,18 @@ public static class NodeBindings
         InstallCharacterData(realm);  // WPT-03: CharacterData / Text / Comment / PI prototype hierarchy
         InstallElement(realm);
         InstallDocument(realm);
+
+        // Generated bindings: emitted from Web IDL by tools/Starling.IdlGen. These
+        // overwrite the mechanical members (simple attributes and methods) defined
+        // above with code generated from the spec. Members that need custom
+        // marshalling stay hand-written and are on the generator's skip list.
+        // Behavioral equivalence is held by the binding + Web Platform Test suites.
+        Generated.CoreDomBindingsGenerated.InstallNode(realm);
+        Generated.CoreDomBindingsGenerated.InstallCharacterData(realm);
+        Generated.CoreDomBindingsGenerated.InstallElement(realm);
+        Generated.CoreDomBindingsGenerated.InstallDocument(realm);
+        Generated.CoreDomBindingsGenerated.InstallDocumentType(realm);
+        Generated.CoreDomBindingsGenerated.InstallProcessingInstruction(realm);
     }
 
     // =====================================================================
@@ -1982,7 +1994,7 @@ public static class NodeBindings
     /// <see cref="JsArray"/>; the live-collection plumbing is a separate
     /// follow-up. <c>Document.querySelectorAll</c> is spec'd as a static
     /// NodeList, so a snapshot array is spec-correct there.</para></summary>
-    private static JsValue MakeArray(JsRealm realm, IReadOnlyList<JsValue> items)
+    internal static JsValue MakeArray(JsRealm realm, IReadOnlyList<JsValue> items)
     {
         var arr = new JsArray(realm, items);
         return JsValue.Object(arr);
@@ -2998,7 +3010,8 @@ public static class NodeBindings
 
     private static int NodeTypeFromKind(NodeKind kind) => (int)kind;
 
-    private static string NormalizeNodeName(Node n) => n switch
+    // Internal so the generated nodeName override binding can reuse it.
+    internal static string NormalizeNodeName(Node n) => n switch
     {
         // Like tagName: HTML-namespace elements are ASCII-uppercased, others keep case.
         Element e => e.Namespace == Element.HtmlNamespace ? e.TagName.ToUpperInvariant() : e.TagName,
@@ -3128,7 +3141,7 @@ public static class NodeBindings
     /// <summary>Build a DOMTokenList JS object wrapping the element's classList.
     /// Spec: DOM §7.1. Methods: add, remove, toggle, contains, replace, item,
     /// forEach, keys, values, entries. Properties: length, value.</summary>
-    private static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element)
+    internal static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element)
         => BuildDomTokenList(realm, element, element.ClassList, "class");
 
     private static DomTokenListObject BuildDomTokenList(JsRealm realm, Element element, DomTokenList cl, string attrName)

@@ -17,7 +17,7 @@ machine-readable specification data, used by `tools/Starling.SpecGen` to:
 | Path | Source path in webref | Contents |
 |---|---|---|
 | `css/*.json` | `ed/css/*.json` | One file per CSSWG spec — properties, at-rules, value types, selectors, prose, anchor URLs. **123 files**. |
-| `idl/*.idl`  | `ed/idl/{css-*,cssom*,web-animations*,font-*,geometry*}.idl` | Web IDL for the JS-visible CSS surface (CSSOM, CSSOM View, Web Animations, Font Loading, etc.). **41 files**. |
+| `idl/*.idl`  | `ed/idl/{dom,css-*,cssom*,web-animations*,font-*,geometry*}.idl` | Web IDL. `dom.idl` is the core DOM surface (Event, Node, Element, Document, and the tree mixins) used by the bindings generator. The rest is the JS-visible CSS surface (CSSOM, CSSOM View, Web Animations, Font Loading, etc.). **42 files**. |
 
 ## Refreshing
 
@@ -30,7 +30,7 @@ git rev-parse HEAD              # pin this commit in the README below
 
 # copy into the repo
 cp ed/css/*.json $REPO/testdata/webref/css/
-cp ed/idl/{css-*,cssom*,web-animations*,font-*,geometry*}.idl $REPO/testdata/webref/idl/
+cp ed/idl/{dom,css-*,cssom*,web-animations*,font-*,geometry*}.idl $REPO/testdata/webref/idl/
 ```
 
 Update the **Snapshot commit** line above when you refresh.

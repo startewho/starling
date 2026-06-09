@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Starling.IdlGen</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Reflected over to discover the Starling DOM CLR members an IDL member
+         binds to. The generator emits an accessor only when the CLR property
+         really exists with a mappable type, so the output is self-correcting. -->
+    <ProjectReference Include="..\..\src\Starling.Dom\Starling.Dom.csproj" />
+  </ItemGroup>
+</Project>
