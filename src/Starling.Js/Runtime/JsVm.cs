@@ -624,6 +624,22 @@ public sealed class JsVm
         // frame before any operation that can suspend or push a callee frame
         // (the snapshot and the unwinder read the frame, not these locals).
         // Reloaded via LoadFrameCache on every frame switch.
+        //
+        // FRAME MATERIALIZATION INVARIANT: a frame on the chain is only read
+        // through its fields at three points — trampoline push (the caller's
+        // Ip/Sp/MaxSp are flushed at the push site, so they name the call
+        // site), suspend (FlushAndSuspend writes everything the snapshot
+        // needs), and the unwinder (which works on the CURRENT frame via
+        // these cached locals, and on caller frames via their push-flushed
+        // state). Native re-entry mid-opcode (a getter, ToPrimitive, a Proxy
+        // trap) does NOT need a flush today because nothing walks the chain
+        // while it runs: a barrier handles its own frames and rethrows
+        // natively, and this dispatch's catch resumes from the live locals.
+        // If a chain-walker is ever added that reads Ip/Sp of frames below a
+        // barrier (a debugger, Error-construction stack capture, a sampling
+        // profiler), every native re-entry site must flush first — without
+        // that, symptoms are wrong stack lines, skipped finally blocks, or
+        // corrupt eval scopes.
         var chunk = frame.Chunk;
         var stack = frame.Stack;
         var locals = frame.Locals;
