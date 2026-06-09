@@ -1,4 +1,5 @@
 using AwesomeAssertions;
+using System.Text.RegularExpressions;
 using Starling.IdlGen.Emit;
 using Starling.IdlGen.Mapping;
 using Starling.IdlGen.Merging;
@@ -56,6 +57,56 @@ public class BindingsEmitterTests
         // mechanical mapping.
         code.Should().Contain("NodeBindings.NormalizeNodeName");
         code.Should().Contain("ToUpperInvariant");
+    }
+
+    [TestMethod]
+    public void Generated_operations_route_through_IdlMarshal()
+    {
+        string code = EmitCoreDom();
+        var methods = Regex.Matches(
+            code,
+            "EventTargetBinding\\.DefineMethod\\(realm, proto, \\\"(?<name>[^\\\"]+)\\\", \\(thisV, args\\) =>\\n        \\{\\n(?<body>.*?)\\n        \\}, length:",
+            RegexOptions.Singleline);
+
+        methods.Count.Should().BeGreaterThan(0);
+        foreach (Match method in methods)
+        {
+            string name = method.Groups["name"].Value;
+            string body = method.Groups["body"].Value;
+            body.Should().Contain("IdlMarshal.", $"{name} must use the shared Web IDL marshalling path");
+        }
+    }
+
+    [TestMethod]
+    public void Generated_unsigned_long_operations_use_the_uint_marshaller()
+    {
+        string code = EmitCoreDom();
+        // CharacterData.substringData(unsigned long, unsigned long) is a mechanical
+        // binding: both args route through the unsigned long marshaller.
+        code.Should().Contain("IdlMarshal.RequireUnsignedLong(realm, args, 0, \"substringData\", 2)");
+        code.Should().Contain("IdlMarshal.RequireUnsignedLong(realm, args, 1, \"substringData\", 2)");
+        // The mechanical path translates a DOM-raised exception, like the dispatch
+        // path, so IndexSizeError reaches JS as a DOMException.
+        code.Should().Contain("catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }");
+    }
+
+    [TestMethod]
+    public void Generated_install_all_calls_every_target_interface()
+    {
+        string code = EmitCoreDom();
+        code.Should().Contain("internal static void InstallAll(JsRealm realm)");
+        foreach (string iface in BindingsEmitter.CoreDomInterfaces)
+            code.Should().Contain($"Install{iface}(realm);");
+    }
+
+    [TestMethod]
+    public void Runtime_uses_generated_install_all()
+    {
+        string sourcePath = Path.Combine(FindRepoRoot(), "src", "Starling.Bindings", "NodeBindings.cs");
+        string source = File.ReadAllText(sourcePath);
+
+        source.Should().Contain("Generated.CoreDomBindingsGenerated.InstallAll(realm);");
+        source.Should().NotContain("Generated.CoreDomBindingsGenerated.InstallNode(realm);");
     }
 
     [TestMethod]

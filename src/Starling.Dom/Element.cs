@@ -74,6 +74,13 @@ public class Element : Node
         set => SetAttribute("id", value);
     }
 
+    /// <summary>Reflects the <c>class</c> attribute. DOM §4.9 <c>className</c>.</summary>
+    public string ClassName
+    {
+        get => GetAttribute("class") ?? string.Empty;
+        set => SetAttribute("class", value);
+    }
+
     public DomTokenList ClassList { get; }
 
     /// <summary>A live <see cref="DomTokenList"/> over an arbitrary reflected

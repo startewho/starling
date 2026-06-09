@@ -11,9 +11,115 @@
     "Comment",
     "DocumentFragment",
     "DocumentType",
-    "ProcessingInstruction"
+    "ProcessingInstruction",
+    "Attr"
   ],
   "members": [
+    {
+      "interface": "Attr",
+      "name": "localName",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Attr",
+      "name": "name",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Attr",
+      "name": "namespaceURI",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Attr",
+      "name": "ownerElement",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Attr",
+      "name": "prefix",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Attr",
+      "name": "specified",
+      "kind": "attribute",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Attr",
+      "name": "value",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": false,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
     {
       "interface": "CharacterData",
       "name": "after",

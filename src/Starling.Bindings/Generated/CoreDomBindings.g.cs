@@ -9,6 +9,20 @@ namespace Starling.Bindings.Generated;
 
 internal static class CoreDomBindingsGenerated
 {
+    internal static void InstallAll(JsRealm realm)
+    {
+        InstallEventTarget(realm);
+        InstallNode(realm);
+        InstallElement(realm);
+        InstallDocument(realm);
+        InstallCharacterData(realm);
+        InstallText(realm);
+        InstallComment(realm);
+        InstallDocumentFragment(realm);
+        InstallDocumentType(realm);
+        InstallProcessingInstruction(realm);
+        InstallAttr(realm);
+    }
     // EventTarget -> Starling.Dom.Events.EventTarget
     internal static void InstallEventTarget(JsRealm realm)
     {
@@ -56,12 +70,18 @@ internal static class CoreDomBindingsGenerated
         ctor?.DefineOwnProperty("DOCUMENT_POSITION_CONTAINED_BY", PropertyDescriptor.Data(JsValue.Number((double)(0x10)), writable: false, enumerable: true, configurable: false));
         proto.DefineOwnProperty("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", PropertyDescriptor.Data(JsValue.Number((double)(0x20)), writable: false, enumerable: true, configurable: false));
         ctor?.DefineOwnProperty("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", PropertyDescriptor.Data(JsValue.Number((double)(0x20)), writable: false, enumerable: true, configurable: false));
+        EventTargetBinding.DefineAccessor(realm, proto, "nodeType",
+            (thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h ? JsValue.Number((double)(int)h.Kind) : JsValue.Undefined);
         EventTargetBinding.DefineAccessor(realm, proto, "nodeName",
             (thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h ? JsValue.String(NodeBindings.NormalizeNodeName(h)) : JsValue.String(""));
+        EventTargetBinding.DefineAccessor(realm, proto, "isConnected",
+            (thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h ? JsValue.Boolean(h.IsConnected) : JsValue.Undefined);
         EventTargetBinding.DefineAccessor(realm, proto, "ownerDocument",
             (thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h && h.OwnerDocument is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, proto, "parentNode",
             (thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h && h.ParentNode is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "parentElement",
+            (thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h && h.ParentElement is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, proto, "childNodes",
             (thisV, _) => IdlMarshal.WrapNodeArray(realm, DomWrappers.UnwrapAs<Node>(thisV)?.ChildNodes ?? System.Array.Empty<Node>()));
         EventTargetBinding.DefineAccessor(realm, proto, "firstChild",
@@ -83,52 +103,73 @@ internal static class CoreDomBindingsGenerated
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "getRootNode");
             return IdlMarshal.Wrap(realm, receiver.GetRootNode());
         }, length: 0);
+        EventTargetBinding.DefineMethod(realm, proto, "hasChildNodes", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "hasChildNodes");
+            try
+            {
+                return IdlMarshal.WrapBool(receiver.HasChildNodes());
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "normalize", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "normalize");
-            receiver.Normalize(); return JsValue.Undefined;
+            receiver.Normalize(); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "isEqualNode", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "isEqualNode");
             var a0 = IdlMarshal.NullableInterface<Node>(realm, args, 0, "isEqualNode", "Node");
-            return JsValue.Boolean(receiver.IsEqualNode(a0));
+            return IdlMarshal.WrapBool(receiver.IsEqualNode(a0));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "isSameNode", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "isSameNode");
             var a0 = IdlMarshal.NullableInterface<Node>(realm, args, 0, "isSameNode", "Node");
-            return JsValue.Boolean(receiver.IsSameNode(a0));
+            return IdlMarshal.WrapBool(receiver.IsSameNode(a0));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "compareDocumentPosition", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "compareDocumentPosition");
             var a0 = IdlMarshal.RequireInterface<Node>(realm, args, 0, "compareDocumentPosition", "Node", 1);
-            return JsValue.Number((double)(receiver.CompareDocumentPosition(a0)));
+            return IdlMarshal.WrapNumber((double)(receiver.CompareDocumentPosition(a0)));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "contains", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "contains");
             var a0 = IdlMarshal.NullableInterface<Node>(realm, args, 0, "contains", "Node");
-            return JsValue.Boolean(receiver.Contains(a0));
+            return IdlMarshal.WrapBool(receiver.Contains(a0));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "lookupPrefix", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Node>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            var r = h.LookupPrefix(a0); return r is { } v ? JsValue.String(v) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "lookupPrefix");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "lookupPrefix", 1);
+            try
+            {
+                return IdlMarshal.WrapString(receiver.LookupPrefix(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "lookupNamespaceURI", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Node>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            var r = h.LookupNamespaceURI(a0); return r is { } v ? JsValue.String(v) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "lookupNamespaceURI");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "lookupNamespaceURI", 1);
+            try
+            {
+                return IdlMarshal.WrapString(receiver.LookupNamespaceURI(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "isDefaultNamespace", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Node>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            return JsValue.Boolean(h.IsDefaultNamespace(a0));
+            var receiver = IdlMarshal.Receiver<Node>(realm, thisV, "Node", "isDefaultNamespace");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "isDefaultNamespace", 1);
+            try
+            {
+                return IdlMarshal.WrapBool(receiver.IsDefaultNamespace(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "insertBefore", (thisV, args) =>
         {
@@ -178,6 +219,8 @@ internal static class CoreDomBindingsGenerated
     internal static void InstallElement(JsRealm realm)
     {
         if (realm.ElementPrototype is not { } proto) return;
+        EventTargetBinding.DefineAccessor(realm, proto, "namespaceURI",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h ? IdlMarshal.WrapString(string.IsNullOrEmpty(h.Namespace) ? null : h.Namespace) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, proto, "prefix",
             (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.Prefix is { } v ? JsValue.String(v) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, proto, "localName",
@@ -187,16 +230,29 @@ internal static class CoreDomBindingsGenerated
         EventTargetBinding.DefineAccessor(realm, proto, "id",
             (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.Id is { } v ? JsValue.String(v) : JsValue.Null,
             (thisV, args) => { if (DomWrappers.UnwrapAs<Element>(thisV) is { } h) h.Id = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined); return JsValue.Undefined; });
+        EventTargetBinding.DefineAccessor(realm, proto, "className",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.ClassName is { } v ? JsValue.String(v) : JsValue.Null,
+            (thisV, args) => { if (DomWrappers.UnwrapAs<Element>(thisV) is { } h) h.ClassName = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined); return JsValue.Undefined; });
         EventTargetBinding.DefineAccessor(realm, proto, "classList",
             (thisV, _) => { if (DomWrappers.UnwrapElement(thisV) is not { } e || !thisV.IsObject) return JsValue.Null; var w = thisV.AsObject; var cached = w.Get("__classList__"); if (!cached.IsUndefined) return cached; var o = JsValue.Object(NodeBindings.BuildDomTokenList(realm, e)); w.Set("__classList__", o); return o; });
         EventTargetBinding.DefineAccessor(realm, proto, "attributes",
             (thisV, _) => { if (DomWrappers.UnwrapElement(thisV) is not { } e || !thisV.IsObject) return JsValue.Null; var w = thisV.AsObject; var cached = w.Get("__attributes__"); if (!cached.IsUndefined) return cached; var o = JsValue.Object(new JsNamedNodeMapObject(realm, e)); w.Set("__attributes__", o); return o; });
         EventTargetBinding.DefineAccessor(realm, proto, "children",
             (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } e ? IdlMarshal.WrapHtmlCollection(realm, () => e.ChildElements()) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "firstElementChild",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.FirstElementChild is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "lastElementChild",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.LastElementChild is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "childElementCount",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h ? JsValue.Number((double)h.ChildElementCount) : JsValue.Undefined);
+        EventTargetBinding.DefineAccessor(realm, proto, "previousElementSibling",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.PreviousElementSibling is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "nextElementSibling",
+            (thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h && h.NextElementSibling is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
         EventTargetBinding.DefineMethod(realm, proto, "hasAttributes", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "hasAttributes");
-            return JsValue.Boolean(receiver.HasAttributes());
+            return IdlMarshal.WrapBool(receiver.HasAttributes());
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "getAttributeNames", (thisV, args) =>
         {
@@ -205,23 +261,31 @@ internal static class CoreDomBindingsGenerated
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "getAttribute", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Element>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            var r = h.GetAttribute(a0); return r is { } v ? JsValue.String(v) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "getAttribute");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "getAttribute", 1);
+            try
+            {
+                return IdlMarshal.WrapString(receiver.GetAttribute(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "getAttributeNS", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "getAttributeNS");
             var a0 = IdlMarshal.NullableString(args, 0);
             var a1 = IdlMarshal.RequireString(realm, args, 1, "getAttributeNS", 2);
-            return receiver.GetAttributeNS(a0, a1) is { } __s ? JsValue.String(__s) : JsValue.Null;
+            return IdlMarshal.WrapString(receiver.GetAttributeNS(a0, a1));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, proto, "setAttribute", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Element>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            var a1 = JsValue.ToStringValue(args.Length > 1 ? args[1] : JsValue.Undefined);
-            h.SetAttribute(a0, a1); return JsValue.Undefined;
+            var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "setAttribute");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "setAttribute", 2);
+            var a1 = IdlMarshal.RequireString(realm, args, 1, "setAttribute", 2);
+            try
+            {
+                receiver.SetAttribute(a0, a1); return IdlMarshal.Void();
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, proto, "setAttributeNS", (thisV, args) =>
         {
@@ -229,40 +293,48 @@ internal static class CoreDomBindingsGenerated
             var a0 = IdlMarshal.NullableString(args, 0);
             var a1 = IdlMarshal.RequireString(realm, args, 1, "setAttributeNS", 3);
             var a2 = IdlMarshal.RequireString(realm, args, 2, "setAttributeNS", 3);
-            receiver.SetAttributeNS(a0, a1, a2); return JsValue.Undefined;
+            receiver.SetAttributeNS(a0, a1, a2); return IdlMarshal.Void();
         }, length: 3);
         EventTargetBinding.DefineMethod(realm, proto, "removeAttribute", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Element>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            h.RemoveAttribute(a0); return JsValue.Undefined;
+            var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "removeAttribute");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "removeAttribute", 1);
+            try
+            {
+                receiver.RemoveAttribute(a0); return IdlMarshal.Void();
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "removeAttributeNS", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "removeAttributeNS");
             var a0 = IdlMarshal.NullableString(args, 0);
             var a1 = IdlMarshal.RequireString(realm, args, 1, "removeAttributeNS", 2);
-            receiver.RemoveAttributeNS(a0, a1); return JsValue.Undefined;
+            receiver.RemoveAttributeNS(a0, a1); return IdlMarshal.Void();
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, proto, "toggleAttribute", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "toggleAttribute");
             var a0 = IdlMarshal.RequireString(realm, args, 0, "toggleAttribute", 1);
             var a1 = IdlMarshal.NullableBool(args, 1);
-            return JsValue.Boolean(receiver.ToggleAttribute(a0, a1));
+            return IdlMarshal.WrapBool(receiver.ToggleAttribute(a0, a1));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "hasAttribute", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Element>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            return JsValue.Boolean(h.HasAttribute(a0));
+            var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "hasAttribute");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "hasAttribute", 1);
+            try
+            {
+                return IdlMarshal.WrapBool(receiver.HasAttribute(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "hasAttributeNS", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "hasAttributeNS");
             var a0 = IdlMarshal.NullableString(args, 0);
             var a1 = IdlMarshal.RequireString(realm, args, 1, "hasAttributeNS", 2);
-            return JsValue.Boolean(receiver.HasAttributeNS(a0, a1));
+            return IdlMarshal.WrapBool(receiver.HasAttributeNS(a0, a1));
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, proto, "closest", (thisV, args) =>
         {
@@ -274,13 +346,13 @@ internal static class CoreDomBindingsGenerated
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "matches");
             var a0 = IdlMarshal.RequireString(realm, args, 0, "matches", 1);
-            return JsValue.Boolean(QuerySelectorEngine.Matches(receiver, a0, realm));
+            return IdlMarshal.WrapBool(QuerySelectorEngine.Matches(receiver, a0, realm));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "webkitMatchesSelector", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "webkitMatchesSelector");
             var a0 = IdlMarshal.RequireString(realm, args, 0, "webkitMatchesSelector", 1);
-            return JsValue.Boolean(QuerySelectorEngine.Matches(receiver, a0, realm));
+            return IdlMarshal.WrapBool(QuerySelectorEngine.Matches(receiver, a0, realm));
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "getElementsByTagName", (thisV, args) =>
         {
@@ -305,19 +377,19 @@ internal static class CoreDomBindingsGenerated
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "prepend");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Prepend(nodes); return JsValue.Undefined;
+            receiver.Prepend(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "append", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "append");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Append(nodes); return JsValue.Undefined;
+            receiver.Append(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "replaceChildren", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "replaceChildren");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.ReplaceChildren(nodes); return JsValue.Undefined;
+            receiver.ReplaceChildren(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "querySelector", (thisV, args) =>
         {
@@ -335,24 +407,24 @@ internal static class CoreDomBindingsGenerated
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "before");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Before(nodes); return JsValue.Undefined;
+            receiver.Before(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "after", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "after");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.After(nodes); return JsValue.Undefined;
+            receiver.After(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "replaceWith", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "replaceWith");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.ReplaceWith(nodes); return JsValue.Undefined;
+            receiver.ReplaceWith(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "remove", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "remove");
-            receiver.RemoveFromParent(); return JsValue.Undefined;
+            receiver.RemoveFromParent(); return IdlMarshal.Void();
         }, length: 0);
     }
 
@@ -362,10 +434,18 @@ internal static class CoreDomBindingsGenerated
         if (realm.DocumentPrototype is not { } proto) return;
         EventTargetBinding.DefineAccessor(realm, proto, "contentType",
             (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } h && h.ContentType is { } v ? JsValue.String(v) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "doctype",
+            (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } h && h.Doctype is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, proto, "documentElement",
             (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } h && h.DocumentElement is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
         EventTargetBinding.DefineAccessor(realm, proto, "children",
             (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } d ? IdlMarshal.WrapHtmlCollection(realm, () => d.ChildElements()) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "firstElementChild",
+            (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } h && h.FirstElementChild is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "lastElementChild",
+            (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } h && h.LastElementChild is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "childElementCount",
+            (thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } h ? JsValue.Number((double)h.ChildElementCount) : JsValue.Undefined);
         EventTargetBinding.DefineMethod(realm, proto, "getElementsByTagName", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "getElementsByTagName");
@@ -387,51 +467,71 @@ internal static class CoreDomBindingsGenerated
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "createDocumentFragment", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Document>(thisV) is not { } h) return JsValue.Undefined;
-            return h.CreateDocumentFragment() is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "createDocumentFragment");
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.CreateDocumentFragment());
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "createTextNode", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Document>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            return h.CreateTextNode(a0) is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "createTextNode");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "createTextNode", 1);
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.CreateTextNode(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "createComment", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Document>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            return h.CreateComment(a0) is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "createComment");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "createComment", 1);
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.CreateComment(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "createProcessingInstruction", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Document>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            var a1 = JsValue.ToStringValue(args.Length > 1 ? args[1] : JsValue.Undefined);
-            return h.CreateProcessingInstruction(a0, a1) is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "createProcessingInstruction");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "createProcessingInstruction", 2);
+            var a1 = IdlMarshal.RequireString(realm, args, 1, "createProcessingInstruction", 2);
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.CreateProcessingInstruction(a0, a1));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, proto, "getElementById", (thisV, args) =>
         {
-            if (DomWrappers.UnwrapAs<Document>(thisV) is not { } h) return JsValue.Undefined;
-            var a0 = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
-            return h.GetElementById(a0) is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null;
+            var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "getElementById");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "getElementById", 1);
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.GetElementById(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "prepend", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "prepend");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Prepend(nodes); return JsValue.Undefined;
+            receiver.Prepend(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "append", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "append");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Append(nodes); return JsValue.Undefined;
+            receiver.Append(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "replaceChildren", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<Document>(realm, thisV, "Document", "replaceChildren");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.ReplaceChildren(nodes); return JsValue.Undefined;
+            receiver.ReplaceChildren(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "querySelector", (thisV, args) =>
         {
@@ -454,28 +554,89 @@ internal static class CoreDomBindingsGenerated
         EventTargetBinding.DefineAccessor(realm, proto, "data",
             (thisV, _) => DomWrappers.UnwrapAs<CharacterData>(thisV) is { } h && h.Data is { } v ? JsValue.String(v) : JsValue.Null,
             (thisV, args) => { if (DomWrappers.UnwrapAs<CharacterData>(thisV) is { } h) h.Data = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined); return JsValue.Undefined; });
+        EventTargetBinding.DefineAccessor(realm, proto, "length",
+            (thisV, _) => DomWrappers.UnwrapAs<CharacterData>(thisV) is { } h ? JsValue.Number((double)h.Length) : JsValue.Undefined);
+        EventTargetBinding.DefineAccessor(realm, proto, "previousElementSibling",
+            (thisV, _) => DomWrappers.UnwrapAs<CharacterData>(thisV) is { } h && h.PreviousElementSibling is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "nextElementSibling",
+            (thisV, _) => DomWrappers.UnwrapAs<CharacterData>(thisV) is { } h && h.NextElementSibling is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineMethod(realm, proto, "substringData", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "substringData");
+            var a0 = IdlMarshal.RequireUnsignedLong(realm, args, 0, "substringData", 2);
+            var a1 = IdlMarshal.RequireUnsignedLong(realm, args, 1, "substringData", 2);
+            try
+            {
+                return IdlMarshal.WrapString(receiver.SubstringData(a0, a1));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, proto, "appendData", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "appendData");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "appendData", 1);
+            try
+            {
+                receiver.AppendData(a0); return IdlMarshal.Void();
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 1);
+        EventTargetBinding.DefineMethod(realm, proto, "insertData", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "insertData");
+            var a0 = IdlMarshal.RequireUnsignedLong(realm, args, 0, "insertData", 2);
+            var a1 = IdlMarshal.RequireString(realm, args, 1, "insertData", 2);
+            try
+            {
+                receiver.InsertData(a0, a1); return IdlMarshal.Void();
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, proto, "deleteData", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "deleteData");
+            var a0 = IdlMarshal.RequireUnsignedLong(realm, args, 0, "deleteData", 2);
+            var a1 = IdlMarshal.RequireUnsignedLong(realm, args, 1, "deleteData", 2);
+            try
+            {
+                receiver.DeleteData(a0, a1); return IdlMarshal.Void();
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 2);
+        EventTargetBinding.DefineMethod(realm, proto, "replaceData", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "replaceData");
+            var a0 = IdlMarshal.RequireUnsignedLong(realm, args, 0, "replaceData", 3);
+            var a1 = IdlMarshal.RequireUnsignedLong(realm, args, 1, "replaceData", 3);
+            var a2 = IdlMarshal.RequireString(realm, args, 2, "replaceData", 3);
+            try
+            {
+                receiver.ReplaceData(a0, a1, a2); return IdlMarshal.Void();
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 3);
         EventTargetBinding.DefineMethod(realm, proto, "before", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "before");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Before(nodes); return JsValue.Undefined;
+            receiver.Before(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "after", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "after");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.After(nodes); return JsValue.Undefined;
+            receiver.After(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "replaceWith", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "replaceWith");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.ReplaceWith(nodes); return JsValue.Undefined;
+            receiver.ReplaceWith(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "remove", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<CharacterData>(realm, thisV, "CharacterData", "remove");
-            receiver.RemoveFromParent(); return JsValue.Undefined;
+            receiver.RemoveFromParent(); return IdlMarshal.Void();
         }, length: 0);
     }
 
@@ -483,6 +644,18 @@ internal static class CoreDomBindingsGenerated
     internal static void InstallText(JsRealm realm)
     {
         if (realm.TextPrototype is not { } proto) return;
+        EventTargetBinding.DefineAccessor(realm, proto, "wholeText",
+            (thisV, _) => DomWrappers.UnwrapAs<Text>(thisV) is { } h && h.WholeText is { } v ? JsValue.String(v) : JsValue.Null);
+        EventTargetBinding.DefineMethod(realm, proto, "splitText", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<Text>(realm, thisV, "Text", "splitText");
+            var a0 = IdlMarshal.RequireUnsignedLong(realm, args, 0, "splitText", 1);
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.SplitText(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 1);
     }
 
     // Comment -> Starling.Dom.Comment
@@ -495,23 +668,41 @@ internal static class CoreDomBindingsGenerated
     internal static void InstallDocumentFragment(JsRealm realm)
     {
         if (realm.DocumentFragmentPrototype is not { } proto) return;
+        EventTargetBinding.DefineAccessor(realm, proto, "children",
+            (thisV, _) => DomWrappers.UnwrapAs<DocumentFragment>(thisV) is { } f ? IdlMarshal.WrapHtmlCollection(realm, () => f.ChildElements()) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "firstElementChild",
+            (thisV, _) => DomWrappers.UnwrapAs<DocumentFragment>(thisV) is { } h && h.FirstElementChild is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "lastElementChild",
+            (thisV, _) => DomWrappers.UnwrapAs<DocumentFragment>(thisV) is { } h && h.LastElementChild is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "childElementCount",
+            (thisV, _) => DomWrappers.UnwrapAs<DocumentFragment>(thisV) is { } h ? JsValue.Number((double)h.ChildElementCount) : JsValue.Undefined);
+        EventTargetBinding.DefineMethod(realm, proto, "getElementById", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<DocumentFragment>(realm, thisV, "DocumentFragment", "getElementById");
+            var a0 = IdlMarshal.RequireString(realm, args, 0, "getElementById", 1);
+            try
+            {
+                return IdlMarshal.Wrap(realm, receiver.GetElementById(a0));
+            }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+        }, length: 1);
         EventTargetBinding.DefineMethod(realm, proto, "prepend", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<DocumentFragment>(realm, thisV, "DocumentFragment", "prepend");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Prepend(nodes); return JsValue.Undefined;
+            receiver.Prepend(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "append", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<DocumentFragment>(realm, thisV, "DocumentFragment", "append");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Append(nodes); return JsValue.Undefined;
+            receiver.Append(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "replaceChildren", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<DocumentFragment>(realm, thisV, "DocumentFragment", "replaceChildren");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.ReplaceChildren(nodes); return JsValue.Undefined;
+            receiver.ReplaceChildren(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "querySelector", (thisV, args) =>
         {
@@ -541,24 +732,24 @@ internal static class CoreDomBindingsGenerated
         {
             var receiver = IdlMarshal.Receiver<DocumentType>(realm, thisV, "DocumentType", "before");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.Before(nodes); return JsValue.Undefined;
+            receiver.Before(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "after", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<DocumentType>(realm, thisV, "DocumentType", "after");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.After(nodes); return JsValue.Undefined;
+            receiver.After(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "replaceWith", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<DocumentType>(realm, thisV, "DocumentType", "replaceWith");
             var nodes = IdlMarshal.NodeOrStringArgs(realm, receiver, args, 0);
-            receiver.ReplaceWith(nodes); return JsValue.Undefined;
+            receiver.ReplaceWith(nodes); return IdlMarshal.Void();
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "remove", (thisV, args) =>
         {
             var receiver = IdlMarshal.Receiver<DocumentType>(realm, thisV, "DocumentType", "remove");
-            receiver.RemoveFromParent(); return JsValue.Undefined;
+            receiver.RemoveFromParent(); return IdlMarshal.Void();
         }, length: 0);
     }
 
@@ -568,5 +759,24 @@ internal static class CoreDomBindingsGenerated
         if (realm.ProcessingInstructionPrototype is not { } proto) return;
         EventTargetBinding.DefineAccessor(realm, proto, "target",
             (thisV, _) => DomWrappers.UnwrapAs<ProcessingInstruction>(thisV) is { } h && h.Target is { } v ? JsValue.String(v) : JsValue.Null);
+    }
+
+    // Attr -> Starling.Dom.AttrNode
+    internal static void InstallAttr(JsRealm realm)
+    {
+        if (realm.AttrPrototype is not { } proto) return;
+        EventTargetBinding.DefineAccessor(realm, proto, "prefix",
+            (thisV, _) => DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h && h.Prefix is { } v ? JsValue.String(v) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "localName",
+            (thisV, _) => DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h && h.LocalName is { } v ? JsValue.String(v) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "name",
+            (thisV, _) => DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h && h.Name is { } v ? JsValue.String(v) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "value",
+            (thisV, _) => DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h && h.Value is { } v ? JsValue.String(v) : JsValue.Null,
+            (thisV, args) => { if (DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h) h.Value = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined); return JsValue.Undefined; });
+        EventTargetBinding.DefineAccessor(realm, proto, "ownerElement",
+            (thisV, _) => DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h && h.OwnerElement is { } v ? JsValue.Object(DomWrappers.Wrap(realm, v)) : JsValue.Null);
+        EventTargetBinding.DefineAccessor(realm, proto, "specified",
+            (thisV, _) => DomWrappers.UnwrapAs<AttrNode>(thisV) is { } h ? JsValue.Boolean(h.Specified) : JsValue.Undefined);
     }
 }

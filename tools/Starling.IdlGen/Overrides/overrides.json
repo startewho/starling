@@ -72,7 +72,17 @@
     "Document.body",
     "Document.head",
     "Document.title",
-    "Document.getElementsByName"
+    "Document.getElementsByName",
+    "Document.createElementNS",
+    "Document.createCDATASection",
+    "Document.adoptNode",
+    "Document.importNode",
+    "Document.implementation",
+    "Element.getAttributeNode",
+    "Element.getAttributeNodeNS",
+    "Element.setAttributeNode",
+    "Element.setAttributeNodeNS",
+    "Element.removeAttributeNode"
   ],
   "skipReason": {
     "Document.createElement": "Must pick the HTML element-class prototype (HTMLDivElement and so on) so instanceof works, and apply HTML tag casing. A plain wrap of Document.CreateElement gives the generic Element prototype, so this stays with the Starling binding.",
@@ -89,7 +99,17 @@
     "Document.body": "HTML document-tree access is already installed by NodeBindings and stays with the Starling binding.",
     "Document.head": "HTML document-tree access is already installed by NodeBindings and stays with the Starling binding.",
     "Document.title": "The Starling binding implements title lookup and setter behavior over the real title element.",
-    "Document.getElementsByName": "HTML legacy lookup returns a live NodeList and stays with the Starling binding."
+    "Document.getElementsByName": "HTML legacy lookup returns a live NodeList and stays with the Starling binding.",
+    "Document.createElementNS": "Must pick the right element-class prototype and validate the namespace and qualified name, like createElement. A plain wrap gives the generic Element prototype, so this stays with the Starling binding.",
+    "Document.createCDATASection": "HTML documents reject this with NotSupportedError and the wrapper needs the CDATASection prototype, so this stays with the Starling binding.",
+    "Document.adoptNode": "Adopting rewraps the moved subtree with the correct prototypes in the new document, like cloneNode, so this stays with the Starling binding.",
+    "Document.importNode": "Importing clones into this document and rewraps the subtree with the correct prototypes, like cloneNode, so this stays with the Starling binding.",
+    "Document.implementation": "Returns the DOMImplementation host object, which the Starling binding builds and caches, so this stays with the Starling binding.",
+    "Element.getAttributeNode": "Returns an Attr (the CLR AttrNode) through the Attr-specific wrapper, so this stays with the Starling binding.",
+    "Element.getAttributeNodeNS": "Returns an Attr through the Attr-specific wrapper, so this stays with the Starling binding.",
+    "Element.setAttributeNode": "Takes and returns an Attr through the Attr-specific wrapper and moves the node between elements, so this stays with the Starling binding.",
+    "Element.setAttributeNodeNS": "Takes and returns an Attr through the Attr-specific wrapper, so this stays with the Starling binding.",
+    "Element.removeAttributeNode": "Matches the Attr by reference and raises NotFoundError, returning the removed Attr through the Attr-specific wrapper, so this stays with the Starling binding."
   },
     "//dispatch": "Thin bindings that dispatch to a Starling DOM impl method (the Chromium model). The DOM impl does the spec validation and raises a typed DomException, which the binding translates.",
   "dispatch": {
@@ -157,6 +177,10 @@
     "DocumentFragment.querySelectorAll": { "impl": "QuerySelectorEngine.All", "static": true, "passRealm": true, "params": ["string"], "returns": "array" }
   },
   "override": {
+    "Node.nodeType": {
+      "//": "The CLR node discriminator is the NodeKind enum (named Kind), not a numeric NodeType property; expose its integer DOM spec code, which is what nodeType returns.",
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h ? JsValue.Number((double)(int)h.Kind) : JsValue.Undefined"
+    },
     "Node.childNodes": {
       "//": "Starling returns a real JS Array of children (like querySelectorAll).",
       "getter": "(thisV, _) => IdlMarshal.WrapNodeArray(realm, DomWrappers.UnwrapAs<Node>(thisV)?.ChildNodes ?? System.Array.Empty<Node>())"
@@ -166,6 +190,9 @@
     },
     "Document.children": {
       "getter": "(thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } d ? IdlMarshal.WrapHtmlCollection(realm, () => d.ChildElements()) : JsValue.Null"
+    },
+    "DocumentFragment.children": {
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<DocumentFragment>(thisV) is { } f ? IdlMarshal.WrapHtmlCollection(realm, () => f.ChildElements()) : JsValue.Null"
     },
     "Element.classList": {
       "//": "Cache the DOMTokenList wrapper on the JS element object so el.classList === el.classList.",
@@ -182,6 +209,10 @@
     "Element.tagName": {
       "//": "ASCII-uppercase the tag name only for HTML-namespace elements (DOM 4.9).",
       "getter": "(thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h ? JsValue.String(h.Namespace == Element.HtmlNamespace ? h.TagName.ToUpperInvariant() : h.TagName) : JsValue.String(\"\")"
+    },
+    "Element.namespaceURI": {
+      "//": "The CLR Element.Namespace is a non-null string ('' for the null namespace); namespaceURI returns null in that case (DOM 4.9).",
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h ? IdlMarshal.WrapString(string.IsNullOrEmpty(h.Namespace) ? null : h.Namespace) : JsValue.Null"
     }
   }
 }
