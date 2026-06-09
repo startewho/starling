@@ -24,6 +24,9 @@ dotnet run --project tools/Starling.IdlGen -- model
 # src/Starling.Bindings/Generated/.
 dotnet run --project tools/Starling.IdlGen -- emit
 
+# Generate only the backend-neutral surface manifest.
+dotnet run --project tools/Starling.IdlGen -- manifest
+
 # Report member coverage over the target interfaces, by cause.
 dotnet run --project tools/Starling.IdlGen -- coverage
 ```
@@ -39,6 +42,11 @@ Into `src/Starling.Bindings/Generated/`:
 | `Dictionaries.g.cs` | C# classes for IDL dictionaries |
 | `Enums.g.cs` | C# enums plus wire-string maps for IDL enums |
 | `Callbacks.g.cs` | C# delegates for IDL callback functions |
+
+The backend-neutral surface manifest is written to
+`testdata/webref/core-dom-surface.json`. It lists the IDL members, arity,
+required argument count, nullable state, and descriptor shape. Rows marked
+`required` are checked against both JS engines.
 
 The emitters cross-reference: generating dictionaries unlocks unions over
 dictionaries, generating callbacks unlocks unions over callbacks. A type that is
@@ -62,7 +70,7 @@ dotnet test tests/Starling.Bindings.Tests
    a binding when the CLR member actually exists with a mappable type.
 4. **Override** — `Overrides/` reads `overrides/overrides.json`. Three layers:
    - `skip` names members the emitter must not generate because the mechanical
-     mapping would be wrong. They keep their hand-written bindings.
+     mapping would be wrong. They keep the Starling binding.
    - `override` supplies a custom getter or setter the emitter uses instead of
      the mechanical mapping. For example, `tagName` and `nodeName` get a getter
      that applies HTML uppercasing.
@@ -80,8 +88,8 @@ golden baseline. `tests/Starling.IdlGen.Tests` re-runs the generator and fails
 if the output drifts. Regenerate with `emit` and review the diff before you
 commit.
 
-`NodeBindings.Install` calls the generated installers after the hand-written
-ones, so the generated members overwrite the mechanical hand-written members.
+`NodeBindings.Install` calls the generated installers after the Starling
+bindings, so the generated members overwrite the mechanical Starling members.
 The binding tests and the Web Platform Tests hold behavioral equivalence.
 
 ## Refreshing the IDL
@@ -92,13 +100,32 @@ surface the generator targets.
 
 ## Adding an override
 
-When a generated member behaves differently from the hand-written one, a binding
+When a generated member behaves differently from the Starling binding, a binding
 test or a Web Platform Test fails. Two fixes, both in `overrides/overrides.json`:
 
-- Add the member under `skip` with a reason. It keeps its hand-written binding.
+- Add the member under `skip` with a reason. It keeps the Starling binding.
 - Add it under `override` with a custom `getter` (and optional `setter`). The
   emitter generates the member using that code instead of the mechanical
   mapping. This is how `tagName` and `nodeName` get their HTML uppercasing.
 
 The node factory methods (`createElement` and friends) are on `skip` because
 they need custom prototype selection.
+
+## Todo
+
+- [x] Generate a backend-neutral IDL surface manifest and use it to check the
+  Starling JS engine and Jint binding surfaces.
+- [x] Make the manifest the source of truth for backend parity.
+- [ ] Route every generated operation through `IdlMarshal`.
+- [ ] Fail when a generated installer is not wired into the runtime.
+- [ ] Add negative Web IDL conversion tests for generated members.
+- [ ] Teach the type mapper nullable strings, sequences, records, callbacks,
+  dictionaries, unions, overloads, variadics, enums, and `[SameObject]`.
+- [ ] Move more DOM algorithms into `Starling.Dom`, then emit thin dispatch
+  bindings for them.
+- [ ] Expand the target interface set with per-interface coverage gates.
+- [ ] Add runtime IDL harness-style tests over the manifest.
+- [ ] Add baseline drift tests for every generated file.
+- [ ] Add Starling JS engine and Jint prototype parity tests.
+- [ ] Require each `skip` entry to have a reason and a test for the matching
+  Starling binding.

@@ -858,7 +858,7 @@ public static class EventTargetBinding
         if (setter is not null)
             set = new JsNativeFunction(realm, $"set {name}", 1, setter, isConstructor: false);
         target.DefineOwnProperty(name,
-            PropertyDescriptor.Accessor(get, set, enumerable: false, configurable: true));
+            PropertyDescriptor.Accessor(get, set, enumerable: true, configurable: true));
     }
 }
 

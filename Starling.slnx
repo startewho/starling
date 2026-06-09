@@ -22,6 +22,7 @@
     <Project Path="bench/Starling.RegExp.Benchmarks/Starling.RegExp.Benchmarks.csproj" />
     <Project Path="tests/Starling.RegExp.Tests/Starling.RegExp.Tests.csproj" />
     <Project Path="tests/Starling.Bindings.Jint.Tests/Starling.Bindings.Jint.Tests.csproj" />
+    <Project Path="tests/Starling.BindingSurface.Tests/Starling.BindingSurface.Tests.csproj" />
     <Project Path="tests/Starling.Bindings.Tests/Starling.Bindings.Tests.csproj" />
     <Project Path="tests/Starling.Ipc.Tests/Starling.Ipc.Tests.csproj" />
     <Project Path="tests/Starling.IdlGen.Tests/Starling.IdlGen.Tests.csproj" />

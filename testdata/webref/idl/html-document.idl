@@ -1,0 +1,11 @@
+// Curated from w3c/webref ed/idl/html.idl at snapshot
+// 589264b15ca2172f2592c5578a857b4d0e2840c1.
+// Keep this slice small until the parser supports the full HTML IDL file.
+
+[LegacyOverrideBuiltIns]
+partial interface Document {
+  [CEReactions] attribute DOMString title;
+  [CEReactions] attribute HTMLElement? body;
+  readonly attribute HTMLHeadElement? head;
+  NodeList getElementsByName(DOMString elementName);
+};

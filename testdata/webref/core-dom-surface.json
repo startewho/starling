@@ -1,0 +1,3945 @@
+{
+  "schema": 1,
+  "source": "testdata/webref/idl",
+  "interfaces": [
+    "EventTarget",
+    "Node",
+    "Element",
+    "Document",
+    "CharacterData",
+    "Text",
+    "Comment",
+    "DocumentFragment",
+    "DocumentType",
+    "ProcessingInstruction"
+  ],
+  "members": [
+    {
+      "interface": "CharacterData",
+      "name": "after",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "appendData",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "before",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "data",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "deleteData",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "insertData",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "length",
+      "kind": "attribute",
+      "static": false,
+      "type": "unsigned long",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "nextElementSibling",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "previousElementSibling",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "remove",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "replaceData",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 3,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "replaceWith",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "CharacterData",
+      "name": "substringData",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "URL",
+      "kind": "attribute",
+      "static": false,
+      "type": "USVString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "activeViewTransition",
+      "kind": "attribute",
+      "static": false,
+      "type": "ViewTransition?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "adoptNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "adoptedStyleSheets",
+      "kind": "attribute",
+      "static": false,
+      "type": "ObservableArray\u003CCSSStyleSheet\u003E",
+      "nullable": false,
+      "readonly": false,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "append",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "body",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLElement?",
+      "nullable": true,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "caretPositionFromPoint",
+      "kind": "operation",
+      "static": false,
+      "type": "CaretPosition?",
+      "nullable": true,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "characterSet",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "charset",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "childElementCount",
+      "kind": "attribute",
+      "static": false,
+      "type": "unsigned long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "children",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "compatMode",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "contentType",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "convertPointFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMPoint",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "convertQuadFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMQuad",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "convertRectFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMQuad",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createAttribute",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createAttributeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createCDATASection",
+      "kind": "operation",
+      "static": false,
+      "type": "CDATASection",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createComment",
+      "kind": "operation",
+      "static": false,
+      "type": "Comment",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createDocumentFragment",
+      "kind": "operation",
+      "static": false,
+      "type": "DocumentFragment",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createElement",
+      "kind": "operation",
+      "static": false,
+      "type": "Element",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createElementNS",
+      "kind": "operation",
+      "static": false,
+      "type": "Element",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createEvent",
+      "kind": "operation",
+      "static": false,
+      "type": "Event",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createExpression",
+      "kind": "operation",
+      "static": false,
+      "type": "XPathExpression",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createNSResolver",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createNodeIterator",
+      "kind": "operation",
+      "static": false,
+      "type": "NodeIterator",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createProcessingInstruction",
+      "kind": "operation",
+      "static": false,
+      "type": "ProcessingInstruction",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createRange",
+      "kind": "operation",
+      "static": false,
+      "type": "Range",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createTextNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Text",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "createTreeWalker",
+      "kind": "operation",
+      "static": false,
+      "type": "TreeWalker",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "customElementRegistry",
+      "kind": "attribute",
+      "static": false,
+      "type": "CustomElementRegistry?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "doctype",
+      "kind": "attribute",
+      "static": false,
+      "type": "DocumentType?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "documentElement",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "documentURI",
+      "kind": "attribute",
+      "static": false,
+      "type": "USVString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "elementFromPoint",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "elementsFromPoint",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CElement\u003E",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "evaluate",
+      "kind": "operation",
+      "static": false,
+      "type": "XPathResult",
+      "nullable": false,
+      "argumentCount": 5,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "firstElementChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "fonts",
+      "kind": "attribute",
+      "static": false,
+      "type": "FontFaceSet",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getAnimations",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CAnimation\u003E",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getBoxQuads",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CDOMQuad\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getElementById",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getElementsByClassName",
+      "kind": "operation",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getElementsByName",
+      "kind": "operation",
+      "static": false,
+      "type": "NodeList",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getElementsByTagName",
+      "kind": "operation",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "getElementsByTagNameNS",
+      "kind": "operation",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "head",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLHeadElement?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "implementation",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMImplementation",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "importNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "inputEncoding",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "lastElementChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "measureElement",
+      "kind": "operation",
+      "static": false,
+      "type": "FontMetrics",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "measureText",
+      "kind": "operation",
+      "static": false,
+      "type": "FontMetrics",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "moveBefore",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "namedFlows",
+      "kind": "attribute",
+      "static": false,
+      "type": "NamedFlowMap",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "prepend",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "querySelector",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "querySelectorAll",
+      "kind": "operation",
+      "static": false,
+      "type": "NodeList",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "replaceChildren",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "scrollingElement",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "startViewTransition",
+      "kind": "operation",
+      "static": false,
+      "type": "ViewTransition",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "styleSheets",
+      "kind": "attribute",
+      "static": false,
+      "type": "StyleSheetList",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "timeline",
+      "kind": "attribute",
+      "static": false,
+      "type": "DocumentTimeline",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Document",
+      "name": "title",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "append",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "childElementCount",
+      "kind": "attribute",
+      "static": false,
+      "type": "unsigned long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "children",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "firstElementChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "getElementById",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "lastElementChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "moveBefore",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "prepend",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "querySelector",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "querySelectorAll",
+      "kind": "operation",
+      "static": false,
+      "type": "NodeList",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentFragment",
+      "name": "replaceChildren",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "after",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "before",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "name",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "publicId",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "remove",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "replaceWith",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "DocumentType",
+      "name": "systemId",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "activeViewTransition",
+      "kind": "attribute",
+      "static": false,
+      "type": "ViewTransition?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "after",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "animate",
+      "kind": "operation",
+      "static": false,
+      "type": "Animation",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "append",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "assignedSlot",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLSlotElement?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "attachShadow",
+      "kind": "operation",
+      "static": false,
+      "type": "ShadowRoot",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "attributes",
+      "kind": "attribute",
+      "static": false,
+      "type": "NamedNodeMap",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "before",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "checkVisibility",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "childElementCount",
+      "kind": "attribute",
+      "static": false,
+      "type": "unsigned long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "children",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "classList",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMTokenList",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "className",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "clientHeight",
+      "kind": "attribute",
+      "static": false,
+      "type": "long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "clientLeft",
+      "kind": "attribute",
+      "static": false,
+      "type": "long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "clientTop",
+      "kind": "attribute",
+      "static": false,
+      "type": "long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "clientWidth",
+      "kind": "attribute",
+      "static": false,
+      "type": "long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "closest",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "computedStyleMap",
+      "kind": "operation",
+      "static": false,
+      "type": "StylePropertyMapReadOnly",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "convertPointFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMPoint",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "convertQuadFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMQuad",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "convertRectFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMQuad",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "currentCSSZoom",
+      "kind": "attribute",
+      "static": false,
+      "type": "double",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "customElementRegistry",
+      "kind": "attribute",
+      "static": false,
+      "type": "CustomElementRegistry?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "firstElementChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "focusableAreas",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CNode\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getAnimations",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CAnimation\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getAttribute",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getAttributeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getAttributeNames",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CDOMString\u003E",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getAttributeNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getAttributeNodeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr?",
+      "nullable": true,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getBoundingClientRect",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMRect",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getBoxQuads",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CDOMQuad\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getClientRects",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMRectList",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getElementsByClassName",
+      "kind": "operation",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getElementsByTagName",
+      "kind": "operation",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getElementsByTagNameNS",
+      "kind": "operation",
+      "static": false,
+      "type": "HTMLCollection",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getRegionFlowRanges",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CRange\u003E?",
+      "nullable": true,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "getSpatialNavigationContainer",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "hasAttribute",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "hasAttributeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "hasAttributes",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "id",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "insertAdjacentElement",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "insertAdjacentText",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "lastElementChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "localName",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "matches",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "moveBefore",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "namespaceURI",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "nextElementSibling",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "part",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMTokenList",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "prefix",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "prepend",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "previousElementSibling",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "pseudo",
+      "kind": "operation",
+      "static": false,
+      "type": "CSSPseudoElement?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "querySelector",
+      "kind": "operation",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "querySelectorAll",
+      "kind": "operation",
+      "static": false,
+      "type": "NodeList",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "regionOverset",
+      "kind": "attribute",
+      "static": false,
+      "type": "CSSOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "remove",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "removeAttribute",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "removeAttributeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "removeAttributeNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "replaceChildren",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "replaceWith",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scroll",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scroll",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollBy",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollBy",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollHeight",
+      "kind": "attribute",
+      "static": false,
+      "type": "long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollIntoView",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollLeft",
+      "kind": "attribute",
+      "static": false,
+      "type": "unrestricted double",
+      "nullable": false,
+      "readonly": false,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollTo",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollTo",
+      "kind": "operation",
+      "static": false,
+      "type": "Promise\u003Cundefined\u003E",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollTop",
+      "kind": "attribute",
+      "static": false,
+      "type": "unrestricted double",
+      "nullable": false,
+      "readonly": false,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "scrollWidth",
+      "kind": "attribute",
+      "static": false,
+      "type": "long",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "setAttribute",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "setAttributeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 3,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "setAttributeNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "setAttributeNodeNS",
+      "kind": "operation",
+      "static": false,
+      "type": "Attr?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "shadowRoot",
+      "kind": "attribute",
+      "static": false,
+      "type": "ShadowRoot?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "slot",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": false,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "spatialNavigationSearch",
+      "kind": "operation",
+      "static": false,
+      "type": "Node?",
+      "nullable": true,
+      "argumentCount": 2,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "startViewTransition",
+      "kind": "operation",
+      "static": false,
+      "type": "ViewTransition",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "tagName",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "toggleAttribute",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Element",
+      "name": "webkitMatchesSelector",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "EventTarget",
+      "name": "addEventListener",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "EventTarget",
+      "name": "dispatchEvent",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "EventTarget",
+      "name": "removeEventListener",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "ATTRIBUTE_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "CDATA_SECTION_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "COMMENT_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_FRAGMENT_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_POSITION_CONTAINED_BY",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_POSITION_CONTAINS",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_POSITION_DISCONNECTED",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_POSITION_FOLLOWING",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_POSITION_PRECEDING",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "DOCUMENT_TYPE_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "ELEMENT_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "ENTITY_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "ENTITY_REFERENCE_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "NOTATION_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "PROCESSING_INSTRUCTION_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "TEXT_NODE",
+      "kind": "constant",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "required": false,
+      "descriptor": {
+        "kind": "data",
+        "writable": false,
+        "enumerable": true,
+        "configurable": false
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "appendChild",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "baseURI",
+      "kind": "attribute",
+      "static": false,
+      "type": "USVString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "childNodes",
+      "kind": "attribute",
+      "static": false,
+      "type": "NodeList",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "cloneNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "compareDocumentPosition",
+      "kind": "operation",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "contains",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "firstChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Node?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "getRootNode",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "hasChildNodes",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "insertBefore",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "isConnected",
+      "kind": "attribute",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "isDefaultNamespace",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "isEqualNode",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "isSameNode",
+      "kind": "operation",
+      "static": false,
+      "type": "boolean",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "lastChild",
+      "kind": "attribute",
+      "static": false,
+      "type": "Node?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "lookupNamespaceURI",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "lookupPrefix",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "nextSibling",
+      "kind": "attribute",
+      "static": false,
+      "type": "Node?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "nodeName",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "nodeType",
+      "kind": "attribute",
+      "static": false,
+      "type": "unsigned short",
+      "nullable": false,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "nodeValue",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "normalize",
+      "kind": "operation",
+      "static": false,
+      "type": "undefined",
+      "nullable": false,
+      "argumentCount": 0,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "ownerDocument",
+      "kind": "attribute",
+      "static": false,
+      "type": "Document?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "parentElement",
+      "kind": "attribute",
+      "static": false,
+      "type": "Element?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "parentNode",
+      "kind": "attribute",
+      "static": false,
+      "type": "Node?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "previousSibling",
+      "kind": "attribute",
+      "static": false,
+      "type": "Node?",
+      "nullable": true,
+      "readonly": true,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "removeChild",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "replaceChild",
+      "kind": "operation",
+      "static": false,
+      "type": "Node",
+      "nullable": false,
+      "argumentCount": 2,
+      "requiredArguments": 2,
+      "required": true,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Node",
+      "name": "textContent",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString?",
+      "nullable": true,
+      "readonly": false,
+      "required": true,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "ProcessingInstruction",
+      "name": "sheet",
+      "kind": "attribute",
+      "static": false,
+      "type": "CSSStyleSheet?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "ProcessingInstruction",
+      "name": "target",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "assignedSlot",
+      "kind": "attribute",
+      "static": false,
+      "type": "HTMLSlotElement?",
+      "nullable": true,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "convertPointFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMPoint",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "convertQuadFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMQuad",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "convertRectFromNode",
+      "kind": "operation",
+      "static": false,
+      "type": "DOMQuad",
+      "nullable": false,
+      "argumentCount": 3,
+      "requiredArguments": 2,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "getBoxQuads",
+      "kind": "operation",
+      "static": false,
+      "type": "sequence\u003CDOMQuad\u003E",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 0,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "splitText",
+      "kind": "operation",
+      "static": false,
+      "type": "Text",
+      "nullable": false,
+      "argumentCount": 1,
+      "requiredArguments": 1,
+      "required": false,
+      "descriptor": {
+        "kind": "method",
+        "writable": true,
+        "enumerable": false,
+        "configurable": true
+      }
+    },
+    {
+      "interface": "Text",
+      "name": "wholeText",
+      "kind": "attribute",
+      "static": false,
+      "type": "DOMString",
+      "nullable": false,
+      "readonly": true,
+      "required": false,
+      "descriptor": {
+        "kind": "accessor",
+        "enumerable": true,
+        "configurable": true
+      }
+    }
+  ]
+}

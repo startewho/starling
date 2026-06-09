@@ -1121,7 +1121,49 @@ internal static class NodeBindings
         Accessor(ctx, proto, "documentElement",
             (t, _) => w.UnwrapDocument(t)?.DocumentElement is { } e ? w.Wrap(e) : JsValue.Null);
         Accessor(ctx, proto, "body",
-            (t, _) => w.UnwrapDocument(t)?.Body is { } b ? w.Wrap(b) : JsValue.Null);
+            (t, _) =>
+            {
+                if (w.UnwrapDocument(t) is not { } d
+                    || d.DocumentElement is not { LocalName: "html", Namespace: Element.HtmlNamespace } htmlEl)
+                    return JsValue.Null;
+                for (var c = htmlEl.FirstChild; c is not null; c = c.NextSibling)
+                    if (c is Element { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" } b)
+                        return w.Wrap(b);
+                return JsValue.Null;
+            },
+            (t, args) =>
+            {
+                if (w.UnwrapDocument(t) is not { } d) return JsValue.Undefined;
+                var val = Arg(args, 0);
+                if (!val.IsObject() || w.UnwrapElement(val) is not { } newEl)
+                    throw TypeError(engine, "document.body must be an HTMLElement");
+                if (newEl is not { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" })
+                    throw DomExceptionBinding.Throw(ctx, "HierarchyRequestError",
+                        "document.body must be a body or frameset element");
+
+                Element? current = null;
+                if (d.DocumentElement is { LocalName: "html", Namespace: Element.HtmlNamespace } htmlEl)
+                {
+                    for (var c = htmlEl.FirstChild; c is not null; c = c.NextSibling)
+                    {
+                        if (c is Element { Namespace: Element.HtmlNamespace, LocalName: "body" or "frameset" } b)
+                        {
+                            current = b;
+                            break;
+                        }
+                    }
+                }
+
+                if (current is not null)
+                    current.ParentNode!.ReplaceChild(newEl, current);
+                else if (d.DocumentElement is { } root)
+                    root.AppendChild(newEl);
+                else
+                    throw DomExceptionBinding.Throw(ctx, "HierarchyRequestError",
+                        "document.body cannot be set without a document element");
+
+                return JsValue.Undefined;
+            });
         Accessor(ctx, proto, "head",
             (t, _) => w.UnwrapDocument(t)?.Head is { } h ? w.Wrap(h) : JsValue.Null);
         Accessor(ctx, proto, "title",
