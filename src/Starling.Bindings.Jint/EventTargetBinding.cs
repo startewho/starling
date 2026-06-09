@@ -84,6 +84,19 @@ internal static class EventTargetBinding
         var customProto = new JsObject(engine) { Prototype = evProto };
         JintInterop.DefineAccessor(engine, customProto, "detail", (thisV, _) =>
             thisV is ObjectInstance oi && state.TryGetDetail(oi, out var d) ? d : JsValue.Null);
+        // Legacy CustomEvent.initCustomEvent (DOM §2.3) — used with createEvent.
+        JintInterop.DefineMethod(engine, customProto, "initCustomEvent", (thisV, a) =>
+        {
+            if (a.Length == 0)
+                throw new JavaScriptException(engine.Intrinsics.TypeError,
+                    "Failed to execute 'initCustomEvent' on 'CustomEvent': 1 argument required, but only 0 present.");
+            if (TryGetNative(state, thisV, out var e))
+                e.InitEvent(a[0].ToString(),
+                    a.Length > 1 && TypeConverter.ToBoolean(a[1]),
+                    a.Length > 2 && TypeConverter.ToBoolean(a[2]));
+            if (thisV is ObjectInstance oi && a.Length > 3) state.SetDetail(oi, a[3]);
+            return JsValue.Undefined;
+        }, length: 4);
 
         var customCtor = new NativeConstructor(engine, "CustomEvent", 1, (args, _) =>
         {
@@ -108,34 +121,211 @@ internal static class EventTargetBinding
 
         // ----- Event subclass interfaces (UIEvent, MouseEvent, …) -------------
         // Real pages and frameworks both construct these (`new MouseEvent(...)`)
-        // and branch on them (`e instanceof MouseEvent`). A missing global makes
-        // `x instanceof MouseEvent` throw "Right-hand side of 'instanceof' is not
-        // an object", which aborts e.g. React's event plumbing. We model each as
-        // a constructible Event subclass: its prototype chains off Event.prototype
-        // and the constructor chains off Event (Web-IDL inheritance), so the phase
-        // constants and base accessors resolve. The init dictionary's extra
-        // members (clientX, key, …) aren't reflected back yet — construction and
-        // instanceof are what these call sites need.
-        foreach (var sub in new[]
+        // and branch on them (`e instanceof MouseEvent`). Each is a constructible
+        // Event subclass whose prototype chains off Event.prototype (so phase
+        // constants + base accessors resolve) and whose constructor chains off
+        // Event (Web-IDL inheritance). The constructor builds the real host
+        // subtype and reads the init dictionary into it, and the init dict is kept
+        // on the wrapper so members with no host slot (buttons, deltaX, …) read
+        // back. Mirrors Starling.Bindings/EventTargetBinding.cs.
+        InstallEventSubtypes(ctx, state, engine, evProto, evCtor);
+
+        // Legacy window.event (HTML) — the event currently being dispatched.
+        JintInterop.DefineAccessor(engine, engine.Global, "event", (_, _) => state.CurrentEvent);
+    }
+
+    // ---- Event subclass prototypes + constructors ----------------------------
+
+    private static void InstallEventSubtypes(
+        JintBackendContext ctx, EventState state, global::Jint.Engine engine,
+        ObjectInstance evProto, NativeConstructor evCtor)
+    {
+        // Build a constructible subtype: prototype chains off `parentProto`; the
+        // constructor builds a host event from (type, init) and chains off Event.
+        ObjectInstance Sub(ObjectInstance parentProto, string name, Func<string, JsValue, DomEvent> build)
         {
-            "UIEvent", "MouseEvent", "KeyboardEvent", "TouchEvent", "PointerEvent",
-            "DragEvent", "WheelEvent", "FocusEvent", "InputEvent", "CompositionEvent",
-            "ClipboardEvent", "AnimationEvent", "TransitionEvent", "PopStateEvent",
-            "HashChangeEvent", "MessageEvent", "ProgressEvent", "ErrorEvent",
-        })
-        {
-            var subProto = new JsObject(engine) { Prototype = evProto };
-            var name = sub;
+            var subProto = new JsObject(engine) { Prototype = parentProto };
             var subCtor = new NativeConstructor(engine, name, 1, (args, _) =>
             {
-                var (type, init) = ParseEventArgs(engine, args, name);
-                return state.WrapNativeEvent(new DomEvent(type, init), subProto);
+                if (args.Length == 0 || args[0].IsUndefined())
+                    throw new JavaScriptException(engine.Intrinsics.TypeError,
+                        $"Failed to construct '{name}': 1 argument required, but only 0 present.");
+                var type = args[0].ToString();
+                var init = args.Length > 1 ? args[1] : JsValue.Undefined;
+                // UIEvents §3.5 — `view` must be a Window or null; a primitive is a TypeError.
+                if (init is ObjectInstance io)
+                {
+                    var view = io.Get("view");
+                    if (!view.IsUndefined() && !view.IsNull() && view is not ObjectInstance)
+                        throw new JavaScriptException(engine.Intrinsics.TypeError,
+                            $"Failed to construct '{name}': member view is not a Window.");
+                }
+                return state.WrapNativeEvent(build(type, init), subProto, init);
             });
             WireConstructor(subCtor, subProto, length: 1);
             subCtor.Prototype = evCtor;
             DefineGlobal(engine, name, subCtor);
+            return subProto;
+        }
+
+        EventTarget? Related(JsValue init) => init is ObjectInstance io
+            ? ctx.Wrappers.Unwrap(io.Get("relatedTarget")) as EventTarget : null;
+
+        // ---- UIEvent
+        var uiProto = Sub(evProto, "UIEvent",
+            (type, init) => new UiEvent(type, ReadInit(init)) { Detail = (int)NumOf(init, "detail") });
+        state.UiEventProto = uiProto;
+        JintInterop.DefineAccessor(engine, uiProto, "detail",
+            (t, _) => Native(state, t) is UiEvent u ? JintInterop.Num(u.Detail) : JintInterop.Num(0));
+        JintInterop.DefineAccessor(engine, uiProto, "view",
+            (t, _) => InitMember(state, t, "view", JsValue.Null));
+
+        // ---- MouseEvent (extends UIEvent)
+        var mouseProto = Sub(uiProto, "MouseEvent", (type, init) => new MouseEvent(type, ReadInit(init))
+        {
+            ClientX = NumOf(init, "clientX"),
+            ClientY = NumOf(init, "clientY"),
+            ScreenX = NumOf(init, "screenX"),
+            ScreenY = NumOf(init, "screenY"),
+            Button = (short)NumOf(init, "button"),
+            Detail = (int)NumOf(init, "detail"),
+            CtrlKey = BoolOf(init, "ctrlKey"),
+            ShiftKey = BoolOf(init, "shiftKey"),
+            AltKey = BoolOf(init, "altKey"),
+            MetaKey = BoolOf(init, "metaKey"),
+            RelatedTarget = Related(init),
+        });
+        state.MouseEventProto = mouseProto;
+        MouseAccessor(engine, state, mouseProto, "clientX", m => m.ClientX);
+        MouseAccessor(engine, state, mouseProto, "clientY", m => m.ClientY);
+        MouseAccessor(engine, state, mouseProto, "x", m => m.ClientX);
+        MouseAccessor(engine, state, mouseProto, "y", m => m.ClientY);
+        MouseAccessor(engine, state, mouseProto, "pageX", m => m.ClientX);
+        MouseAccessor(engine, state, mouseProto, "pageY", m => m.ClientY);
+        MouseAccessor(engine, state, mouseProto, "screenX", m => m.ScreenX);
+        MouseAccessor(engine, state, mouseProto, "screenY", m => m.ScreenY);
+        MouseAccessor(engine, state, mouseProto, "button", m => m.Button);
+        JintInterop.DefineAccessor(engine, mouseProto, "buttons", (t, _) => InitNum(state, t, "buttons"));
+        MouseBoolAccessor(engine, state, mouseProto, "ctrlKey", m => m.CtrlKey);
+        MouseBoolAccessor(engine, state, mouseProto, "shiftKey", m => m.ShiftKey);
+        MouseBoolAccessor(engine, state, mouseProto, "altKey", m => m.AltKey);
+        MouseBoolAccessor(engine, state, mouseProto, "metaKey", m => m.MetaKey);
+        JintInterop.DefineAccessor(engine, mouseProto, "relatedTarget",
+            (t, _) => Native(state, t) is MouseEvent { RelatedTarget: { } rt } ? ctx.Wrappers.Wrap(rt) : JsValue.Null);
+
+        // ---- KeyboardEvent (extends UIEvent)
+        var kbdProto = Sub(uiProto, "KeyboardEvent", (type, init) => new KeyboardEvent(type, ReadInit(init))
+        {
+            Key = StrOf(init, "key"),
+            Code = StrOf(init, "code"),
+            Repeat = BoolOf(init, "repeat"),
+            CtrlKey = BoolOf(init, "ctrlKey"),
+            ShiftKey = BoolOf(init, "shiftKey"),
+            AltKey = BoolOf(init, "altKey"),
+            MetaKey = BoolOf(init, "metaKey"),
+            Detail = (int)NumOf(init, "detail"),
+        });
+        state.KeyboardEventProto = kbdProto;
+        JintInterop.DefineAccessor(engine, kbdProto, "key", (t, _) => Native(state, t) is KeyboardEvent k ? JintInterop.Str(k.Key) : JintInterop.Str(""));
+        JintInterop.DefineAccessor(engine, kbdProto, "code", (t, _) => Native(state, t) is KeyboardEvent k ? JintInterop.Str(k.Code) : JintInterop.Str(""));
+        JintInterop.DefineAccessor(engine, kbdProto, "repeat", (t, _) => JintInterop.Bool(Native(state, t) is KeyboardEvent { Repeat: true }));
+        JintInterop.DefineAccessor(engine, kbdProto, "location", (t, _) => InitNum(state, t, "location"));
+        JintInterop.DefineAccessor(engine, kbdProto, "isComposing", (t, _) => InitBool(state, t, "isComposing"));
+        JintInterop.DefineAccessor(engine, kbdProto, "charCode", (t, _) => InitNum(state, t, "charCode"));
+        JintInterop.DefineAccessor(engine, kbdProto, "keyCode", (t, _) => InitNum(state, t, "keyCode"));
+        JintInterop.DefineAccessor(engine, kbdProto, "which", (t, _) => InitNum(state, t, "which"));
+        KbdBoolAccessor(engine, state, kbdProto, "ctrlKey", k => k.CtrlKey);
+        KbdBoolAccessor(engine, state, kbdProto, "shiftKey", k => k.ShiftKey);
+        KbdBoolAccessor(engine, state, kbdProto, "altKey", k => k.AltKey);
+        KbdBoolAccessor(engine, state, kbdProto, "metaKey", k => k.MetaKey);
+
+        // ---- FocusEvent (extends UIEvent)
+        var focusProto = Sub(uiProto, "FocusEvent", (type, init) => new FocusEvent(type, ReadInit(init))
+        {
+            Detail = (int)NumOf(init, "detail"),
+            RelatedTarget = Related(init),
+        });
+        state.FocusEventProto = focusProto;
+        JintInterop.DefineAccessor(engine, focusProto, "relatedTarget",
+            (t, _) => Native(state, t) is FocusEvent { RelatedTarget: { } rt } ? ctx.Wrappers.Wrap(rt) : JsValue.Null);
+
+        // ---- WheelEvent (extends MouseEvent) — host MouseEvent + init deltas
+        var wheelProto = Sub(mouseProto, "WheelEvent", (type, init) => new MouseEvent(type, ReadInit(init))
+        {
+            ClientX = NumOf(init, "clientX"),
+            ClientY = NumOf(init, "clientY"),
+            ScreenX = NumOf(init, "screenX"),
+            ScreenY = NumOf(init, "screenY"),
+            Button = (short)NumOf(init, "button"),
+            Detail = (int)NumOf(init, "detail"),
+            RelatedTarget = Related(init),
+        });
+        JintInterop.DefineAccessor(engine, wheelProto, "deltaX", (t, _) => InitNum(state, t, "deltaX"));
+        JintInterop.DefineAccessor(engine, wheelProto, "deltaY", (t, _) => InitNum(state, t, "deltaY"));
+        JintInterop.DefineAccessor(engine, wheelProto, "deltaZ", (t, _) => InitNum(state, t, "deltaZ"));
+        JintInterop.DefineAccessor(engine, wheelProto, "deltaMode", (t, _) => InitNum(state, t, "deltaMode"));
+
+        // ---- CompositionEvent (extends UIEvent) — data payload
+        var compProto = Sub(uiProto, "CompositionEvent",
+            (type, init) => new UiEvent(type, ReadInit(init)) { Detail = (int)NumOf(init, "detail") });
+        JintInterop.DefineAccessor(engine, compProto, "data",
+            (t, _) => JintInterop.Str(TypeConverter.ToString(InitMember(state, t, "data", JintInterop.Str("")))));
+
+        // ---- InputEvent (extends UIEvent)
+        Sub(uiProto, "InputEvent", (type, init) => new UiEvent(type, ReadInit(init)));
+
+        // ---- Pointer/Drag extend MouseEvent; Touch extends UIEvent — host subtypes.
+        Sub(mouseProto, "PointerEvent", (type, init) => new MouseEvent(type, ReadInit(init)));
+        Sub(mouseProto, "DragEvent", (type, init) => new MouseEvent(type, ReadInit(init)));
+        Sub(uiProto, "TouchEvent", (type, init) => new UiEvent(type, ReadInit(init)));
+
+        // ---- Remaining base-Event subclasses — constructible, chain off Event.
+        foreach (var name in new[]
+        {
+            "ClipboardEvent", "AnimationEvent", "TransitionEvent", "PopStateEvent",
+            "HashChangeEvent", "MessageEvent", "ProgressEvent", "ErrorEvent",
+        })
+        {
+            Sub(evProto, name, (type, init) => new DomEvent(type, ReadInit(init)));
         }
     }
+
+    // ---- subtype accessor + init-dict helpers --------------------------------
+
+    private static DomEvent? Native(EventState state, JsValue thisV)
+        => thisV is ObjectInstance oi && state.TryGetNativeEvent(oi, out var e) ? e : null;
+
+    private static JsValue InitMember(EventState state, JsValue thisV, string key, JsValue fallback)
+    {
+        if (thisV is ObjectInstance oi && state.TryGetInitDict(oi, out var init) && init is ObjectInstance io)
+        {
+            var v = io.Get(key);
+            if (!v.IsUndefined()) return v;
+        }
+        return fallback;
+    }
+
+    private static JsValue InitNum(EventState state, JsValue thisV, string key)
+        => JintInterop.Num(TypeConverter.ToNumber(InitMember(state, thisV, key, JintInterop.Num(0))));
+    private static JsValue InitBool(EventState state, JsValue thisV, string key)
+        => JintInterop.Bool(TypeConverter.ToBoolean(InitMember(state, thisV, key, JsBoolean.False)));
+
+    private static void MouseAccessor(global::Jint.Engine engine, EventState state, ObjectInstance proto, string name, Func<MouseEvent, double> read)
+        => JintInterop.DefineAccessor(engine, proto, name, (t, _) => Native(state, t) is MouseEvent m ? JintInterop.Num(read(m)) : JintInterop.Num(0));
+    private static void MouseBoolAccessor(global::Jint.Engine engine, EventState state, ObjectInstance proto, string name, Func<MouseEvent, bool> read)
+        => JintInterop.DefineAccessor(engine, proto, name, (t, _) => JintInterop.Bool(Native(state, t) is MouseEvent m && read(m)));
+    private static void KbdBoolAccessor(global::Jint.Engine engine, EventState state, ObjectInstance proto, string name, Func<KeyboardEvent, bool> read)
+        => JintInterop.DefineAccessor(engine, proto, name, (t, _) => JintInterop.Bool(Native(state, t) is KeyboardEvent k && read(k)));
+
+    private static EventInit ReadInit(JsValue v) => v is ObjectInstance o
+        ? new EventInit(
+            Bubbles: TypeConverter.ToBoolean(o.Get("bubbles")),
+            Cancelable: TypeConverter.ToBoolean(o.Get("cancelable")),
+            Composed: TypeConverter.ToBoolean(o.Get("composed")))
+        : default;
+    private static double NumOf(JsValue v, string k) => v is ObjectInstance o && !o.Get(k).IsUndefined() ? TypeConverter.ToNumber(o.Get(k)) : 0;
+    private static bool BoolOf(JsValue v, string k) => v is ObjectInstance o && TypeConverter.ToBoolean(o.Get(k));
+    private static string StrOf(JsValue v, string k) => v is ObjectInstance o && o.Get(k).IsString() ? o.Get(k).AsString() : "";
 
     // ---- addEventListener / removeEventListener / dispatchEvent --------------
 
@@ -195,6 +385,11 @@ internal static class EventTargetBinding
         if (args.Length == 0 || args[0] is not ObjectInstance evObj || !state.TryGetNativeEvent(evObj, out var native))
             throw new JavaScriptException(ctx.Engine.Intrinsics.TypeError,
                 "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
+        // DOM §2.10 — an event that is mid-dispatch or uninitialized must not be dispatched.
+        if (native.IsBeingDispatched)
+            throw DomExceptionBinding.Throw(ctx, "InvalidStateError", "The event is already being dispatched.");
+        if (!native.Initialized)
+            throw DomExceptionBinding.Throw(ctx, "InvalidStateError", "The event has not been initialized.");
         var notCanceled = host.DispatchEvent(native);
         return JintInterop.Bool(notCanceled);
     }
@@ -244,6 +439,54 @@ internal static class EventTargetBinding
             if (!TryGetNative(state, thisV, out var e)) return new JsArray(engine, Array.Empty<JsValue>());
             return ComposedPath(ctx, e);
         }, length: 0);
+
+        // Legacy Event.initEvent (DOM §2.9) — used with document.createEvent. The
+        // `type` argument is mandatory per WebIDL.
+        JintInterop.DefineMethod(engine, evProto, "initEvent", (thisV, a) =>
+        {
+            if (a.Length == 0)
+                throw new JavaScriptException(engine.Intrinsics.TypeError,
+                    "Failed to execute 'initEvent' on 'Event': 1 argument required, but only 0 present.");
+            if (TryGetNative(state, thisV, out var e))
+                e.InitEvent(a[0].ToString(),
+                    a.Length > 1 && TypeConverter.ToBoolean(a[1]),
+                    a.Length > 2 && TypeConverter.ToBoolean(a[2]));
+            return JsValue.Undefined;
+        }, length: 3);
+
+        // Legacy cancelBubble (alias of stopPropagation when set truthy) and
+        // returnValue (false ⇒ preventDefault).
+        JintInterop.DefineAccessor(engine, evProto, "cancelBubble",
+            (thisV, _) => TryGetNative(state, thisV, out var e) ? JintInterop.Bool(e.PropagationStopped) : JsBoolean.False,
+            (thisV, a) => { if (a.Length > 0 && TypeConverter.ToBoolean(a[0]) && TryGetNative(state, thisV, out var e)) e.StopPropagation(); return JsValue.Undefined; });
+        JintInterop.DefineAccessor(engine, evProto, "returnValue",
+            (thisV, _) => TryGetNative(state, thisV, out var e) ? JintInterop.Bool(!e.DefaultPrevented) : JsBoolean.True,
+            (thisV, a) => { if (a.Length > 0 && !TypeConverter.ToBoolean(a[0]) && TryGetNative(state, thisV, out var e)) e.PreventDefault(); return JsValue.Undefined; });
+    }
+
+    /// <summary>Legacy <c>document.createEvent(interface)</c> (DOM §2.9). Returns an
+    /// uninitialized event of the requested legacy interface, wrapped against its
+    /// subtype prototype so it is dispatchable and <c>instanceof</c> resolves. The
+    /// caller must call <c>initEvent</c>/<c>initCustomEvent</c> before dispatch.
+    /// Throws <c>NotSupportedError</c> for an unrecognized interface.</summary>
+    public static JsValue CreateLegacyEvent(JintBackendContext ctx, string interfaceName)
+    {
+        ArgumentNullException.ThrowIfNull(ctx);
+        var state = EventState.For(ctx);
+        var evProto = ctx.Wrappers.EventPrototype!;
+        var key = interfaceName.ToLowerInvariant();
+        // A createEvent() event is uninitialized until initEvent/initCustomEvent.
+        DomEvent Mk(DomEvent ev) { ev.MarkAsUninitialized(); return ev; }
+        return key switch
+        {
+            "event" or "events" or "htmlevents" => state.WrapNativeEvent(Mk(new DomEvent("", default)), evProto),
+            "customevent" => state.WrapNativeEvent(Mk(new DomCustomEvent("", default)), evProto),
+            "uievent" or "uievents" => state.WrapNativeEvent(Mk(new UiEvent("", default)), state.UiEventProto ?? evProto),
+            "mouseevent" or "mouseevents" => state.WrapNativeEvent(Mk(new MouseEvent("", default)), state.MouseEventProto ?? evProto),
+            "keyboardevent" or "keyevents" => state.WrapNativeEvent(Mk(new KeyboardEvent("", default)), state.KeyboardEventProto ?? evProto),
+            _ => throw DomExceptionBinding.Throw(ctx, "NotSupportedError",
+                $"Failed to execute 'createEvent' on 'Document': The provided event type ('{interfaceName}') is invalid."),
+        };
     }
 
     /// <summary>composedPath() — DOM §2.10. The native dispatcher does not retain
@@ -269,7 +512,10 @@ internal static class EventTargetBinding
         var jsLog = ctx.LoggerFactory.CreateLogger("Starling.engine.js");
         try
         {
-            var jsEvent = state.WrapNativeEvent(ev, ctx.Wrappers.EventPrototype!);
+            // Wrap against the host event's own subtype prototype, so a listener
+            // for a host-fired `click`/`keydown` sees `instanceof MouseEvent` and
+            // the subtype accessors (clientX, key, …), not a bare Event.
+            var jsEvent = state.WrapNativeEvent(ev, state.GetEventPrototypeForHost(ev));
             JsValue thisVal = ev.CurrentTarget is null ? JsValue.Undefined : ctx.Wrappers.Wrap(ev.CurrentTarget);
 
             JsValue callback = listener;
@@ -283,17 +529,46 @@ internal static class EventTargetBinding
                 thisVal = listener;
             }
 
-            callback.Call(thisVal, new[] { jsEvent });
+            var previousEvent = state.CurrentEvent;
+            state.CurrentEvent = jsEvent;
+            try { callback.Call(thisVal, new[] { jsEvent }); }
+            finally { state.CurrentEvent = previousEvent; }
         }
         catch (JavaScriptException ex)
         {
-            EventTargetBindingLog.UncaughtInEventListener(jsLog,
-                JintInterop.DescribeError(ex.Error, ex.Message));
+            // HTML §"report the exception": run window.onerror first; a truthy
+            // return cancels the default (logged) report.
+            if (!ReportException(ctx, ex.Error, JintInterop.DescribeError(ex.Error, ex.Message)))
+                EventTargetBindingLog.UncaughtInEventListener(jsLog,
+                    JintInterop.DescribeError(ex.Error, ex.Message));
         }
         catch (Exception ex)
         {
             EventTargetBindingLog.UncaughtInEventListener(jsLog, ex.Message);
         }
+    }
+
+    /// <summary>HTML §"report the exception" — invoke the legacy <c>window.onerror</c>
+    /// handler (message, source, lineno, colno, error). Returns true when the
+    /// handler ran and returned a truthy value (cancelling the default report).
+    /// An error thrown by the handler itself is swallowed (no recursion).</summary>
+    public static bool ReportException(JintBackendContext ctx, JsValue error, string message)
+    {
+        var onerror = ctx.Engine.Global.Get("onerror");
+        if (!onerror.IsCallable()) return false;
+        try
+        {
+            var result = onerror.Call(ctx.Engine.Global, new[]
+            {
+                JintInterop.Str(message),
+                JintInterop.Str(ctx.BaseUrl.ToString()),
+                JintInterop.Num(0),
+                JintInterop.Num(0),
+                error,
+            });
+            return TypeConverter.ToBoolean(result);
+        }
+        catch (JavaScriptException) { return false; }
     }
 
     // ---- helpers -------------------------------------------------------------
@@ -403,15 +678,48 @@ internal sealed class EventState
     private readonly ConditionalWeakTable<ObjectInstance, DomEvent> _wrapperToEvent = new();
     // CustomEvent JS-value detail (JsValue is a struct → box for the table).
     private readonly ConditionalWeakTable<ObjectInstance, JsValueBox> _detail = new();
+    // The raw JS init dictionary a subtype event was constructed with, so subtype
+    // accessors with no host-class slot (buttons, deltaX, location, …) read back.
+    private readonly ConditionalWeakTable<ObjectInstance, JsValueBox> _initDict = new();
     // per host EventTarget listener bookkeeping.
     private readonly ConditionalWeakTable<EventTarget, ListenerRegistry> _registries = new();
 
     private EventState(JintBackendContext ctx) => _ctx = ctx;
 
+    /// <summary>Legacy <c>window.event</c> — the event whose listener is currently
+    /// running, or undefined when none. Set/restored around each listener call.</summary>
+    public JsValue CurrentEvent { get; set; } = JsValue.Undefined;
+
+    // Subtype prototype slots, set during Install. GetEventPrototypeForHost reads
+    // these so a host-fired MouseEvent/KeyboardEvent/… wraps against its own
+    // prototype (not the bare Event prototype) — fixing `instanceof MouseEvent`
+    // and `event.clientX` for real `click`/`keydown` listeners.
+    public ObjectInstance? UiEventProto { get; set; }
+    public ObjectInstance? MouseEventProto { get; set; }
+    public ObjectInstance? KeyboardEventProto { get; set; }
+    public ObjectInstance? FocusEventProto { get; set; }
+
+    /// <summary>The most-derived installed prototype for a host event subtype,
+    /// falling back up the chain to %EventPrototype%.</summary>
+    public ObjectInstance GetEventPrototypeForHost(DomEvent ev) => ev switch
+    {
+        MouseEvent => MouseEventProto ?? UiEventProto ?? _ctx.Wrappers.EventPrototype!,
+        KeyboardEvent => KeyboardEventProto ?? UiEventProto ?? _ctx.Wrappers.EventPrototype!,
+        FocusEvent => FocusEventProto ?? UiEventProto ?? _ctx.Wrappers.EventPrototype!,
+        UiEvent => UiEventProto ?? _ctx.Wrappers.EventPrototype!,
+        _ => _ctx.Wrappers.EventPrototype!,
+    };
+
     /// <summary>Get the existing JS wrapper for a native event, or mint one with
     /// the given prototype. For native events fired by the DOM (no JS wrapper yet)
     /// this builds the Event facade the listener sees.</summary>
     public ObjectInstance WrapNativeEvent(DomEvent native, ObjectInstance defaultProto)
+        => WrapNativeEvent(native, defaultProto, JsValue.Undefined);
+
+    /// <summary>As <see cref="WrapNativeEvent(DomEvent, ObjectInstance)"/>, but also
+    /// records the JS init dictionary the event was constructed with so subtype
+    /// accessors can read members that have no host-class slot.</summary>
+    public ObjectInstance WrapNativeEvent(DomEvent native, ObjectInstance defaultProto, JsValue initDict)
     {
         if (_eventToWrapper.TryGetValue(native, out var existing)) return existing;
 
@@ -424,6 +732,7 @@ internal sealed class EventState
         var wrapper = new JsObject(_ctx.Engine) { Prototype = proto };
         _eventToWrapper.Add(native, wrapper);
         _wrapperToEvent.Add(wrapper, native);
+        if (!initDict.IsUndefined()) _initDict.AddOrUpdate(wrapper, new JsValueBox(initDict));
 
         // Surface the host CustomEvent.Detail when it carries a JsValue (e.g. an
         // event constructed by C# / a non-JS CustomEvent).
@@ -435,6 +744,13 @@ internal sealed class EventState
 
     public bool TryGetNativeEvent(ObjectInstance wrapper, out DomEvent native)
         => _wrapperToEvent.TryGetValue(wrapper, out native!);
+
+    public bool TryGetInitDict(ObjectInstance wrapper, out JsValue initDict)
+    {
+        if (_initDict.TryGetValue(wrapper, out var box)) { initDict = box.Value; return true; }
+        initDict = JsValue.Undefined;
+        return false;
+    }
 
     public void SetDetail(ObjectInstance wrapper, JsValue detail)
     {

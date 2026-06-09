@@ -1,167 +1,180 @@
+using Starling.Js.Bytecode;
+
 namespace Starling.Js.Runtime;
 
 /// <summary>
-/// B1b-2c — runtime handle for a generator / async function body suspended
-/// at a <c>yield</c> or <c>await</c> point. Backed by a dedicated worker
-/// thread that owns the VM frame's locals + eval stack: when JS code on the
-/// main thread calls <c>.next()</c> (generator) or the awaited promise
-/// settles (async), the main thread signals the worker to resume and waits
-/// for the next suspension or completion.
+/// Runtime handle for a generator, async function, or async generator body that
+/// is parked at a <c>yield</c>, <c>await</c>, or prologue boundary.
 /// </summary>
-/// <remarks>
-/// <para>
-/// The handoff is synchronous: only one thread runs JS at a time, so the
-/// usual single-threaded VM invariants are preserved. The worker thread
-/// blocks on <see cref="_resume"/> until the main thread sets it; the main
-/// thread blocks on <see cref="_yield"/> until the worker yields. There is
-/// no lock — the events provide mutual exclusion.
-/// </para>
-/// <para>
-/// Chosen for implementation simplicity over CPS rewriting. Performance
-/// cost: one thread per concurrently-suspended generator/async, plus the
-/// signal cost on each yield. Acceptable for the M3 surface.
-/// </para>
-/// </remarks>
 public sealed class SuspendedFrame
 {
-    private readonly ManualResetEventSlim _resume = new(initialState: false);
-    private readonly ManualResetEventSlim _yield = new(initialState: false);
-    private Thread? _worker;
+    private Action? _body;
 
-    /// <summary>Value pushed by the caller when resuming
-    /// (<c>.next(v)</c> for generators, the resolved value for async).
-    /// The worker pops this onto its eval stack after Suspend returns.</summary>
-    public JsValue ResumeValue { get; set; } = JsValue.Undefined;
-
-    /// <summary>True when the caller wants to inject a throw at the
-    /// suspension point — used by generator <c>.throw(e)</c> and by
-    /// async <c>await</c> when the awaited promise rejects.</summary>
-    public bool ResumeWithThrow { get; set; }
-
-    /// <summary>True when the caller wants to inject a Return completion
-    /// at the suspension point — used by generator <c>.return(v)</c> so
-    /// the worker walks any enclosing <c>finally</c> blocks before
-    /// completing with <see cref="ResumeValue"/> as the return value.
-    /// Mutually exclusive with <see cref="ResumeWithThrow"/>.</summary>
-    public bool ResumeWithReturn { get; set; }
-
-    /// <summary>Value yielded by the worker (the operand of <c>yield expr</c>
-    /// or <c>await expr</c>). For yield it becomes the result-object's
-    /// <c>value</c>; for await it's the promise/value to settle on.</summary>
-    public JsValue YieldedValue { get; set; } = JsValue.Undefined;
-
-    /// <summary>Why the worker last suspended: <c>0</c> = <c>yield</c>,
-    /// <c>1</c> = <c>await</c>. Set by the <see cref="Starling.Js.Bytecode.Opcode.Suspend"/>
-    /// handler before it hands off, so the async-generator driver can tell a
-    /// genuine yield (settle the pending request with <c>{value, done:false}</c>)
-    /// apart from an internal await (resume after the awaited promise settles,
-    /// without producing a result for the caller). Sync generators and plain
-    /// async functions ignore this field.</summary>
-    public int SuspendKind { get; set; }
-
-    /// <summary>True once the worker thread has finished executing the
-    /// function body (normally via <c>return</c> or fall-off).</summary>
+    public JsValue ResumeValue { get; private set; } = JsValue.Undefined;
+    public bool ResumeWithThrow { get; private set; }
+    public bool ResumeWithReturn { get; private set; }
+    public JsValue YieldedValue { get; private set; } = JsValue.Undefined;
+    public int SuspendKind { get; private set; }
     public bool Completed { get; private set; }
-
-    /// <summary>The function's return value when <see cref="Completed"/>
-    /// becomes true normally. Undefined for explicit-return-less generators.</summary>
     public JsValue ReturnValue { get; private set; } = JsValue.Undefined;
-
-    /// <summary>True if the worker thread threw an uncaught JsThrow. The
-    /// thrown value lives in <see cref="ReturnValue"/>.</summary>
     public bool ThrewUncaught { get; private set; }
-
-    /// <summary>The active VM. Stashed so the worker can publish itself as
-    /// the realm's <c>ActiveVm</c> before starting bytecode execution.</summary>
     public JsVm Vm { get; }
+
+    internal bool Suspended { get; private set; }
+    internal ContinuationFrameState? State { get; private set; }
+    internal ContinuationResumeAction ResumeAction { get; private set; }
+    internal YieldDelegateContinuation? YieldDelegate { get; set; }
 
     public SuspendedFrame(JsVm vm)
     {
-        Vm = vm ?? throw new System.ArgumentNullException(nameof(vm));
+        Vm = vm ?? throw new ArgumentNullException(nameof(vm));
     }
 
-    /// <summary>Spawn the worker thread that will execute <paramref name="body"/>.
-    /// The worker blocks immediately on <see cref="_resume"/>; it only starts
-    /// running when the caller invokes <see cref="Resume"/>. The body must
-    /// drive the VM's <c>RunInner</c> with this frame as the active
-    /// suspension target, so any <see cref="Starling.Js.Bytecode.Opcode.Suspend"/>
-    /// dispatches to <see cref="WorkerYield"/>.</summary>
-    public void Start(System.Action body)
+    public void Start(Action body)
     {
-        if (_worker is not null)
-            throw new System.InvalidOperationException("SuspendedFrame already started");
-        _worker = new Thread(() =>
-        {
-            // Wait for first resume signal before doing anything.
-            _resume.Wait();
-            _resume.Reset();
-            try
-            {
-                body();
-            }
-            catch (JsThrow ex)
-            {
-                ThrewUncaught = true;
-                ReturnValue = ex.Value;
-            }
-            catch (System.Exception ex)
-            {
-                ThrewUncaught = true;
-                ReturnValue = JsValue.String("internal VM error: " + ex.Message);
-            }
-            finally
-            {
-                Completed = true;
-                _yield.Set();
-            }
-        })
-        {
-            IsBackground = true,
-            Name = "JsSuspendedFrame",
-        };
-        _worker.Start();
+        if (_body is not null)
+            throw new InvalidOperationException("SuspendedFrame already started");
+        _body = body ?? throw new ArgumentNullException(nameof(body));
     }
 
-    /// <summary>Worker-side primitive: pause and hand
-    /// <paramref name="yielded"/> to the caller. Blocks until
-    /// <see cref="Resume"/> wakes us. Returns the resume-value pushed by
-    /// the caller. If the caller asked us to throw, the caller side of
-    /// Resume injects the throw into the VM via the Suspend opcode handler.
-    /// </summary>
-    public JsValue WorkerYield(JsValue yielded)
+    internal void Suspend(
+        ContinuationFrameState state,
+        JsValue yieldedValue,
+        int suspendKind,
+        ContinuationResumeAction resumeAction)
     {
-        YieldedValue = yielded;
-        _yield.Set();
-        _resume.Wait();
-        _resume.Reset();
-        return ResumeValue;
+        if (Completed) return;
+        State = state ?? throw new ArgumentNullException(nameof(state));
+        YieldedValue = yieldedValue;
+        SuspendKind = suspendKind;
+        ResumeAction = resumeAction;
+        Suspended = true;
     }
 
-    /// <summary>Internal — worker calls this just before exiting to publish
-    /// the return value (the "completion" the next caller-side
-    /// <see cref="Resume"/> sees).</summary>
-    internal void SetReturnValue(JsValue v) => ReturnValue = v;
+    public void ClearContinuation()
+    {
+        State = null;
+        YieldDelegate = null;
+        ResumeAction = ContinuationResumeAction.None;
+        Suspended = false;
+    }
 
-    /// <summary>Internal — worker publishes that its body threw uncaught.</summary>
-    internal void SetThrew(JsValue v)
+    internal void ClearResumeAction() => ResumeAction = ContinuationResumeAction.None;
+
+    internal ResumeCompletion ConsumeResume()
+    {
+        var result = ResumeWithThrow
+            ? new ResumeCompletion(ResumeCompletionKind.Throw, ResumeValue)
+            : ResumeWithReturn
+                ? new ResumeCompletion(ResumeCompletionKind.Return, ResumeValue)
+                : new ResumeCompletion(ResumeCompletionKind.Normal, ResumeValue);
+
+        ResumeWithThrow = false;
+        ResumeWithReturn = false;
+        return result;
+    }
+
+    internal void SetReturnValue(JsValue value)
+    {
+        ReturnValue = value;
+        Completed = true;
+        ClearContinuation();
+    }
+
+    internal void SetThrew(JsValue value)
     {
         ThrewUncaught = true;
-        ReturnValue = v;
+        ReturnValue = value;
+        Completed = true;
+        ClearContinuation();
     }
 
-    /// <summary>Caller-side primitive: signal the worker to start (or
-    /// continue) running, then block until the worker either yields or
-    /// completes. After this returns, callers should consult
-    /// <see cref="Completed"/> and either <see cref="YieldedValue"/> (still
-    /// running) or <see cref="ReturnValue"/> (done).</summary>
     public void Resume(JsValue value, bool withThrow = false, bool withReturn = false)
     {
         if (Completed) return;
+        if (_body is null)
+            throw new InvalidOperationException("SuspendedFrame has not been started");
+
         ResumeValue = value;
         ResumeWithThrow = withThrow;
         ResumeWithReturn = withReturn;
-        _resume.Set();
-        _yield.Wait();
-        _yield.Reset();
+        Suspended = false;
+
+        try
+        {
+            _body();
+        }
+        catch (JsThrow ex)
+        {
+            SetThrew(ex.Value);
+        }
+        catch (Exception ex)
+        {
+            SetThrew(JsValue.String("internal VM error: " + ex.Message));
+        }
     }
+}
+
+internal enum ContinuationResumeAction
+{
+    None,
+    IgnoreResume,
+    PushResume,
+    AsyncGeneratorYieldAwait,
+    YieldDelegate,
+}
+
+internal enum ResumeCompletionKind
+{
+    Normal,
+    Throw,
+    Return,
+}
+
+internal readonly record struct ResumeCompletion(ResumeCompletionKind Kind, JsValue Value);
+
+internal sealed class ContinuationFrameState
+{
+    public required Chunk Chunk { get; init; }
+    public required JsValue[] Stack { get; init; }
+    public required JsValue[] Locals { get; init; }
+    public required IReadOnlyList<JsValue> Upvalues { get; init; }
+    public required Stack<TryFrame> TryStack { get; init; }
+    public JsFunction? CurrentFunction { get; init; }
+    public JsObject? NewTarget { get; init; }
+    public EvalScope? EvalScope { get; init; }
+    public EvalVarStore? FrameVarStore { get; set; }
+    public List<JsObject>? WithStack { get; init; }
+    public JsValue ThisValue { get; init; }
+    public int Ip { get; init; }
+    public int Sp { get; init; }
+    public int MaxSp { get; init; }
+    public int InitDepth { get; init; }
+}
+
+internal sealed class YieldDelegateContinuation
+{
+    public required bool IsAsync { get; init; }
+    public required bool SyncWrapped { get; init; }
+    public required IteratorRecord Record { get; init; }
+    public JsValue InnerIterator { get; init; }
+    public JsValue NextMethod { get; init; }
+    public JsValue Received { get; set; } = JsValue.Undefined;
+    public int ReceivedKind { get; set; }
+    public YieldDelegatePhase Phase { get; set; }
+    public bool ProcessingReturnResult { get; set; }
+    public bool PendingOuterReturn { get; set; }
+}
+
+internal enum YieldDelegatePhase
+{
+    CallInner,
+    AwaitInnerResult,
+    AfterOuterYield,
+}
+
+internal readonly record struct YieldDelegateStep(bool Suspended, bool Completed, JsValue Value)
+{
+    public static YieldDelegateStep Parked() => new(Suspended: true, Completed: false, JsValue.Undefined);
+    public static YieldDelegateStep Done(JsValue value) => new(Suspended: false, Completed: true, value);
 }

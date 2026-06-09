@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using Jint;
-using Jint.Native;
 using Jint.Runtime;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -422,37 +421,18 @@ internal sealed class JintScriptSession : IScriptSession
     }
 
     private void ReportUncaught(JavaScriptException ex)
-        => _consoleSink(ConsoleLevel.Error,
-            $"Uncaught {JintInterop.DescribeError(ex.Error, ex.Message)}");
+    {
+        // HTML §"report the exception": run window.onerror first (a truthy return
+        // cancels the default console report), then echo to the console.
+        var message = JintInterop.DescribeError(ex.Error, ex.Message);
+        if (EventTargetBinding.ReportException(_ctx, ex.Error, message)) return;
+        _consoleSink(ConsoleLevel.Error, $"Uncaught {message}");
+    }
 
     private void InstallConsole()
-    {
-        var console = new global::Jint.Native.JsObject(_engine);
-        void Method(string name, ConsoleLevel level)
-            => JintInterop.DefineMethod(_engine, console, name, (_, args) =>
-            {
-                _consoleSink(level, FormatConsoleArgs(args));
-                return JsValue.Undefined;
-            }, 0);
-
-        Method("log", ConsoleLevel.Log);
-        Method("info", ConsoleLevel.Info);
-        Method("warn", ConsoleLevel.Warn);
-        Method("error", ConsoleLevel.Error);
-        Method("debug", ConsoleLevel.Debug);
-        Method("trace", ConsoleLevel.Trace);
-        Method("dir", ConsoleLevel.Dir);
-        Method("table", ConsoleLevel.Table);
-
-        JintInterop.DefineDataProp(_engine.Global, "console", console,
-            writable: true, enumerable: false, configurable: true);
-    }
-
-    private static string FormatConsoleArgs(JsValue[] args)
-    {
-        if (args.Length == 0) return string.Empty;
-        return string.Join(" ", args.Select(a => a.IsNull() ? "null" : a.ToString()));
-    }
+        // Reads the current sink live (it can be reassigned after install), and
+        // installs the full method set (time/count/group/assert/clear, …).
+        => ConsoleBinding.Install(_engine, (level, msg) => _consoleSink(level, msg));
 }
 
 /// <summary>

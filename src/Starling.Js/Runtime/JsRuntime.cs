@@ -23,6 +23,7 @@ public sealed class JsRuntime
 
     public JsRealm Realm { get; }
     public JsObject Global => Realm.GlobalObject;
+    internal JsRuntimeDiagnostics Diagnostics { get; } = new();
 
     /// <summary>When true, top-level uncaught throws are swallowed and logged
     /// rather than propagated to the host. Path-A behavior so the engine can
@@ -279,4 +280,14 @@ public sealed class JsRuntime
         "trace" => ConsoleLevel.Trace,
         _ => ConsoleLevel.Log,
     };
+}
+
+internal sealed class JsRuntimeDiagnostics
+{
+    private int _continuationThreadStarts;
+
+    internal int ContinuationThreadStarts => Volatile.Read(ref _continuationThreadStarts);
+
+    internal void RecordContinuationThreadStart()
+        => Interlocked.Increment(ref _continuationThreadStarts);
 }

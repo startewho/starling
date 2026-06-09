@@ -30,18 +30,17 @@ internal static class CookieBinding
             return;
         }
 
+        if (documentProto.HasOwnProperty("cookie")) return;
+
         JintInterop.DefineAccessor(engine, documentProto, "cookie",
-            (_, _) => JintInterop.Str(""),
+            (_, _) => JintInterop.Str(ctx.Cookies.BuildCookieHeader(ctx.BaseUrl)),
             (_, args) =>
             {
-                var value = args.Length > 0 ? args[0].ToString() : "";
-                CookieBindingLog.CookieSetIgnored(log, Truncate(value));
+                var raw = args.Length > 0 ? args[0].ToString() : "";
+                if (!string.IsNullOrEmpty(raw)) ctx.Cookies.StoreFromHeaders(ctx.BaseUrl, new[] { raw });
                 return JsValue.Undefined;
             });
     }
-
-    private static string Truncate(string s, int max = 120)
-        => s.Length <= max ? s : s[..max] + "…";
 }
 
 internal static partial class CookieBindingLog
@@ -49,8 +48,4 @@ internal static partial class CookieBindingLog
     [LoggerMessage(Level = LogLevel.Debug,
         Message = "DocumentPrototype is null; document.cookie accessor not installed.")]
     public static partial void DocumentPrototypeNull(ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Debug,
-        Message = "document.cookie= ignored (no CookieJar wired): {Value}")]
-    public static partial void CookieSetIgnored(ILogger logger, string value);
 }

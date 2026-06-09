@@ -236,8 +236,8 @@ public enum JsFunctionKind : byte
 {
     /// <summary>Plain function — body runs synchronously.</summary>
     Normal = 0,
-    /// <summary>Async function — invocation returns a Promise; the body runs
-    /// on a worker thread and suspends at <c>await</c> via the VM's
+    /// <summary>Async function — invocation returns a Promise; the body
+    /// suspends at <c>await</c> via the VM's
     /// <see cref="Starling.Js.Bytecode.Opcode.Suspend"/> opcode.</summary>
     Async = 1,
     /// <summary>Generator function — invocation returns a Generator

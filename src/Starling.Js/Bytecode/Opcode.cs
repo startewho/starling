@@ -414,17 +414,16 @@ public enum Opcode : byte
     // ----- Generators / async (B1b-2c) -----
     /// <summary>[u8 kind] — Suspend the current frame. <c>kind</c>:
     /// 0 = yield (sync generator), 1 = await (async). Pops the yielded /
-    /// awaited value, hands it to the suspension scheduler (the worker
-    /// thread blocks until the caller resumes), then pushes the
-    /// resume-value back onto the stack. For <c>await</c>, the
+    /// awaited value, parks the heap-backed continuation frame, then pushes the
+    /// resume-value back onto the stack when resumed. For <c>await</c>, the
     /// resume-value is the resolved value (or, if the awaited promise
     /// rejected, a <c>JsThrow</c> is raised at this point).</summary>
     Suspend,
 
     /// <summary>§10.2.1.3 / §15.5.2 / §27 — marks the end of the
     /// parameter-binding prologue (FunctionDeclarationInstantiation) of a
-    /// generator / async / async-generator body. The worker thread executes the
-    /// prologue synchronously at call time and then hands off here, so a throw
+    /// generator / async / async-generator body. The prologue runs
+    /// synchronously at call time and then hands off here, so a throw
     /// from parameter destructuring / defaults / RequireObjectCoercible /
     /// iterator-protocol surfaces to the caller BEFORE the generator object /
     /// promise is produced. Resuming past this point continues the body lazily.

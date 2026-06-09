@@ -69,6 +69,11 @@ internal static class CssBinding
             return JsValue.Undefined;
         }, 1);
 
+        // CSSOM §6 — CSS[Symbol.toStringTag] === "CSS".
+        css.DefineOwnProperty(global::Jint.Native.Symbol.GlobalSymbolRegistry.ToStringTag,
+            new global::Jint.Runtime.Descriptors.PropertyDescriptor(JintInterop.Str("CSS"),
+                writable: false, enumerable: false, configurable: true));
+
         JintInterop.DefineDataProp(global, "CSS", css, writable: true, enumerable: false, configurable: true);
 
         // CSS Typed OM 1 §3.2 — CSSStyleValue.parse(property, cssText).
