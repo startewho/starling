@@ -2,7 +2,7 @@
 id: "wp:M3-84-js-stack-trampoline"
 parent: "wp:M3-04-js-vm"
 milestone: "M3"
-status: "in_progress"
+status: "complete"
 phase: "3"
 subsystem: "Starling.Js"
 depends_on:
@@ -249,6 +249,30 @@ Two Stage B choices that differ from the design sketch above:
   how the frame was entered.
 
 ## Handoff log
+- 2026-06-09 — gates passed, P0 review finding fixed, task complete
+  (agent-claude-cody, commit `5494fb24`). An adversarial review of the full
+  diff found one real bug: a derived constructor that finishes without
+  running `super()` throws its ReferenceError during the pop coercion, and
+  on a barrier pop the dispatch catch then released the already-released
+  frame — the same pooled operand stack went to the array pool twice, and
+  later unrelated code computed wrong values (`Reflect.construct(B, [])`
+  then `1 + g()` gave NaN). Fixed by returning the raw value from barrier
+  pops and coercing in `RunBarrier`, outside the dispatch catch, which is
+  where the old native model ran it. Three regression tests added (2,235
+  unit tests green, Test262 unchanged at 95.61%). Perf gates measured
+  against pre-change baseline `6ef6e37c` with identical ShortRun harnesses:
+  `Run_FibRecursive_15` 817 µs → 540 µs (−34%), `StarlingScalingBench`
+  −26% to −37% at every N ≥ 100, allocation growth exactly one 96-byte
+  `CallFrame` per JS→JS call at all scales. Stage C judged unnecessary —
+  the bench got faster, not slower. End-to-end: x.com in the live GUI
+  (Starling engine) loads and renders with zero console errors and zero
+  RangeError/uncaught entries in the engine logs — before this work the
+  same load died in the webpack module graph at ~26 native frames. Review
+  also documented two pre-existing parity gaps that are NOT regressions
+  (class ctors callable without `new`, `IsConstructor` true for arrows)
+  and a benign pooled-args leak on throw-past-call that matches the old
+  code. Known limit: x.com's title/hydration still doesn't complete — a
+  separate bindings gap, same class as the angular.dev hydration issue.
 - 2026-06-09 — Stage B landed (agent-claude-cody). JS→JS calls no longer
   recurse on the native stack. The dispatch loop (`Dispatch`) switches heap
   `CallFrame`s on call/return: `Call`/`CallMethod`/`New`/`CallApply`/
