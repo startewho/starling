@@ -68,8 +68,8 @@ public static class RegexBackendSelector
     /// expensive compiled form — the Pike VM parse plus any System.Text.Regex
     /// construction — is built once and reused, the way real engines cache a
     /// literal's compiled pattern. The matcher is realm-independent, immutable,
-    /// and thread-safe, so the cache is safe to share across realms and the
-    /// cooperative worker threads. Bounded by the program's distinct literals.</summary>
+    /// and thread-safe, so the cache is safe to share across realms and host
+    /// callbacks. Bounded by the program's distinct literals.</summary>
     public static IRegexMatcher CompileCached(string pattern, RegexFlags flags)
         => _cache.TryGetValue((pattern, flags), out var hit)
             ? hit

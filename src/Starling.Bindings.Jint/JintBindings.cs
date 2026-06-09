@@ -34,6 +34,37 @@ public static class JintBindings
         // constructible interface wins.
         DomExceptionBinding.Install(ctx);
 
+        // DOM §6 traversal (NodeFilter / TreeWalker / NodeIterator). Needs the
+        // DocumentPrototype slot from NodeBindings for createTreeWalker/createNodeIterator.
+        TraversalBinding.Install(ctx);
+
+        // DOM §4.6 Range / StaticRange + document.createRange.
+        RangeBinding.Install(ctx);
+
+        // Selection API (window/document.getSelection). After RangeBinding so the
+        // Range wrapper exists for getRangeAt/addRange.
+        SelectionBinding.Install(ctx);
+
+        // CSSOM (document.styleSheets, element.sheet, CSSStyleSheet/Rule/Declaration).
+        CssomBinding.Install(ctx);
+
+        // DOM §4.9 Attr / NamedNodeMap (real element.attributes, Attr-node methods,
+        // document.createAttribute). Needs Element/Document prototypes from NodeBindings.
+        AttrBinding.Install(ctx);
+
+        // CSS Font Loading (document.fonts + FontFace constructor).
+        FontFaceBinding.Install(ctx);
+
+        // Web Animations (element.animate → Animation + KeyframeEffect).
+        WebAnimationsBinding.Install(ctx);
+
+        // WebAssembly (Wasmtime-backed Module/Instance/Memory/Table + errors).
+        WebAssemblyBinding.Install(ctx);
+
+        // IFrame browsing context (contentDocument/contentWindow + src load).
+        // After WindowBinding (defaultView override) and NodeBindings prototypes.
+        IFrameBinding.Install(ctx);
+
         // Window/global + companions.
         WindowBinding.Install(ctx);
         CssBinding.Install(ctx);
@@ -51,14 +82,27 @@ public static class JintBindings
         UrlBinding.Install(ctx);
         EncodingBinding.Install(ctx);
 
+        // Blob / File / FormData (real classes). Before FetchBinding so its
+        // Response.blob() can mint a real Blob; after NodeBindings for the
+        // __starlingFormDataEntries hook.
+        BlobFileFormDataBinding.Install(ctx);
+
         // Network.
         FetchBinding.Install(ctx);
         XhrBinding.Install(ctx);
 
         // Observers, crypto, cookies. Cookies run after NodeBindings.
-        ObserversBinding.Install(ctx);
+        MutationObserverBinding.Install(ctx); // real MutationObserver (records + delivery)
+        ObserversBinding.Install(ctx);        // Intersection / Resize (surface-level)
         CryptoBinding.Install(ctx);
         CookieBinding.Install(ctx);
+
+        // Core utility globals: btoa / atob / structuredClone.
+        CoreWebApiBinding.Install(ctx);
+
+        // Full console (idempotent — the live session installs its own with a real
+        // sink before InstallAll; this serves bare contexts / parity tests).
+        ConsoleBinding.Install(ctx);
 
         // ES modules.
         ModuleLoader.Install(ctx);

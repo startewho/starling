@@ -201,6 +201,41 @@ internal static class WindowBinding
         JintInterop.DefineAccessor(engine, nav, "cookieEnabled", (_, _) => JsBoolean.True);
         JintInterop.DefineMethod(engine, nav, "javaEnabled", (_, _) => JsBoolean.False, length: 0);
         JintInterop.DefineMethod(engine, nav, "sendBeacon", (_, _) => JsBoolean.False, length: 2);
+        // Hardware / input hints + automation flag (feature-detected by many sites).
+        JintInterop.DefineAccessor(engine, nav, "hardwareConcurrency",
+            (_, _) => JintInterop.Num(Math.Max(1, Environment.ProcessorCount)));
+        JintInterop.DefineAccessor(engine, nav, "maxTouchPoints", (_, _) => JintInterop.Num(0));
+        JintInterop.DefineAccessor(engine, nav, "webdriver", (_, _) => JsBoolean.False);
+        JintInterop.DefineAccessor(engine, nav, "pdfViewerEnabled", (_, _) => JsBoolean.False);
+        // Sub-API stubs present enough for `'clipboard' in navigator` feature tests;
+        // the operations resolve/no-op rather than throwing.
+        var clipboard = new JsObject(engine);
+        JintInterop.DefineMethod(engine, clipboard, "writeText", (_, _) => { var (p, r, _) = engine.Advanced.RegisterPromise(); r(JsValue.Undefined); return p; }, 1);
+        JintInterop.DefineMethod(engine, clipboard, "readText", (_, _) => { var (p, r, _) = engine.Advanced.RegisterPromise(); r(JintInterop.Str("")); return p; }, 0);
+        JintInterop.DefineAccessor(engine, nav, "clipboard", (_, _) => clipboard);
+        var geolocation = new JsObject(engine);
+        JintInterop.DefineMethod(engine, geolocation, "getCurrentPosition", (_, a) =>
+        {
+            // Invoke the error callback with a PERMISSION_DENIED-shaped error (no real geolocation).
+            if (a.Length > 1 && a[1].IsCallable())
+            {
+                var err = new JsObject(engine);
+                JintInterop.DefineDataProp(err, "code", JintInterop.Num(1));
+                JintInterop.DefineDataProp(err, "message", JintInterop.Str("User denied Geolocation"));
+                a[1].Call(JsValue.Undefined, new JsValue[] { err });
+            }
+            return JsValue.Undefined;
+        }, 1);
+        JintInterop.DefineMethod(engine, geolocation, "watchPosition", (_, _) => JintInterop.Num(0), 1);
+        JintInterop.DefineMethod(engine, geolocation, "clearWatch", (_, _) => JsValue.Undefined, 1);
+        JintInterop.DefineAccessor(engine, nav, "geolocation", (_, _) => geolocation);
+        var serviceWorker = new JsObject(engine);
+        JintInterop.DefineMethod(engine, serviceWorker, "register", (_, _) => { var (p, _, rj) = engine.Advanced.RegisterPromise(); rj(new JsString("ServiceWorker registration is not supported")); return p; }, 1);
+        JintInterop.DefineMethod(engine, serviceWorker, "getRegistration", (_, _) => { var (p, r, _) = engine.Advanced.RegisterPromise(); r(JsValue.Undefined); return p; }, 0);
+        JintInterop.DefineMethod(engine, serviceWorker, "getRegistrations", (_, _) => { var (p, r, _) = engine.Advanced.RegisterPromise(); r(new JsArray(engine, System.Array.Empty<JsValue>())); return p; }, 0);
+        JintInterop.DefineAccessor(engine, serviceWorker, "controller", (_, _) => JsValue.Null);
+        JintInterop.DefineMethod(engine, serviceWorker, "addEventListener", (_, _) => JsValue.Undefined, 2);
+        JintInterop.DefineAccessor(engine, nav, "serviceWorker", (_, _) => serviceWorker);
         return nav;
     }
 

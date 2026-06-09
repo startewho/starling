@@ -13,6 +13,9 @@
          (AttributeMutated/ChildListMutated/CharacterDataMutated) to queue
          MutationRecords, kept off the public surface. -->
     <InternalsVisibleTo Include="Starling.Bindings" />
+    <!-- The Jint backend subscribes to the same Document mutation hooks to
+         implement a real MutationObserver, matching the canonical backend. -->
+    <InternalsVisibleTo Include="Starling.Bindings.Jint" />
     <!-- Tests exercise the internal mutation hooks directly. -->
     <InternalsVisibleTo Include="Starling.Dom.Tests" />
   </ItemGroup>

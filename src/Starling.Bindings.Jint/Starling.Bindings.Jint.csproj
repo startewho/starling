@@ -8,6 +8,9 @@
          deletable in one step (this project + the Jint package + one selector
          arm) without touching the seam or the Starling.Js backend. -->
     <PackageReference Include="Jint" />
+    <!-- Real WebAssembly execution for the WebAssembly JS API, mirroring the
+         canonical backend (Wasmtime.NET). -->
+    <PackageReference Include="Wasmtime" />
   </ItemGroup>
   <ItemGroup>
     <!-- J7: the ILayoutHost / LayoutRect / OffsetMetrics contract now lives in

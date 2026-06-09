@@ -1,6 +1,7 @@
 using System.Text;
 using Jint; // JsValueExtensions (IsObject/AsObject/IsString/…)
 using Jint.Native;
+using Jint.Native.Object;
 using Jint.Runtime;
 using Jint.Runtime.Descriptors;
 using Microsoft.Extensions.Logging;
@@ -55,6 +56,8 @@ internal static class FetchBinding
         Fn("headersHas", (_, a) => Bool(state.Headers.Get(Handle(a, 0)).Has(Str0(a, 1))), 2);
         Fn("headersGet", (_, a) => { var v = state.Headers.Get(Handle(a, 0)).GetCombined(Str0(a, 1)); return v is null ? JsValue.Null : Str(v); }, 2);
         Fn("headersEntries", (_, a) => state.Headers.Get(Handle(a, 0)).EntriesAsJsArray(engine), 1);
+        Fn("headersGetSetCookie", (_, a) =>
+            new JsArray(engine, state.Headers.Get(Handle(a, 0)).SetCookies().Select(c => (JsValue)new JsString(c)).ToArray()), 1);
 
         // ---- Request backing ----
         Fn("requestBuild", (_, a) => Num(state.BuildRequest(Arg(a, 0), Arg(a, 1))), 2);
@@ -119,6 +122,7 @@ internal static class FetchBinding
         delete(n) { B.headersDelete(this[H], String(n)); }
         has(n) { return B.headersHas(this[H], String(n)); }
         get(n) { return B.headersGet(this[H], String(n)); }
+        getSetCookie() { return B.headersGetSetCookie(this[H]); }
         forEach(cb, thisArg) {
           const e = B.headersEntries(this[H]);
           for (let i = 0; i < e.length; i++) cb.call(thisArg, e[i][1], e[i][0], this);
@@ -146,16 +150,46 @@ internal static class FetchBinding
           try { return Promise.resolve(B.bodyArrayBuffer(this[H])); }
           catch (e) { return Promise.reject(e); }
         };
-        // Minimal Blob: a thin object exposing size/type/text()/arrayBuffer().
+        // Real Blob via the global Blob class (installed by BlobFileFormDataBinding).
         proto.blob = function () {
           try {
             const buf = B.bodyArrayBuffer(this[H]);
-            return Promise.resolve({
-              size: buf.byteLength,
-              type: '',
-              arrayBuffer() { return Promise.resolve(buf); },
-              text() { return Promise.resolve(new TextDecoder().decode(buf)); }
-            });
+            let ct = '';
+            try { ct = (this.headers && this.headers.get('content-type')) || ''; } catch (e) {}
+            return Promise.resolve(new Blob([buf], { type: ct }));
+          } catch (e) { return Promise.reject(e); }
+        };
+        // formData() — parse the body per content-type (urlencoded fully; a basic
+        // multipart/form-data parser for the common simple-field case).
+        proto.formData = function () {
+          try {
+            let ct = '';
+            try { ct = (this.headers && this.headers.get('content-type')) || ''; } catch (e) {}
+            const text = B.bodyText(this[H]);
+            const fd = new FormData();
+            if (/multipart\/form-data/i.test(ct)) {
+              const m = /boundary=("?)([^";]+)\1/i.exec(ct);
+              if (m) {
+                const boundary = '--' + m[2];
+                const parts = text.split(boundary);
+                for (let i = 0; i < parts.length; i++) {
+                  let part = parts[i];
+                  if (part === '' || part === '--' || part === '--\r\n' || part === '\r\n') continue;
+                  if (part.startsWith('\r\n')) part = part.slice(2);
+                  const sep = part.indexOf('\r\n\r\n');
+                  if (sep < 0) continue;
+                  const head = part.slice(0, sep);
+                  let value = part.slice(sep + 4);
+                  if (value.endsWith('\r\n')) value = value.slice(0, -2);
+                  const nm = /name="([^"]*)"/i.exec(head);
+                  if (nm) fd.append(nm[1], value);
+                }
+              }
+            } else {
+              const usp = new URLSearchParams(text);
+              for (const [k, v] of usp) fd.append(k, v);
+            }
+            return Promise.resolve(fd);
           } catch (e) { return Promise.reject(e); }
         };
       }
@@ -165,6 +199,7 @@ internal static class FetchBinding
           if (input === undefined) throw new TypeError("Request requires at least 1 argument");
           this[H] = B.requestBuild(input, init);
           stamp(this, '__rid', this[H]);
+          this._signal = (init && init.signal) || (input && input.signal) || null;
         }
         get url() { return B.requestField(this[H], 'url'); }
         get method() { return B.requestField(this[H], 'method'); }
@@ -172,7 +207,7 @@ internal static class FetchBinding
         get redirect() { return B.requestField(this[H], 'redirect'); }
         get mode() { return B.requestField(this[H], 'mode'); }
         get credentials() { return B.requestField(this[H], 'credentials'); }
-        get signal() { return null; }
+        get signal() { return this._signal || null; }
         clone() { return new Request(this); }
       }
       defineBody(Request.prototype);
@@ -201,14 +236,33 @@ internal static class FetchBinding
       }
       defineBody(Response.prototype);
 
+      function abortError() {
+        try { return new DOMException('The operation was aborted.', 'AbortError'); }
+        catch (e) { const x = new Error('The operation was aborted.'); x.name = 'AbortError'; return x; }
+      }
+
       class AbortSignal {
-        constructor(h) { this[H] = h; }
+        constructor(h) { this[H] = h; this.__listeners = []; this.onabort = null; }
         get aborted() { return B.abortAborted(this[H]); }
         get reason() { return B.abortReason(this[H]); }
         throwIfAborted() { if (this.aborted) throw this.reason; }
-        // EventTarget surface is minimal (no listener registry on the Jint signal yet).
-        addEventListener() {}
-        removeEventListener() {}
+        addEventListener(type, cb) { if (type === 'abort' && typeof cb === 'function') this.__listeners.push(cb); }
+        removeEventListener(type, cb) { if (type === 'abort') this.__listeners = this.__listeners.filter(x => x !== cb); }
+        __fireAbort() {
+          const ev = { type: 'abort', target: this };
+          if (typeof this.onabort === 'function') { try { this.onabort(ev); } catch (e) {} }
+          for (const cb of this.__listeners.slice()) { try { cb(ev); } catch (e) {} }
+        }
+        static abort(reason) { const c = new AbortController(); c.abort(reason); return c.signal; }
+        static timeout(ms) { const c = new AbortController(); return c.signal; } // no real timer wiring
+        static any(signals) {
+          const c = new AbortController();
+          for (const s of signals) {
+            if (s.aborted) { c.abort(s.reason); break; }
+            s.addEventListener('abort', () => c.abort(s.reason));
+          }
+          return c.signal;
+        }
       }
 
       class AbortController {
@@ -217,7 +271,11 @@ internal static class FetchBinding
           this._signal = new AbortSignal(this[H]);
         }
         get signal() { return this._signal; }
-        abort(reason) { B.abortDoAbort(this[H], reason); }
+        abort(reason) {
+          if (this._signal.aborted) return;
+          B.abortDoAbort(this[H], reason === undefined ? abortError() : reason);
+          this._signal.__fireAbort();
+        }
       }
 
       // Mint facades over an existing native handle.
@@ -225,8 +283,21 @@ internal static class FetchBinding
       function __mkResponse(h) { const o = Object.create(Response.prototype); o[H] = h; stamp(o, '__qid', h); return o; }
 
       function fetch(input, init) {
-        try { return B.send(input, init); }
-        catch (e) { return Promise.reject(e); }
+        try {
+          const signal = (init && init.signal) || (input && input.signal) || null;
+          if (signal && signal.aborted) return Promise.reject(signal.reason || abortError());
+          const p = B.send(input, init);
+          if (!signal) return p;
+          // Race the in-flight request against an abort on the signal.
+          return new Promise((resolve, reject) => {
+            let settled = false;
+            const onAbort = () => { if (!settled) { settled = true; reject(signal.reason || abortError()); } };
+            signal.addEventListener('abort', onAbort);
+            p.then(
+              r => { if (!settled) { settled = true; resolve(r); } },
+              e => { if (!settled) { settled = true; reject(e); } });
+          });
+        } catch (e) { return Promise.reject(e); }
       }
 
       const g = globalThis;
@@ -329,7 +400,12 @@ internal sealed class FetchState
             var o = init.AsObject();
             var m = o.Get("method"); if (m.IsString()) method = m.AsString().ToUpperInvariant();
             var h = o.Get("headers"); if (!h.IsUndefined() && !h.IsNull()) { headers = new HeaderStore(); headers.PopulateFromJs(Headers, h); }
-            var b = o.Get("body"); if (!b.IsUndefined() && !b.IsNull()) body = BodyToBytes(b);
+            var b = o.Get("body");
+            if (!b.IsUndefined() && !b.IsNull())
+            {
+                body = BodyToBytes(b, out var bodyCt);
+                if (bodyCt is not null && !headers.Has("content-type")) headers.Append("content-type", bodyCt);
+            }
             var r = o.Get("redirect"); if (r.IsString()) redirect = r.AsString();
             var md = o.Get("mode"); if (md.IsString()) mode = md.AsString();
             var cr = o.Get("credentials"); if (cr.IsString()) credentials = cr.AsString();
@@ -341,7 +417,7 @@ internal sealed class FetchState
 
     public int BuildResponse(JsValue body, JsValue init)
     {
-        var bytes = BodyToBytes(body);
+        var bytes = BodyToBytes(body, out var bodyCt);
         var status = 200;
         var statusText = "";
         var headers = new HeaderStore();
@@ -352,6 +428,7 @@ internal sealed class FetchState
             var stt = o.Get("statusText"); if (stt.IsString()) statusText = stt.AsString();
             var hd = o.Get("headers"); if (!hd.IsUndefined() && !hd.IsNull()) headers.PopulateFromJs(Headers, hd);
         }
+        if (bodyCt is not null && !headers.Has("content-type")) headers.Append("content-type", bodyCt);
         return RegisterResponse(status, statusText, headers, bytes, url: "", redirected: false, type: "default");
     }
 
@@ -515,15 +592,103 @@ internal sealed class FetchState
         return abs.IsOk ? abs.Value.ToString() : input;
     }
 
-    private static byte[] BodyToBytes(JsValue body)
+    private static byte[] BodyToBytes(JsValue body) => BodyToBytes(body, out _);
+
+    // Convert a fetch body init into bytes, also reporting the default
+    // Content-Type the body implies (null when none / caller-supplied). Handles
+    // string, ArrayBuffer/typed-array/DataView, Blob/File, FormData (multipart),
+    // and URLSearchParams (urlencoded).
+    private static byte[] BodyToBytes(JsValue body, out string? contentType)
     {
+        contentType = null;
         if (body.IsUndefined() || body.IsNull()) return Array.Empty<byte>();
         if (body.IsString()) return Encoding.UTF8.GetBytes(body.AsString());
         if (body.IsArrayBuffer() && body.AsArrayBuffer() is { } ab) return (byte[])ab.Clone();
         if (body.IsUint8Array() && body.AsUint8Array() is { } u8) return (byte[])u8.Clone();
         if (body.IsDataView() && body.AsDataView() is { } dv) return (byte[])dv.Clone();
-        // Headers/URLSearchParams/Blob etc. fall back to string coercion.
+
+        if (body is ObjectInstance o)
+        {
+            // Blob / File — has the non-enumerable __bytes() helper.
+            var bytesFn = o.Get("__bytes");
+            if (bytesFn.IsCallable())
+            {
+                var arr = bytesFn.Call(o, System.Array.Empty<JsValue>());
+                var bytes = ExtractBytes(arr);
+                var t = o.Get("type");
+                if (t.IsString() && t.AsString().Length > 0) contentType = t.AsString();
+                return bytes;
+            }
+            // FormData — has the __entries list.
+            var entries = o.Get("__entries");
+            if (entries is JsArray fdEntries)
+                return SerializeMultipart(fdEntries, out contentType);
+            // URLSearchParams — toStringTag "URLSearchParams".
+            var tag = o.Get(global::Jint.Native.Symbol.GlobalSymbolRegistry.ToStringTag);
+            if (tag.IsString() && tag.AsString() == "URLSearchParams")
+            {
+                contentType = "application/x-www-form-urlencoded;charset=UTF-8";
+                return Encoding.UTF8.GetBytes(body.ToString());
+            }
+        }
         return Encoding.UTF8.GetBytes(body.ToString());
+    }
+
+    private static byte[] ExtractBytes(JsValue v)
+    {
+        if (v.IsArrayBuffer() && v.AsArrayBuffer() is { } ab) return (byte[])ab.Clone();
+        if (v is ObjectInstance oi)
+        {
+            var bufVal = oi.Get("buffer");
+            if (bufVal.IsArrayBuffer() && bufVal.AsArrayBuffer() is { } backing)
+            {
+                var offset = oi.Get("byteOffset").IsNumber() ? (int)oi.Get("byteOffset").AsNumber() : 0;
+                var length = oi.Get("byteLength").IsNumber() ? (int)oi.Get("byteLength").AsNumber() : backing.Length;
+                if (offset >= 0 && length >= 0 && offset + length <= backing.Length)
+                {
+                    var slice = new byte[length];
+                    System.Array.Copy(backing, offset, slice, 0, length);
+                    return slice;
+                }
+            }
+        }
+        return System.Array.Empty<byte>();
+    }
+
+    // HTML §multipart/form-data serialization of a FormData entry list.
+    private static byte[] SerializeMultipart(JsArray entries, out string contentType)
+    {
+        var boundary = "----StarlingFormBoundary" + Guid.NewGuid().ToString("N");
+        contentType = "multipart/form-data; boundary=" + boundary;
+        using var ms = new System.IO.MemoryStream();
+        void Write(string s) { var b = Encoding.UTF8.GetBytes(s); ms.Write(b, 0, b.Length); }
+
+        for (uint i = 0; i < entries.Length; i++)
+        {
+            if (entries[(int)i] is not JsArray pair || pair.Length < 2) continue;
+            var name = pair[0].ToString();
+            var value = pair[1];
+            Write("--" + boundary + "\r\n");
+            if (value is ObjectInstance vo && vo.Get("__bytes").IsCallable())
+            {
+                var fileName = vo.Get("name");
+                var fn = fileName.IsString() ? fileName.AsString() : "blob";
+                var typeV = vo.Get("type");
+                Write($"Content-Disposition: form-data; name=\"{name}\"; filename=\"{fn}\"\r\n");
+                Write($"Content-Type: {(typeV.IsString() && typeV.AsString().Length > 0 ? typeV.AsString() : "application/octet-stream")}\r\n\r\n");
+                var bytes = ExtractBytes(vo.Get("__bytes").Call(vo, System.Array.Empty<JsValue>()));
+                ms.Write(bytes, 0, bytes.Length);
+                Write("\r\n");
+            }
+            else
+            {
+                Write($"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n");
+                Write(value.ToString());
+                Write("\r\n");
+            }
+        }
+        Write("--" + boundary + "--\r\n");
+        return ms.ToArray();
     }
 
     private static bool TryGetRequestHandle(JsValue v, out int handle)
@@ -591,6 +756,14 @@ internal sealed class HeaderStore
     }
 
     public IEnumerable<(string Name, string Value)> Entries() => _entries;
+
+    /// <summary>Fetch §Headers.getSetCookie() — the individual (uncombined)
+    /// <c>Set-Cookie</c> header values in insertion order.</summary>
+    public IEnumerable<string> SetCookies()
+    {
+        foreach (var (name, value) in _entries)
+            if (name == "set-cookie") yield return value;
+    }
 
     public JsValue EntriesAsJsArray(global::Jint.Engine engine)
     {

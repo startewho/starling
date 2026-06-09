@@ -45,8 +45,8 @@ public sealed class JsVm
     // interpreter. args.Length is load-bearing (it is the JS argument count), so
     // this hands back arrays of the EXACT requested length, unlike ArrayPool's
     // ">= size" sizing. Rent and Return are balanced on one thread within a
-    // single synchronous call; generator/async bodies clone their args (see
-    // StartGeneratorBody), so a pooled buffer is never parked on a worker thread.
+    // single synchronous call; generator/async bodies clone their args because
+    // those values may be held by a suspended continuation frame.
     // Arrays are cleared on return so the pool never pins JS objects.
     [ThreadStatic] private static Stack<JsValue[]>?[]? t_argPools;
     private const int MaxPooledArgc = 8;
@@ -498,24 +498,35 @@ public sealed class JsVm
         SuspendedFrame? suspension = null, EvalScope? evalScope = null,
         EvalVarStore? frameVarStore = null)
     {
+        var restored = suspension?.State;
+        if (restored is not null)
+        {
+            chunk = restored.Chunk;
+            upvalues = restored.Upvalues;
+            currentFunction = restored.CurrentFunction;
+            newTarget = restored.NewTarget;
+            evalScope = restored.EvalScope;
+            frameVarStore = restored.FrameVarStore;
+        }
+
         // wp — operand stack rented from the shared array pool. This was the
         // single largest per-frame allocation (MaxStack JsValue). It is returned
-        // via Finish() at every normal exit below; abnormal exits (host abort,
-        // stack overflow) just let it fall to GC, which is harmless. Generators
-        // rent on their worker thread and return on completion, so rent/return
-        // stay balanced per thread. maxSp tracks the high-water slot so Finish
-        // clears only the touched region (never pinning JS objects in the pool)
-        // rather than memset-ing the whole 1024-slot buffer on every call.
-        var stack = ArrayPool<JsValue>.Shared.Rent(MaxStack);
-        var maxSp = 0;
-        var sp = 0;
-        var locals = new JsValue[Math.Max(chunk.LocalCount, 1)];
-        for (var k = 0; k < args.Length && k < locals.Length; k++)
-            locals[k] = args[k];
+        // via Finish() at every normal exit below; suspended frames keep their
+        // stack until completion. maxSp tracks the high-water slot so Finish
+        // clears only the touched region.
+        var stack = restored?.Stack ?? ArrayPool<JsValue>.Shared.Rent(MaxStack);
+        var maxSp = restored?.MaxSp ?? 0;
+        var sp = restored?.Sp ?? 0;
+        var locals = restored?.Locals ?? new JsValue[Math.Max(chunk.LocalCount, 1)];
+        if (restored is null)
+        {
+            for (var k = 0; k < args.Length && k < locals.Length; k++)
+                locals[k] = args[k];
+        }
         var code = chunk.Code;
         var constants = chunk.Constants;
-        var ip = 0;
-        var thisV = thisValue;
+        var ip = restored?.Ip ?? 0;
+        var thisV = restored?.ThisValue ?? thisValue;
         // ES strict mode — whether this frame's code runs as strict mode code.
         // Drives strict StoreGlobal (assignment to undeclared global throws) and
         // strict Set/delete failures.
@@ -529,7 +540,7 @@ public sealed class JsVm
         // already-captured parent store (frameVarStore, from
         // JsFunction.CapturedEvalVarStore) becomes this store's lookup parent so
         // a free identifier resolves own-env -> enclosing eval-env -> global.
-        if (!frameStrict && chunk.HasDirectEval)
+        if (restored is null && !frameStrict && chunk.HasDirectEval)
             frameVarStore = new EvalVarStore { Parent = frameVarStore };
 
         // wp:M3-81 — §sec-performeval-rules-in-initializer initializer depth. A
@@ -539,8 +550,9 @@ public sealed class JsVm
         // initializer context lexically (chunk.IsArrow && the closure's
         // InInitializer flag). Parameter default regions toggle it at runtime via
         // the Enter/ExitInitializer opcodes the compiler brackets them with.
-        var initDepth = (chunk.IsInitializer
-            || (chunk.IsArrow && currentFunction is { InInitializer: true })) ? 1 : 0;
+        var initDepth = restored?.InitDepth
+            ?? ((chunk.IsInitializer
+                || (chunk.IsArrow && currentFunction is { InInitializer: true })) ? 1 : 0);
 
         void Push(JsValue v)
         {
@@ -602,7 +614,7 @@ public sealed class JsVm
 
         // §14.15 try-frame stack — owns the catch/finally targets that the
         // outer C# catch(JsThrow) and the Return opcode handler consult.
-        var tryStack = new Stack<TryFrame>();
+        var tryStack = restored?.TryStack ?? new Stack<TryFrame>();
 
         // §14.11 / §9.1.1.2 — stack of object Environment Records installed by
         // the running `with` statements (innermost last). The with-aware
@@ -612,9 +624,10 @@ public sealed class JsVm
         // §10.2.1 — a function whose body was compiled inside a `with` seeds its
         // frame's with-stack from the object Environment Records captured at
         // closure-creation time, so its free identifiers resolve against them.
-        List<JsObject>? withStack = currentFunction?.CapturedWith is { Count: > 0 } cap
-            ? new List<JsObject>(cap)
-            : null;
+        List<JsObject>? withStack = restored?.WithStack
+            ?? (currentFunction?.CapturedWith is { Count: > 0 } cap
+                ? new List<JsObject>(cap)
+                : null);
 
         // §9.1.1.2.1 HasBinding — does object Environment Record `obj` have a
         // usable binding for `name`? True when HasProperty(obj, name) and the
@@ -641,6 +654,237 @@ public sealed class JsVm
             return null;
         }
 
+        ContinuationFrameState SnapshotFrame() => new()
+        {
+            Chunk = chunk,
+            Stack = stack,
+            Locals = locals,
+            Upvalues = upvalues,
+            TryStack = tryStack,
+            CurrentFunction = currentFunction,
+            NewTarget = newTarget,
+            EvalScope = evalScope,
+            FrameVarStore = frameVarStore,
+            WithStack = withStack,
+            ThisValue = thisV,
+            Ip = ip,
+            Sp = sp,
+            MaxSp = maxSp,
+            InitDepth = initDepth,
+        };
+
+        JsValue SuspendCurrent(ContinuationResumeAction action, JsValue yielded, int kind)
+        {
+            if (suspension is null)
+                throw new InvalidOperationException("Cannot suspend without a suspended frame");
+            suspension.Suspend(SnapshotFrame(), yielded, kind, action);
+            return JsValue.Undefined;
+        }
+
+        void ApplyResumeToStack()
+        {
+            if (suspension is null) return;
+            var resume = suspension.ConsumeResume();
+            suspension.ClearContinuation();
+            switch (resume.Kind)
+            {
+                case ResumeCompletionKind.Throw:
+                    throw new JsThrow(resume.Value);
+                case ResumeCompletionKind.Return:
+                    throw new JsReturnSentinel(resume.Value);
+                default:
+                    Push(resume.Value);
+                    break;
+            }
+        }
+
+        YieldDelegateStep SuspendYieldDelegateAwait(YieldDelegateContinuation yd, JsValue value, bool processingReturn)
+        {
+            if (yd.SyncWrapped)
+                value = JsValue.Object(WrapSyncIteratorResult(value));
+            yd.Phase = YieldDelegatePhase.AwaitInnerResult;
+            yd.ProcessingReturnResult = processingReturn;
+            _ = SuspendCurrent(ContinuationResumeAction.YieldDelegate, value, kind: 1);
+            return YieldDelegateStep.Parked();
+        }
+
+        YieldDelegateStep SuspendYieldDelegateYield(YieldDelegateContinuation yd, JsValue value)
+        {
+            yd.Phase = YieldDelegatePhase.AfterOuterYield;
+            _ = SuspendCurrent(ContinuationResumeAction.YieldDelegate, value, kind: 0);
+            return YieldDelegateStep.Parked();
+        }
+
+        YieldDelegateStep ProcessYieldDelegateInnerResult(YieldDelegateContinuation yd, JsValue innerResult)
+        {
+            if (!innerResult.IsObject)
+                throw new JsThrow(_runtime.Realm.NewTypeError(
+                    yd.ProcessingReturnResult
+                        ? "iterator.return() did not return an object"
+                        : "iterator.next() did not return an object"));
+
+            var done = JsValue.ToBoolean(AbstractOperations.Get(this, innerResult.AsObject, "done"));
+            var value = AbstractOperations.Get(this, innerResult.AsObject, "value");
+            if (done)
+            {
+                if (yd.PendingOuterReturn)
+                {
+                    yd.PendingOuterReturn = false;
+                    throw new JsReturnSentinel(value);
+                }
+                return YieldDelegateStep.Done(value);
+            }
+
+            return SuspendYieldDelegateYield(yd, value);
+        }
+
+        YieldDelegateStep RunYieldDelegateContinuation(YieldDelegateContinuation yd)
+        {
+            while (true)
+            {
+                if (yd.Phase == YieldDelegatePhase.AwaitInnerResult)
+                {
+                    if (suspension is null)
+                        throw new InvalidOperationException("Yield delegate await without suspended frame");
+                    var resume = suspension.ConsumeResume();
+                    suspension.ClearResumeAction();
+                    yd.Phase = YieldDelegatePhase.CallInner;
+                    if (resume.Kind == ResumeCompletionKind.Throw)
+                        throw new JsThrow(resume.Value);
+                    if (resume.Kind == ResumeCompletionKind.Return)
+                        throw new JsReturnSentinel(resume.Value);
+                    var step = ProcessYieldDelegateInnerResult(yd, resume.Value);
+                    if (step.Suspended || step.Completed) return step;
+                    continue;
+                }
+
+                if (yd.Phase == YieldDelegatePhase.AfterOuterYield)
+                {
+                    if (suspension is null)
+                        throw new InvalidOperationException("Yield delegate resume without suspended frame");
+                    var resume = suspension.ConsumeResume();
+                    suspension.ClearResumeAction();
+                    yd.Phase = YieldDelegatePhase.CallInner;
+                    yd.ProcessingReturnResult = false;
+                    switch (resume.Kind)
+                    {
+                        case ResumeCompletionKind.Throw:
+                            yd.Received = resume.Value;
+                            yd.ReceivedKind = 1;
+                            break;
+                        case ResumeCompletionKind.Return:
+                            yd.Received = resume.Value;
+                            yd.ReceivedKind = 2;
+                            yd.PendingOuterReturn = true;
+                            break;
+                        default:
+                            yd.Received = resume.Value;
+                            yd.ReceivedKind = 0;
+                            break;
+                    }
+                }
+
+                JsValue innerResult;
+                var processingReturn = false;
+                if (yd.ReceivedKind == 0)
+                {
+                    innerResult = AbstractOperations.Call(this, yd.NextMethod, yd.InnerIterator,
+                        new[] { yd.Received });
+                }
+                else if (yd.ReceivedKind == 1)
+                {
+                    var throwM = AbstractOperations.GetMethod(this, yd.InnerIterator, "throw");
+                    if (throwM.IsUndefined || throwM.IsNull)
+                    {
+                        if (yd.IsAsync)
+                        {
+                            var ret = AbstractOperations.GetMethod(this, yd.InnerIterator, "return");
+                            if (!ret.IsUndefined && !ret.IsNull)
+                                _ = AbstractOperations.Call(this, ret, yd.InnerIterator, Array.Empty<JsValue>());
+                        }
+                        else
+                        {
+                            AbstractOperations.IteratorClose(this, yd.Record, isThrowing: true);
+                        }
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Inner iterator does not have a 'throw' method"));
+                    }
+                    innerResult = AbstractOperations.Call(this, throwM, yd.InnerIterator,
+                        new[] { yd.Received });
+                }
+                else
+                {
+                    var retM = AbstractOperations.GetMethod(this, yd.InnerIterator, "return");
+                    if (retM.IsUndefined || retM.IsNull)
+                        throw new JsReturnSentinel(yd.Received);
+
+                    yd.PendingOuterReturn = true;
+                    processingReturn = true;
+                    innerResult = AbstractOperations.Call(this, retM, yd.InnerIterator,
+                        new[] { yd.Received });
+                }
+
+                yd.Received = JsValue.Undefined;
+                yd.ReceivedKind = 0;
+                yd.ProcessingReturnResult = processingReturn;
+
+                if (yd.IsAsync)
+                    return SuspendYieldDelegateAwait(yd, innerResult, processingReturn);
+
+                var result = ProcessYieldDelegateInnerResult(yd, innerResult);
+                if (result.Suspended || result.Completed) return result;
+            }
+        }
+
+        bool RunContinuationPrelude(out JsValue result)
+        {
+            result = JsValue.Undefined;
+            if (suspension is null) return false;
+
+            switch (suspension.ResumeAction)
+            {
+                case ContinuationResumeAction.IgnoreResume:
+                    _ = suspension.ConsumeResume();
+                    suspension.ClearContinuation();
+                    return false;
+                case ContinuationResumeAction.PushResume:
+                    ApplyResumeToStack();
+                    return false;
+                case ContinuationResumeAction.AsyncGeneratorYieldAwait:
+                    {
+                        var resume = suspension.ConsumeResume();
+                        suspension.ClearContinuation();
+                        if (resume.Kind == ResumeCompletionKind.Throw)
+                            throw new JsThrow(resume.Value);
+                        if (resume.Kind == ResumeCompletionKind.Return)
+                            throw new JsReturnSentinel(resume.Value);
+                        result = SuspendCurrent(ContinuationResumeAction.PushResume, resume.Value, kind: 0);
+                        return true;
+                    }
+                case ContinuationResumeAction.YieldDelegate:
+                    if (suspension.YieldDelegate is null) return false;
+                    try
+                    {
+                        var step = RunYieldDelegateContinuation(suspension.YieldDelegate);
+                        if (step.Suspended)
+                        {
+                            result = JsValue.Undefined;
+                            return true;
+                        }
+                        suspension.ClearContinuation();
+                        Push(step.Value);
+                        return false;
+                    }
+                    catch
+                    {
+                        suspension.ClearContinuation();
+                        throw;
+                    }
+                default:
+                    return false;
+            }
+        }
+
         // Host-driven abort (Stop button, navigation supersede). Checked at a
         // ~1-in-1024 cadence so the interpreter pays at most one cheap mask + a
         // very-rarely-taken branch per opcode. The token lives on the runtime so
@@ -659,6 +903,9 @@ public sealed class JsVm
             JsThrow? rethrow = null;
             try
             {
+                if (RunContinuationPrelude(out var continuationResult))
+                    return continuationResult;
+
                 var op = (Opcode)code[ip++];
                 OpcodeCounts[(byte)op]++;
                 switch (op)
@@ -2893,71 +3140,34 @@ public sealed class JsVm
                                         ? "await is only valid in async functions and async generators"
                                         : "yield is only valid in generator functions"));
                             }
-                            JsValue toYield = yielded;
-                            if (kind == 1)
-                            {
-                                // await: wrap in Promise.resolve and register a .then
-                                // that resumes the worker. The yielded value is the
-                                // promise itself — the dispatcher (StartAsyncBody)
-                                // reads it via SuspendedFrame.YieldedValue, hooks
-                                // up the .then, then calls Resume.
-                                toYield = yielded;
-                            }
-                            else if (currentFunction?.Kind == JsFunctionKind.AsyncGenerator)
+                            if (kind == 0 && currentFunction?.Kind == JsFunctionKind.AsyncGenerator)
                             {
                                 // §27.6.3.8 AsyncGeneratorYield step 1: a plain `yield x`
                                 // inside an async generator must `Await(x)` before the
-                                // result is delivered to the pending request. If the
-                                // operand is a promise that rejects, AwaitOnWorker
-                                // injects the rejection as a throw at this suspension
-                                // point, so the body unwinds and the driver rejects the
-                                // consumer's next() promise (rather than resolving it).
-                                // On fulfilment we yield the awaited value, preserving
-                                // the {value, done:false} result.
-                                toYield = AwaitOnWorker(suspension, yielded);
+                                // result is delivered to the pending request. The resume
+                                // prelude turns the await fulfilment into the visible yield.
+                                return SuspendCurrent(
+                                    ContinuationResumeAction.AsyncGeneratorYieldAwait,
+                                    yielded,
+                                    kind: 1);
                             }
-                            // Record whether this suspension is a yield (0) or an
-                            // await (1). The async-generator driver inspects this to
-                            // distinguish a real `yield` (which settles the pending
-                            // request with {value, done:false}) from an internal
-                            // `await` (which just resumes the worker once the awaited
-                            // promise settles). Sync generators / plain async ignore it.
-                            suspension.SuspendKind = kind;
-                            // Hand off to the caller (main thread). Block until
-                            // resume. Returned value is the value to push back.
-                            var resumed = suspension.WorkerYield(toYield);
-                            if (suspension.ResumeWithThrow)
-                            {
-                                // Caller asked us to throw at this point (e.g.
-                                // gen.throw(e) or awaited promise rejected).
-                                suspension.ResumeWithThrow = false;
-                                throw new JsThrow(resumed);
-                            }
-                            if (suspension.ResumeWithReturn)
-                            {
-                                // Caller invoked Generator.return(v) — walk any
-                                // enclosing try/finally frames via the standard
-                                // exception path (see the catch (JsReturnSentinel)
-                                // arm below). At the top of the body the sentinel
-                                // becomes a normal completion with the value as
-                                // the return value.
-                                suspension.ResumeWithReturn = false;
-                                throw new JsReturnSentinel(resumed);
-                            }
-                            Push(resumed);
-                            break;
+
+                            return SuspendCurrent(ContinuationResumeAction.PushResume, yielded, kind);
                         }
                     case Opcode.PrologueEnd:
                         {
                             // §10.2.1.3 — the parameter-binding prologue has run
-                            // synchronously on the worker thread. Hand off to the
+                            // synchronously. Hand off to the
                             // caller (Start{Generator,Async,AsyncGenerator}Body) so it
                             // can observe a prologue throw before producing the
                             // generator/promise. No value travels across this boundary;
                             // the body resumes here on the first real next()/drive.
                             // If suspension is null (defensive), it's a no-op.
                             if (suspension is not null)
-                                suspension.WorkerYield(JsValue.Undefined);
+                                return SuspendCurrent(
+                                    ContinuationResumeAction.IgnoreResume,
+                                    JsValue.Undefined,
+                                    kind: 0);
                             break;
                         }
                     case Opcode.YieldDelegate:
@@ -2969,7 +3179,31 @@ public sealed class JsVm
                                 throw new JsThrow(_runtime.Realm.NewSyntaxError(
                                     "yield is only valid in generator functions"));
                             }
-                            Push(ExecuteYieldDelegate(suspension, iterable, isAsync));
+                            IteratorRecord record;
+                            bool syncWrapped = false;
+                            if (isAsync)
+                            {
+                                var handle = GetAsyncIteratorHandle(iterable);
+                                record = handle.Record;
+                                syncWrapped = handle.SyncWrapped;
+                            }
+                            else
+                            {
+                                record = AbstractOperations.GetIterator(_runtime.Realm, this, iterable);
+                            }
+                            suspension.YieldDelegate = new YieldDelegateContinuation
+                            {
+                                IsAsync = isAsync,
+                                SyncWrapped = syncWrapped,
+                                Record = record,
+                                InnerIterator = record.Iterator,
+                                NextMethod = record.NextMethod,
+                            };
+                            var step = RunYieldDelegateContinuation(suspension.YieldDelegate);
+                            if (step.Suspended)
+                                return JsValue.Undefined;
+                            suspension.ClearContinuation();
+                            Push(step.Value);
                             break;
                         }
                     case Opcode.BuildClass:
@@ -3155,209 +3389,6 @@ public sealed class JsVm
         if (name.Length == 0) sb.Append(message);
         else if (message.Length == 0) sb.Append(name);
         else sb.Append(name).Append(": ").Append(message);
-    }
-
-    /// <summary>§27.5.3.2 / §27.6.3.7 YieldDelegate body — runs the full
-    /// <c>yield*</c> protocol inside a single opcode handler. Forwards the outer
-    /// generator's resume kind (next / return / throw) into the inner
-    /// iterator's matching method on each round-trip with the outer
-    /// caller. Returns the value to push as the result of the yield*
-    /// expression (the inner iterator's final <c>value</c> on done, or
-    /// the value of an inner .return that completes early).
-    /// <para>When <paramref name="isAsync"/> the inner iterator is acquired via
-    /// the async iteration protocol (<c>@@asyncIterator</c>, falling back to a
-    /// sync iterator wrapped as async per §27.1.4.1) and every result returned
-    /// by inner.next / .throw / .return is <c>await</c>ed before use.</para></summary>
-    private JsValue ExecuteYieldDelegate(SuspendedFrame suspension, JsValue iterable, bool isAsync)
-    {
-        var realm = _runtime.Realm;
-        IteratorRecord record;
-        bool syncWrapped = false;
-        if (isAsync)
-        {
-            var handle = GetAsyncIteratorHandle(iterable);
-            record = handle.Record;
-            syncWrapped = handle.SyncWrapped;
-        }
-        else
-        {
-            record = AbstractOperations.GetIterator(realm, this, iterable);
-        }
-        var innerIter = record.Iterator;
-        var nextMethod = record.NextMethod;
-
-        // §27.6.3.7 — in an async generator, `yield* x` awaits every result the
-        // inner iterator produces before inspecting done/value. For a true
-        // async iterator next/throw/return already return a promise; for a
-        // sync iterable wrapped as async (§27.1.4) the result is a plain
-        // iterator-result whose `value` must itself be awaited.
-        JsValue MaybeAwait(JsValue v)
-        {
-            if (!isAsync) return v;
-            if (syncWrapped)
-                v = JsValue.Object(WrapSyncIteratorResult(v));
-            return AwaitOnWorker(suspension, v);
-        }
-        // Bootstrap: caller's first .next() value (the one already on the
-        // suspension's resume slot, or whatever they sent on the call that
-        // brought us to yield*). The first round we always invoke
-        // inner.next(undefined) — the outer caller's send-value is what
-        // they pass on the .next() that *resumes* yield*, which we have
-        // not yet observed (we're called from inside Suspend's frame).
-        // Per spec §27.5.3.2 step 1, the initial received completion is
-        // NormalCompletion(undefined).
-        JsValue received = JsValue.Undefined;
-        int receivedKind = 0; // 0 = normal, 1 = throw, 2 = return
-
-        while (true)
-        {
-            JsValue innerResult;
-            if (receivedKind == 0)
-            {
-                // Normal completion → inner.next(received)
-                innerResult = MaybeAwait(AbstractOperations.Call(this, nextMethod, innerIter,
-                    new[] { received }));
-            }
-            else if (receivedKind == 1)
-            {
-                // Throw completion → inner.throw(received) if present.
-                var throwM = AbstractOperations.GetMethod(this, innerIter, "throw");
-                if (throwM.IsUndefined || throwM.IsNull)
-                {
-                    // No throw method: close the iterator and re-throw.
-                    // §27.6.3.7 — for an async iterator the close is awaited.
-                    if (isAsync)
-                        AsyncIteratorCloseOnWorker(suspension, innerIter);
-                    else
-                        AbstractOperations.IteratorClose(this, record, isThrowing: true);
-                    throw new JsThrow(realm.NewTypeError(
-                        "Inner iterator does not have a 'throw' method"));
-                }
-                innerResult = MaybeAwait(AbstractOperations.Call(this, throwM, innerIter,
-                    new[] { received }));
-            }
-            else
-            {
-                // Return completion → inner.return(received) if present.
-                var retM = AbstractOperations.GetMethod(this, innerIter, "return");
-                if (retM.IsUndefined || retM.IsNull)
-                {
-                    // No return method: §27.5.3.2 — close inner with
-                    // Return, then propagate Return(received) out of the
-                    // outer generator body via the sentinel path.
-                    throw new JsReturnSentinel(received);
-                }
-                innerResult = MaybeAwait(AbstractOperations.Call(this, retM, innerIter,
-                    new[] { received }));
-                if (!innerResult.IsObject)
-                    throw new JsThrow(realm.NewTypeError(
-                        "iterator.return() did not return an object"));
-                var doneR = JsValue.ToBoolean(AbstractOperations.Get(this, innerResult.AsObject, "done"));
-                var valR = AbstractOperations.Get(this, innerResult.AsObject, "value");
-                if (doneR)
-                {
-                    // Inner iterator honored the return — propagate
-                    // Return(valR) out of the outer body so its finally
-                    // blocks (if any) still run.
-                    throw new JsReturnSentinel(valR);
-                }
-                // Inner refused to close — yield its value, continue.
-                suspension.SuspendKind = 0; // real yield (not an internal await)
-                var resumedR = suspension.WorkerYield(valR);
-                if (suspension.ResumeWithThrow)
-                {
-                    suspension.ResumeWithThrow = false;
-                    received = resumedR;
-                    receivedKind = 1;
-                    continue;
-                }
-                if (suspension.ResumeWithReturn)
-                {
-                    suspension.ResumeWithReturn = false;
-                    received = resumedR;
-                    receivedKind = 2;
-                    continue;
-                }
-                received = resumedR;
-                receivedKind = 0;
-                continue;
-            }
-
-            if (!innerResult.IsObject)
-                throw new JsThrow(realm.NewTypeError(
-                    "iterator.next() did not return an object"));
-            var done = JsValue.ToBoolean(AbstractOperations.Get(this, innerResult.AsObject, "done"));
-            var value = AbstractOperations.Get(this, innerResult.AsObject, "value");
-            if (done)
-            {
-                // Inner finished — yield* evaluates to the inner's final
-                // value. Push and exit the opcode.
-                return value;
-            }
-
-            // Suspend the outer generator with the inner's yielded value.
-            suspension.SuspendKind = 0; // real yield (not an internal await)
-            var resumed = suspension.WorkerYield(value);
-            if (suspension.ResumeWithThrow)
-            {
-                suspension.ResumeWithThrow = false;
-                received = resumed;
-                receivedKind = 1;
-            }
-            else if (suspension.ResumeWithReturn)
-            {
-                suspension.ResumeWithReturn = false;
-                received = resumed;
-                receivedKind = 2;
-            }
-            else
-            {
-                received = resumed;
-                receivedKind = 0;
-            }
-        }
-    }
-
-    /// <summary>Worker-side <c>await</c> used by <c>yield*</c> inside an async
-    /// generator (§27.6.3.7). Suspends the worker with <see cref="SuspendedFrame.SuspendKind"/>
-    /// = 1 so the async-generator driver settles <paramref name="value"/> as a
-    /// promise and resumes us with the resolved value (or injects a throw on
-    /// rejection). Mirrors the <c>Suspend</c> opcode's await arm.</summary>
-    private static JsValue AwaitOnWorker(SuspendedFrame suspension, JsValue value)
-    {
-        suspension.SuspendKind = 1;
-        var resumed = suspension.WorkerYield(value);
-        if (suspension.ResumeWithThrow)
-        {
-            suspension.ResumeWithThrow = false;
-            throw new JsThrow(resumed);
-        }
-        // A .return() injected while awaiting still has to unwind the body.
-        if (suspension.ResumeWithReturn)
-        {
-            suspension.ResumeWithReturn = false;
-            throw new JsReturnSentinel(resumed);
-        }
-        return resumed;
-    }
-
-    /// <summary>§7.4.11 AsyncIteratorClose used by <c>yield*</c> when the inner
-    /// async iterator lacks a <c>throw</c> method — invoke its <c>return</c>
-    /// (if any) and <c>await</c> the result on the worker thread before the
-    /// outer TypeError propagates.</summary>
-    private void AsyncIteratorCloseOnWorker(SuspendedFrame suspension, JsValue innerIter)
-    {
-        JsValue ret;
-        try { ret = AbstractOperations.GetMethod(this, innerIter, "return"); }
-        catch (Exception ex) { JsVmLog.AsyncIteratorCloseGetMethodFailed(_log, ex); return; }
-        if (ret.IsUndefined || ret.IsNull) return;
-        JsValue result;
-        try { result = AbstractOperations.Call(this, ret, innerIter, Array.Empty<JsValue>()); }
-        catch (Exception ex) { JsVmLog.AsyncIteratorCloseCallFailed(_log, ex); return; }
-        // Await the close result; swallow any rejection so the original throw
-        // (the missing-throw-method TypeError) wins per §7.4.11.
-        try { AwaitOnWorker(suspension, result); }
-        catch (JsThrow ex) { JsVmLog.AsyncIteratorCloseAwaitRejected(_log, ex); /* original completion already throwing */ }
     }
 
     /// <summary>§14.15 — divert a return through any enclosing finalizer.</summary>
@@ -4066,8 +4097,7 @@ public sealed class JsVm
     // =====================================================================
 
     /// <summary>Invoke a generator function — set up a JsGenerator wrapper
-    /// whose worker thread will run the body lazily on the first
-    /// <c>.next()</c> call.</summary>
+    /// whose heap-backed frame runs lazily on the first <c>.next()</c> call.</summary>
     internal JsValue StartGeneratorBody(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
         var realm = _runtime.Realm;
@@ -4075,32 +4105,22 @@ public sealed class JsVm
         var gen = new JsGenerator(realm, frame);
         // Stamp own properties so duck-typing tests work.
         // Deep-copy: the caller's args array is pooled and reused after this
-        // synchronous call returns, but the worker lambda parks with a reference
-        // to it across suspensions. Clone so the worker owns its own buffer.
+        // synchronous call returns, but the suspended frame keeps a reference to
+        // its arguments across resumes.
         var argsCopy = args.Length == 0 ? args : (JsValue[])args.Clone();
         var thisCopy = thisValue;
         var fnCopy = fn;
         frame.Start(() =>
         {
-            // Worker thread: invoke the body with this frame as the active
-            // suspension target. Result becomes the frame's return value.
-            try
-            {
-                var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
-                    drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
-                    suspension: frame);
-                // Frame's return value will be read by the dispatcher
-                // (Generator.next's caller) — store via a field.
+            var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+                drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
+                suspension: frame);
+            if (!frame.Suspended)
                 frame.SetReturnValue(rv);
-            }
-            catch (JsThrow ex)
-            {
-                frame.SetThrew(ex.Value);
-            }
         });
         // §15.5.2 EvaluateGeneratorBody — FunctionDeclarationInstantiation (the
         // parameter-binding prologue) runs synchronously here, BEFORE the
-        // generator object is returned. RunPrologue drives the worker to the
+        // generator object is returned. RunPrologue drives the frame to the
         // PrologueEnd marker; a throw from param destructuring / defaults /
         // RequireObjectCoercible / iterator protocol propagates to the caller
         // now (no generator object is produced).
@@ -4108,12 +4128,12 @@ public sealed class JsVm
         return JsValue.Object(gen);
     }
 
-    /// <summary>§10.2.1.3 — drive the worker through the synchronous
+    /// <summary>§10.2.1.3 — drive the frame through the synchronous
     /// parameter-binding prologue. Resumes once (which runs everything up to the
     /// body's <see cref="Opcode.PrologueEnd"/> marker). If the prologue threw,
-    /// re-raises it on the calling thread; if it ran to completion (an
+    /// re-raises it on the caller; if it ran to completion (an
     /// empty/return-only body with no marker — defensive) the throw still
-    /// surfaces. On success the worker is parked at PrologueEnd, ready for the
+    /// surfaces. On success the frame is parked at PrologueEnd, ready for the
     /// first real resume.</summary>
     private static void RunPrologue(SuspendedFrame frame)
     {
@@ -4122,9 +4142,9 @@ public sealed class JsVm
             throw new JsThrow(frame.ReturnValue);
     }
 
-    /// <summary>Invoke an async function — set up an outer Promise + worker
-    /// thread that runs the body. Returns the outer Promise immediately;
-    /// the body settles it on completion (or via an unhandled throw).</summary>
+    /// <summary>Invoke an async function — set up an outer Promise and a
+    /// heap-backed continuation frame. Returns the outer Promise immediately;
+    /// the body settles it on completion or an unhandled throw.</summary>
     internal JsValue StartAsyncBody(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
         var realm = _runtime.Realm;
@@ -4134,39 +4154,32 @@ public sealed class JsVm
 
         var fnCopy = fn;
         // Deep-copy: the caller's args array is pooled and reused after this
-        // synchronous call returns, but the worker lambda parks with a reference
-        // to it across suspensions. Clone so the worker owns its own buffer.
+        // synchronous call returns, but the suspended frame keeps a reference to
+        // its arguments across awaits.
         var argsCopy = args.Length == 0 ? args : (JsValue[])args.Clone();
         var thisCopy = thisValue;
         frame.Start(() =>
         {
-            try
-            {
-                var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
-                    drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
-                    suspension: frame);
+            var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+                drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
+                suspension: frame);
+            if (!frame.Suspended)
                 frame.SetReturnValue(rv);
-            }
-            catch (JsThrow ex)
-            {
-                frame.SetThrew(ex.Value);
-            }
         });
 
         // §27.7.5.2 AsyncFunctionStart — FunctionDeclarationInstantiation (the
         // parameter-binding prologue) runs synchronously at call time. Per
         // §27.7.5.1, an abrupt completion from the prologue REJECTS the returned
         // promise (it is NOT thrown synchronously — the function still returns a
-        // promise). RunPrologueAsync runs the worker to the PrologueEnd marker;
+        // promise). RunPrologueAsync runs the frame to the PrologueEnd marker;
         // if it threw, reject `outer` and skip driving the body. Synthetic async
         // bodies without a marker (top-level-await module wrappers) skip this.
         if (fn.Body.HasPrologue && RunPrologueAsync(state))
             return JsValue.Object(outer);
 
-        // Drive the worker synchronously from the calling thread, riding
-        // each await suspension via the microtask queue. The first Resume
-        // kicks off the body; subsequent Resumes are wired by the await
-        // handler below.
+        // Drive the frame synchronously on this thread, riding each await
+        // suspension via the microtask queue. The first Resume kicks off the
+        // body; subsequent Resumes are wired by the await handler below.
         DriveAsync(state);
         return JsValue.Object(outer);
     }
@@ -4174,7 +4187,7 @@ public sealed class JsVm
     /// <summary>§27.7.5.1 — run the async body's parameter-binding prologue
     /// synchronously. Returns true if the prologue threw (in which case the
     /// outer promise has been rejected and the body must not be driven); false
-    /// when the worker parked cleanly at <see cref="Opcode.PrologueEnd"/>.</summary>
+    /// when the frame parked cleanly at <see cref="Opcode.PrologueEnd"/>.</summary>
     private bool RunPrologueAsync(JsAsyncFunctionState state)
     {
         var frame = state.Frame;
@@ -4190,13 +4203,13 @@ public sealed class JsVm
 
     /// <summary>Run the async body forward until the next await or
     /// completion. If the body awaits a value, schedules a .then on the
-    /// Promise.resolve(value) so the worker resumes after the awaited
+    /// Promise.resolve(value) so the frame resumes after the awaited
     /// settlement.</summary>
     private void DriveAsync(JsAsyncFunctionState state)
     {
         var realm = _runtime.Realm;
         var frame = state.Frame;
-        // Initial kick: pass Undefined as resume value. The worker starts
+        // Initial kick: pass Undefined as resume value. The frame starts
         // executing and either runs to completion or hits a Suspend.
         frame.Resume(JsValue.Undefined);
         if (frame.Completed)
@@ -4259,7 +4272,7 @@ public sealed class JsVm
     }
 
     /// <summary>wp:M3-04g — invoke an <c>async function*</c>. Sets up a
-    /// <see cref="JsAsyncGenerator"/> whose worker thread runs the body lazily
+    /// <see cref="JsAsyncGenerator"/> whose heap-backed frame runs the body lazily
     /// on the first request. The body interleaves <c>yield</c> (kind 0) and
     /// <c>await</c> (kind 1) suspensions through the shared
     /// <see cref="SuspendedFrame"/>; the driver
@@ -4272,23 +4285,17 @@ public sealed class JsVm
         var gen = new JsAsyncGenerator(realm, frame);
         var fnCopy = fn;
         // Deep-copy: the caller's args array is pooled and reused after this
-        // synchronous call returns, but the worker lambda parks with a reference
-        // to it across suspensions. Clone so the worker owns its own buffer.
+        // synchronous call returns, but the suspended frame keeps a reference to
+        // its arguments across resumes.
         var argsCopy = args.Length == 0 ? args : (JsValue[])args.Clone();
         var thisCopy = thisValue;
         frame.Start(() =>
         {
-            try
-            {
-                var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
-                    drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
-                    suspension: frame);
+            var rv = Run(fnCopy.Body, argsCopy, thisCopy, fnCopy.Upvalues,
+                drainMicrotasks: false, currentFunction: fnCopy, newTarget: null,
+                suspension: frame);
+            if (!frame.Suspended)
                 frame.SetReturnValue(rv);
-            }
-            catch (JsThrow ex)
-            {
-                frame.SetThrew(ex.Value);
-            }
         });
         // §27.4 EvaluateAsyncGeneratorBody — like sync generators, the parameter-
         // binding prologue runs synchronously at call time and a throw propagates
@@ -4544,7 +4551,7 @@ public sealed class JsThrow : Exception
     }
 }
 
-/// <summary>Internal sentinel raised inside a generator worker thread when
+/// <summary>Internal sentinel raised inside a generator continuation when
 /// the caller invokes <c>.return(v)</c> at a suspension point. Walks any
 /// enclosing try/finally frames via the standard exception-handling path
 /// (treated as a Return completion), and at the top of the generator body

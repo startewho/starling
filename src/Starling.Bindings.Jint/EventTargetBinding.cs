@@ -84,6 +84,19 @@ internal static class EventTargetBinding
         var customProto = new JsObject(engine) { Prototype = evProto };
         JintInterop.DefineAccessor(engine, customProto, "detail", (thisV, _) =>
             thisV is ObjectInstance oi && state.TryGetDetail(oi, out var d) ? d : JsValue.Null);
+        // Legacy CustomEvent.initCustomEvent (DOM §2.3) — used with createEvent.
+        JintInterop.DefineMethod(engine, customProto, "initCustomEvent", (thisV, a) =>
+        {
+            if (a.Length == 0)
+                throw new JavaScriptException(engine.Intrinsics.TypeError,
+                    "Failed to execute 'initCustomEvent' on 'CustomEvent': 1 argument required, but only 0 present.");
+            if (TryGetNative(state, thisV, out var e))
+                e.InitEvent(a[0].ToString(),
+                    a.Length > 1 && TypeConverter.ToBoolean(a[1]),
+                    a.Length > 2 && TypeConverter.ToBoolean(a[2]));
+            if (thisV is ObjectInstance oi && a.Length > 3) state.SetDetail(oi, a[3]);
+            return JsValue.Undefined;
+        }, length: 4);
 
         var customCtor = new NativeConstructor(engine, "CustomEvent", 1, (args, _) =>
         {
@@ -116,6 +129,9 @@ internal static class EventTargetBinding
         // on the wrapper so members with no host slot (buttons, deltaX, …) read
         // back. Mirrors Starling.Bindings/EventTargetBinding.cs.
         InstallEventSubtypes(ctx, state, engine, evProto, evCtor);
+
+        // Legacy window.event (HTML) — the event currently being dispatched.
+        JintInterop.DefineAccessor(engine, engine.Global, "event", (_, _) => state.CurrentEvent);
     }
 
     // ---- Event subclass prototypes + constructors ----------------------------
@@ -369,6 +385,11 @@ internal static class EventTargetBinding
         if (args.Length == 0 || args[0] is not ObjectInstance evObj || !state.TryGetNativeEvent(evObj, out var native))
             throw new JavaScriptException(ctx.Engine.Intrinsics.TypeError,
                 "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
+        // DOM §2.10 — an event that is mid-dispatch or uninitialized must not be dispatched.
+        if (native.IsBeingDispatched)
+            throw DomExceptionBinding.Throw(ctx, "InvalidStateError", "The event is already being dispatched.");
+        if (!native.Initialized)
+            throw DomExceptionBinding.Throw(ctx, "InvalidStateError", "The event has not been initialized.");
         var notCanceled = host.DispatchEvent(native);
         return JintInterop.Bool(notCanceled);
     }
@@ -418,6 +439,54 @@ internal static class EventTargetBinding
             if (!TryGetNative(state, thisV, out var e)) return new JsArray(engine, Array.Empty<JsValue>());
             return ComposedPath(ctx, e);
         }, length: 0);
+
+        // Legacy Event.initEvent (DOM §2.9) — used with document.createEvent. The
+        // `type` argument is mandatory per WebIDL.
+        JintInterop.DefineMethod(engine, evProto, "initEvent", (thisV, a) =>
+        {
+            if (a.Length == 0)
+                throw new JavaScriptException(engine.Intrinsics.TypeError,
+                    "Failed to execute 'initEvent' on 'Event': 1 argument required, but only 0 present.");
+            if (TryGetNative(state, thisV, out var e))
+                e.InitEvent(a[0].ToString(),
+                    a.Length > 1 && TypeConverter.ToBoolean(a[1]),
+                    a.Length > 2 && TypeConverter.ToBoolean(a[2]));
+            return JsValue.Undefined;
+        }, length: 3);
+
+        // Legacy cancelBubble (alias of stopPropagation when set truthy) and
+        // returnValue (false ⇒ preventDefault).
+        JintInterop.DefineAccessor(engine, evProto, "cancelBubble",
+            (thisV, _) => TryGetNative(state, thisV, out var e) ? JintInterop.Bool(e.PropagationStopped) : JsBoolean.False,
+            (thisV, a) => { if (a.Length > 0 && TypeConverter.ToBoolean(a[0]) && TryGetNative(state, thisV, out var e)) e.StopPropagation(); return JsValue.Undefined; });
+        JintInterop.DefineAccessor(engine, evProto, "returnValue",
+            (thisV, _) => TryGetNative(state, thisV, out var e) ? JintInterop.Bool(!e.DefaultPrevented) : JsBoolean.True,
+            (thisV, a) => { if (a.Length > 0 && !TypeConverter.ToBoolean(a[0]) && TryGetNative(state, thisV, out var e)) e.PreventDefault(); return JsValue.Undefined; });
+    }
+
+    /// <summary>Legacy <c>document.createEvent(interface)</c> (DOM §2.9). Returns an
+    /// uninitialized event of the requested legacy interface, wrapped against its
+    /// subtype prototype so it is dispatchable and <c>instanceof</c> resolves. The
+    /// caller must call <c>initEvent</c>/<c>initCustomEvent</c> before dispatch.
+    /// Throws <c>NotSupportedError</c> for an unrecognized interface.</summary>
+    public static JsValue CreateLegacyEvent(JintBackendContext ctx, string interfaceName)
+    {
+        ArgumentNullException.ThrowIfNull(ctx);
+        var state = EventState.For(ctx);
+        var evProto = ctx.Wrappers.EventPrototype!;
+        var key = interfaceName.ToLowerInvariant();
+        // A createEvent() event is uninitialized until initEvent/initCustomEvent.
+        DomEvent Mk(DomEvent ev) { ev.MarkAsUninitialized(); return ev; }
+        return key switch
+        {
+            "event" or "events" or "htmlevents" => state.WrapNativeEvent(Mk(new DomEvent("", default)), evProto),
+            "customevent" => state.WrapNativeEvent(Mk(new DomCustomEvent("", default)), evProto),
+            "uievent" or "uievents" => state.WrapNativeEvent(Mk(new UiEvent("", default)), state.UiEventProto ?? evProto),
+            "mouseevent" or "mouseevents" => state.WrapNativeEvent(Mk(new MouseEvent("", default)), state.MouseEventProto ?? evProto),
+            "keyboardevent" or "keyevents" => state.WrapNativeEvent(Mk(new KeyboardEvent("", default)), state.KeyboardEventProto ?? evProto),
+            _ => throw DomExceptionBinding.Throw(ctx, "NotSupportedError",
+                $"Failed to execute 'createEvent' on 'Document': The provided event type ('{interfaceName}') is invalid."),
+        };
     }
 
     /// <summary>composedPath() — DOM §2.10. The native dispatcher does not retain
@@ -460,17 +529,46 @@ internal static class EventTargetBinding
                 thisVal = listener;
             }
 
-            callback.Call(thisVal, new[] { jsEvent });
+            var previousEvent = state.CurrentEvent;
+            state.CurrentEvent = jsEvent;
+            try { callback.Call(thisVal, new[] { jsEvent }); }
+            finally { state.CurrentEvent = previousEvent; }
         }
         catch (JavaScriptException ex)
         {
-            EventTargetBindingLog.UncaughtInEventListener(jsLog,
-                JintInterop.DescribeError(ex.Error, ex.Message));
+            // HTML §"report the exception": run window.onerror first; a truthy
+            // return cancels the default (logged) report.
+            if (!ReportException(ctx, ex.Error, JintInterop.DescribeError(ex.Error, ex.Message)))
+                EventTargetBindingLog.UncaughtInEventListener(jsLog,
+                    JintInterop.DescribeError(ex.Error, ex.Message));
         }
         catch (Exception ex)
         {
             EventTargetBindingLog.UncaughtInEventListener(jsLog, ex.Message);
         }
+    }
+
+    /// <summary>HTML §"report the exception" — invoke the legacy <c>window.onerror</c>
+    /// handler (message, source, lineno, colno, error). Returns true when the
+    /// handler ran and returned a truthy value (cancelling the default report).
+    /// An error thrown by the handler itself is swallowed (no recursion).</summary>
+    public static bool ReportException(JintBackendContext ctx, JsValue error, string message)
+    {
+        var onerror = ctx.Engine.Global.Get("onerror");
+        if (!onerror.IsCallable()) return false;
+        try
+        {
+            var result = onerror.Call(ctx.Engine.Global, new[]
+            {
+                JintInterop.Str(message),
+                JintInterop.Str(ctx.BaseUrl.ToString()),
+                JintInterop.Num(0),
+                JintInterop.Num(0),
+                error,
+            });
+            return TypeConverter.ToBoolean(result);
+        }
+        catch (JavaScriptException) { return false; }
     }
 
     // ---- helpers -------------------------------------------------------------
@@ -587,6 +685,10 @@ internal sealed class EventState
     private readonly ConditionalWeakTable<EventTarget, ListenerRegistry> _registries = new();
 
     private EventState(JintBackendContext ctx) => _ctx = ctx;
+
+    /// <summary>Legacy <c>window.event</c> — the event whose listener is currently
+    /// running, or undefined when none. Set/restored around each listener call.</summary>
+    public JsValue CurrentEvent { get; set; } = JsValue.Undefined;
 
     // Subtype prototype slots, set during Install. GetEventPrototypeForHost reads
     // these so a host-fired MouseEvent/KeyboardEvent/… wraps against its own
