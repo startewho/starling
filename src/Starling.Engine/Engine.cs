@@ -1615,12 +1615,23 @@ public sealed class StarlingEngine
     {
         foreach (var styleElement in doc.GetElementsByTagName("style"))
         {
+            // HTML §4.12.2 — <noscript> content is inert when scripting is
+            // enabled (always, in this engine); its fallback CSS must not
+            // contribute fonts/backgrounds any more than it contributes rules.
+            if (HasNoscriptAncestor(styleElement)) continue;
             var source = styleElement.TextContent;
             if (string.IsNullOrWhiteSpace(source)) continue;
             yield return (CssParser.ParseStyleSheet(source, StyleOrigin.Author), docUrl);
         }
         foreach (var entry in stylesheets.EnumerateLoaded())
             yield return (entry.Sheet, entry.BaseUrl);
+    }
+
+    private static bool HasNoscriptAncestor(Element element)
+    {
+        for (var p = element.ParentNode; p is not null; p = p.ParentNode)
+            if (p is Element { LocalName: "noscript" }) return true;
+        return false;
     }
 
     private static string? ExtractTitle(Document doc)

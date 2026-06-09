@@ -443,6 +443,12 @@ public sealed class Painter
     {
         if (node is Element element)
         {
+            // HTML §4.12.2 — with scripting enabled <noscript> content is inert
+            // fallback. The engine always has scripting, so a <style>/<link>
+            // inside <noscript> must not join the cascade: x.com's no-JS block
+            // is `#react-root{display:none!important}` + a white body — applying
+            // it blanks the whole app.
+            if (element.LocalName == "noscript") return;
             if (element.LocalName == "style")
             {
                 var source = element.TextContent;
