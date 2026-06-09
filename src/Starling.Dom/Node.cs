@@ -54,6 +54,314 @@ public abstract class Node : EventTarget
 
     public Node AppendChild(Node child) => InsertBefore(child, null);
 
+    /// <summary>
+    /// WHATWG DOM §4.2.3 "pre-insert(node, child)": ensure pre-insertion validity,
+    /// then insert. Throws <see cref="DomException"/> with the right error name on
+    /// an invalid hierarchy. The generated <c>appendChild</c>/<c>insertBefore</c>
+    /// bindings dispatch here so they stay thin; the HTML parser uses the
+    /// lower-level <see cref="AppendChild"/>, which does not run these checks.
+    /// </summary>
+    public Node PreInsert(Node child, Node? referenceChild)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+
+        // The parent must be a node that can contain children.
+        if (this is not (Document or Element or DocumentFragment))
+            throw DomException.Create("HierarchyRequestError",
+                $"Node of type '{GetType().Name}' cannot have children");
+
+        // The child must not be an inclusive ancestor of the parent (cycle check).
+        for (var p = (Node?)this; p is not null; p = p.ParentNode)
+            if (ReferenceEquals(p, child))
+                throw DomException.Create("HierarchyRequestError", "The new child element contains the parent");
+
+        // A document cannot be inserted as a child of a non-document.
+        if (child is Document && this is not Document)
+            throw DomException.Create("HierarchyRequestError", "Documents cannot be inserted as a child node");
+
+        // An Attr is not part of the normal node tree.
+        if (child is AttrNode)
+            throw DomException.Create("HierarchyRequestError", "Cannot insert an Attr into a node tree.");
+
+        // The reference child, when given, must be a child of this node.
+        if (referenceChild is not null && referenceChild.ParentNode != this)
+            throw DomException.Create("NotFoundError", "The reference child is not a child of this node.");
+
+        try
+        {
+            return InsertBefore(child, referenceChild);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw MapMutationException(ex);
+        }
+    }
+
+    /// <summary>WHATWG DOM §4.2.3 "pre-remove(child)": throws NotFoundError when
+    /// the child is not a child of this node, otherwise removes it. The generated
+    /// <c>removeChild</c> binding dispatches here.</summary>
+    public Node PreRemove(Node child)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+        if (!ReferenceEquals(child.ParentNode, this))
+            throw DomException.Create("NotFoundError", "The node to be removed is not a child of this node");
+        try
+        {
+            return RemoveChild(child);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw DomException.Create("NotFoundError", ex.Message ?? "");
+        }
+    }
+
+    /// <summary>WHATWG DOM §4.2.3 "replace(child, node)": validates the hierarchy
+    /// and that the old child belongs to this node, then replaces it. The
+    /// generated <c>replaceChild</c> binding dispatches here.</summary>
+    public Node PreReplace(Node newChild, Node oldChild)
+    {
+        ArgumentNullException.ThrowIfNull(newChild);
+        ArgumentNullException.ThrowIfNull(oldChild);
+
+        if (this is not (Document or Element or DocumentFragment))
+            throw DomException.Create("HierarchyRequestError", $"Node of type '{GetType().Name}' cannot have children");
+        for (var p = (Node?)this; p is not null; p = p.ParentNode)
+            if (ReferenceEquals(p, newChild))
+                throw DomException.Create("HierarchyRequestError", "The new child element contains the parent");
+        if (newChild is AttrNode)
+            throw DomException.Create("HierarchyRequestError", "Cannot insert an Attr into a node tree.");
+        if (!ReferenceEquals(oldChild.ParentNode, this))
+            throw DomException.Create("NotFoundError", "The child to be replaced is not a child of this node");
+
+        try
+        {
+            return ReplaceChild(newChild, oldChild);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw MapMutationException(ex);
+        }
+    }
+
+    /// <summary>WHATWG DOM §4.4 "contains": true when <paramref name="other"/> is
+    /// an inclusive descendant of this node. The generated binding dispatches here.</summary>
+    public bool Contains(Node? other)
+    {
+        for (var n = other; n is not null; n = n.ParentNode)
+            if (ReferenceEquals(n, this)) return true;
+        return false;
+    }
+
+    /// <summary>WHATWG DOM §4.4 "isSameNode": identity comparison.</summary>
+    public bool IsSameNode(Node? other) => ReferenceEquals(this, other);
+
+    /// <summary>WHATWG DOM §4.4 "getRootNode": the topmost ancestor (the
+    /// composed flag is not honored, matching the prior binding).</summary>
+    public Node GetRootNode()
+    {
+        var root = this;
+        while (root.ParentNode is { } parent) root = parent;
+        return root;
+    }
+
+    /// <summary>WHATWG DOM §4.4 "isEqualNode": structural equality.</summary>
+    public bool IsEqualNode(Node? other) => NodesEqual(this, other);
+
+    /// <summary>WHATWG DOM §4.4 "normalize": merge adjacent Text nodes and drop
+    /// empty ones, recursively.</summary>
+    public void Normalize()
+    {
+        var child = FirstChild;
+        while (child is not null)
+        {
+            var next = child.NextSibling;
+            if (child is Text t)
+            {
+                if (string.IsNullOrEmpty(t.Data))
+                {
+                    RemoveChild(child);
+                }
+                else
+                {
+                    while (next is Text t2)
+                    {
+                        var following = t2.NextSibling;
+                        t.Data += t2.Data;
+                        RemoveChild(t2);
+                        next = following;
+                    }
+                }
+            }
+            else
+            {
+                child.Normalize();
+            }
+            child = next;
+        }
+    }
+
+    /// <summary>The element children of this node, in tree order.</summary>
+    public IReadOnlyList<Element> ChildElements()
+    {
+        var list = new List<Element>();
+        for (var n = FirstChild; n is not null; n = n.NextSibling)
+            if (n is Element e) list.Add(e);
+        return list;
+    }
+
+    /// <summary>WHATWG DOM §4.4 "compareDocumentPosition": the position bitmask.
+    /// Cross-root order is implementation-defined but internally consistent.</summary>
+    public ushort CompareDocumentPosition(Node other)
+    {
+        if (ReferenceEquals(this, other)) return 0;
+        if (!ReferenceEquals(GetRootNode(), other.GetRootNode()))
+        {
+            int selfHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+            int otherHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(other);
+            int precedingOrFollowing = otherHash < selfHash || (otherHash == selfHash && GetHashCode() < other.GetHashCode()) ? 2 : 4;
+            return (ushort)(1 | 32 | precedingOrFollowing);   // DISCONNECTED | IMPLEMENTATION_SPECIFIC | (PRECEDING|FOLLOWING)
+        }
+
+        int bits = 0;
+        if (Contains(other)) bits |= 16;        // CONTAINED_BY
+        if (other.Contains(this)) bits |= 8;    // CONTAINS
+        bits |= IsBeforeInTreeOrder(other, this) ? 2 : 4;   // PRECEDING : FOLLOWING
+        return (ushort)bits;
+    }
+
+    private static bool IsBeforeInTreeOrder(Node a, Node b)
+    {
+        static List<Node> Path(Node n)
+        {
+            var path = new List<Node>();
+            for (var cur = (Node?)n; cur is not null; cur = cur.ParentNode) path.Insert(0, cur);
+            return path;
+        }
+
+        var pa = Path(a);
+        var pb = Path(b);
+        int min = System.Math.Min(pa.Count, pb.Count);
+        for (int i = 0; i < min; i++)
+        {
+            if (!ReferenceEquals(pa[i], pb[i]))
+            {
+                var parent = i > 0 ? pa[i - 1] : null;
+                if (parent is null) return false;
+                for (var child = parent.FirstChild; child is not null; child = child.NextSibling)
+                {
+                    if (ReferenceEquals(child, pa[i])) return true;
+                    if (ReferenceEquals(child, pb[i])) return false;
+                }
+                return false;
+            }
+        }
+        return pa.Count < pb.Count;
+    }
+
+    private static bool NodesEqual(Node? a, Node? b)
+    {
+        if (a is null && b is null) return true;
+        if (a is null || b is null) return false;
+        if (a.Kind != b.Kind) return false;
+
+        switch (a)
+        {
+            case Element ea when b is Element eb:
+                if (ea.TagName != eb.TagName || ea.Namespace != eb.Namespace) return false;
+                var attrsA = ea.Attributes;
+                var attrsB = eb.Attributes;
+                if (attrsA.Count != attrsB.Count) return false;
+                for (var i = 0; i < attrsA.Count; i++)
+                {
+                    var atA = attrsA[i];
+                    var localName = NamedNodeMap.LocalNameOf(atA.Name);
+                    var atB = eb.GetAttributeNS(atA.Namespace, localName);
+                    if (atB is null || atA.Value != atB) return false;
+                }
+                break;
+            case Text ta when b is Text tb:
+                if (ta.Data != tb.Data) return false;
+                break;
+            case Comment ca when b is Comment cb:
+                if (ca.Data != cb.Data) return false;
+                break;
+            case ProcessingInstruction pia when b is ProcessingInstruction pib:
+                if (pia.Target != pib.Target || pia.Data != pib.Data) return false;
+                break;
+            case DocumentType dta when b is DocumentType dtb:
+                if (dta.Name != dtb.Name) return false;
+                break;
+        }
+
+        var ac = a.FirstChild;
+        var bc = b.FirstChild;
+        while (ac is not null && bc is not null)
+        {
+            if (!NodesEqual(ac, bc)) return false;
+            ac = ac.NextSibling;
+            bc = bc.NextSibling;
+        }
+        return ac is null && bc is null;
+    }
+
+    // ParentNode / ChildNode insertion methods (WHATWG DOM §4.2.1). The node-or-
+    // string coercion happens in the binding marshaller; these take the resolved
+    // nodes. The generated append/prepend/before/after/replaceWith/replaceChildren
+    // bindings dispatch here.
+
+    /// <summary>ParentNode "append": insert each node after the last child.</summary>
+    public void Append(IReadOnlyList<Node> nodes)
+    {
+        foreach (var n in nodes) AppendChild(n);
+    }
+
+    /// <summary>ParentNode "prepend": insert each node before the first child.</summary>
+    public void Prepend(IReadOnlyList<Node> nodes)
+    {
+        var reference = FirstChild;
+        foreach (var n in nodes) InsertBefore(n, reference);
+    }
+
+    /// <summary>ChildNode "before": insert each node before this node.</summary>
+    public void Before(IReadOnlyList<Node> nodes)
+    {
+        if (ParentNode is not { } parent) return;
+        foreach (var n in nodes) parent.InsertBefore(n, this);
+    }
+
+    /// <summary>ChildNode "after": insert each node after this node.</summary>
+    public void After(IReadOnlyList<Node> nodes)
+    {
+        if (ParentNode is not { } parent) return;
+        var reference = NextSibling;
+        foreach (var n in nodes) parent.InsertBefore(n, reference);
+    }
+
+    /// <summary>ChildNode "replaceWith": replace this node with the given nodes.</summary>
+    public void ReplaceWith(IReadOnlyList<Node> nodes)
+    {
+        if (ParentNode is not { } parent) return;
+        var reference = NextSibling;
+        RemoveFromParent();
+        foreach (var n in nodes) parent.InsertBefore(n, reference);
+    }
+
+    /// <summary>ParentNode "replaceChildren": replace all children with the given nodes.</summary>
+    public void ReplaceChildren(IReadOnlyList<Node> nodes)
+    {
+        while (FirstChild is { } c) c.RemoveFromParent();
+        foreach (var n in nodes) AppendChild(n);
+    }
+
+    private static DomException MapMutationException(InvalidOperationException ex)
+    {
+        string msg = ex.Message ?? "";
+        string name = msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                      || msg.Contains("not a child", StringComparison.OrdinalIgnoreCase)
+            ? "NotFoundError" : "HierarchyRequestError";
+        return DomException.Create(name, msg);
+    }
+
     public Node InsertBefore(Node child, Node? referenceChild)
     {
         ArgumentNullException.ThrowIfNull(child);

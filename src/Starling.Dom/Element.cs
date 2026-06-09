@@ -190,6 +190,59 @@ public class Element : Node
         Attributes.RemoveNamedItemNS(@namespace, localName);
     }
 
+    /// <summary>DOM §4.9 getElementsByTagName over this element's descendants
+    /// (live). "*" matches any local name.</summary>
+    public IReadOnlyList<Element> GetElementsByTagName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var list = new List<Element>();
+        foreach (var d in DescendantElements())
+            if (name == "*" || d.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                list.Add(d);
+        return list;
+    }
+
+    /// <summary>DOM §4.9 getElementsByClassName over this element's descendants.
+    /// The caller re-evaluates for liveness.</summary>
+    public IReadOnlyList<Element> GetElementsByClassName(string names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        var classes = names.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var list = new List<Element>();
+        if (classes.Length == 0) return list;
+        foreach (var d in DescendantElements())
+            if (classes.All(d.ClassList.Contains))
+                list.Add(d);
+        return list;
+    }
+
+    /// <summary>DOM §4.9 "hasAttributes".</summary>
+    public bool HasAttributes() => Attributes.Count > 0;
+
+    /// <summary>DOM §4.9 "getAttributeNames": the qualified attribute names.</summary>
+    public IReadOnlyList<string> GetAttributeNames()
+    {
+        var names = new List<string>(Attributes.Count);
+        foreach (var attr in Attributes) names.Add(attr.Name);
+        return names;
+    }
+
+    /// <summary>DOM §4.9 "toggleAttribute(name, force?)": adds or removes a
+    /// boolean attribute, returning whether it is now present.</summary>
+    public bool ToggleAttribute(string name, bool? force)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        if (force is { } f)
+        {
+            if (f) { SetAttribute(name, ""); return true; }
+            RemoveAttribute(name);
+            return false;
+        }
+        if (HasAttribute(name)) { RemoveAttribute(name); return false; }
+        SetAttribute(name, "");
+        return true;
+    }
+
     /// <summary>DOM §4.9 getElementsByTagNameNS over this element's descendants.
     /// "*" matches any namespace / any local name.</summary>
     public IEnumerable<Element> GetElementsByTagNameNS(string? @namespace, string localName)

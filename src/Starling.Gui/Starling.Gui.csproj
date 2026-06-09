@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <!-- Single net10.0 TFM — Avalonia handles platform abstraction itself,
-         no per-platform TFM shape needed (unlike the MAUI Starling.Gui). -->
+    <!-- Single TFM — Avalonia handles platform abstraction itself, no
+         per-platform TFM shape needed (unlike the MAUI Starling.Gui). net11
+         because it consumes Starling.Engine, which is net11 for the generated
+         Web IDL bindings (C# union types). -->
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <!-- NativeAOT. Setting this unconditionally is a no-op for ordinary builds
          (it only triggers native codegen on `dotnet publish -r <rid>`), but it
          keeps the trim/AOT analyzers on during every build so AOT regressions
