@@ -114,7 +114,15 @@ internal static class IntrinsicSizes
             {
                 case TextBox tb:
                     foreach (var frag in tb.Fragments)
+                    {
+                        // A collapsible space that trails a line hangs in this
+                        // engine instead of being removed (CSS Text 3 §4.1.1
+                        // line-end trimming); it is not content, so it must not
+                        // widen the measured extent (a zero-width min-content
+                        // probe would otherwise report longest-word + space).
+                        if (string.IsNullOrWhiteSpace(frag.Text)) continue;
                         max = Math.Max(max, frag.X + frag.Width);
+                    }
                     return;
                 case ImageBox img:
                     max = Math.Max(max, img.Frame.X + img.Frame.Width);
