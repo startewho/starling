@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -154,8 +155,13 @@ internal static class ImageSharpFontLookup
     {
         foreach (var family in families)
         {
-            yield return family;
-            foreach (var sub in ExpandGeneric(family))
+            // Family keying is quote/whitespace-insensitive: canonicalise once
+            // per candidate (allocation-free when the name is already clean) so
+            // a quote-laden name still hits the @font-face alias map and the
+            // collection. Case-insensitivity comes from the dictionaries.
+            var name = FontFamilyKey.Normalize(family);
+            yield return name;
+            foreach (var sub in ExpandGeneric(name))
                 yield return sub;
         }
     }
@@ -163,19 +169,29 @@ internal static class ImageSharpFontLookup
     /// <summary>
     /// CSS generic-family expansions, mirroring <see cref="FontResolver.ExpandGeneric"/>.
     /// macOS names come first because osx-arm64 is the only shipped RID today.
+    /// Keyed OrdinalIgnoreCase so the resolve path never lowercases candidates.
     /// </summary>
-    private static IEnumerable<string> ExpandGeneric(string family) => family.ToLowerInvariant() switch
+    private static readonly FrozenDictionary<string, string[]> s_genericExpansions = BuildGenericExpansions();
+
+    private static string[] ExpandGeneric(string family)
+        => s_genericExpansions.TryGetValue(family, out var expansion) ? expansion : [];
+
+    private static FrozenDictionary<string, string[]> BuildGenericExpansions()
     {
-        "serif" => ["Times New Roman", "Times", "Georgia", "Liberation Serif", "DejaVu Serif", "Noto Serif"],
-        "sans-serif" => ["Helvetica Neue", "Helvetica", "Arial", "Inter", "Liberation Sans", "DejaVu Sans", "Segoe UI", "Noto Sans", "Verdana"],
-        "monospace" => ["Menlo", "Monaco", "SF Mono", "Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono", "Consolas", "Noto Sans Mono"],
-        "cursive" => ["Snell Roundhand", "Apple Chancery", "Comic Sans MS", "Brush Script MT"],
-        "fantasy" => ["Papyrus", "Impact", "Herculanum"],
-        "system-ui" or "ui-sans-serif" => ["-apple-system", "system-ui", "SF Pro Text", "Helvetica Neue", "Segoe UI", "Roboto"],
-        "ui-serif" => ["-apple-system", "Times New Roman", "Times"],
-        "ui-monospace" => ["Menlo", "SF Mono", "Consolas"],
-        _ => [],
-    };
+        string[] systemUi = ["-apple-system", "system-ui", "SF Pro Text", "Helvetica Neue", "Segoe UI", "Roboto"];
+        return new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["serif"] = ["Times New Roman", "Times", "Georgia", "Liberation Serif", "DejaVu Serif", "Noto Serif"],
+            ["sans-serif"] = ["Helvetica Neue", "Helvetica", "Arial", "Inter", "Liberation Sans", "DejaVu Sans", "Segoe UI", "Noto Sans", "Verdana"],
+            ["monospace"] = ["Menlo", "Monaco", "SF Mono", "Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono", "Consolas", "Noto Sans Mono"],
+            ["cursive"] = ["Snell Roundhand", "Apple Chancery", "Comic Sans MS", "Brush Script MT"],
+            ["fantasy"] = ["Papyrus", "Impact", "Herculanum"],
+            ["system-ui"] = systemUi,
+            ["ui-sans-serif"] = systemUi,
+            ["ui-serif"] = ["-apple-system", "Times New Roman", "Times"],
+            ["ui-monospace"] = ["Menlo", "SF Mono", "Consolas"],
+        }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+    }
 
     private static void AddEmbeddedFonts(FontCollection collection, ILogger log)
     {
