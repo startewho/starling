@@ -12,6 +12,9 @@
     <!-- Animation playback tests drive a fake IAnimationHost over the real
          AnimationEngine/AnimationInstance with an injected clock. -->
     <ProjectReference Include="..\..\src\Starling.Css\Starling.Css.csproj" />
+    <!-- Scroll-event tests lay fixtures out for real so the ScrollStateStore
+         carries measured geometry, the way the engine session runs it. -->
+    <ProjectReference Include="..\..\src\Starling.Layout\Starling.Layout.csproj" />
     <ProjectReference Include="..\Starling.Spec.Common\Starling.Spec.Common.csproj" />
   </ItemGroup>
 </Project>
