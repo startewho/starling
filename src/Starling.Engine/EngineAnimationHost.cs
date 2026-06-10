@@ -28,7 +28,11 @@ internal sealed class EngineAnimationHost : IAnimationHost
     public EngineAnimationHost(AnimationEngine engine, Func<double>? clock = null)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
-        _clock = clock ?? (static () => 0);
+        // Default to the animation engine's own timeline: the live Engine
+        // constructs this host without a clock, and a zero clock would pin
+        // every element.animate() start at t=0 while sampling runs on the
+        // GUI stopwatch — instantly "finishing" any animation issued late.
+        _clock = clock ?? (() => engine.NowMs);
     }
 
     public double TimelineNow => _clock();

@@ -646,9 +646,21 @@ internal sealed class GridLayout
                 // Lengths, percentages, numbers, symbolic calc(). Anything else
                 // (line-name blocks, unknown keywords) contributes no track.
                 var px = ResolvePx(value, basis);
-                if (px is not { } v) return false;
-                def = new TrackDef { MinKind = SizeKind.Px, Min = v, MaxKind = SizeKind.Px, Max = v };
-                return true;
+                if (px is { } v)
+                {
+                    def = new TrackDef { MinKind = SizeKind.Px, Min = v, MaxKind = SizeKind.Px, Max = v };
+                    return true;
+                }
+                // A percentage (or calc with %) against an indefinite size
+                // behaves as auto (css-grid-1 §7.2.1) — the track must still
+                // occupy its slot, or later tracks shift and negative line
+                // numbers resolve against the wrong count.
+                if (value is CssPercentage or CssCalc)
+                {
+                    def = AutoDef();
+                    return true;
+                }
+                return false;
             }
         }
     }
