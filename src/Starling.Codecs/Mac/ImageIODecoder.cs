@@ -48,11 +48,18 @@ internal sealed partial class ImageIODecoder : IImageDecoder
             nint height = CGImageGetHeight(cgImage);
             var (w, h, _) = NativeImageDecoder.ValidateDecodedDimensions(width, height);
 
+            // Clamp the decode resolution: very large photos draw into a
+            // proportionally smaller context and CoreGraphics performs the
+            // high-quality downscale during CGContextDrawImage, so the
+            // full-resolution RGBA never touches the managed heap. The
+            // DecodedImage still reports the true intrinsic dimensions.
+            var (cw, ch) = NativeImageDecoder.ClampDecodeTarget(w, h);
+
             colorSpace = CGColorSpaceCreateDeviceRGB();
             if (colorSpace == 0)
                 throw new ImageDecodeException("ImageIO: CGColorSpaceCreateDeviceRGB failed.");
 
-            nint stride = (nint)w * 4;
+            nint stride = (nint)cw * 4;
 
             // CoreGraphics bitmap contexts only support *premultiplied* (or
             // none/skip) alpha for 8-bit RGBA — straight alpha
@@ -60,7 +67,7 @@ internal sealed partial class ImageIODecoder : IImageDecoder
             // premultiplied-RGBA context pointed straight at the destination
             // buffer, then un-premultiply in place to satisfy the
             // straight-alpha DecodedImage contract.
-            return DecodedImage.CreatePooled(w, h, span =>
+            return DecodedImage.CreatePooled(cw, ch, w, h, span =>
             {
                 // ArrayPool.Rent returns an uninitialised buffer. CGContextDrawImage
                 // defaults to sourceOver, so any non-zero alpha left in the rented
@@ -73,7 +80,7 @@ internal sealed partial class ImageIODecoder : IImageDecoder
                 fixed (byte* dst = span)
                 {
                     nint ctx = CGBitmapContextCreate(
-                        (nint)dst, width, height,
+                        (nint)dst, cw, ch,
                         bitsPerComponent: 8,
                         bytesPerRow: stride,
                         space: colorSpace,
@@ -82,12 +89,17 @@ internal sealed partial class ImageIODecoder : IImageDecoder
                         throw new ImageDecodeException("ImageIO: CGBitmapContextCreate failed.");
                     context = ctx;
 
+                    // When the decode is resolution-clamped the draw below is a
+                    // downscale; ask CG for its best resampling filter.
+                    if (cw != w || ch != h)
+                        CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
+
                     // A CGBitmapContext stores row 0 of its backing buffer at
                     // the *top* of the image, and CGContextDrawImage fills the
                     // given rect in that same orientation — so drawing the
                     // image at the origin already lands top-down in memory. No
                     // CTM flip is needed (a flip would invert it).
-                    var rect = new CGRect { X = 0, Y = 0, Width = w, Height = h };
+                    var rect = new CGRect { X = 0, Y = 0, Width = cw, Height = ch };
                     CGContextDrawImage(ctx, rect, cgImage);
                     CGContextFlush(ctx);
 
@@ -113,6 +125,9 @@ internal sealed partial class ImageIODecoder : IImageDecoder
         }
     }
 
+    // CGInterpolationQuality.kCGInterpolationHigh == 3 — CG's best resampler
+    // (Lanczos-class) for the clamped-decode downscale draw.
+    private const int kCGInterpolationHigh = 3;
     // CGImageAlphaInfo.kCGImageAlphaPremultipliedLast == 1 (premultiplied,
     // alpha in the last byte).
     private const uint kCGImageAlphaPremultipliedLast = 1;
@@ -191,6 +206,9 @@ internal sealed partial class ImageIODecoder : IImageDecoder
 
     [LibraryImport(CoreGraphics)]
     private static partial void CGContextRelease(nint context);
+
+    [LibraryImport(CoreGraphics)]
+    private static partial void CGContextSetInterpolationQuality(nint context, int quality);
 
     [LibraryImport(CoreGraphics)]
     private static partial void CGContextDrawImage(nint context, CGRect rect, nint image);
