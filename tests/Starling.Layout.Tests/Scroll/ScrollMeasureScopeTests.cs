@@ -253,4 +253,41 @@ public sealed class ScrollMeasureScopeTests
         s.OffsetY.Should().Be(10);
     }
 #endif
+
+    [TestMethod]
+    public void Rewrapped_bare_text_flex_item_keeps_scoped_and_full_measurement_in_agreement()
+    {
+        // Bare text directly inside a flex container lands in an anonymous
+        // flex item whose layout takes the AnonymousBlock early return in
+        // BlockLayout.LayoutItem. That return must still invalidate the
+        // extent-cache chain, or the scoped pass composes a stale extent
+        // after the text re-wraps and diverges from a full layout.
+        var (doc, session, store) = StartSession("""
+            <body style="margin:0">
+              <div id=s style="overflow:auto;width:300px;height:50px">
+                <div style="display:flex;width:300px">
+                  <div id=grow style="width:20px;height:10px"></div>
+                  <div style="font-size:16px">alpha beta gamma delta epsilon zeta eta theta iota kappa</div>
+                </div>
+              </div>
+            </body>
+            """);
+        var initial = StateOf(store, doc, "s").OverflowHeight;
+
+        // Widen the sibling so the bare-text item re-wraps much taller; the
+        // scroller itself is only touched through the dirty chain.
+        doc.GetElementById("grow")!.SetAttribute("style", "width:240px;height:10px");
+        Relayout(session, doc);
+        var scoped = StateOf(store, doc, "s").OverflowHeight;
+
+        var freshStore = new ScrollStateStore();
+        new LayoutSession(new StyleEngine()) { ScrollState = freshStore }
+            .Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
+        freshStore.TryGet(doc.GetElementById("s")!, out var fresh).Should().BeTrue();
+
+        scoped.Should().Be(fresh.OverflowHeight,
+            "scoped and full scroll measurement must agree after an anonymous flex item re-wraps");
+        scoped.Should().BeGreaterThan(initial,
+            "the narrowed text column must actually have re-wrapped taller");
+    }
 }
