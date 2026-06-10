@@ -178,10 +178,25 @@ public static class BoxHitTester
             contentY -= off.Y;
         }
 
-        // Last child wins ties — later siblings paint on top.
+        // Last child wins ties — later siblings paint on top. With a scroll
+        // model, sticky children paint ABOVE in-flow siblings (the painter
+        // hoists them per CSS 2.1 Appendix E), so test them first.
+        if (stickyShifts is not null)
+        {
+            for (var i = box.Children.Count - 1; i >= 0; i--)
+            {
+                var child = box.Children[i];
+                if (child.Element is null || !IsStickyPositioned(child)) continue;
+                var stickyHit = FindDeepest(child, x, y, contentX, contentY, viewportX, viewportY, scrollOffsets, stickyShifts);
+                if (stickyHit is not null)
+                    return stickyHit;
+            }
+        }
         for (var i = box.Children.Count - 1; i >= 0; i--)
         {
-            var childHit = FindDeepest(box.Children[i], x, y, contentX, contentY, viewportX, viewportY, scrollOffsets, stickyShifts);
+            var child = box.Children[i];
+            if (stickyShifts is not null && child.Element is not null && IsStickyPositioned(child)) continue;
+            var childHit = FindDeepest(child, x, y, contentX, contentY, viewportX, viewportY, scrollOffsets, stickyShifts);
             if (childHit is not null)
                 return childHit;
         }

@@ -387,6 +387,42 @@ public sealed class DisplayListBuilder
     }
 
     /// <summary>
+    /// Paints <paramref name="box"/>'s children in paint order. With a scroll
+    /// model attached (<see cref="_stickyShifts"/> non-null), sticky children
+    /// are hoisted to paint AFTER their in-flow siblings — CSS 2.1 Appendix E:
+    /// positioned descendants with <c>z-index: auto</c> paint above the
+    /// in-flow layer, which is what keeps a stuck header visible over the
+    /// content that scrolls under it. Without a scroll model the loop is the
+    /// plain tree-order walk, byte-identical to the pre-WP5 painter.
+    /// </summary>
+    private void VisitChildren(Box box, DisplayList list, double contentOriginX, double contentOriginY, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride, IImageResolver? images, LayerSlice? slice)
+    {
+        if (_stickyShifts is null)
+        {
+            foreach (var child in box.Children)
+                Visit(child, list, contentOriginX, contentOriginY, current, cull, styleOverride, images, slice);
+            return;
+        }
+
+        var anySticky = false;
+        foreach (var child in box.Children)
+        {
+            if (child.Element is not null && IsStickyPositioned(child, styleOverride))
+            {
+                anySticky = true;
+                continue;
+            }
+            Visit(child, list, contentOriginX, contentOriginY, current, cull, styleOverride, images, slice);
+        }
+        if (!anySticky) return;
+        foreach (var child in box.Children)
+        {
+            if (child.Element is not null && IsStickyPositioned(child, styleOverride))
+                Visit(child, list, contentOriginX, contentOriginY, current, cull, styleOverride, images, slice);
+        }
+    }
+
+    /// <summary>
     /// Adds <paramref name="item"/> to <paramref name="list"/> unless culling is
     /// active and the item's page-coordinate AABB (the local <paramref name="bounds"/>
     /// transformed by <paramref name="current"/>) does not intersect the
@@ -654,8 +690,7 @@ public sealed class DisplayListBuilder
             var scrollMatrix = Matrix2D.Translate(-scrollOffset.X, -scrollOffset.Y);
             var composed = current.Multiply(scrollMatrix);
             var scratch = new DisplayList();
-            foreach (var child in box.Children)
-                Visit(child, scratch, contentOriginX, contentOriginY, composed, childCull, styleOverride, images, slice);
+            VisitChildren(box, scratch, contentOriginX, contentOriginY, composed, childCull, styleOverride, images, slice);
             if (scratch.Items.Count > 0)
             {
                 // Emit the clip bracket around the scrolled children so they
@@ -684,8 +719,7 @@ public sealed class DisplayListBuilder
         {
             var clipBounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
             activeList.Add(new PushClip(clipBounds, clipRadii));
-            foreach (var child in box.Children)
-                Visit(child, activeList, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
+            VisitChildren(box, activeList, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
             activeList.Add(PopClip.Instance);
             FlushClipPathBracket(innerList, activeList, clipPathValue, refBox);
             if (maskGeometry is not null)
@@ -693,8 +727,7 @@ public sealed class DisplayListBuilder
             return;
         }
 
-        foreach (var child in box.Children)
-            Visit(child, activeList, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
+        VisitChildren(box, activeList, contentOriginX, contentOriginY, current, childCull, styleOverride, images, slice);
 
         FlushClipPathBracket(innerList, activeList, clipPathValue, refBox);
         if (maskGeometry is not null)
