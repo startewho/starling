@@ -163,8 +163,14 @@ public sealed record StrokeRoundedRect(Rect Bounds, CornerRadii Radii, CssColor 
 /// translated by (<paramref name="OffsetX"/>, <paramref name="OffsetY"/>), and
 /// softened by a Gaussian whose standard deviation is <paramref name="Blur"/>/2
 /// (the spec defines the blur radius as one standard deviation × 2). When
-/// <paramref name="Inset"/> is true the layer is an inner shadow; outer
-/// painting is the supported path and the painter documents the inset gap.
+/// <paramref name="Inset"/> is true the layer is an inner shadow (§7.1.1):
+/// <paramref name="Bounds"/> then carries the element's PADDING box and
+/// <paramref name="Radii"/> the padding-box (inner) radii. The painter fills
+/// the ring between the inner silhouette — the padding box translated by the
+/// offset and shrunk by <paramref name="Spread"/> on every side — and the
+/// padding edge, blurred, clipped to the (rounded) padding box. A positive
+/// <paramref name="OffsetX"/> shifts the silhouette right and thickens the
+/// LEFT shadow band.
 /// </summary>
 public sealed record DrawBoxShadow(
     Rect Bounds,

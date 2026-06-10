@@ -26,7 +26,10 @@ internal sealed partial class ImageSharpBackend
         byte R,
         byte G,
         byte B,
-        byte A)
+        byte A,
+        bool Inset = false,
+        double OffsetX = 0,
+        double OffsetY = 0)
     {
         public static BoxShadowCacheKey From(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
             => new(
@@ -42,6 +45,30 @@ internal sealed partial class ImageSharpBackend
                 shadow.Color.G,
                 shadow.Color.B,
                 shadow.Color.A);
+
+        /// <summary>
+        /// Key for an inset layer raster. Unlike outer shadows (where the
+        /// offset only moves the blit destination), the offset changes the
+        /// rasterized ring itself, so it joins the key. The silhouette fields
+        /// carry the padding-box dimensions.
+        /// </summary>
+        public static BoxShadowCacheKey FromInset(DrawBoxShadow shadow, int imageWidth, int imageHeight, int margin)
+            => new(
+                imageWidth,
+                imageHeight,
+                shadow.Bounds.Width,
+                shadow.Bounds.Height,
+                margin,
+                Math.Max(0, shadow.Blur),
+                shadow.Spread,
+                shadow.Radii,
+                shadow.Color.R,
+                shadow.Color.G,
+                shadow.Color.B,
+                shadow.Color.A,
+                Inset: true,
+                shadow.OffsetX,
+                shadow.OffsetY);
     }
 
     private sealed class DisposableBag : IDisposable

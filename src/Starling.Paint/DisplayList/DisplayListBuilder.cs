@@ -381,8 +381,10 @@ public sealed class DisplayListBuilder
             // the normal background fill + background-image gradient.
             if (IsTextClip(style) && TryEmitBackgroundTextClip(box, frameX, frameY, activeList, current, cull, style, styleOverride))
             {
-                // Borders still paint normally; only the background was
-                // diverted to the glyph-clipped item.
+                // Inset shadows still paint above the (glyph-clipped)
+                // background and below the borders, which paint normally; only
+                // the background fill was diverted to the glyph-clipped item.
+                EmitInsetBoxShadows(box, bounds, radii, activeList, current, cull, style);
                 EmitBorders(box, frameX, frameY, activeList, current, cull, style, radii);
             }
             else
@@ -390,10 +392,18 @@ public sealed class DisplayListBuilder
                 var bg = style.GetColor(PropertyId.BackgroundColor);
                 if (bg is { A: > 0 })
                 {
-                    if (radii.IsZero)
-                        Emit(activeList, new FillRect(bounds, bg, FillRectPixelAlignment.Preserve), bounds, current, cull);
-                    else
-                        Emit(activeList, new FillRoundedRect(bounds, radii, bg), bounds, current, cull);
+                    // CSS Backgrounds 3 §2.4 — background-color is clipped by the
+                    // bottom (last) layer's background-clip box, with the corner
+                    // radii corrected to that box's inner edge.
+                    var (colorRect, colorRadii) = ResolveBackgroundPaintBox(
+                        box, bounds, radii, LastLayerValue(style.Get(PropertyId.BackgroundClip)), "border-box");
+                    if (colorRect.Width > 0 && colorRect.Height > 0)
+                    {
+                        if (colorRadii.IsZero)
+                            Emit(activeList, new FillRect(colorRect, bg, FillRectPixelAlignment.Preserve), colorRect, current, cull);
+                        else
+                            Emit(activeList, new FillRoundedRect(colorRect, colorRadii, bg), colorRect, current, cull);
+                    }
                 }
 
                 // CSS Backgrounds 3 §3 — background-image paints inside the
@@ -401,6 +411,10 @@ public sealed class DisplayListBuilder
                 // but at this layout fidelity the padding+border distinction
                 // is unobservable and using the frame is correct).
                 EmitBackgroundImage(box, frameX, frameY, activeList, current, cull, style, images, radii);
+
+                // CSS Backgrounds 3 §6 — inset box-shadow layers paint ABOVE
+                // the background (color + images) and BELOW the border stroke.
+                EmitInsetBoxShadows(box, bounds, radii, activeList, current, cull, style);
 
                 // Borders. Painter renders one stroke per side that has a non-zero width.
                 EmitBorders(box, frameX, frameY, activeList, current, cull, style, radii);
@@ -726,6 +740,11 @@ public sealed class DisplayListBuilder
     {
         var bgImage = style.Get(PropertyId.BackgroundImage);
 
+        // CSS Backgrounds 3 §2.6/§2.4 — per-layer positioning area (origin)
+        // and painting area (clip), indexed per layer like position/size.
+        var originList = style.Get(PropertyId.BackgroundOrigin);
+        var clipList = style.Get(PropertyId.BackgroundClip);
+
         // CSS Backgrounds 3 §3.4 — `background-image` may be a comma-separated
         // list of layers. The first layer is the topmost, so paint the list
         // back-to-front (later layers sit behind earlier ones). Per-layer
@@ -736,12 +755,14 @@ public sealed class DisplayListBuilder
             var sizeList = style.Get(PropertyId.BackgroundSize);
             for (var i = layers.Values.Count - 1; i >= 0; i--)
                 EmitOneBackgroundLayer(box, frameX, frameY, list, current, cull, images, radii,
-                    layers.Values[i], LayerValueAt(sizeList, i), LayerValueAt(posList, i));
+                    layers.Values[i], LayerValueAt(sizeList, i), LayerValueAt(posList, i),
+                    LayerValueAt(originList, i), LayerValueAt(clipList, i));
             return;
         }
 
         EmitOneBackgroundLayer(box, frameX, frameY, list, current, cull, images, radii,
-            bgImage, style.Get(PropertyId.BackgroundSize), style.Get(PropertyId.BackgroundPosition));
+            bgImage, style.Get(PropertyId.BackgroundSize), style.Get(PropertyId.BackgroundPosition),
+            LayerValueAt(originList, 0), LayerValueAt(clipList, 0));
     }
 
     /// <summary>Index into a layered background longhand: returns the i-th
@@ -752,7 +773,7 @@ public sealed class DisplayListBuilder
             ? (l.Values.Count == 0 ? null : l.Values[Math.Min(i, l.Values.Count - 1)])
             : value;
 
-    private static void EmitOneBackgroundLayer(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, IImageResolver? images, CornerRadii radii, CssValue? layerImage, CssValue? layerSize, CssValue? layerPosition)
+    private static void EmitOneBackgroundLayer(Box box, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, IImageResolver? images, CornerRadii radii, CssValue? layerImage, CssValue? layerSize, CssValue? layerPosition, CssValue? layerOrigin = null, CssValue? layerClip = null)
     {
         // CSS Images 3 §3 — `background-image: <gradient>`. Gradients paint
         // directly from the typed value and don't need an image resolver; map
@@ -767,8 +788,14 @@ public sealed class DisplayListBuilder
             && gradient.IsPaintable
             && box.Frame.Width > 0 && box.Frame.Height > 0)
         {
-            var gbounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
-            Emit(list, new FillGradient(gbounds, gradient, radii), gbounds, current, cull);
+            // CSS Backgrounds 3 §2.4 — the gradient paints over this layer's
+            // background-clip box with that box's corrected inner radii. (The
+            // gradient's positioning area is approximated by the same box;
+            // origin-only differences are not observable without tiling.)
+            var gborder = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+            var (gbounds, gradRadii) = ResolveBackgroundPaintBox(box, gborder, radii, layerClip, "border-box");
+            if (gbounds.Width <= 0 || gbounds.Height <= 0) return;
+            Emit(list, new FillGradient(gbounds, gradient, gradRadii), gbounds, current, cull);
             return;
         }
 
@@ -782,33 +809,43 @@ public sealed class DisplayListBuilder
         if (box.Frame.Width <= 0 || box.Frame.Height <= 0) return;
         if (decoded.Width <= 0 || decoded.Height <= 0) return;
 
-        var boxW = box.Frame.Width;
-        var boxH = box.Frame.Height;
+        // CSS Backgrounds 3 §2.6 — background-origin picks the positioning
+        // area (border/padding/content box) that position and size resolve
+        // against. §2.4 — background-clip picks the painting area the
+        // rendered image is cropped to.
+        var bbounds = new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height);
+        var (originRect, _) = ResolveBackgroundPaintBox(box, bbounds, radii, layerOrigin, "padding-box");
+        var (clipRect, clipRadii) = ResolveBackgroundPaintBox(box, bbounds, radii, layerClip, "border-box");
+        if (originRect.Width <= 0 || originRect.Height <= 0) return;
+        if (clipRect.Width <= 0 || clipRect.Height <= 0) return;
+
+        var areaW = originRect.Width;
+        var areaH = originRect.Height;
 
         // background-size — default `auto auto` keeps the image at native
         // dimensions. A single length applies to width with height = auto.
         // Native size is the *intrinsic* size in CSS px, which can exceed the
         // pixel buffer when the decode was resolution-clamped.
-        var (renderW, renderH) = ResolveBackgroundSize(layerSize, boxW, boxH, decoded.IntrinsicWidth, decoded.IntrinsicHeight);
+        var (renderW, renderH) = ResolveBackgroundSize(layerSize, areaW, areaH, decoded.IntrinsicWidth, decoded.IntrinsicHeight);
         if (renderW <= 0 || renderH <= 0) return;
 
         // background-position — where the rendered image's top-left lands
-        // inside the box. A single value is the X offset (Y defaults to
-        // centred per the spec, but the sprite use case keys on X only, so
-        // we default Y to 0 for the single-value case to match common
-        // sprite-sheet authoring).
-        var (offsetX, offsetY) = ResolveBackgroundPosition(layerPosition, boxW, boxH, renderW, renderH);
+        // inside the positioning area. A single value is the X offset (Y
+        // defaults to centred per the spec, but the sprite use case keys on
+        // X only, so we default Y to 0 for the single-value case to match
+        // common sprite-sheet authoring).
+        var (offsetX, offsetY) = ResolveBackgroundPosition(layerPosition, areaW, areaH, renderW, renderH);
 
-        // The rendered image rectangle in box coordinates.
-        var imgX = offsetX;
-        var imgY = offsetY;
+        // The rendered image rectangle in document coordinates.
+        var imgX = originRect.X + offsetX;
+        var imgY = originRect.Y + offsetY;
 
-        // Clip the rendered image to the box — the visible part is the
-        // intersection. Anything outside is discarded.
-        var destX = Math.Max(0, imgX);
-        var destY = Math.Max(0, imgY);
-        var destRight = Math.Min(boxW, imgX + renderW);
-        var destBottom = Math.Min(boxH, imgY + renderH);
+        // Clip the rendered image to the painting area — the visible part is
+        // the intersection. Anything outside is discarded.
+        var destX = Math.Max(clipRect.X, imgX);
+        var destY = Math.Max(clipRect.Y, imgY);
+        var destRight = Math.Min(clipRect.Right, imgX + renderW);
+        var destBottom = Math.Min(clipRect.Bottom, imgY + renderH);
         var destW = destRight - destX;
         var destH = destBottom - destY;
         if (destW <= 0 || destH <= 0) return;
@@ -822,8 +859,18 @@ public sealed class DisplayListBuilder
         var srcW = destW * scaleX;
         var srcH = destH * scaleY;
 
-        var dest = new Rect(frameX + destX, frameY + destY, destW, destH);
+        var dest = new Rect(destX, destY, destW, destH);
+        if (clipRadii.IsZero)
+        {
+            Emit(list, new DrawImage(dest, decoded, new Rect(srcX, srcY, srcW, srcH)), dest, current, cull);
+            return;
+        }
+
+        // Rounded painting area: crop the blit with a real clip bracket so
+        // the clip box's rounded corners stay transparent.
+        list.Add(new PushClip(clipRect, clipRadii));
         Emit(list, new DrawImage(dest, decoded, new Rect(srcX, srcY, srcW, srcH)), dest, current, cull);
+        list.Add(PopClip.Instance);
     }
 
     private static (double Width, double Height) ResolveBackgroundSize(CssValue? value, double boxW, double boxH, double nativeW, double nativeH)
@@ -1125,11 +1172,80 @@ public sealed class DisplayListBuilder
     }
 
     /// <summary>
+    /// Shrinks each corner radius component by the adjacent box edges (CSS
+    /// Backgrounds 3 §5.1 — the inner radius at a corner is the outer radius
+    /// minus the edge thickness on the side that component runs along).
+    /// Negative results clamp to zero (a square inner corner); a corner that
+    /// is already square stays square.
+    /// </summary>
+    private static CornerRadii ShrinkRadiiPerSide(CornerRadii r, double top, double right, double bottom, double left)
+    {
+        static double S(double v, double by) => v <= 0 ? 0 : Math.Max(0, v - by);
+        return new CornerRadii(
+            S(r.TopLeftX, left), S(r.TopLeftY, top),
+            S(r.TopRightX, right), S(r.TopRightY, top),
+            S(r.BottomRightX, right), S(r.BottomRightY, bottom),
+            S(r.BottomLeftX, left), S(r.BottomLeftY, bottom));
+    }
+
+    /// <summary>Returns the LAST layer's value of a layered background
+    /// longhand (the bottom layer — the one background-color is clipped by
+    /// per CSS Backgrounds 3 §2.4), or the value itself when it is a single
+    /// shared value.</summary>
+    private static CssValue? LastLayerValue(CssValue? value)
+        => value is CssValueList { Values.Count: > 0 } l ? l.Values[^1] : value;
+
+    /// <summary>
+    /// Resolves a background box keyword (<c>border-box | padding-box |
+    /// content-box</c>, CSS Backgrounds 3 §2.4/§2.6) to its document-space
+    /// rectangle and corrected corner radii. <paramref name="borderBounds"/> /
+    /// <paramref name="radii"/> are the border box and its radii;
+    /// <paramref name="fallback"/> supplies the per-property initial keyword
+    /// (<c>padding-box</c> for origin, <c>border-box</c> for clip) when the
+    /// style carries no keyword. Unrecognised keywords (e.g. <c>text</c>,
+    /// which is handled by the dedicated glyph-clip path) resolve to the
+    /// border box.
+    /// </summary>
+    private static (Rect Rect, CornerRadii Radii) ResolveBackgroundPaintBox(Box box, Rect borderBounds, CornerRadii radii, CssValue? keyword, string fallback)
+    {
+        var name = keyword is CssKeyword k ? k.Name : fallback;
+        double top, right, bottom, left;
+        if (name.Equals("content-box", StringComparison.OrdinalIgnoreCase))
+        {
+            top = box.Border.Top + box.Padding.Top;
+            right = box.Border.Right + box.Padding.Right;
+            bottom = box.Border.Bottom + box.Padding.Bottom;
+            left = box.Border.Left + box.Padding.Left;
+        }
+        else if (name.Equals("padding-box", StringComparison.OrdinalIgnoreCase))
+        {
+            top = box.Border.Top;
+            right = box.Border.Right;
+            bottom = box.Border.Bottom;
+            left = box.Border.Left;
+        }
+        else
+        {
+            return (borderBounds, radii);
+        }
+
+        if (top == 0 && right == 0 && bottom == 0 && left == 0)
+            return (borderBounds, radii);
+
+        var rect = new Rect(
+            borderBounds.X + left,
+            borderBounds.Y + top,
+            Math.Max(0, borderBounds.Width - left - right),
+            Math.Max(0, borderBounds.Height - top - bottom));
+        return (rect, radii.IsZero ? radii : ShrinkRadiiPerSide(radii, top, right, bottom, left));
+    }
+
+    /// <summary>
     /// Emits the outer <c>box-shadow</c> drop shadows behind the box. Per CSS
     /// Backgrounds 3 §6 the first listed layer is on top, so the layers are
-    /// emitted back-to-front (last → first). Inset layers are recognised but
-    /// only their parse is honoured here; inner-shadow painting is a documented
-    /// follow-up.
+    /// emitted back-to-front (last → first). Inset layers are skipped here;
+    /// they paint later, above the background, via
+    /// <see cref="EmitInsetBoxShadows"/>.
     /// </summary>
     private static void EmitBoxShadows(Box box, Rect bounds, CornerRadii radii, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style)
     {
@@ -1143,7 +1259,7 @@ public sealed class DisplayListBuilder
         for (var i = shadow.Layers.Count - 1; i >= 0; i--)
         {
             var layer = shadow.Layers[i];
-            if (layer.Inset) continue; // outer shadows only (inset deferred)
+            if (layer.Inset) continue; // inner layers paint via EmitInsetBoxShadows
 
             var color = layer.Color ?? textColor;
             if (color.A == 0) continue;
@@ -1162,6 +1278,64 @@ public sealed class DisplayListBuilder
                 bounds.Height + 2 * pad);
 
             Emit(list, new DrawBoxShadow(bounds, radii, offsetX, offsetY, blur, spread, color, layer.Inset), shadowAabb, current, cull);
+        }
+    }
+
+    /// <summary>
+    /// Emits the inset <c>box-shadow</c> layers (CSS Backgrounds 3 §6/§7.1.1).
+    /// Inner shadows paint ABOVE the background and BELOW the border stroke,
+    /// clipped to the padding box, so the caller invokes this between the
+    /// background and the border emission. The emitted
+    /// <see cref="DrawBoxShadow"/> carries the PADDING box as <c>Bounds</c>
+    /// and the padding-box (inner) radii as <c>Radii</c>; the backend
+    /// rasterizes the ring between the inner silhouette (the padding box
+    /// offset by the shadow offset and shrunk by spread) and the padding
+    /// edge. Layers are emitted back-to-front so the first listed layer
+    /// paints on top, matching the outer-shadow order. Parsing happens twice
+    /// for boxes that actually have a box-shadow (once here, once for the
+    /// outer pass) — both passes early-out before parsing for the common
+    /// shadow-less box.
+    /// </summary>
+    private static void EmitInsetBoxShadows(Box box, Rect bounds, CornerRadii radii, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style)
+    {
+        var raw = style.Get(PropertyId.BoxShadow);
+        if (raw is null or CssKeyword { Name: "none" }) return;
+        var shadow = CssBoxShadowParser.Parse(raw);
+        if (shadow.IsNone) return;
+
+        // Padding box: the border box inset by the used border widths. The
+        // inner radii shrink per-side by the adjacent border widths (§5.1).
+        var bt = box.Border.Top;
+        var brd = box.Border.Right;
+        var bb = box.Border.Bottom;
+        var bl = box.Border.Left;
+        var padW = bounds.Width - bl - brd;
+        var padH = bounds.Height - bt - bb;
+        if (padW <= 0 || padH <= 0) return;
+        var padding = new Rect(bounds.X + bl, bounds.Y + bt, padW, padH);
+        var innerRadii = radii.IsZero ? radii : ShrinkRadiiPerSide(radii, bt, brd, bb, bl);
+
+        var textColor = style.GetColor(PropertyId.Color);
+
+        for (var i = shadow.Layers.Count - 1; i >= 0; i--)
+        {
+            var layer = shadow.Layers[i];
+            if (!layer.Inset) continue;
+
+            var color = layer.Color ?? textColor;
+            if (color.A == 0) continue;
+
+            var offsetX = Starling.Layout.Block.BlockLayout.ToPx(layer.OffsetX);
+            var offsetY = Starling.Layout.Block.BlockLayout.ToPx(layer.OffsetY);
+            var blur = Math.Max(0, Starling.Layout.Block.BlockLayout.ToPx(layer.Blur));
+            var spread = Starling.Layout.Block.BlockLayout.ToPx(layer.Spread);
+
+            // No offset, no blur, and no positive spread → the inner
+            // silhouette covers the whole padding box; the ring is empty.
+            if (offsetX == 0 && offsetY == 0 && blur <= 0 && spread <= 0) continue;
+
+            // Inner shadows never escape the padding box, so its rect is the AABB.
+            Emit(list, new DrawBoxShadow(padding, innerRadii, offsetX, offsetY, blur, spread, color, Inset: true), padding, current, cull);
         }
     }
 
