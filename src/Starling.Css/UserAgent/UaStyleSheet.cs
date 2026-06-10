@@ -112,6 +112,7 @@ public static class UaStyleSheet
           border: 1px solid #767676;
           padding: 1px 2px;
           margin: 0;
+          appearance: auto;
         }
         button, input[type="submit"], input[type="button"], input[type="reset"] {
           background-color: #efefef;
@@ -126,6 +127,20 @@ public static class UaStyleSheet
            author CSS that sets a real height/min-height wins over this. */
         input { min-height: 1.2em; }
 
+        /* Checkbox / radio widgets: a fixed square hit target (about the 13px
+           native size), padding stripped so the glyph geometry the painter
+           draws (check mark / dot) fills the border box predictably. The
+           min-height override beats the text-input rule above via the
+           attribute selector's higher specificity. border-radius:50% turns
+           the radio's border into the outer circle. */
+        input[type="checkbox"], input[type="radio"] {
+          width: 13px;
+          height: 13px;
+          min-height: 13px;
+          padding: 0;
+        }
+        input[type="radio"] { border-radius: 50%; }
+
         /* <textarea> is multi-line; we don't have multi-line content layout
            for inline-block yet, so it ends up looking like a wide single-line
            field. Monospace matches platform default and helps users tell
@@ -137,7 +152,7 @@ public static class UaStyleSheet
 
         /* <select>: without JS we can't actually open a dropdown. Approximate
            the closed state by showing only the first option as its label. */
-        select { padding: 1px 4px; }
+        select { padding: 1px 16px 1px 4px; }
         option { display: none; }
         select > option:first-child { display: inline; }
 

@@ -478,3 +478,18 @@ public sealed record DrawBorderSides(
     BorderSideStyle RightStyle,
     BorderSideStyle BottomStyle,
     BorderSideStyle LeftStyle) : DisplayItem;
+
+/// <summary>
+/// Two stroked line segments through three points (P0→P1→P2), drawn with a
+/// round-capped solid pen. Resolution-independent vector primitive for form
+/// control glyphs: the checkbox check mark and the <c>&lt;select&gt;</c>
+/// chevron are both a single three-point polyline. Coordinates are
+/// page-space CSS px; <paramref name="Color"/> carries the element's resolved
+/// <c>currentColor</c> so author <c>color</c> tints the glyph.
+/// </summary>
+public sealed record StrokeSegments(
+    double X0, double Y0,
+    double X1, double Y1,
+    double X2, double Y2,
+    CssColor Color,
+    double Width) : DisplayItem;

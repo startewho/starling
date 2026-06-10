@@ -29,6 +29,11 @@ public sealed class DisplayListBuilder
     /// </summary>
     private const double OverdrawMargin = 64d;
 
+    /// <summary>UA default ::placeholder gray — what Chromium uses
+    /// (#757575) on a light scheme; distinct from the #767676 control border
+    /// only by happenstance, both read as "muted".</summary>
+    private static readonly CssColor PlaceholderColor = new(117, 117, 117, 255);
+
     /// <summary>Host abort signal — see Painter.LayoutDocumentWithStyle.
     /// Observed by the box-tree walk so a Stop arriving during paint of a very
     /// large page unwinds between sibling boxes instead of running to completion.</summary>
@@ -425,6 +430,12 @@ public sealed class DisplayListBuilder
             // overflow PushClip bracket opens, so the element's own overflow
             // clip never crops its outline (ancestor clips still apply).
             EmitOutline(box, frameX, frameY, activeList, current, cull, style, radii);
+
+            // HTML form-control chrome — checkbox check mark, radio dot,
+            // select chevron. Painted above background/border and below
+            // children (the select's option label paints later, to the left
+            // of the right-aligned chevron).
+            EmitFormControlChrome(box, frameX, frameY, activeList, current, cull, style);
         }
 
         // Inline content: text fragments live on TextBoxes, positioned in their
@@ -1555,11 +1566,101 @@ public sealed class DisplayListBuilder
             G(r.BottomLeftX, by), G(r.BottomLeftY, by));
     }
 
+    /// <summary>
+    /// Minimum-credible native-widget chrome for HTML form controls, drawn as
+    /// resolution-independent vector items (HTML §4.10 rendering / CSS Basic
+    /// UI 4 §7): a check-mark polyline for a checked checkbox, a filled
+    /// centred dot for a checked radio (the outer circle comes from the UA
+    /// sheet's border-radius:50% border), and a right-aligned chevron for
+    /// select. The UA sheet opts controls in with `appearance: auto`; any
+    /// other computed value — including the property's initial `none` — keeps
+    /// the element a plain styled box, so author `appearance: none` strips
+    /// all of this chrome. Glyph strokes follow the element's resolved
+    /// `color` (currentColor).
+    /// </summary>
+    private static void EmitFormControlChrome(Box box, double x, double y, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style)
+    {
+        if (box.Element is not { } element) return;
+        var name = element.LocalName;
+        if (name is not ("input" or "select")) return;
+
+        if (style.Get(PropertyId.Appearance) is not CssKeyword appearance
+            || !string.Equals(appearance.Name, "auto", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var w = box.Frame.Width;
+        var h = box.Frame.Height;
+        if (w <= 0 || h <= 0) return;
+
+        var color = style.GetColor(PropertyId.Color);
+        if (color.A == 0) return;
+
+        if (name == "select")
+        {
+            // Chevron-down, right-aligned in the border box and vertically
+            // centred: inset 5px from the right border edge, ~8px wide. Skip
+            // degenerate boxes where the chevron would not fit.
+            const double chevronWidth = 8d;
+            const double chevronInset = 5d;
+            if (w < chevronWidth + 2 * chevronInset) return;
+            var chevronHeight = Math.Min(4.5d, h * 0.4d);
+            if (chevronHeight <= 0) return;
+            var rightX = x + w - chevronInset;
+            var midY = y + h / 2d;
+            var topY = midY - chevronHeight / 2d;
+            var glyph = new StrokeSegments(
+                rightX - chevronWidth, topY,
+                rightX - chevronWidth / 2d, topY + chevronHeight,
+                rightX, topY,
+                color, 1.5d);
+            var chevronBounds = new Rect(rightX - chevronWidth - 1, topY - 1, chevronWidth + 2, chevronHeight + 2);
+            Emit(list, glyph, chevronBounds, current, cull);
+            return;
+        }
+
+        // <input>: only checkbox/radio carry glyph chrome, and only when
+        // checked. Checkedness is attribute-backed in Starling.Dom — the IDL
+        // `checked` setter writes the content attribute (HtmlFormControls),
+        // so attribute presence IS the live state.
+        var type = element.GetAttribute("type");
+        if (string.Equals(type, "checkbox", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!HtmlFormControls.Checked(element)) return;
+            // Check mark: two stroked segments through three points placed at
+            // fractions of the border box, so the glyph scales with any
+            // author-resized control.
+            var stroke = Math.Max(1.5d, Math.Min(w, h) * 0.15d);
+            var glyph = new StrokeSegments(
+                x + w * 0.22d, y + h * 0.55d,
+                x + w * 0.42d, y + h * 0.75d,
+                x + w * 0.78d, y + h * 0.28d,
+                color, stroke);
+            var bounds = new Rect(x, y, w, h);
+            Emit(list, glyph, bounds, current, cull);
+        }
+        else if (string.Equals(type, "radio", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!HtmlFormControls.Checked(element)) return;
+            // Inner dot: a filled circle at half the control's diameter,
+            // centred in the border box.
+            var d = Math.Min(w, h) * 0.5d;
+            if (d <= 0) return;
+            var dotRect = new Rect(x + (w - d) / 2d, y + (h - d) / 2d, d, d);
+            var r = d / 2d;
+            Emit(list, new FillRoundedRect(dotRect, CornerRadii.Uniform(r, r, r, r), color), dotRect, current, cull);
+        }
+    }
+
     private static void EmitTextFragments(TextBox text, double x, double y, DisplayList list, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride)
     {
         if (text.Fragments.Count == 0) return;
         var style = EffectiveStyle(text, styleOverride);
         var color = style?.GetColor(PropertyId.Color) ?? CssColor.Black;
+        // HTML placeholder text renders muted (the UA ::placeholder default —
+        // a mid gray) rather than in the element's own color. The box-tree
+        // builder marks the synthesized placeholder TextBox.
+        if (text.IsPlaceholder)
+            color = PlaceholderColor;
         var fontSize = style?.Get(PropertyId.FontSize) switch
         {
             CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),

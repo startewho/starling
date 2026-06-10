@@ -623,6 +623,19 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
                     canvas.Draw(pen, r);
                 }
                 break;
+            case StrokeSegments segments:
+                if (segments.Width <= 0 || segments.Color.A == 0) return;
+                {
+                    // Form-control glyph stroke (checkbox check / select
+                    // chevron): a three-point open polyline drawn with a solid
+                    // pen. PathBuilder keeps it a single figure so the joint
+                    // renders as one continuous stroke.
+                    var pb = new PathBuilder();
+                    pb.AddLine(new PointF((float)segments.X0, (float)segments.Y0), new PointF((float)segments.X1, (float)segments.Y1));
+                    pb.AddLine(new PointF((float)segments.X1, (float)segments.Y1), new PointF((float)segments.X2, (float)segments.Y2));
+                    canvas.Draw(Pens.Solid(ToColor(segments.Color), (float)segments.Width), pb.Build());
+                }
+                break;
             case FillRoundedRect roundFill:
                 if (roundFill.Bounds.Width <= 0 || roundFill.Bounds.Height <= 0) return;
                 {
