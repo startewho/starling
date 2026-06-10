@@ -44,6 +44,14 @@ internal sealed class BoxLayoutHost : ILayoutHost
     /// used to drag in.</summary>
     private readonly Func<StyleEngine>? _cascadeOnlyBuilder;
 
+    /// <summary>The engine session's per-document scroll store
+    /// (browser-plan/scroll-model.md). Layout passes triggered through this
+    /// host refresh it (the recompute delegate threads it into
+    /// <c>Painter.LayoutDocumentWithStyle</c>), and the scroll-metric reads
+    /// below answer from it. Null when the owner has no store (legacy static
+    /// snapshots) — reads then report "not a scroll container".</summary>
+    private readonly Starling.Layout.Scroll.ScrollStateStore? _scrollState;
+
     private BlockBox? _root;
     private StyleEngine? _style;
     private int _laidOutVersion;
@@ -80,8 +88,10 @@ internal sealed class BoxLayoutHost : ILayoutHost
     /// a static snapshot — DOM mutations are not reflected.
     /// </summary>
     public BoxLayoutHost(BlockBox root, StyleEngine style,
-        Document? document = null, Func<string?, (BlockBox Root, StyleEngine Style)>? relayout = null)
+        Document? document = null, Func<string?, (BlockBox Root, StyleEngine Style)>? relayout = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
+        _scrollState = scrollState;
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(style);
         _root = root;
@@ -103,8 +113,10 @@ internal sealed class BoxLayoutHost : ILayoutHost
     /// document's <see cref="Document.LayoutInvalidationVersion"/>.
     /// </summary>
     public BoxLayoutHost(Document document, Func<string?, (BlockBox Root, StyleEngine Style)> relayout,
-        Func<StyleEngine>? cascadeOnlyBuilder = null)
+        Func<StyleEngine>? cascadeOnlyBuilder = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
+        _scrollState = scrollState;
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(relayout);
         _document = document;
@@ -299,6 +311,46 @@ internal sealed class BoxLayoutHost : ILayoutHost
         }
         metrics = default;
         return false;
+    }
+
+    public bool TryGetScrollMetrics(Element element, out ScrollMetrics metrics)
+    {
+        if (_scrollState is null)
+        {
+            metrics = default;
+            return false;
+        }
+        // Same up-to-date rule as the offset metrics: a DOM mutation since the
+        // last layout forces a re-layout, which re-measures the store before
+        // we read it.
+        EnsureFresh("scroll-metrics");
+        if (_scrollState.TryGet(element, out var s))
+        {
+            metrics = new ScrollMetrics(
+                ScrollLeft: s.OffsetX,
+                ScrollTop: s.OffsetY,
+                ScrollWidth: s.OverflowWidth,
+                ScrollHeight: s.OverflowHeight,
+                ClientWidth: s.ScrollportWidth,
+                ClientHeight: s.ScrollportHeight);
+            return true;
+        }
+        metrics = default;
+        return false;
+    }
+
+    public ScrollMetrics GetRootScrollMetrics()
+    {
+        if (_scrollState is null) return default;
+        EnsureFresh("scroll-metrics");
+        var s = _scrollState.Root;
+        return new ScrollMetrics(
+            ScrollLeft: s.OffsetX,
+            ScrollTop: s.OffsetY,
+            ScrollWidth: s.OverflowWidth,
+            ScrollHeight: s.OverflowHeight,
+            ClientWidth: s.ScrollportWidth,
+            ClientHeight: s.ScrollportHeight);
     }
 
     public bool MatchMedia(string query)
