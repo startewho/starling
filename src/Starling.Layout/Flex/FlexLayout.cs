@@ -256,7 +256,6 @@ internal sealed class FlexLayout
         var justifyMain = mainIsDefinite
             ? mainSize
             : Math.Max(contentMain, minMainFloor ?? 0);
-        var free = justifyMain - outerSum - gapTotal;
 
         ResolveFlexibleLengths(items, start, end, justifyMain, gapTotal);
 
