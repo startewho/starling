@@ -365,6 +365,44 @@ public static class EventTargetBinding
             RelatedTarget = init.IsObject ? ResolveHost(init.AsObject.Get("relatedTarget")) : null,
         });
 
+        // ----- AnimationEvent / TransitionEvent (CSS Animations 1 §5, CSS
+        // Transitions 2 §events). Chain directly off Event.prototype — these
+        // are not UIEvents. Host-dispatched events (engine-fired
+        // animationstart / transitionend / ...) carry their values on the host
+        // subtype; JS-constructed ones copy the init dictionary into the host
+        // subtype so the same accessors serve both.
+        var animationEvProto = new JsObject(evProto);
+        realm.AnimationEventPrototype = animationEvProto;
+        DefineAccessor(realm, animationEvProto, "animationName", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.AnimationEvent a ? JsValue.String(a.AnimationName) : JsValue.String(""));
+        DefineAccessor(realm, animationEvProto, "elapsedTime", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.AnimationEvent a ? JsValue.Number(a.ElapsedTime) : JsValue.Number(0));
+        DefineAccessor(realm, animationEvProto, "pseudoElement", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.AnimationEvent a ? JsValue.String(a.PseudoElement) : JsValue.String(""));
+        DefineSubtypeCtor(realm, animationEvProto, "AnimationEvent", (type, init) =>
+            new Starling.Dom.Events.AnimationEvent(type, ReadInit(init))
+            {
+                AnimationName = StrOf(init, "animationName"),
+                ElapsedTime = NumOf(init, "elapsedTime"),
+                PseudoElement = StrOf(init, "pseudoElement"),
+            });
+
+        var transitionEvProto = new JsObject(evProto);
+        realm.TransitionEventPrototype = transitionEvProto;
+        DefineAccessor(realm, transitionEvProto, "propertyName", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.TransitionEvent tr ? JsValue.String(tr.PropertyName) : JsValue.String(""));
+        DefineAccessor(realm, transitionEvProto, "elapsedTime", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.TransitionEvent tr ? JsValue.Number(tr.ElapsedTime) : JsValue.Number(0));
+        DefineAccessor(realm, transitionEvProto, "pseudoElement", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.TransitionEvent tr ? JsValue.String(tr.PseudoElement) : JsValue.String(""));
+        DefineSubtypeCtor(realm, transitionEvProto, "TransitionEvent", (type, init) =>
+            new Starling.Dom.Events.TransitionEvent(type, ReadInit(init))
+            {
+                PropertyName = StrOf(init, "propertyName"),
+                ElapsedTime = NumOf(init, "elapsedTime"),
+                PseudoElement = StrOf(init, "pseudoElement"),
+            });
+
         var inputEvProto = new JsObject(uiEvProto);
         DefineSubtypeCtor(realm, inputEvProto, "InputEvent", (type, init) => new UiEvent(type, ReadInit(init)));
 
@@ -791,6 +829,8 @@ public static class EventTargetBinding
             KeyboardEvent => realm.KeyboardEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
             FocusEvent => realm.FocusEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
             UiEvent => realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            Starling.Dom.Events.AnimationEvent => realm.AnimationEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            Starling.Dom.Events.TransitionEvent => realm.TransitionEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
             _ => realm.EventPrototype ?? realm.ObjectPrototype,
         };
 
