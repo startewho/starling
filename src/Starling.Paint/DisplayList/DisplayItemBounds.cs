@@ -67,6 +67,23 @@ internal static class DisplayItemBounds
                     EstimateShadowWidth(s) + 2 * s.Blur,
                     s.FontSize * 1.3 + 2 * s.Blur);
                 return true;
+            case PushFilter pf:
+                // The filtered group can spill past the border box: the
+                // Gaussian tail and a drop-shadow offset both paint outside it
+                // (same reasoning as the outer DrawBoxShadow halo). Bracketed
+                // content bounds are unioned separately by callers that walk
+                // the items; this entry contributes the border box + halo.
+                var halo = FilterFunction.HaloPadding(pf.Filters);
+                bounds = new Rect(
+                    pf.Bounds.X - halo,
+                    pf.Bounds.Y - halo,
+                    pf.Bounds.Width + 2 * halo,
+                    pf.Bounds.Height + 2 * halo);
+                return true;
+            case DrawBackdropFilter bf:
+                // The filtered backdrop patch is clipped to the border box.
+                bounds = bf.Bounds;
+                return true;
             default:
                 bounds = Rect.Empty;
                 return false;
