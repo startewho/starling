@@ -544,16 +544,22 @@ internal sealed class BlockLayout
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §8.3/§8.4: percentage margins and padding on ALL FOUR sides
+        // resolve against the containing block's WIDTH — including the
+        // vertical ones. (That's what makes the `padding-bottom: %`
+        // aspect-ratio trick work: x.com's profile banner is
+        // `padding-bottom: 33.33%` of the column width, not of the viewport
+        // height.)
         box.Margin = new Edges(
-            ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         box.Border = new Edges(
