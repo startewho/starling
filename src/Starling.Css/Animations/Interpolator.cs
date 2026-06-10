@@ -361,12 +361,14 @@ public static class Interpolator
 
     private static CssValue InterpolateBackgroundImage(CssValue from, CssValue to, double p)
     {
-        var a = from is CssGradient ag
-            ? new ParsedImageLayers([ag])
-            : ImageLayersCache.GetValue(from, static v => ParseImageLayers(v));
-        var b = to is CssGradient bg
-            ? new ParsedImageLayers([bg])
-            : ImageLayersCache.GetValue(to, static v => ParseImageLayers(v));
+        // Fast path: both endpoints already typed (single-gradient transitions
+        // land here every sampled frame) — lerp directly, no per-sample
+        // wrapper allocation.
+        if (from is CssGradient fg && to is CssGradient tg)
+            return TryLerpGradient(fg, tg, p, out var direct) ? direct! : Discrete(from, to, p);
+
+        var a = ImageLayersCache.GetValue(from, static v => ParseImageLayers(v));
+        var b = ImageLayersCache.GetValue(to, static v => ParseImageLayers(v));
 
         var n = a.Layers.Length;
         if (n == 0 || n != b.Layers.Length) return Discrete(from, to, p);
