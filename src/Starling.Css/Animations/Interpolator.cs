@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Starling.Css.Properties;
 using Starling.Css.Values;
 
@@ -41,6 +42,18 @@ public static class Interpolator
             var toTransform = to as CssTransform ?? CssTransformParser.Parse(to);
             return InterpolateTransform(fromTransform, toTransform, progress);
         }
+
+        // Shadow lists and gradient images are stored in the cascade as raw
+        // value trees (CssValueList / CssFunctionValue), so the type switch
+        // below would never pair them up. Dispatch on the property id and
+        // parse to the typed form once per endpoint (cached — the transition
+        // engines hold stable endpoint references and sample per frame).
+        if (property == PropertyId.BoxShadow)
+            return InterpolateBoxShadowValue(from, to, progress);
+        if (property == PropertyId.TextShadow && from is CssTextShadow fromText && to is CssTextShadow toText)
+            return InterpolateTextShadow(fromText, toText, progress);
+        if (property == PropertyId.BackgroundImage)
+            return InterpolateBackgroundImage(from, to, progress);
 
         if (from.GetType() != to.GetType()) return Discrete(from, to, progress);
 
@@ -101,6 +114,8 @@ public static class Interpolator
             or PropertyId.BorderBottomWidth or PropertyId.BorderLeftWidth => true,
         PropertyId.FontSize or PropertyId.LineHeight or PropertyId.LetterSpacing or PropertyId.WordSpacing => true,
         PropertyId.Transform => true,
+        PropertyId.BoxShadow or PropertyId.TextShadow => true,
+        PropertyId.BackgroundImage => true,
         _ => false,
     };
 
@@ -212,6 +227,300 @@ public static class Interpolator
         // evaluate at sample time.
         if (a.IsPercent != b.IsPercent) return p < 0.5 ? a : b;
         return new CssLengthOrPercent(Lerp(a.Value, b.Value, p), a.IsPercent);
+    }
+
+    // ---- box-shadow / text-shadow (CSS Backgrounds 3 §6) -------------------
+
+    // Parse-once cache for raw box-shadow endpoints. Transition/animation
+    // endpoints are stable object references for the life of a transition, so
+    // keying on the instance gives one parse per endpoint instead of one per
+    // sampled frame; entries die with the endpoint values.
+    private static readonly ConditionalWeakTable<CssValue, CssBoxShadow> ShadowCache = new();
+
+    private static CssValue InterpolateBoxShadowValue(CssValue from, CssValue to, double p)
+    {
+        var a = from as CssBoxShadow ?? ShadowCache.GetValue(from, static v => CssBoxShadowParser.Parse(v));
+        var b = to as CssBoxShadow ?? ShadowCache.GetValue(to, static v => CssBoxShadowParser.Parse(v));
+
+        var count = Math.Max(a.Layers.Count, b.Layers.Count);
+        if (count == 0) return from; // none → none
+
+        var layers = new CssShadow[count];
+        for (var i = 0; i < count; i++)
+        {
+            var la = i < a.Layers.Count ? a.Layers[i] : null;
+            var lb = i < b.Layers.Count ? b.Layers[i] : null;
+            // Shorter list pads with the neutral shadow: all-zero lengths,
+            // transparent color, inset matching the paired layer (CSS
+            // Backgrounds 3 §6 / web-animations-1 shadow list interpolation).
+            la ??= NeutralShadow(lb!);
+            lb ??= NeutralShadow(la);
+            // A pair that disagrees on inset is not interpolable — the whole
+            // property falls back to discrete.
+            if (la.Inset != lb.Inset) return Discrete(from, to, p);
+            if (!TryLerpShadow(la, lb, p, out layers[i]!)) return Discrete(from, to, p);
+        }
+
+        return new CssBoxShadow(layers);
+    }
+
+    private static CssShadow NeutralShadow(CssShadow paired)
+        => new(CssLength.Zero, CssLength.Zero, CssLength.Zero, CssLength.Zero,
+            new CssColor(0, 0, 0, 0), paired.Inset);
+
+    private static bool TryLerpShadow(CssShadow a, CssShadow b, double p, out CssShadow? result)
+    {
+        result = null;
+        if (!TryLerpLength(a.OffsetX, b.OffsetX, p, out var ox)) return false;
+        if (!TryLerpLength(a.OffsetY, b.OffsetY, p, out var oy)) return false;
+        if (!TryLerpLength(a.Blur, b.Blur, p, out var blur)) return false;
+        if (!TryLerpLength(a.Spread, b.Spread, p, out var spread)) return false;
+        // Blur radius is non-negative per spec; the endpoints already are, but
+        // clamp anyway so an overshooting easing can never paint a negative.
+        if (blur!.Value < 0) blur = new CssLength(0, blur.Unit);
+
+        CssColor? color;
+        if (a.Color is null && b.Color is null)
+        {
+            color = null; // currentColor at both ends — keep the sentinel
+        }
+        else if (a.Color is null || b.Color is null)
+        {
+            // currentColor vs a concrete color can't be resolved at compute
+            // time (we don't know the element's `color` here) — discrete.
+            return false;
+        }
+        else
+        {
+            color = InterpolateColor(a.Color, b.Color, p);
+        }
+
+        result = new CssShadow(ox!, oy!, blur, spread!, color, a.Inset);
+        return true;
+    }
+
+    private static bool TryLerpLength(CssLength a, CssLength b, double p, out CssLength? result)
+    {
+        if (a.Unit == b.Unit)
+        {
+            result = new CssLength(Lerp(a.Value, b.Value, p), a.Unit);
+            return true;
+        }
+        if (TryToPx(a, out var apx) && TryToPx(b, out var bpx))
+        {
+            result = new CssLength(Lerp(apx, bpx, p), CssLengthUnit.Px);
+            return true;
+        }
+        result = null;
+        return false;
+    }
+
+    // text-shadow is stored typed (CssTextShadow, px-resolved doubles), so no
+    // parse cache is needed; pad and lerp per layer like box-shadow but with
+    // no inset/spread components.
+    private static readonly CssTextShadowLayer NeutralTextShadowLayer = new(0, 0, 0, new CssColor(0, 0, 0, 0));
+
+    private static CssValue InterpolateTextShadow(CssTextShadow a, CssTextShadow b, double p)
+    {
+        var count = Math.Max(a.Layers.Count, b.Layers.Count);
+        if (count == 0) return a;
+
+        var layers = new CssTextShadowLayer[count];
+        for (var i = 0; i < count; i++)
+        {
+            var la = i < a.Layers.Count ? a.Layers[i] : NeutralTextShadowLayer;
+            var lb = i < b.Layers.Count ? b.Layers[i] : NeutralTextShadowLayer;
+
+            CssColor? color;
+            if (la.Color is null && lb.Color is null) color = null;
+            else if (la.Color is null || lb.Color is null) return Discrete(a, b, p);
+            else color = InterpolateColor(la.Color, lb.Color, p);
+
+            layers[i] = new CssTextShadowLayer(
+                Lerp(la.OffsetX, lb.OffsetX, p),
+                Lerp(la.OffsetY, lb.OffsetY, p),
+                Math.Max(0, Lerp(la.Blur, lb.Blur, p)),
+                color);
+        }
+
+        return new CssTextShadow(layers);
+    }
+
+    // ---- background-image gradients (CSS Images 3 §3.4.1) ------------------
+
+    /// <summary>Typed view of a background-image endpoint: one entry per
+    /// layer, null when the layer is not a gradient (url(), none, image-set).</summary>
+    private sealed class ParsedImageLayers
+    {
+        public ParsedImageLayers(CssGradient?[] layers) => Layers = layers;
+
+        public readonly CssGradient?[] Layers;
+    }
+
+    private static readonly ConditionalWeakTable<CssValue, ParsedImageLayers> ImageLayersCache = new();
+
+    private static CssValue InterpolateBackgroundImage(CssValue from, CssValue to, double p)
+    {
+        // Fast path: both endpoints already typed (single-gradient transitions
+        // land here every sampled frame) — lerp directly, no per-sample
+        // wrapper allocation.
+        if (from is CssGradient fg && to is CssGradient tg)
+            return TryLerpGradient(fg, tg, p, out var direct) ? direct! : Discrete(from, to, p);
+
+        var a = ImageLayersCache.GetValue(from, static v => ParseImageLayers(v));
+        var b = ImageLayersCache.GetValue(to, static v => ParseImageLayers(v));
+
+        var n = a.Layers.Length;
+        if (n == 0 || n != b.Layers.Length) return Discrete(from, to, p);
+
+        // Single layer stays a bare CssGradient; multi-layer becomes a clean
+        // CssValueList of gradients (the same shape the `background` shorthand
+        // produces, which the paint layer iterates per layer).
+        if (n == 1)
+        {
+            var ga = a.Layers[0];
+            var gb = b.Layers[0];
+            if (ga is null || gb is null || !TryLerpGradient(ga, gb, p, out var lerped))
+                return Discrete(from, to, p);
+            return lerped!;
+        }
+
+        var values = new CssValue[n];
+        for (var i = 0; i < n; i++)
+        {
+            var ga = a.Layers[i];
+            var gb = b.Layers[i];
+            if (ga is null || gb is null || !TryLerpGradient(ga, gb, p, out var lerped))
+                return Discrete(from, to, p);
+            values[i] = lerped!;
+        }
+        return new CssValueList(values);
+    }
+
+    private static ParsedImageLayers ParseImageLayers(CssValue value)
+    {
+        if (value is CssGradient g) return new ParsedImageLayers([g]);
+        if (value is CssValueList list)
+        {
+            var layers = new List<CssGradient?>(list.Values.Count);
+            foreach (var item in list.Values)
+            {
+                // Longhand lists keep top-level commas as empty/"," keywords
+                // (see CssBoxShadowParser.IsCommaSeparator); shorthand-built
+                // lists carry one value per layer with no separators.
+                if (item is CssKeyword { Name: "" or "," }) continue;
+                layers.Add(ParseImageLayer(item));
+            }
+            return new ParsedImageLayers(layers.ToArray());
+        }
+        return new ParsedImageLayers([ParseImageLayer(value)]);
+    }
+
+    private static CssGradient? ParseImageLayer(CssValue value)
+        => value switch
+        {
+            CssGradient g => g,
+            CssFunctionValue fn when CssGradientParser.TryParseFunction(fn, out var g) => g,
+            _ => null,
+        };
+
+    private static bool TryLerpGradient(CssGradient a, CssGradient b, double p, out CssGradient? result)
+    {
+        result = null;
+        // Interpolable only between the same gradient shape: same kind, same
+        // repeating flag, same stop count (CSS Images 3 §3.4.1). Radial
+        // keyword shape/size and the color-interpolation prelude must match —
+        // none of those lerp without layout context.
+        if (a.Kind != b.Kind || a.Repeating != b.Repeating) return false;
+        if (a.Stops.Count != b.Stops.Count) return false;
+        if (a.Kind == CssGradientKind.Radial && (a.Shape != b.Shape || a.Size != b.Size)) return false;
+        if (!Equals(a.Interpolation, b.Interpolation)) return false;
+
+        if (!TryLerpGradientLine(a, b, p, out var line)) return false;
+
+        // `at <position>` center (radial/conic): null means center, so both
+        // endpoints always resolve; keep null when both ends used the default.
+        CssGradientPosition? position;
+        if (a.Position is null && b.Position is null)
+        {
+            position = null;
+        }
+        else
+        {
+            var pa = a.Position ?? CssGradientPosition.Center;
+            var pb = b.Position ?? CssGradientPosition.Center;
+            position = new CssGradientPosition(
+                Lerp(pa.FractionX, pb.FractionX, p),
+                Lerp(pa.FractionY, pb.FractionY, p));
+        }
+
+        var stops = new CssColorStop[a.Stops.Count];
+        for (var i = 0; i < stops.Length; i++)
+        {
+            var sa = a.Stops[i];
+            var sb = b.Stops[i];
+            if (sa.IsHint != sb.IsHint) return false; // hint must pair with hint
+
+            CssGradientStopPosition? pos;
+            if (sa.Position is null && sb.Position is null)
+            {
+                pos = null; // both auto-distributed — stays auto
+            }
+            else if (sa.Position is { } qa && sb.Position is { } qb && qa.IsPercent == qb.IsPercent)
+            {
+                pos = new CssGradientStopPosition(Lerp(qa.Value, qb.Value, p), qa.IsPercent);
+            }
+            else
+            {
+                // auto vs fixed, or % vs px — needs the gradient line length
+                // to resolve, which we don't have at compute time.
+                return false;
+            }
+
+            // A hint's color is a sentinel (transparent black) — carry it
+            // through unchanged instead of lerping the sentinel.
+            var color = sa.IsHint ? sa.Color : InterpolateColor(sa.Color, sb.Color, p);
+            stops[i] = new CssColorStop(color, pos, sa.IsHint);
+        }
+
+        result = new CssGradient(a.Kind, a.Repeating, stops, line, a.Shape, a.Size, position, a.Interpolation);
+        return true;
+    }
+
+    private static bool TryLerpGradientLine(CssGradient a, CssGradient b, double p, out CssGradientLine? line)
+    {
+        line = null;
+        var la = a.Line;
+        var lb = b.Line;
+        if (Equals(la, lb))
+        {
+            line = la; // identical (or both default) — keep as-is
+            return true;
+        }
+
+        // Differing lines interpolate only when both resolve to pure angles.
+        // `to <side-or-corner>` needs the box aspect ratio to become an angle,
+        // so any mismatch involving sides stays discrete.
+        var defaultDeg = a.Kind == CssGradientKind.Linear ? 180.0 : 0.0; // linear default `to bottom`; conic default 0deg
+        if (!TryLineAngle(la, defaultDeg, out var da) || !TryLineAngle(lb, defaultDeg, out var db)) return false;
+        line = CssGradientLine.FromAngle(Lerp(da, db, p));
+        return true;
+    }
+
+    private static bool TryLineAngle(CssGradientLine? l, double defaultDeg, out double degrees)
+    {
+        if (l is null)
+        {
+            degrees = defaultDeg;
+            return true;
+        }
+        if (l.AngleDegrees is { } d)
+        {
+            degrees = d;
+            return true;
+        }
+        degrees = 0;
+        return false;
     }
 
     private static bool TryToPx(CssLength l, out double px)
