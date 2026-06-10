@@ -58,6 +58,12 @@ public sealed class DisplayListBuilder
     /// </summary>
     private Func<Element, (double X, double Y)>? _scrollOffsets;
 
+    // CSS 2.1 §14.2 / CSS Backgrounds 3 §2.11.2 — the box whose
+    // background-color was promoted to the canvas for this Build pass. Its own
+    // background-color paint is suppressed so translucent colors are not
+    // blended twice. Null when no canvas rect was supplied or no box donates.
+    private Box? _canvasDonor;
+
     public DisplayListBuilder() : this(CancellationToken.None) { }
 
     public DisplayListBuilder(CancellationToken abort)
@@ -87,10 +93,26 @@ public sealed class DisplayListBuilder
     /// so the cost stays O(items on screen). When null, every item is emitted
     /// (the full-page behavior the headless screenshot path relies on).
     /// </summary>
-    public DisplayList Build(BlockBox root, Rect? viewport, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, Func<Element, (double X, double Y)>? scrollOffsets = null)
+    public DisplayList Build(BlockBox root, Rect? viewport, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, Func<Element, (double X, double Y)>? scrollOffsets = null, Rect? canvasRect = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         var list = new DisplayList();
+        _canvasDonor = null;
+        if (canvasRect is { Width: > 0, Height: > 0 } canvas)
+        {
+            // CSS 2.1 §14.2 — the root element's background paints the whole
+            // canvas; an <html> root with no background borrows the <body>'s,
+            // and the donor must not paint that background again on its own
+            // box. Color-only at this fidelity (background-image stays on the
+            // donor box).
+            var donor = FindCanvasBackgroundDonor(root, styleOverride);
+            if (donor is not null)
+            {
+                var canvasColor = EffectiveStyle(donor, styleOverride)!.GetColor(PropertyId.BackgroundColor);
+                list.Add(new FillRect(canvas, canvasColor, FillRectPixelAlignment.Preserve));
+                _canvasDonor = donor;
+            }
+        }
         Rect? cull = viewport is { } v
             ? new Rect(v.X - OverdrawMargin, v.Y - OverdrawMargin, v.Width + 2 * OverdrawMargin, v.Height + 2 * OverdrawMargin)
             : null;
@@ -171,6 +193,43 @@ public sealed class DisplayListBuilder
     /// exclude. Null on the flat full-document build, where every box is emitted.
     /// </summary>
     private sealed record LayerSlice(Box Root, Func<Box, bool> IsBoundary);
+
+    /// <summary>
+    /// CSS 2.1 §14.2 — picks the box whose background-color becomes the
+    /// canvas background: the root element when it has one, otherwise the
+    /// root's <c>&lt;body&gt;</c> child when the root is <c>&lt;html&gt;</c>.
+    /// Returns null when neither donates a visible color.
+    /// </summary>
+    private static Box? FindCanvasBackgroundDonor(Box root, Func<Box, ComputedStyle?>? styleOverride)
+    {
+        if (EffectiveStyle(root, styleOverride) is { } rootStyle
+            && rootStyle.GetColor(PropertyId.BackgroundColor).A > 0)
+        {
+            return root;
+        }
+
+        if (root.Element is not { } rootEl
+            || !string.Equals(rootEl.TagName, "html", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var children = root.Children;
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            if (child.Element is not { } childEl
+                || !string.Equals(childEl.TagName, "body", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            return EffectiveStyle(child, styleOverride) is { } bodyStyle
+                && bodyStyle.GetColor(PropertyId.BackgroundColor).A > 0
+                    ? child
+                    : null;
+        }
+        return null;
+    }
 
     private static ComputedStyle? EffectiveStyle(Box box, Func<Box, ComputedStyle?>? styleOverride)
         => styleOverride?.Invoke(box) ?? box.Style;
@@ -390,7 +449,7 @@ public sealed class DisplayListBuilder
             else
             {
                 var bg = style.GetColor(PropertyId.BackgroundColor);
-                if (bg is { A: > 0 })
+                if (bg is { A: > 0 } && !ReferenceEquals(box, _canvasDonor))
                 {
                     // CSS Backgrounds 3 §2.4 — background-color is clipped by the
                     // bottom (last) layer's background-clip box, with the corner
