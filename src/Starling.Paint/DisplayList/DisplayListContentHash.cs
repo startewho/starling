@@ -82,6 +82,13 @@ internal static class DisplayListContentHash
                 case PopClip:
                     entries.Add(new Entry(item, alwaysFold: true, default));
                     continue;
+                // Filter brackets affect every pixel the group paints (a blur
+                // mixes neighbouring tiles), so fold them into every tile's
+                // hash — a chain change re-rasters the whole layer.
+                case PushFilter:
+                case PopFilter:
+                    entries.Add(new Entry(item, alwaysFold: true, default));
+                    continue;
             }
 
             if (DisplayItemBounds.TryGet(item, out var local))
@@ -301,6 +308,20 @@ internal static class DisplayListContentHash
                 HashBool(ref h, s.Bold);
                 HashBool(ref h, s.Italic);
                 break;
+            case PushFilter pf:
+                Tag(ref h, 16);
+                HashRect(ref h, pf.Bounds);
+                HashFilters(ref h, pf.Filters);
+                break;
+            case PopFilter:
+                Tag(ref h, 17);
+                break;
+            case DrawBackdropFilter bf:
+                Tag(ref h, 18);
+                HashRect(ref h, bf.Bounds);
+                HashRadii(ref h, bf.Radii);
+                HashFilters(ref h, bf.Filters);
+                break;
             default:
                 // Unknown item kind: fold a distinct discriminator so its mere
                 // presence changes the hash. Worst case is a needless re-raster.
@@ -352,6 +373,20 @@ internal static class DisplayListContentHash
         HashInt(ref h, families.Count);
         for (var i = 0; i < families.Count; i++)
             HashString(ref h, families[i]);
+    }
+
+    private static void HashFilters(ref ulong h, IReadOnlyList<FilterFunction> filters)
+    {
+        HashInt(ref h, filters.Count);
+        for (var i = 0; i < filters.Count; i++)
+        {
+            var f = filters[i];
+            HashInt(ref h, (int)f.Kind);
+            HashDouble(ref h, f.Amount);
+            HashDouble(ref h, f.OffsetX);
+            HashDouble(ref h, f.OffsetY);
+            HashColor(ref h, f.Color ?? CssColor.Black);
+        }
     }
 
     private static void HashRect(ref ulong h, Rect r)

@@ -153,9 +153,27 @@ public sealed class DisplayListBuilder
         {
             // The slice root's transform is owned by its layer, so paint its
             // own box + children directly (no transform bracket) in local space.
+            // A `filter` on the slice root still applies at raster time, so the
+            // filter bracket (normally emitted by Visit) is re-created here.
             var frameX = originX + sliceRoot.Frame.X;
             var frameY = originY + sliceRoot.Frame.Y;
-            PaintBoxAndChildren(sliceRoot, list, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+            var rootFilters = TryGetFilterFunctions(sliceRoot, styleOverride);
+            if (rootFilters is not null)
+            {
+                var scratch = new DisplayList();
+                PaintBoxAndChildren(sliceRoot, scratch, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+                if (scratch.Items.Count > 0)
+                {
+                    list.Add(new PushFilter(new Rect(frameX, frameY, sliceRoot.Frame.Width, sliceRoot.Frame.Height), rootFilters));
+                    foreach (var item in scratch.Items)
+                        list.Add(item);
+                    list.Add(PopFilter.Instance);
+                }
+            }
+            else
+            {
+                PaintBoxAndChildren(sliceRoot, list, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+            }
         }
         else
         {
@@ -231,22 +249,36 @@ public sealed class DisplayListBuilder
         var transformMatrix = TryGetTransformMatrix(box, styleOverride, frameX, frameY);
         var transformed = transformMatrix is not null;
 
-        if (transformed)
+        // Filter Effects 1 §10 — `filter` renders the element AND its descendants
+        // as a group: the subtree is collected into a scratch list and wrapped in
+        // a PushFilter/PopFilter bracket so the backend can composite it
+        // offscreen, run the chain, and blit the result. The filter bracket sits
+        // INSIDE the transform bracket: the spec filters the element's local
+        // rendering, then the transform maps the filtered result.
+        var filterFns = TryGetFilterFunctions(box, styleOverride);
+
+        if (transformed || filterFns is not null)
         {
             // Items inside the transform must be culled using their
             // post-transform AABB, so compose the matrix onto the active one
             // and paint the subtree into a scratch list. Only if it produced
             // visible items do we emit the bracket — an entirely off-screen
             // transformed subtree contributes nothing and stays O(on-screen).
-            var composed = current.Multiply(transformMatrix!.Value);
+            var composed = transformed ? current.Multiply(transformMatrix!.Value) : current;
             var scratch = new DisplayList();
             PaintBoxAndChildren(box, scratch, frameX, frameY, composed, cull, styleOverride, images, slice);
             if (scratch.Items.Count > 0)
             {
-                list.Add(new PushTransform(transformMatrix.Value));
+                if (transformed)
+                    list.Add(new PushTransform(transformMatrix!.Value));
+                if (filterFns is not null)
+                    list.Add(new PushFilter(new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height), filterFns));
                 foreach (var item in scratch.Items)
                     list.Add(item);
-                list.Add(PopTransform.Instance);
+                if (filterFns is not null)
+                    list.Add(PopFilter.Instance);
+                if (transformed)
+                    list.Add(PopTransform.Instance);
             }
             return;
         }
@@ -364,6 +396,14 @@ public sealed class DisplayListBuilder
             // CSS Backgrounds 3 §5 — the four corner radii (clamped to the box
             // per §5.1 so overlapping radii never exceed the box dimensions).
             var radii = ReadCornerRadii(style, box.Frame.Width, box.Frame.Height);
+
+            // Filter Effects 2 §6 — backdrop-filter. The filtered backdrop patch
+            // paints first, beneath everything the element itself paints; the
+            // backend snapshots the canvas under the border box, filters it, and
+            // draws it back clipped to the (rounded) border box. Emitted on the
+            // OUTER list: inside a mask/clip-path scratch layer the "canvas"
+            // would be the transparent offscreen, not the real backdrop.
+            EmitBackdropFilter(bounds, radii, list, current, cull, style);
 
             // CSS Backgrounds 3 §6 — box-shadow. Outer shadows paint BEHIND the
             // box (before background + border), in reverse list order so the
@@ -1736,4 +1776,175 @@ public sealed class DisplayListBuilder
 
     private static CssTextShadow ResolveTextShadow(ComputedStyle? style)
         => style?.Get(PropertyId.TextShadow) as CssTextShadow ?? CssTextShadow.None;
+
+    // ---- Filter Effects 1 (Tier 4 item 18) — filter / backdrop-filter --------
+
+    /// <summary>
+    /// Resolves the box's `filter` chain to the typed paint-side list, or null
+    /// when no paintable filter applies (the overwhelmingly common case — the
+    /// initial `none` keyword exits on the type switch with no allocation).
+    /// </summary>
+    private static IReadOnlyList<FilterFunction>? TryGetFilterFunctions(Box box, Func<Box, ComputedStyle?>? styleOverride)
+    {
+        if (box.Frame.Width <= 0 && box.Frame.Height <= 0) return null;
+        var style = EffectiveStyle(box, styleOverride);
+        if (style is null) return null;
+        return ResolveFilterFunctions(style.Get(PropertyId.Filter), style.GetColor(PropertyId.Color));
+    }
+
+    /// <summary>
+    /// Emits the <see cref="DrawBackdropFilter"/> item for a box whose
+    /// `backdrop-filter` resolves to a paintable chain (Filter Effects 2 §6).
+    /// The item carries the border box and its corner radii so the backend can
+    /// clip the filtered patch to the rounded shape.
+    /// </summary>
+    private static void EmitBackdropFilter(Rect bounds, CornerRadii radii, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style)
+    {
+        var raw = style.Get(PropertyId.BackdropFilter);
+        if (raw is null or CssKeyword) return; // none — the initial value
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        var filters = ResolveFilterFunctions(raw, style.GetColor(PropertyId.Color));
+        if (filters is null) return;
+        Emit(list, new DrawBackdropFilter(bounds, radii, filters), bounds, current, cull);
+    }
+
+    /// <summary>
+    /// Resolves a parsed `filter` / `backdrop-filter` value — a single
+    /// <see cref="CssFunctionValue"/> or a <see cref="CssValueList"/> of them
+    /// (the generic value path's shape, see the CssFilterEffects1 spec tests) —
+    /// into the typed <see cref="FilterFunction"/> chain, in order. Returns
+    /// null for `none`, for url() references (SVG filter resolution is
+    /// deferred), and — per Filter Effects 1 §10.1, where one invalid function
+    /// invalidates the whole list — when any entry fails to resolve.
+    /// <paramref name="currentColor"/> supplies the drop-shadow default color.
+    /// </summary>
+    internal static IReadOnlyList<FilterFunction>? ResolveFilterFunctions(CssValue? value, CssColor currentColor)
+    {
+        switch (value)
+        {
+            case CssFunctionValue fn:
+                return ResolveFilterFunction(fn, currentColor) is { } single ? new[] { single } : null;
+            case CssValueList { Values.Count: > 0 } chain:
+            {
+                var resolved = new FilterFunction[chain.Values.Count];
+                for (var i = 0; i < chain.Values.Count; i++)
+                {
+                    if (chain.Values[i] is not CssFunctionValue fn) return null;
+                    if (ResolveFilterFunction(fn, currentColor) is not { } one) return null;
+                    resolved[i] = one;
+                }
+                return resolved;
+            }
+            default:
+                return null; // none / unset / url(#id)
+        }
+    }
+
+    private static FilterFunction? ResolveFilterFunction(CssFunctionValue fn, CssColor currentColor)
+    {
+        var arg = fn.Arguments.Count > 0 ? fn.Arguments[0] : null;
+        switch (fn.Name)
+        {
+            case "blur":
+                // blur(<length>?) — the radius; omitted means 0 (§10.1).
+                return arg switch
+                {
+                    null => new FilterFunction(FilterFunctionKind.Blur, 0),
+                    CssLength len => new FilterFunction(FilterFunctionKind.Blur, Math.Max(0, Starling.Layout.Block.BlockLayout.ToPx(len))),
+                    CssNumber { Value: 0 } => new FilterFunction(FilterFunctionKind.Blur, 0),
+                    _ => null,
+                };
+            case "brightness":
+                return AmountFunction(FilterFunctionKind.Brightness, arg, clampToOne: false);
+            case "contrast":
+                return AmountFunction(FilterFunctionKind.Contrast, arg, clampToOne: false);
+            case "saturate":
+                return AmountFunction(FilterFunctionKind.Saturate, arg, clampToOne: false);
+            case "grayscale":
+                return AmountFunction(FilterFunctionKind.Grayscale, arg, clampToOne: true);
+            case "sepia":
+                return AmountFunction(FilterFunctionKind.Sepia, arg, clampToOne: true);
+            case "invert":
+                return AmountFunction(FilterFunctionKind.Invert, arg, clampToOne: true);
+            case "opacity":
+                return AmountFunction(FilterFunctionKind.Opacity, arg, clampToOne: true);
+            case "hue-rotate":
+                // hue-rotate(<angle>?) — omitted and unitless 0 both mean 0deg.
+                return arg switch
+                {
+                    null => new FilterFunction(FilterFunctionKind.HueRotate, 0),
+                    CssAngle angle => new FilterFunction(FilterFunctionKind.HueRotate, angle.InDegrees),
+                    CssNumber { Value: 0 } => new FilterFunction(FilterFunctionKind.HueRotate, 0),
+                    _ => null,
+                };
+            case "drop-shadow":
+                return ResolveDropShadowFunction(fn, currentColor);
+            default:
+                return null; // unknown function ⇒ whole list invalid (§10.1)
+        }
+    }
+
+    /// <summary>
+    /// Resolves the amount-style functions. An omitted amount means 1 (§10.1);
+    /// negative amounts are invalid; grayscale/sepia/invert/opacity clamp
+    /// values over 100% down to 1, the rest pass through (brightness(3) is
+    /// meaningful).
+    /// </summary>
+    private static FilterFunction? AmountFunction(FilterFunctionKind kind, CssValue? arg, bool clampToOne)
+    {
+        double amount;
+        switch (arg)
+        {
+            case null: amount = 1; break;
+            case CssNumber n when n.Value >= 0: amount = n.Value; break;
+            case CssPercentage p when p.Value >= 0: amount = p.Value / 100d; break;
+            default: return null;
+        }
+        if (clampToOne && amount > 1) amount = 1;
+        return new FilterFunction(kind, amount);
+    }
+
+    /// <summary>
+    /// drop-shadow( [length length length?]? color? ) — the comma-split
+    /// tokenizer collapses the space-separated parts into one
+    /// <see cref="CssValueList"/> argument; the lengths are gathered in order
+    /// (offset-x, offset-y, blur) and the color wherever it appears. A missing
+    /// color falls back to <paramref name="currentColor"/> per the spec.
+    /// </summary>
+    private static FilterFunction? ResolveDropShadowFunction(CssFunctionValue fn, CssColor currentColor)
+    {
+        double? ox = null, oy = null;
+        double blur = 0;
+        CssColor color = currentColor;
+
+        for (var a = 0; a < fn.Arguments.Count; a++)
+        {
+            var values = fn.Arguments[a] is CssValueList inner
+                ? inner.Values
+                : new[] { fn.Arguments[a] };
+            for (var i = 0; i < values.Count; i++)
+            {
+                switch (values[i])
+                {
+                    case CssLength len when ox is null:
+                        ox = Starling.Layout.Block.BlockLayout.ToPx(len);
+                        break;
+                    case CssLength len when oy is null:
+                        oy = Starling.Layout.Block.BlockLayout.ToPx(len);
+                        break;
+                    case CssLength len:
+                        blur = Math.Max(0, Starling.Layout.Block.BlockLayout.ToPx(len));
+                        break;
+                    case CssColor c:
+                        color = c;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+        }
+
+        if (ox is null || oy is null) return null; // both offsets are required
+        return new FilterFunction(FilterFunctionKind.DropShadow, blur, ox.Value, oy.Value, color);
+    }
 }
