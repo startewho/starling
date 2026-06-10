@@ -146,10 +146,13 @@ internal sealed class PositionLayout
     /// clean reused subtree is NOT re-placed by an incremental pass: its frame
     /// still carries the shift this pass applied last time, and translating it
     /// again would compound (the y=100 -> 150 -> 200 drift). The position pass
-    /// records the exact frame it writes (<see cref="Box.Box.RelShiftedFrame"/>);
-    /// seeing that same frame again means no seam re-placed the box, so the
-    /// recorded natural origin is the basis. Any re-lay writes a fresh frame
-    /// that no longer matches, which resets the basis to the live frame.
+    /// records the exact frame it writes (<see cref="Box.Box.RelShiftedFrame"/>).
+    /// Every re-lay seam clears <see cref="Box.Box.RelShiftValid"/>
+    /// (<c>BlockLayout.NoteRelaid</c>), so a valid flag means no seam
+    /// re-placed the box and the recorded natural origin is the basis. The
+    /// frame-equality check stays as defense for frame writes outside the
+    /// instrumented seams (e.g. flex container repositioning of clean items):
+    /// a moved frame resets the basis to the live frame.
     /// </summary>
     private static Rect NaturalFrameOf(Box.Box box)
         => box.RelShiftValid && box.Frame == box.RelShiftedFrame
@@ -161,15 +164,18 @@ internal sealed class PositionLayout
     /// so a later pass can tell "unshifted" from "never visited".</summary>
     private void CommitShift(Box.Box box, Rect natural, Rect shifted)
     {
-        box.RelNaturalX = natural.X;
-        box.RelNaturalY = natural.Y;
-        box.RelShiftedFrame = shifted;
-        box.RelShiftValid = true;
+        // Frame write + scroll bookkeeping first, idempotency bookkeeping
+        // last — re-lay seams clear RelShiftValid, so the valid flag must be
+        // the final write of the commit.
         if (shifted != box.Frame)
         {
             box.Frame = shifted;
             _block.NoteFrameMoved(box); // ancestors' cached scroll extents now include a moved rect
         }
+        box.RelNaturalX = natural.X;
+        box.RelNaturalY = natural.Y;
+        box.RelShiftedFrame = shifted;
+        box.RelShiftValid = true;
     }
 
     // ---------------------------------------------------------------------
