@@ -636,8 +636,8 @@ public sealed class DisplayListBuilder
         // The background paint: a paintable gradient takes priority over the
         // solid color (matching the layering order of `background`).
         CssGradient? gradient = null;
-        if (style.Get(PropertyId.BackgroundImage) is CssFunctionValue gradientFn
-            && CssGradientParser.TryParseFunction(gradientFn, out var g)
+        if (style.Get(PropertyId.BackgroundImage) is { } bgImageValue
+            && CssGradientParser.TryParse(bgImageValue, out var g)
             && g.IsPaintable)
         {
             gradient = g;
@@ -756,8 +756,8 @@ public sealed class DisplayListBuilder
         // unresolved-image path below. Pass the box's corner radii so the
         // backend clips the gradient fill to the rounded rectangle (CSS
         // Backgrounds 3 §5 border-radius).
-        if (layerImage is CssFunctionValue gradientFn
-            && CssGradientParser.TryParseFunction(gradientFn, out var gradient)
+        if (layerImage is not null
+            && CssGradientParser.TryParse(layerImage, out var gradient)
             && gradient.IsPaintable
             && box.Frame.Width > 0 && box.Frame.Height > 0)
         {
