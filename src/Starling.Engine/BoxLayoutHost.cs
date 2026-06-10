@@ -326,13 +326,24 @@ internal sealed class BoxLayoutHost : ILayoutHost
         EnsureFresh("scroll-metrics");
         if (_scrollState.TryGet(element, out var s))
         {
+            // clientLeft/clientTop = border widths (CSSOM §7; overlay
+            // scrollbars, so no scrollbar term). The store keeps only sizes,
+            // so the per-side insets come from the box itself.
+            double clientLeft = 0, clientTop = 0;
+            if (_boxByElement.TryGetValue(element, out var box))
+            {
+                clientLeft = box.Border.Left;
+                clientTop = box.Border.Top;
+            }
             metrics = new ScrollMetrics(
                 ScrollLeft: s.OffsetX,
                 ScrollTop: s.OffsetY,
                 ScrollWidth: s.OverflowWidth,
                 ScrollHeight: s.OverflowHeight,
                 ClientWidth: s.ScrollportWidth,
-                ClientHeight: s.ScrollportHeight);
+                ClientHeight: s.ScrollportHeight,
+                ClientLeft: clientLeft,
+                ClientTop: clientTop);
             return true;
         }
         metrics = default;
@@ -351,6 +362,29 @@ internal sealed class BoxLayoutHost : ILayoutHost
             ScrollHeight: s.OverflowHeight,
             ClientWidth: s.ScrollportWidth,
             ClientHeight: s.ScrollportHeight);
+    }
+
+    /// <summary>Write side of the JS scroll surface
+    /// (browser-plan/scroll-model.md §JavaScript surface): flush layout if
+    /// dirty — the same up-to-date rule the offset metrics use, so the clamp
+    /// bound reflects the current DOM — then let the store clamp, store, and
+    /// flag the pending scroll event. Never triggers a relayout by itself:
+    /// the offset is paint/hit-test state, and the repaint rides the store's
+    /// pending-event flag (drained by the shells' frame pump, WP2/WP4).</summary>
+    public void SetScrollOffset(Element element, double x, double y)
+    {
+        if (_scrollState is null) return;
+        EnsureFresh("scroll-write");
+        _scrollState.Write(element, x, y);
+    }
+
+    /// <summary>Document-scroller variant of <see cref="SetScrollOffset"/>
+    /// (window.scrollTo / scrollBy, root-element scrollTop/scrollLeft).</summary>
+    public void SetRootScrollOffset(double x, double y)
+    {
+        if (_scrollState is null) return;
+        EnsureFresh("scroll-write");
+        _scrollState.WriteRoot(x, y);
     }
 
     public bool MatchMedia(string query)
