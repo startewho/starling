@@ -330,7 +330,8 @@ public sealed class Painter
                 var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
                 displayList = new DisplayListBuilder().Build(
                     root, clipViewport, styleOverride: null, images: images,
-                    scrollOffsets: scrollState is null ? null : scrollState.GetOffset, canvasRect);
+                    scrollOffsets: scrollState is null ? null : scrollState.GetOffset, canvasRect,
+                    stickyShifts: scrollState is null ? null : scrollState.GetStickyShift);
             }
 
             using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))

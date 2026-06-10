@@ -63,6 +63,17 @@ public sealed class DisplayListBuilder
     /// </summary>
     private Func<Element, (double X, double Y)>? _scrollOffsets;
 
+    /// <summary>
+    /// Per-element <c>position: sticky</c> paint shift, read from the same
+    /// scroll store the offsets come from (<c>ScrollStateStore.GetStickyShift</c>
+    /// shape — browser-plan/scroll-model.md WP5). Layout keeps sticky frames
+    /// natural; this builder offsets the box's paint origin by the shift, so
+    /// the whole subtree (and any CSS transform bracket, whose origin derives
+    /// from the shifted frame) composes with it. Null when the host has no
+    /// scroll model — sticky then arrived pre-shifted by the layout fallback.
+    /// </summary>
+    private Func<Element, (double X, double Y)>? _stickyShifts;
+
     // CSS 2.1 §14.2 / CSS Backgrounds 3 §2.11.2 — the box whose
     // background-color was promoted to the canvas for this Build pass. Its own
     // background-color paint is suppressed so translucent colors are not
@@ -98,8 +109,9 @@ public sealed class DisplayListBuilder
     /// so the cost stays O(items on screen). When null, every item is emitted
     /// (the full-page behavior the headless screenshot path relies on).
     /// </summary>
-    public DisplayList Build(BlockBox root, Rect? viewport, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, Func<Element, (double X, double Y)>? scrollOffsets = null, Rect? canvasRect = null)
+    public DisplayList Build(BlockBox root, Rect? viewport, Func<Box, ComputedStyle?>? styleOverride = null, IImageResolver? images = null, Func<Element, (double X, double Y)>? scrollOffsets = null, Rect? canvasRect = null, Func<Element, (double X, double Y)>? stickyShifts = null)
     {
+        _stickyShifts = stickyShifts;
         ArgumentNullException.ThrowIfNull(root);
         var list = new DisplayList();
         _canvasDonor = null;
@@ -165,7 +177,8 @@ public sealed class DisplayListBuilder
         bool suppressRootTransform,
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
-        Func<Element, (double X, double Y)>? scrollOffsets = null)
+        Func<Element, (double X, double Y)>? scrollOffsets = null,
+        Func<Element, (double X, double Y)>? stickyShifts = null)
     {
         ArgumentNullException.ThrowIfNull(sliceRoot);
         ArgumentNullException.ThrowIfNull(isLayerBoundary);
@@ -175,6 +188,7 @@ public sealed class DisplayListBuilder
         // brackets the scrolled children in a -offset transform). Lets the zero-copy
         // surface path render inner-scrolled pages instead of declining to readback.
         _scrollOffsets = scrollOffsets;
+        _stickyShifts = stickyShifts;
         // Layer slices never own the canvas; clear any donor left by a prior
         // Build call on a reused builder so no slice drops its background.
         _canvasDonor = null;
@@ -276,6 +290,11 @@ public sealed class DisplayListBuilder
            && style.Get(PropertyId.Position) is CssKeyword k
            && k.Name.Equals("fixed", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsStickyPositioned(Box box, Func<Box, ComputedStyle?>? styleOverride)
+        => EffectiveStyle(box, styleOverride) is { } style
+           && style.Get(PropertyId.Position) is CssKeyword k
+           && k.Name.Equals("sticky", StringComparison.OrdinalIgnoreCase);
+
     private void Visit(Box box, DisplayList list, double originX, double originY, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride, IImageResolver? images, LayerSlice? slice)
     {
         // Host abort (Stop button, navigation supersede). One check per visited
@@ -305,6 +324,22 @@ public sealed class DisplayListBuilder
         {
             frameX += _viewportX;
             frameY += _viewportY;
+        }
+
+        // `position: sticky` (scroll-model.md WP5): layout left the frame at
+        // its natural position; the bound scroller's live offset turns into a
+        // pure paint-time translation here, exactly like the scroll offset.
+        // Offsetting the paint origin shifts the box AND its whole subtree
+        // (children inherit the content origin), and composes with any
+        // enclosing transform bracket because items inside it are emitted in
+        // these coordinates. One keyword test per element box, one store read
+        // per sticky box — nothing on the sticky-free path.
+        if (_stickyShifts is not null && box.Element is { } stickyElement
+            && IsStickyPositioned(box, styleOverride))
+        {
+            var stickyShift = _stickyShifts(stickyElement);
+            frameX += stickyShift.X;
+            frameY += stickyShift.Y;
         }
 
         // CSS `transform` is applied around the box's transform-origin (default

@@ -276,10 +276,29 @@ internal sealed class BoxLayoutHost : ILayoutHost
             // origin walk DisplayListBuilder does, run bottom-up here.
             var x = box.Frame.X;
             var y = box.Frame.Y;
+            // Decision 2 (scroll-model.md): a stuck element reports the STUCK
+            // position, like Chromium. Layout keeps sticky frames natural, so
+            // the same store-computed paint shift is added here — for the box
+            // itself and for any stuck ancestor it rides on. Gated on the
+            // store actually holding sticky entries so the overwhelmingly
+            // common sticky-free read pays one count check, no lookups.
+            var sticky = _scrollState is { HasStickyEntries: true } ? _scrollState : null;
+            if (sticky is not null && box.Element is { } selfEl)
+            {
+                var (sx, sy) = sticky.GetStickyShift(selfEl);
+                x += sx;
+                y += sy;
+            }
             for (var p = box.Parent; p is not null; p = p.Parent)
             {
                 x += p.Frame.X + p.Border.Left + p.Padding.Left;
                 y += p.Frame.Y + p.Border.Top + p.Padding.Top;
+                if (sticky is not null && p.Element is { } ancestorEl)
+                {
+                    var (sx, sy) = sticky.GetStickyShift(ancestorEl);
+                    x += sx;
+                    y += sy;
+                }
             }
             rect = new LayoutRect(x, y, box.Frame.Width, box.Frame.Height);
             return true;

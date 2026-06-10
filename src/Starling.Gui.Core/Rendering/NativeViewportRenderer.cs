@@ -97,7 +97,8 @@ public sealed class NativeViewportRenderer : IDisposable
         IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null,
         Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null,
         long pageVersion = 0,
-        bool animationTick = false)
+        bool animationTick = false,
+        Func<Starling.Dom.Element, (double X, double Y)>? stickyShifts = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -114,7 +115,7 @@ public sealed class NativeViewportRenderer : IDisposable
 
             var builder = new LayerTreeBuilder(styleOverride, images,
                 isAnimatingLayerRoot: isAnimatingLayerRoot, layerIdFor: _tiles.LayerIdFor,
-                scrollOffsets: scrollOffsets);
+                scrollOffsets: scrollOffsets, stickyShifts: stickyShifts);
 
             // Pure animation tick over an unchanged page: refresh only the animating
             // layers and reuse every static layer's cached slice/hash. Otherwise
@@ -184,7 +185,8 @@ public sealed class NativeViewportRenderer : IDisposable
         BlockBox? bottomChromeRightRoot = null,
         double bottomChromeLeftWidthCss = 0,
         double bottomChromeHeightCss = 0,
-        Func<Starling.Dom.Element, (double X, double Y)>? pageScrollOffsets = null)
+        Func<Starling.Dom.Element, (double X, double Y)>? pageScrollOffsets = null,
+        Func<Starling.Dom.Element, (double X, double Y)>? pageStickyShifts = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(presenter);
@@ -222,7 +224,7 @@ public sealed class NativeViewportRenderer : IDisposable
         // WP2); chrome and overlay documents have no per-element scrollers.
         var pageTree = new LayerTreeBuilder(styleOverride, images,
             isAnimatingLayerRoot: pageAnimating, layerIdFor: _tiles.LayerIdFor,
-            scrollOffsets: pageScrollOffsets).Build(pageRoot);
+            scrollOffsets: pageScrollOffsets, stickyShifts: pageStickyShifts).Build(pageRoot);
         // Optional overlay (find highlight, context menu, …) drawn in page space,
         // scrolling and clipping with the page content region.
         var overlayTree = overlayRoot is null

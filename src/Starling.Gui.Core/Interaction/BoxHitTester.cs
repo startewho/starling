@@ -62,6 +62,16 @@ public static class BoxHitTester
     /// on a painted pixel lands on the box that painted that pixel.
     /// </summary>
     public static HitResult HitTest(BlockBox root, double x, double y, double viewportX, double viewportY, Func<DomElement, (double X, double Y)>? scrollOffsets)
+        => HitTest(root, x, y, viewportX, viewportY, scrollOffsets, stickyShifts: null);
+
+    /// <summary>
+    /// Hit-test overload that also mirrors the painter's <c>position: sticky</c>
+    /// shift (scroll-model.md WP5): a sticky box's frame stays at its natural
+    /// layout position, and <paramref name="stickyShifts"/> (the scroll store's
+    /// <c>GetStickyShift</c>) supplies the paint-time translation, so a click
+    /// on the stuck position lands on the sticky element.
+    /// </summary>
+    public static HitResult HitTest(BlockBox root, double x, double y, double viewportX, double viewportY, Func<DomElement, (double X, double Y)>? scrollOffsets, Func<DomElement, (double X, double Y)>? stickyShifts)
     {
         ArgumentNullException.ThrowIfNull(root);
 
@@ -77,12 +87,12 @@ public static class BoxHitTester
         for (var i = fixedRoots.Count - 1; i >= 0; i--)
         {
             var fr = fixedRoots[i];
-            var hit = FindDeepest(fr.Root, x, y, fr.OriginX, fr.OriginY, viewportX, viewportY, scrollOffsets);
+            var hit = FindDeepest(fr.Root, x, y, fr.OriginX, fr.OriginY, viewportX, viewportY, scrollOffsets, stickyShifts);
             if (hit is not null)
                 return new HitResult(hit, FindLinkAnchor(hit));
         }
 
-        var inflowHit = FindDeepest(root, x, y, originX: 0, originY: 0, viewportX, viewportY, scrollOffsets);
+        var inflowHit = FindDeepest(root, x, y, originX: 0, originY: 0, viewportX, viewportY, scrollOffsets, stickyShifts);
         if (inflowHit is null)
             return new HitResult(null, null);
         return new HitResult(inflowHit, FindLinkAnchor(inflowHit));
@@ -107,7 +117,7 @@ public static class BoxHitTester
             CollectFixedRoots(child, contentX, contentY, sink);
     }
 
-    private static Box? FindDeepest(Box box, double x, double y, double originX, double originY, double viewportX, double viewportY, Func<DomElement, (double X, double Y)>? scrollOffsets)
+    private static Box? FindDeepest(Box box, double x, double y, double originX, double originY, double viewportX, double viewportY, Func<DomElement, (double X, double Y)>? scrollOffsets, Func<DomElement, (double X, double Y)>? stickyShifts)
     {
         var frameX = originX + box.Frame.X;
         var frameY = originY + box.Frame.Y;
@@ -121,6 +131,16 @@ public static class BoxHitTester
         {
             frameX += viewportX;
             frameY += viewportY;
+        }
+
+        // Mirror the painter's sticky shift (scroll-model.md WP5): the frame
+        // is the natural layout position; the painted position adds the
+        // store-computed shift, and so must the hit test.
+        if (stickyShifts is not null && box.Element is { } stickyEl && IsStickyPositioned(box))
+        {
+            var shift = stickyShifts(stickyEl);
+            frameX += shift.X;
+            frameY += shift.Y;
         }
 
         var insideSelf = x >= frameX && x < frameX + box.Frame.Width
@@ -161,7 +181,7 @@ public static class BoxHitTester
         // Last child wins ties — later siblings paint on top.
         for (var i = box.Children.Count - 1; i >= 0; i--)
         {
-            var childHit = FindDeepest(box.Children[i], x, y, contentX, contentY, viewportX, viewportY, scrollOffsets);
+            var childHit = FindDeepest(box.Children[i], x, y, contentX, contentY, viewportX, viewportY, scrollOffsets, stickyShifts);
             if (childHit is not null)
                 return childHit;
         }
@@ -172,6 +192,10 @@ public static class BoxHitTester
     private static bool IsFixedPositioned(Box box)
         => box.Style?.Get(PropertyId.Position) is CssKeyword k
            && k.Name.Equals("fixed", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsStickyPositioned(Box box)
+        => box.Style?.Get(PropertyId.Position) is CssKeyword k
+           && k.Name.Equals("sticky", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsScrollContainer(Box box)
         => box.Style is { } style
