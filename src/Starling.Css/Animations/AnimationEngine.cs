@@ -33,6 +33,12 @@ public sealed class AnimationEngine
     private readonly Dictionary<string, KeyframesRule> _keyframes
         = new(StringComparer.Ordinal);
     private double _nowMs;
+    // Pending animation DOM-event facts (animationstart / animationiteration /
+    // animationend) recorded by Tick. The embedder drains these after the
+    // frame's style pass and dispatches real DOM events at a safe point —
+    // never synchronously from inside the style/compose path, because
+    // listeners mutate the DOM.
+    private readonly List<AnimationEventRecord> _pendingEvents = new();
 
     private sealed class ScriptAnimation(AnimationInstance instance, KeyframesRule rule)
     {
@@ -270,11 +276,33 @@ public sealed class AnimationEngine
         var completed = 0;
         foreach (var list in _active.Values)
             foreach (var inst in list)
+            {
                 if (inst.NoteTick(nowMs)) completed++;
+                // Lifecycle DOM events fire only for animations that actually
+                // run — an animation-name without a registered @keyframes rule
+                // creates no animation (CSS Animations 1 §3).
+                if (_keyframes.ContainsKey(inst.Name))
+                    inst.CollectLifecycleEvents(nowMs, _pendingEvents);
+            }
         foreach (var list in _scriptActive.Values)
             foreach (var s in list)
                 if (s.Instance.NoteTick(nowMs)) completed++;
         return completed;
+    }
+
+    /// <summary>True when Tick queued animation DOM-event facts not yet drained.</summary>
+    public bool HasPendingEvents => _pendingEvents.Count > 0;
+
+    /// <summary>Move all pending animation DOM-event facts into
+    /// <paramref name="into"/> (appended in fire order) and clear the queue.
+    /// The embedder calls this after the frame's style pass and dispatches the
+    /// corresponding DOM events through the bindings layer.</summary>
+    public void DrainPendingEvents(List<AnimationEventRecord> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        if (_pendingEvents.Count == 0) return;
+        into.AddRange(_pendingEvents);
+        _pendingEvents.Clear();
     }
 
     /// <summary>Forget all animation state for <paramref name="element"/> (detached element cleanup).</summary>
@@ -290,6 +318,7 @@ public sealed class AnimationEngine
         _active.Clear();
         _scriptActive.Clear();
         _keyframes.Clear();
+        _pendingEvents.Clear();
         _nowMs = 0;
     }
 }
@@ -387,6 +416,69 @@ public sealed class AnimationInstance
             return true;
         }
         return false;
+    }
+
+    // ---- CSS animation DOM events (CSS Animations 1 §5) --------------------
+    // Additive event-fact tracking; never touches the playback math. Follows
+    // the events-on-sample model from CSS Animations 2: each tick compares the
+    // playback head against the boundaries not yet reported and queues at most
+    // one animationstart / animationiteration / animationend fact each.
+    private bool _eventStartFired;
+    private bool _eventEndFired;
+    private double _eventIterationsFired; // iteration boundaries already reported
+
+    /// <summary>
+    /// Append the animation DOM-event facts implied by the playback head at
+    /// <paramref name="nowMs"/> to <paramref name="sink"/>. Called from
+    /// <see cref="AnimationEngine.Tick"/> for cascade-managed instances only —
+    /// script (Web Animations API) animations surface finish/cancel on the
+    /// Animation object and never fire the CSS animation events. elapsedTime
+    /// values follow the spec: seconds, excluding the delay phase.
+    /// </summary>
+    internal void CollectLifecycleEvents(double nowMs, List<AnimationEventRecord> sink)
+    {
+        if (_canceled || _scriptPaused || _decl.PlayState == AnimationPlayState.Paused) return;
+        // An iteration count of 0 (or negative) never reaches a terminal state
+        // in NoteTick; keep event behavior consistent and stay silent too.
+        if (_decl.IterationCount <= 0) return;
+
+        var elapsed = nowMs - _startMs - _decl.DelayMs;
+        if (elapsed < 0) return; // still inside the delay phase — nothing fires
+
+        var duration = Math.Max(0, _decl.DurationMs);
+        var iterations = _decl.IterationCount;
+        var activeMs = double.IsInfinity(iterations) ? double.PositiveInfinity : duration * iterations;
+
+        if (!_eventStartFired)
+        {
+            _eventStartFired = true;
+            // §5: elapsedTime = min(max(-delay, 0), active duration) — zero
+            // unless the delay is negative (the head starts mid-animation).
+            var startElapsed = Math.Min(Math.Max(-_decl.DelayMs, 0), activeMs);
+            sink.Add(new AnimationEventRecord(Element, AnimationEventKind.AnimationStart, _decl.Name, startElapsed / 1000.0));
+        }
+
+        if (duration > 0)
+        {
+            // Iteration boundaries crossed so far, excluding the one that ends
+            // the animation (that one is animationend, not animationiteration).
+            // At most one event per tick — when a slow frame skips several
+            // boundaries, report only the latest (CSS Animations 2 sampling).
+            var boundaries = Math.Floor(elapsed / duration);
+            if (!double.IsInfinity(iterations))
+                boundaries = Math.Min(boundaries, Math.Ceiling(iterations) - 1);
+            if (_eventIterationsFired < boundaries)
+            {
+                _eventIterationsFired = boundaries;
+                sink.Add(new AnimationEventRecord(Element, AnimationEventKind.AnimationIteration, _decl.Name, boundaries * duration / 1000.0));
+            }
+        }
+
+        if (!_eventEndFired && !double.IsInfinity(iterations) && elapsed >= activeMs)
+        {
+            _eventEndFired = true;
+            sink.Add(new AnimationEventRecord(Element, AnimationEventKind.AnimationEnd, _decl.Name, activeMs / 1000.0));
+        }
     }
 
     // ---- Web Animations API playback control (element.animate) -------------
