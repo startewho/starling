@@ -1326,16 +1326,32 @@ public static class NodeBindings
             (thisV, _) => ReadOffsetMetric(realm, thisV, m => m.ClientWidth));
         EventTargetBinding.DefineAccessor(realm, elProto, "clientHeight",
             (thisV, _) => ReadOffsetMetric(realm, thisV, m => m.ClientHeight));
+        // CSSOM View §7 scrollWidth/scrollHeight — the element's scrolling
+        // area, not the offset-size alias it used to be (see ReadScrollSize).
         EventTargetBinding.DefineAccessor(realm, elProto, "scrollWidth",
-            (thisV, _) => ReadOffsetMetric(realm, thisV, m => m.OffsetWidth));
+            (thisV, _) => ReadScrollSize(realm, thisV, vertical: false));
         EventTargetBinding.DefineAccessor(realm, elProto, "scrollHeight",
-            (thisV, _) => ReadOffsetMetric(realm, thisV, m => m.OffsetHeight));
-        // CSSOM View §7 — scrollTop/scrollLeft. No scroll position is tracked
-        // behind the seam, so a never-scrolled element reads 0 (spec-permitted).
+            (thisV, _) => ReadScrollSize(realm, thisV, vertical: true));
+        // CSSOM View §7 scrollTop/scrollLeft. Reads come from the engine's
+        // scroll store via ILayoutHost; writes flush layout if dirty, clamp,
+        // store, and flag — never relayout (browser-plan/scroll-model.md).
         EventTargetBinding.DefineAccessor(realm, elProto, "scrollTop",
-            (_, _) => JsValue.Number(0));
+            (thisV, _) => ReadScrollOffset(realm, thisV, vertical: true),
+            (thisV, args) => WriteScrollOffset(realm, thisV, args, vertical: true));
         EventTargetBinding.DefineAccessor(realm, elProto, "scrollLeft",
-            (_, _) => JsValue.Number(0));
+            (thisV, _) => ReadScrollOffset(realm, thisV, vertical: false),
+            (thisV, args) => WriteScrollOffset(realm, thisV, args, vertical: false));
+        // CSSOM View §7 — element scroll(), scrollTo(), scrollBy(),
+        // scrollIntoView(). behavior:"smooth" is accepted and treated as
+        // instant (smooth animation is a v1 non-goal).
+        EventTargetBinding.DefineMethod(realm, elProto, "scroll",
+            (thisV, args) => ScrollElementTo(realm, thisV, args, relative: false), length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "scrollTo",
+            (thisV, args) => ScrollElementTo(realm, thisV, args, relative: false), length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "scrollBy",
+            (thisV, args) => ScrollElementTo(realm, thisV, args, relative: true), length: 0);
+        EventTargetBinding.DefineMethod(realm, elProto, "scrollIntoView",
+            (thisV, args) => ScrollIntoView(realm, thisV, args), length: 0);
 
         var elCtor = new JsNativeFunction(realm, "Element", 0, (_, _) =>
             throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
@@ -3007,6 +3023,260 @@ public static class NodeBindings
             return JsValue.Number(select(m));
         }
         return JsValue.Number(0);
+    }
+
+    // ---- CSSOM View §7 scroll surface (browser-plan/scroll-model.md WP3) ----
+
+    /// <summary>CSSOM-View scroll-into-view alignment keywords.</summary>
+    private enum ScrollAlign { Start, Center, End, Nearest }
+
+    /// <summary>True when <paramref name="e"/> is the document's root element
+    /// — CSSOM View §7 routes its scrollTop/scrollLeft/scrollWidth/
+    /// scrollHeight/scrollTo to the viewport (standards mode; the quirks-mode
+    /// body special case is not modelled).</summary>
+    private static bool IsDocumentScroller(Element e)
+        => e.OwnerDocument is { } doc && ReferenceEquals(doc.DocumentElement, e);
+
+    /// <summary>CSSOM View §7 dom-element-scrolltop / dom-element-scrollleft,
+    /// read side: the root element reads the viewport scroll position, a
+    /// scroll container reads its store entry, everything else reads 0.</summary>
+    private static JsValue ReadScrollOffset(JsRealm realm, JsValue thisV, bool vertical)
+    {
+        var host = WindowBinding.LayoutHostForRealm(realm);
+        if (host is null || DomWrappers.UnwrapElement(thisV) is not { } e)
+            return JsValue.Number(0);
+        if (IsDocumentScroller(e))
+        {
+            var r = host.GetRootScrollMetrics();
+            return JsValue.Number(vertical ? r.ScrollTop : r.ScrollLeft);
+        }
+        if (host.TryGetScrollMetrics(e, out var m))
+            return JsValue.Number(vertical ? m.ScrollTop : m.ScrollLeft);
+        return JsValue.Number(0);
+    }
+
+    /// <summary>CSSOM View §7 dom-element-scrolltop / dom-element-scrollleft,
+    /// write side: normalize non-finite values to 0, keep the other axis,
+    /// and hand the pair to the host (which flushes layout if dirty, clamps,
+    /// stores, and flags — no relayout). A non-scroller write terminates
+    /// without effect, per the spec's "has no scrolling box" step.</summary>
+    private static JsValue WriteScrollOffset(JsRealm realm, JsValue thisV, JsValue[] args, bool vertical)
+    {
+        var host = WindowBinding.LayoutHostForRealm(realm);
+        if (host is null || DomWrappers.UnwrapElement(thisV) is not { } e)
+            return JsValue.Undefined;
+        var v = args.Length > 0 ? JsValue.ToNumber(args[0]) : 0;
+        if (!double.IsFinite(v)) v = 0; // CSSOM: normalize non-finite values
+        if (IsDocumentScroller(e))
+        {
+            var r = host.GetRootScrollMetrics();
+            host.SetRootScrollOffset(vertical ? r.ScrollLeft : v, vertical ? v : r.ScrollTop);
+        }
+        else if (host.TryGetScrollMetrics(e, out var m))
+        {
+            host.SetScrollOffset(e, vertical ? m.ScrollLeft : v, vertical ? v : m.ScrollTop);
+        }
+        return JsValue.Undefined;
+    }
+
+    /// <summary>CSSOM View §7 dom-element-scrollwidth / dom-element-scrollheight:
+    /// 1-2. no document / inactive document → the no-host zero fallback below;
+    /// 4-5. the root element (standards mode) returns
+    ///      max(viewport scrolling area, viewport size) — exactly what the
+    ///      store's root entry records;
+    /// 6.   no associated box → 0 (both host lookups fail);
+    /// 7.   otherwise the width/height of the element's scrolling area. For a
+    ///      measured scroll container that is the stored scrollable overflow.
+    ///      For a non-scroller no overflow is recorded, so the box's own
+    ///      offset size stands in — the spec's max(content, padding box)
+    ///      collapses to the box itself when nothing overflows, and the
+    ///      offset size only over-reports by the border, preserving the
+    ///      pre-store behavior for non-scrollers.</summary>
+    private static JsValue ReadScrollSize(JsRealm realm, JsValue thisV, bool vertical)
+    {
+        var host = WindowBinding.LayoutHostForRealm(realm);
+        if (host is null || DomWrappers.UnwrapElement(thisV) is not { } e)
+            return JsValue.Number(0);
+        if (IsDocumentScroller(e))
+        {
+            var r = host.GetRootScrollMetrics();
+            var rootSize = vertical ? r.ScrollHeight : r.ScrollWidth;
+            // All-zero root metrics mean no store behind the host (legacy
+            // snapshot) — fall through to the offset alias below.
+            if (rootSize > 0) return JsValue.Number(rootSize);
+        }
+        else if (host.TryGetScrollMetrics(e, out var m))
+        {
+            return JsValue.Number(vertical ? m.ScrollHeight : m.ScrollWidth);
+        }
+        if (host.TryGetOffsetMetrics(e, out var om))
+            return JsValue.Number(vertical ? om.OffsetHeight : om.OffsetWidth);
+        return JsValue.Number(0);
+    }
+
+    /// <summary>Shared argument parsing for <c>scroll()</c>/<c>scrollTo()</c>/
+    /// <c>scrollBy()</c> on elements and on the window. Accepts the
+    /// <c>(x, y)</c> overload and the <c>ScrollToOptions</c> dictionary
+    /// (<c>left</c>/<c>top</c>/<c>behavior</c>); <c>behavior</c> is accepted
+    /// and ignored — "smooth" is treated as instant (v1 non-goal). Omitted
+    /// members keep the current offset (absolute) or contribute a zero delta
+    /// (relative). Non-finite values normalize to 0 per CSSOM.</summary>
+    internal static void ParseScrollArgs(JsValue[] args, bool relative, double currentX, double currentY,
+        out double x, out double y)
+    {
+        double? left = null, top = null;
+        if (args.Length >= 2 && !args[0].IsObject)
+        {
+            left = JsValue.ToNumber(args[0]);
+            top = JsValue.ToNumber(args[1]);
+        }
+        else if (args.Length >= 1 && args[0].IsObject)
+        {
+            var o = args[0].AsObject;
+            var l = o.Get("left");
+            if (!l.IsUndefined) left = JsValue.ToNumber(l);
+            var t = o.Get("top");
+            if (!t.IsUndefined) top = JsValue.ToNumber(t);
+        }
+        var lx = left.GetValueOrDefault();
+        var ty = top.GetValueOrDefault();
+        if (!double.IsFinite(lx)) lx = 0;
+        if (!double.IsFinite(ty)) ty = 0;
+        if (relative)
+        {
+            x = currentX + lx;
+            y = currentY + ty;
+        }
+        else
+        {
+            x = left.HasValue ? lx : currentX;
+            y = top.HasValue ? ty : currentY;
+        }
+    }
+
+    /// <summary>CSSOM View §7 element scroll()/scrollTo()/scrollBy(). The
+    /// root element scrolls the viewport; a non-scroller terminates without
+    /// effect (the spec's "no associated scrolling box" step).</summary>
+    private static JsValue ScrollElementTo(JsRealm realm, JsValue thisV, JsValue[] args, bool relative)
+    {
+        var host = WindowBinding.LayoutHostForRealm(realm);
+        if (host is null || DomWrappers.UnwrapElement(thisV) is not { } e)
+            return JsValue.Undefined;
+        if (IsDocumentScroller(e))
+        {
+            var r = host.GetRootScrollMetrics();
+            ParseScrollArgs(args, relative, r.ScrollLeft, r.ScrollTop, out var rx, out var ry);
+            host.SetRootScrollOffset(rx, ry);
+            return JsValue.Undefined;
+        }
+        if (!host.TryGetScrollMetrics(e, out var m)) return JsValue.Undefined;
+        ParseScrollArgs(args, relative, m.ScrollLeft, m.ScrollTop, out var x, out var y);
+        host.SetScrollOffset(e, x, y);
+        return JsValue.Undefined;
+    }
+
+    /// <summary>CSSOM View §7 dom-element-scrollintoview. Defaults are
+    /// block:"start", inline:"nearest"; the boolean form maps true → block
+    /// "start", false → block "end" (both inline "nearest"). behavior is
+    /// accepted and treated as instant. Resolves the target rect, then walks
+    /// each scrolling ancestor outward — innermost first, then the viewport —
+    /// adjusting each offset just enough for the requested alignment.</summary>
+    private static JsValue ScrollIntoView(JsRealm realm, JsValue thisV, JsValue[] args)
+    {
+        var host = WindowBinding.LayoutHostForRealm(realm);
+        if (host is null || DomWrappers.UnwrapElement(thisV) is not { } e)
+            return JsValue.Undefined;
+
+        var blockAlign = ScrollAlign.Start;
+        var inlineAlign = ScrollAlign.Nearest;
+        if (args.Length > 0)
+        {
+            if (args[0].IsObject)
+            {
+                var o = args[0].AsObject;
+                blockAlign = ParseScrollAlign(o.Get("block"), ScrollAlign.Start);
+                inlineAlign = ParseScrollAlign(o.Get("inline"), ScrollAlign.Nearest);
+            }
+            else if (!JsValue.ToBoolean(args[0]))
+            {
+                blockAlign = ScrollAlign.End;
+            }
+        }
+
+        if (!host.TryGetBoundingClientRect(e, out var target)) return JsValue.Undefined;
+
+        // Host rects are document-space at scroll zero, so the target's
+        // *visual* position at each level is its layout rect minus the
+        // (clamped, read-back) offsets of the scrollers already adjusted
+        // further in. Walk inside-out so each level sees the inner result.
+        double accX = 0, accY = 0;
+        for (var p = e.ParentElement; p is not null; p = p.ParentElement)
+        {
+            if (IsDocumentScroller(p)) break; // the viewport leg below owns the root
+            if (!host.TryGetScrollMetrics(p, out var m)) continue;
+            if (!host.TryGetBoundingClientRect(p, out var box)) continue;
+            // Target in the scroller's scroll-origin (padding-box) space.
+            var elemX = target.X - accX - (box.X + m.ClientLeft);
+            var elemY = target.Y - accY - (box.Y + m.ClientTop);
+            var nx = ResolveScrollAlign(inlineAlign, m.ScrollLeft, elemX, target.Width, m.ClientWidth);
+            var ny = ResolveScrollAlign(blockAlign, m.ScrollTop, elemY, target.Height, m.ClientHeight);
+            host.SetScrollOffset(p, nx, ny);
+            if (host.TryGetScrollMetrics(p, out var after))
+            {
+                accX += after.ScrollLeft;
+                accY += after.ScrollTop;
+            }
+        }
+
+        // The document scroller (viewport) is the outermost scrolling box;
+        // its scroll origin is the document origin.
+        var root = host.GetRootScrollMetrics();
+        if (root.ClientWidth > 0 || root.ClientHeight > 0)
+        {
+            var vx = target.X - accX;
+            var vy = target.Y - accY;
+            var nx = ResolveScrollAlign(inlineAlign, root.ScrollLeft, vx, target.Width, root.ClientWidth);
+            var ny = ResolveScrollAlign(blockAlign, root.ScrollTop, vy, target.Height, root.ClientHeight);
+            host.SetRootScrollOffset(nx, ny);
+        }
+        return JsValue.Undefined;
+    }
+
+    private static ScrollAlign ParseScrollAlign(JsValue v, ScrollAlign fallback)
+    {
+        if (v.IsUndefined) return fallback;
+        var s = JsValue.ToStringValue(v);
+        // WebIDL would throw on an unknown enum value; the binding surface is
+        // lenient and keeps the default instead.
+        if (s.Equals("start", StringComparison.Ordinal)) return ScrollAlign.Start;
+        if (s.Equals("center", StringComparison.Ordinal)) return ScrollAlign.Center;
+        if (s.Equals("end", StringComparison.Ordinal)) return ScrollAlign.End;
+        if (s.Equals("nearest", StringComparison.Ordinal)) return ScrollAlign.Nearest;
+        return fallback;
+    }
+
+    /// <summary>One axis of CSSOM View §12 "determine the scroll-into-view
+    /// position": the new scroll offset that aligns an element spanning
+    /// [<paramref name="pos"/>, <paramref name="pos"/>+<paramref name="size"/>]
+    /// (scroll-origin space) inside a scrollport of <paramref name="port"/>,
+    /// given the <paramref name="current"/> offset (used by "nearest").</summary>
+    private static double ResolveScrollAlign(ScrollAlign align, double current, double pos, double size, double port)
+    {
+        switch (align)
+        {
+            case ScrollAlign.Start: return pos;
+            case ScrollAlign.End: return pos + size - port;
+            case ScrollAlign.Center: return pos + (size - port) / 2;
+            default:
+                // nearest: fully visible (or spanning the whole port) keeps
+                // the current offset; otherwise align the closer edge, with
+                // the spec's larger-than-port edge flip.
+                var startOut = pos < current;
+                var endOut = pos + size > current + port;
+                if (startOut == endOut) return current;
+                if ((startOut && size <= port) || (endOut && size > port)) return pos;
+                return pos + size - port;
+        }
     }
 
     /// <summary>If <paramref name="e"/> is a <c>&lt;script&gt;</c> or
