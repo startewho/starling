@@ -31,6 +31,16 @@ internal sealed class BlockLayout
     // byte-for-byte unchanged. See Starling.Layout.Incremental.
     private readonly bool _incremental;
 
+    /// <summary>
+    /// When set (the layout session's incremental-relayout path with a scroll
+    /// store attached), every box this pass actually (re)lays out has its
+    /// cached scroll extents invalidated chain-to-root, and every relaid
+    /// scroll container is queued here for the post-pass scoped re-measure
+    /// (browser-plan/scroll-model.md WP1). Null everywhere else, making the
+    /// whole mechanism one null check per laid box.
+    /// </summary>
+    internal List<Box.Box>? RelaidScrollerSink { get; set; }
+
     public BlockLayout(ITextMeasurer measurer, Size viewport, CancellationToken abort = default, bool incremental = false)
     {
         _measurer = measurer;
@@ -147,6 +157,7 @@ internal sealed class BlockLayout
             // clean from here on.
             item.SubtreeDirty = false;
         }
+        NoteRelaid(item);
         return content;
     }
 
@@ -308,6 +319,12 @@ internal sealed class BlockLayout
             placement.Y + child.Margin.Top,
             fullWidth,
             fullHeight);
+
+        // Floats have no reuse key — this re-laid the box wholesale, so the
+        // scroll-extent caches up the chain are stale (and a float scroller
+        // owes a re-measure). Children laid above go through the stamped
+        // seams and report themselves.
+        NoteRelaid(child);
     }
 
     /// <summary>
@@ -453,6 +470,38 @@ internal sealed class BlockLayout
         Stamp(child, cs, measure);
     }
 
+    /// <summary>
+    /// Scroll-measure bookkeeping for a box this pass actually (re)laid out:
+    /// its cached subtree extent (and every ancestor's) no longer describes
+    /// the tree, and if it is a scroll container it owes a scoped re-measure.
+    /// Queuing on a re-lay is deliberately conservative — re-recording
+    /// unchanged geometry is a harmless overwrite, while missing a changed
+    /// scroller would serve stale scroll ranges. No-op without a sink.
+    /// </summary>
+    internal void NoteRelaid(Box.Box box)
+    {
+        var sink = RelaidScrollerSink;
+        if (sink is null) return;
+        Scroll.ScrollOverflowMeasurer.InvalidateExtentsToRoot(box);
+        if (box.Element is not null
+            && !box.ScrollMeasureQueued
+            && (Scroll.ScrollOverflowMeasurer.Classify(box) & Scroll.ScrollBoxFlags.ScrollContainer) != 0)
+        {
+            box.ScrollMeasureQueued = true;
+            sink.Add(box);
+        }
+    }
+
+    /// <summary>Scroll-measure bookkeeping for a frame moved in place by the
+    /// position pass (relative/sticky shift): the box's own cached extent is
+    /// frame-origin-relative and stays exact, but every ancestor's union now
+    /// includes a moved rect. No-op without a sink.</summary>
+    internal void NoteFrameMoved(Box.Box box)
+    {
+        if (RelaidScrollerSink is null) return;
+        Scroll.ScrollOverflowMeasurer.InvalidateExtentsToRoot(box);
+    }
+
     /// <summary>Record the constraint space a freshly laid-out box was computed
     /// under so a later frame can reuse it. The normal pass also clears the dirty
     /// mark; the measurement pass records only its own (height-only) reuse key and
@@ -461,6 +510,7 @@ internal sealed class BlockLayout
     private void Stamp(Box.Box box, ConstraintSpace cs, bool measure)
     {
         if (!_incremental) return;
+        NoteRelaid(box);
         if (measure)
         {
             box.LaidConstraintMeasure = cs;

@@ -123,6 +123,35 @@ public abstract class Box
     internal Starling.Layout.Incremental.ConstraintSpace? ItemLaidConstraint;
     internal double ItemLaidContent;
 
+    // ---- Scroll-measurement cache (see Starling.Layout.Scroll) ----------------
+    //
+    // Written by ScrollOverflowMeasurer and the layout seams that re-lay a box;
+    // never read by layout itself. The classification is memoized per box
+    // because Style is immutable for a box's lifetime (a style change rebuilds
+    // the box). The subtree extent is relative to the box's own frame origin,
+    // so pure repositioning of a clean subtree never invalidates it.
+
+    /// <summary>Lazily memoized overflow/position classification — see
+    /// <see cref="Scroll.ScrollOverflowMeasurer.Classify"/>. Replaces the five
+    /// per-pass CssValue keyword reads the measurer used to do per box.</summary>
+    internal Scroll.ScrollBoxFlags ScrollFlags;
+
+    /// <summary>True when <see cref="ScrollExtentRight"/>/<see cref="ScrollExtentBottom"/>
+    /// describe this subtree as currently laid out. Cleared (chain-to-root) by
+    /// every seam that re-lays the box when a scroll store is attached, so a
+    /// scoped re-measure descends only into relaid subtrees.</summary>
+    internal bool ScrollExtentValid;
+
+    /// <summary>Cached scrollable-extent of this box's subtree (border box union
+    /// of non-clipped, non-fixed descendants), relative to the box's own frame
+    /// origin. Only meaningful while <see cref="ScrollExtentValid"/> is true.</summary>
+    internal double ScrollExtentRight;
+    internal double ScrollExtentBottom;
+
+    /// <summary>True while the box sits in the layout session's relaid-scroller
+    /// queue, so a box laid several times in one pass is queued exactly once.</summary>
+    internal bool ScrollMeasureQueued;
+
     public void AppendChild(Box child)
     {
         ArgumentNullException.ThrowIfNull(child);
