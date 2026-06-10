@@ -226,8 +226,6 @@ public sealed class DisplayListBuilder
         // 50% 50% 0). Layout is unaffected: the box keeps its frame coordinates
         // and paint composes T(+origin) × M × T(-origin) on top of every
         // primitive in this subtree (paint of this box and every descendant).
-        // Transform-origin parsing is a follow-up; the default centre is the
-        // most common case and matches the spec's initial value.
         var transformMatrix = TryGetTransformMatrix(box, styleOverride, frameX, frameY);
         var transformed = transformMatrix is not null;
 
@@ -446,10 +444,7 @@ public sealed class DisplayListBuilder
         if (box is ImageBox imageBox)
         {
             if (selfVisible)
-            {
-                var bounds = new Rect(frameX, frameY, imageBox.Frame.Width, imageBox.Frame.Height);
-                Emit(activeList, new DrawImage(bounds, imageBox.Source), bounds, current, cull);
-            }
+                EmitReplacedImage(imageBox, frameX, frameY, activeList, current, cull, styleOverride);
             FlushClipPathBracket(innerList, activeList, clipPathValue, new Rect(frameX, frameY, box.Frame.Width, box.Frame.Height));
             if (maskGeometry is not null)
                 FlushMaskBracket(list, innerList, maskGeometry);
@@ -947,6 +942,232 @@ public sealed class DisplayListBuilder
             _ => 0,
         };
 
+    // -----------------------------------------------------------------------
+    // CSS Images 3 §4.5/§4.6 — object-fit + object-position for replaced
+    // boxes, and CSS Transforms 1 §6.2 — transform-origin resolution.
+    // Additive arms per the shared-paint-file etiquette.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Emits the replaced content of an <see cref="ImageBox"/> honouring
+    /// <c>object-fit</c> and <c>object-position</c> (CSS Images 3 §4.5/§4.6).
+    /// Layout already sized the box; this only changes how the source pixels
+    /// map onto the CONTENT box. The fitted image rectangle is computed from
+    /// the fit keyword, positioned by <c>object-position</c>, and any part
+    /// outside the content box (possible under <c>cover</c>/<c>none</c> or an
+    /// edge position) is cropped by slicing the source rectangle, so the blit
+    /// never paints past the content edge.
+    /// </summary>
+    private static void EmitReplacedImage(ImageBox imageBox, double frameX, double frameY, DisplayList list, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride)
+    {
+        var decoded = imageBox.Source;
+        if (decoded.Width <= 0 || decoded.Height <= 0) return;
+
+        // object-fit positions the replaced content inside the content box
+        // (frame minus border and padding).
+        var contentX = frameX + imageBox.Border.Left + imageBox.Padding.Left;
+        var contentY = frameY + imageBox.Border.Top + imageBox.Padding.Top;
+        var contentW = imageBox.Frame.Width - imageBox.Border.Left - imageBox.Border.Right - imageBox.Padding.Left - imageBox.Padding.Right;
+        var contentH = imageBox.Frame.Height - imageBox.Border.Top - imageBox.Border.Bottom - imageBox.Padding.Top - imageBox.Padding.Bottom;
+        if (contentW <= 0 || contentH <= 0) return;
+
+        var style = EffectiveStyle(imageBox, styleOverride);
+        var fitName = style?.Get(PropertyId.ObjectFit) is CssKeyword fitKeyword ? fitKeyword.Name : "fill";
+
+        // Natural size in CSS px. A ratio-only intrinsic size (e.g. an SVG
+        // with only a viewBox) has no definite natural size: contain/cover
+        // still work off the ratio, while `none` degrades to fill and
+        // `scale-down` to contain (§4.5 — the default object size is the
+        // content box, and contain never exceeds it).
+        var naturalW = imageBox.IntrinsicWidth;
+        var naturalH = imageBox.IntrinsicHeight;
+        var hasRatio = naturalW > 0 && naturalH > 0;
+        var hasNatural = hasRatio && !imageBox.IntrinsicSizeIsRatioOnly;
+
+        var fitW = contentW;
+        var fitH = contentH;
+        switch (fitName)
+        {
+            case "contain" when hasRatio:
+            {
+                var scale = Math.Min(contentW / naturalW, contentH / naturalH);
+                fitW = naturalW * scale;
+                fitH = naturalH * scale;
+                break;
+            }
+            case "cover" when hasRatio:
+            {
+                var scale = Math.Max(contentW / naturalW, contentH / naturalH);
+                fitW = naturalW * scale;
+                fitH = naturalH * scale;
+                break;
+            }
+            case "none" when hasNatural:
+                fitW = naturalW;
+                fitH = naturalH;
+                break;
+            case "scale-down" when hasRatio:
+            {
+                // §4.5 — the smaller of `none` and `contain`.
+                var scale = Math.Min(contentW / naturalW, contentH / naturalH);
+                if (hasNatural && scale > 1d) scale = 1d;
+                fitW = naturalW * scale;
+                fitH = naturalH * scale;
+                break;
+            }
+        }
+
+        var (offsetX, offsetY) = ResolveObjectPosition(
+            style?.Get(PropertyId.ObjectPosition), contentW, contentH, fitW, fitH);
+
+        var imgX = contentX + offsetX;
+        var imgY = contentY + offsetY;
+
+        // Fast path — the fitted image covers the content box exactly (the
+        // `fill` default): one whole-source blit, the same item this arm
+        // emitted before object-fit existed.
+        if (imgX == contentX && imgY == contentY && fitW == contentW && fitH == contentH)
+        {
+            var bounds = new Rect(contentX, contentY, contentW, contentH);
+            Emit(list, new DrawImage(bounds, decoded), bounds, current, cull);
+            return;
+        }
+
+        // The visible part is the fitted rectangle clipped to the content box.
+        var destX = Math.Max(contentX, imgX);
+        var destY = Math.Max(contentY, imgY);
+        var destRight = Math.Min(contentX + contentW, imgX + fitW);
+        var destBottom = Math.Min(contentY + contentH, imgY + fitH);
+        var destW = destRight - destX;
+        var destH = destBottom - destY;
+        if (destW <= 0 || destH <= 0) return;
+
+        // Map the cropped destination back to source pixel coords — the pixel
+        // BUFFER dims, not the intrinsic dims, because SourceRect addresses
+        // the buffer (which may be a resolution-clamped decode).
+        var scaleX = decoded.Width / fitW;
+        var scaleY = decoded.Height / fitH;
+        var srcX = (destX - imgX) * scaleX;
+        var srcY = (destY - imgY) * scaleY;
+        var srcW = destW * scaleX;
+        var srcH = destH * scaleY;
+
+        var dest = new Rect(destX, destY, destW, destH);
+        Emit(list, new DrawImage(dest, decoded, new Rect(srcX, srcY, srcW, srcH)), dest, current, cull);
+    }
+
+    /// <summary>
+    /// Resolves <c>object-position</c> (CSS Images 3 §4.6, a CSS
+    /// <c>&lt;position&gt;</c>) to the fitted image's top-left offset inside
+    /// the content box. Percentages resolve against the leftover space
+    /// (content − fitted, so 50% centres and 100% flush-ends); lengths offset
+    /// from the top/left edge; keyword pairs accept either axis order. The
+    /// four-value edge-offset form (<c>right 10px bottom 5px</c>) offsets
+    /// from the named edge. The initial value (stored as the raw keyword
+    /// "50% 50%") and anything unrecognised resolve to the centre.
+    /// </summary>
+    private static (double X, double Y) ResolveObjectPosition(CssValue? value, double boxW, double boxH, double imgW, double imgH)
+    {
+        if (value is CssValueList list)
+        {
+            var vs = list.Values;
+            if (vs.Count >= 4)
+            {
+                // <edge> <offset> <edge> <offset> — e.g. "right 10px bottom 5px".
+                var ex = ResolvePositionEdgeOffset(vs[0], vs[1], boxW, imgW);
+                var ey = ResolvePositionEdgeOffset(vs[2], vs[3], boxH, imgH);
+                return (ex, ey);
+            }
+            CssValue? xv = vs.Count > 0 ? vs[0] : null;
+            CssValue? yv = vs.Count > 1 ? vs[1] : null;
+            // Keyword pairs may come axis-swapped ("top left"): when the first
+            // names the vertical axis or the second the horizontal one, swap.
+            if (IsVerticalPositionKeyword(xv) || IsHorizontalPositionKeyword(yv))
+                (xv, yv) = (yv, xv);
+            return (ResolvePositionAxis(xv, boxW, imgW), ResolvePositionAxis(yv, boxH, imgH));
+        }
+
+        // Single value: that axis is explicit, the other centres (the missing
+        // axis pattern in ResolvePositionAxis handles the null).
+        if (IsVerticalPositionKeyword(value))
+            return (ResolvePositionAxis(null, boxW, imgW), ResolvePositionAxis(value, boxH, imgH));
+        return (ResolvePositionAxis(value, boxW, imgW), ResolvePositionAxis(null, boxH, imgH));
+    }
+
+    private static bool IsVerticalPositionKeyword(CssValue? value)
+        => value is CssKeyword { Name: "top" or "bottom" };
+
+    private static bool IsHorizontalPositionKeyword(CssValue? value)
+        => value is CssKeyword { Name: "left" or "right" };
+
+    private static double ResolvePositionAxis(CssValue? value, double boxSize, double imgSize)
+        => value switch
+        {
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
+            CssPercentage pct => (boxSize - imgSize) * pct.Value / 100d,
+            CssNumber n => n.Value,
+            CssKeyword { Name: "left" or "top" } => 0,
+            CssKeyword { Name: "right" or "bottom" } => boxSize - imgSize,
+            // center / missing axis / the raw "50% 50%" initial keyword.
+            _ => (boxSize - imgSize) * 0.5,
+        };
+
+    /// <summary>Edge-offset form of one <c>&lt;position&gt;</c> axis:
+    /// <c>left|top &lt;offset&gt;</c> offsets from the start edge,
+    /// <c>right|bottom &lt;offset&gt;</c> from the end edge (so
+    /// <c>right 20%</c> equals <c>80%</c>).</summary>
+    private static double ResolvePositionEdgeOffset(CssValue edge, CssValue offset, double boxSize, double imgSize)
+    {
+        var off = offset switch
+        {
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
+            CssPercentage pct => (boxSize - imgSize) * pct.Value / 100d,
+            CssNumber n => n.Value,
+            _ => 0d,
+        };
+        return edge is CssKeyword { Name: "right" or "bottom" }
+            ? boxSize - imgSize - off
+            : off;
+    }
+
+    /// <summary>
+    /// Resolves <c>transform-origin</c> (CSS Transforms 1 §6.2) to an offset
+    /// from the border box's top-left. Keywords left/center/right/top/bottom,
+    /// lengths (px from the top-left), and percentages of the border-box
+    /// dimensions; keyword pairs accept either axis order ("top left" ==
+    /// "left top"); a single value sets that axis with the other centred. A
+    /// third (Z) component is ignored — paint is 2D. The initial value
+    /// (stored as the raw keyword "50% 50% 0") and anything unrecognised
+    /// resolve to the centre, matching the previous hardcoded behaviour.
+    /// </summary>
+    internal static (double X, double Y) ResolveTransformOrigin(CssValue? value, double width, double height)
+    {
+        if (value is CssValueList list && list.Values.Count > 0)
+        {
+            CssValue? xv = list.Values[0];
+            CssValue? yv = list.Values.Count > 1 ? list.Values[1] : null;
+            if (IsVerticalPositionKeyword(xv) || IsHorizontalPositionKeyword(yv))
+                (xv, yv) = (yv, xv);
+            return (ResolveOriginAxis(xv, width), ResolveOriginAxis(yv, height));
+        }
+
+        if (IsVerticalPositionKeyword(value))
+            return (width * 0.5, ResolveOriginAxis(value, height));
+        return (ResolveOriginAxis(value, width), height * 0.5);
+    }
+
+    private static double ResolveOriginAxis(CssValue? value, double size)
+        => value switch
+        {
+            CssLength len => Starling.Layout.Block.BlockLayout.ToPx(len),
+            CssPercentage pct => size * pct.Value / 100d,
+            CssNumber n => n.Value,
+            CssKeyword { Name: "left" or "top" } => 0,
+            CssKeyword { Name: "right" or "bottom" } => size,
+            // center / missing axis / the raw "50% 50% 0" initial keyword.
+            _ => size * 0.5,
+        };
+
     /// <summary>
     /// Holds the resolved mask source and geometry for a whole-element mask group.
     /// Created by <see cref="TryResolveMaskGeometry"/> and consumed by
@@ -1086,11 +1307,10 @@ public sealed class DisplayListBuilder
 
     /// <summary>
     /// Reads <c>PropertyId.Transform</c> off the box's effective style and
-    /// composes it with the (centre-of-box) transform-origin into a single
-    /// document-space matrix. Returns <c>null</c> when no transform applies
-    /// (<c>none</c>, identity, or unparseable). The hardcoded centre origin
-    /// is a known limitation. Full <c>transform-origin</c> value parsing is
-    /// tracked as separate work.
+    /// composes it with the box's resolved <c>transform-origin</c>
+    /// (CSS Transforms 1 §6.2) into a single document-space matrix
+    /// <c>T(+origin) × M × T(-origin)</c>. Returns <c>null</c> when no
+    /// transform applies (<c>none</c>, identity, or unparseable).
     /// </summary>
     internal static Matrix2D? TryGetTransformMatrix(Box box, Func<Box, ComputedStyle?>? styleOverride, double frameX, double frameY)
     {
@@ -1106,8 +1326,10 @@ public sealed class DisplayListBuilder
         var local = transform.ToMatrix(box.Frame.Width, box.Frame.Height);
         if (local.IsIdentity) return null;
 
-        var originX = frameX + box.Frame.Width * 0.5;
-        var originY = frameY + box.Frame.Height * 0.5;
+        var (originOffsetX, originOffsetY) = ResolveTransformOrigin(
+            style.Get(PropertyId.TransformOrigin), box.Frame.Width, box.Frame.Height);
+        var originX = frameX + originOffsetX;
+        var originY = frameY + originOffsetY;
 
         // final = T(+origin) × local × T(-origin)
         var preOrigin = Matrix2D.Translate(-originX, -originY);
