@@ -493,3 +493,121 @@ public sealed record StrokeSegments(
     double X2, double Y2,
     CssColor Color,
     double Width) : DisplayItem;
+
+// ---------------------------------------------------------------------------
+// Filter Effects 1 — `filter` / `backdrop-filter` painting (Tier 4 item 18).
+// Appended at the end per the shared-paint-file etiquette.
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Which Filter Effects 1 §10.1 shorthand function a <see cref="FilterFunction"/>
+/// carries. The kinds map one-to-one onto the parse-side function names.
+/// </summary>
+public enum FilterFunctionKind
+{
+    Blur,
+    Brightness,
+    Contrast,
+    Grayscale,
+    Sepia,
+    Saturate,
+    HueRotate,
+    Invert,
+    Opacity,
+    DropShadow,
+}
+
+/// <summary>
+/// One resolved filter function in a `filter` / `backdrop-filter` chain.
+/// <see cref="Amount"/> semantics depend on <see cref="Kind"/>:
+/// <list type="bullet">
+///   <item><see cref="FilterFunctionKind.Blur"/> — the blur radius in CSS px.</item>
+///   <item><see cref="FilterFunctionKind.HueRotate"/> — the rotation in degrees.</item>
+///   <item><see cref="FilterFunctionKind.DropShadow"/> — the shadow blur radius in
+///   CSS px; <see cref="OffsetX"/>/<see cref="OffsetY"/> carry the offset and
+///   <see cref="Color"/> the shadow color.</item>
+///   <item>every other kind — the unit amount (1 = identity, already divided
+///   out of a percentage by the builder).</item>
+/// </list>
+/// </summary>
+public readonly record struct FilterFunction(
+    FilterFunctionKind Kind,
+    double Amount,
+    double OffsetX = 0,
+    double OffsetY = 0,
+    CssColor? Color = null)
+{
+    /// <summary>
+    /// σ of the Gaussian the backend runs for a CSS blur radius — radius/2,
+    /// the same σ convention this repo's box-shadow rasterizer uses
+    /// (<c>GaussianBlur(Blur / 2)</c>), so filter and shadow blurs of the same
+    /// radius soften identically.
+    /// </summary>
+    internal static double Sigma(double radius) => Math.Max(0, radius) / 2d;
+
+    /// <summary>
+    /// Padding (CSS px) the offscreen surface needs around the filtered
+    /// content so the result is not cropped: 3σ per blur (the Gaussian tail —
+    /// without it the layer edge samples transparent pixels and goes dark)
+    /// plus the offset + 3σ of each drop-shadow.
+    /// </summary>
+    internal static double HaloPadding(IReadOnlyList<FilterFunction> filters)
+    {
+        double pad = 0;
+        for (var i = 0; i < filters.Count; i++)
+        {
+            var f = filters[i];
+            switch (f.Kind)
+            {
+                case FilterFunctionKind.Blur:
+                    pad += Math.Ceiling(3 * Sigma(f.Amount)) + 2;
+                    break;
+                case FilterFunctionKind.DropShadow:
+                    pad += Math.Ceiling(3 * Sigma(f.Amount))
+                           + Math.Max(Math.Abs(f.OffsetX), Math.Abs(f.OffsetY)) + 2;
+                    break;
+            }
+        }
+        return pad;
+    }
+}
+
+/// <summary>
+/// Opens an offscreen compositing group for CSS `filter` (Filter Effects 1
+/// §10): all display items between this push and the matching
+/// <see cref="PopFilter"/> — the element's own box paint plus its descendants —
+/// are rendered into a transparent offscreen surface, the
+/// <see cref="Filters"/> chain is applied IN ORDER, and the result is
+/// composited back through the current canvas transform.
+/// <see cref="Bounds"/> is the element's border box in page coordinates; the
+/// backend grows the offscreen by the painted extents of the bracketed items
+/// and by the chain's blur/offset halo (see
+/// <see cref="FilterFunction.HaloPadding"/>).
+/// </summary>
+public sealed record PushFilter(Rect Bounds, IReadOnlyList<FilterFunction> Filters) : DisplayItem;
+
+/// <summary>Pops the most recent <see cref="PushFilter"/> off the filter stack.</summary>
+public sealed record PopFilter : DisplayItem
+{
+    public static PopFilter Instance { get; } = new();
+}
+
+/// <summary>
+/// Applies `backdrop-filter` (Filter Effects 2 §6) at the element's paint
+/// position: the backend snapshots the CURRENT canvas content under the
+/// element's border box <see cref="Bounds"/> (expanded by the chain's blur
+/// halo so the Gaussian has real neighbours at the edge), runs
+/// <see cref="Filters"/> over the patch, and draws it back clipped to the
+/// border box rounded by <see cref="Radii"/>. The element's own background /
+/// content items follow this item in paint order, so they paint over the
+/// filtered backdrop and stay sharp.
+/// <para>
+/// v1 simplification: the snapshot reads the flattened canvas painted so far —
+/// there is no isolation/backdrop-root grouping for overlapping promoted
+/// layers, which matches what the CPU/ImageSharp path can see.
+/// </para>
+/// </summary>
+public sealed record DrawBackdropFilter(
+    Rect Bounds,
+    CornerRadii Radii,
+    IReadOnlyList<FilterFunction> Filters) : DisplayItem;
