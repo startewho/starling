@@ -46,6 +46,19 @@ public abstract class Box
     public Edges Padding { get; internal set; }
     public Edges Border { get; internal set; }
 
+    /// <summary>
+    /// Hypothetical static position of an out-of-flow box (CSS 2.1 §10.3.7 /
+    /// §10.6.4): where the in-flow pass WOULD have placed its top-left, in the
+    /// parent's content-box coordinate space (same space as <see cref="Frame"/>).
+    /// Recorded by the flow pass when it skips a `position:absolute|fixed`
+    /// child; consumed by <c>PositionLayout</c> when an axis has BOTH insets
+    /// auto. Defaults to (0,0) — the parent's content origin — which is also
+    /// the recorded value for flex containers (sole-item flex-start
+    /// approximation, CSS Flexbox §4.1).
+    /// </summary>
+    internal double StaticX;
+    internal double StaticY;
+
     // ---- Incremental-layout cache (see Starling.Layout.Incremental) ----------
     //
     // These back constraint-space-keyed subtree reuse. They are written only on

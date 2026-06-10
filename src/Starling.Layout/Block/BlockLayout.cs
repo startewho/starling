@@ -198,8 +198,18 @@ internal sealed class BlockLayout
             // cursor doesn't advance — they're placed in a second pass by
             // PositionLayout. The child's Frame is left at default (zero)
             // until that pass writes it.
+            // Record the hypothetical static position (§10.3.7/§10.6.4) the
+            // box would have had in this flow — the current stack cursor at
+            // the parent's left content edge — so the positioning pass can
+            // fall back to it when both insets of an axis are auto, instead
+            // of snapping to the containing block's origin. Margin collapse
+            // with the would-be previous sibling is approximated away.
             if (IsOutOfFlow(child.Style))
+            {
+                child.StaticX = 0;
+                child.StaticY = cursorY;
                 continue;
+            }
 
             var floatSide = GetFloatSide(child.Style);
             if (floatSide is not null)
