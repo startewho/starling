@@ -2820,9 +2820,15 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         }
 
         // Render the bracketed items into a transparent offscreen layer whose
-        // local origin is the padded bounds' top-left (same pattern as
-        // ApplyMaskGroup).
-        var layerViewportTransform = Matrix2D.Translate(-bounds.X, -bounds.Y).Multiply(transforms.Peek());
+        // local origin is the padded bounds' top-left. The current canvas
+        // transform (viewport/tile translate + any enclosing CSS transform) is
+        // deliberately NOT composed in: canvas.DrawImage maps the blit's
+        // destRect through that transform already, so baking it into the layer
+        // would apply it twice — visible as a shifted/cropped group on the
+        // tiled compositor path, whose per-tile viewport origin is non-zero.
+        // (Rendering the group upright also matches the spec's order: filter
+        // in local space, then the ancestor transform maps the result.)
+        var layerViewportTransform = Matrix2D.Translate(-bounds.X, -bounds.Y);
         var contentLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
         pendingImageSources.Add(contentLayer);
         contentLayer.Mutate(ctx => ctx.Paint(c =>

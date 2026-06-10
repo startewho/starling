@@ -7,7 +7,9 @@ using Starling.Layout;
 using Starling.Layout.Text;
 using Starling.Paint.Backend;
 using Starling.Paint.DisplayList;
+using Starling.Paint.Compositor;
 using Starling.Spec;
+using CompositorEngine = Starling.Paint.Compositor.Compositor;
 using StyleEngine = Starling.Css.Cascade.StyleEngine;
 using LayoutRect = Starling.Layout.Rect;
 using LayoutSize = Starling.Layout.Size;
@@ -347,6 +349,41 @@ public sealed class FilterPaintTests
     }
 
     // ---- End to end: CSS → builder → backend --------------------------------
+
+    [TestMethod]
+    [Spec("css-filter-effects-1", "https://www.w3.org/TR/filter-effects-1/#FilterProperty", section: "10.1")]
+    public void Promoted_filtered_layer_matches_the_flat_path()
+    {
+        // `filter` promotes a compositor layer (StackingContextResolver flags
+        // LayerHint.Filter). The slice carries the PushFilter bracket, so the
+        // tile rasterizer applies the chain and the composite blits the
+        // already-filtered pixels — output must match the flat path.
+        const int W = 200, H = 200;
+        var html =
+            "<body style=\"margin:0\">" +
+            "<div style=\"position:absolute;left:60px;top:60px;width:80px;height:80px;" +
+            "background-color:#ff0000;filter:grayscale(1) blur(6px)\">x</div>" +
+            "</body>";
+
+        var document = HtmlParser.Parse(html);
+        var engine = new LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance);
+        var root = engine.LayoutDocument(document, new LayoutSize(W, H));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var flat = backend.Render(new DisplayListBuilder().Build(root), new LayoutRect(0, 0, W, H), 1f);
+
+        var tree = new LayerTreeBuilder().Build(root);
+        using var layered = new CompositorEngine(backend).Render(tree, new LayoutRect(0, 0, W, H), 1f);
+
+        // The box must actually be grayscaled on the layered path…
+        var centre = layered.GetPixel(100, 100);
+        Math.Abs(centre.R - centre.G).Should().BeLessThan(12, "the promoted layer must rasterize its filter");
+
+        // …and the two paths must agree, including the blur halo outside the
+        // border box (the layer/tile bounds carry the 3σ padding).
+        var ssim = Ssim.ComputeRgba(layered.Rgba, flat.Rgba, layered.Width, layered.Height);
+        ssim.Should().BeGreaterThanOrEqualTo(0.98, "the composited filter must match the flat path");
+    }
 
     [TestMethod]
     [Spec("css-filter-effects-1", "https://www.w3.org/TR/filter-effects-1/#funcdef-filter-grayscale", section: "10.1")]
