@@ -170,6 +170,9 @@ public sealed class DisplayListBuilder
         // brackets the scrolled children in a -offset transform). Lets the zero-copy
         // surface path render inner-scrolled pages instead of declining to readback.
         _scrollOffsets = scrollOffsets;
+        // Layer slices never own the canvas; clear any donor left by a prior
+        // Build call on a reused builder so no slice drops its background.
+        _canvasDonor = null;
         var slice = new LayerSlice(sliceRoot, isLayerBoundary);
         if (suppressRootTransform)
         {
