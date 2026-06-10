@@ -244,8 +244,9 @@ public sealed class Painter
         Func<Element, StyleSheet?>? externalStylesheet = null,
         FontFaceRegistry? webFonts = null,
         ColorScheme colorScheme = ColorScheme.Light,
-        CancellationToken ct = default)
-        => LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme, ct);
+        CancellationToken ct = default,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
+        => LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme, ct, scrollState);
 
     /// <summary>Layout overload that threads a frame timestamp through the
     /// cascade. See the matching RenderDocument overload for semantics. The
@@ -260,7 +261,8 @@ public sealed class Painter
         FontFaceRegistry? webFonts,
         double? nowMs,
         ColorScheme colorScheme = ColorScheme.Light,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -271,7 +273,11 @@ public sealed class Painter
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory, ct);
+            // The engine session's per-document scroll store rides along so
+            // this pass refreshes scrollports + scrollable overflow and
+            // re-clamps stored offsets (scroll-model.md WP1). Null for
+            // callers without a session (one-shot raster paths).
+            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory, ct) { ScrollState = scrollState };
             Starling.Layout.Box.BlockBox root;
             using (StarlingTelemetry.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);

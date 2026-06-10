@@ -67,6 +67,16 @@ public sealed class LayoutSession
     public bool VerifyAgainstFullRebuild { get; init; } = Verification.LayoutVerifier.Enabled;
 
     /// <summary>
+    /// Optional per-document scroll store (browser-plan/scroll-model.md WP1).
+    /// Same contract as <see cref="LayoutEngine.ScrollState"/>: each
+    /// <see cref="Layout"/> call runs under the store's layout gate, then
+    /// measures scrollports + scrollable overflow and re-clamps stored
+    /// offsets. The offset itself never enters <see cref="ConstraintSpace"/>
+    /// or any other reuse key — scrolling must not dirty layout.
+    /// </summary>
+    public Scroll.ScrollStateStore? ScrollState { get; set; }
+
+    /// <summary>
     /// Lay <paramref name="document"/> out at <paramref name="viewport"/>,
     /// reusing the retained tree where the mutation batch lets us. The first
     /// call (and any call the reconciler can't handle incrementally) does a full
@@ -80,20 +90,40 @@ public sealed class LayoutSession
 
         var batch = document.DrainLayoutMutations();
 
-        if (_root is not null && viewport == _viewport && TryReconcile(batch, nowMs))
+        var scroll = ScrollState;
+        scroll?.BeginLayoutPass();
+        try
         {
-            using (StarlingTelemetry.Span("layout", "incremental.relayout"))
-                RunLayout(measurer, viewport, abort, incremental: true);
-            StarlingTelemetry.Counter("layout.incremental.relayout", 1);
-            if (VerifyAgainstFullRebuild)
-                Verify(document, viewport, measurer, nowMs, abort);
-            return _root;
-        }
+            if (_root is not null && viewport == _viewport && TryReconcile(batch, nowMs))
+            {
+                using (StarlingTelemetry.Span("layout", "incremental.relayout"))
+                    RunLayout(measurer, viewport, abort, incremental: true);
+                StarlingTelemetry.Counter("layout.incremental.relayout", 1);
+                if (VerifyAgainstFullRebuild)
+                    Verify(document, viewport, measurer, nowMs, abort);
+                MeasureScroll(scroll, viewport);
+                return _root;
+            }
 
-        using (StarlingTelemetry.Span("layout", "incremental.full_rebuild"))
-            FullBuild(document, viewport, measurer, nowMs, abort);
-        StarlingTelemetry.Counter("layout.incremental.full_rebuild", 1);
-        return _root!;
+            using (StarlingTelemetry.Span("layout", "incremental.full_rebuild"))
+                FullBuild(document, viewport, measurer, nowMs, abort);
+            StarlingTelemetry.Counter("layout.incremental.full_rebuild", 1);
+            MeasureScroll(scroll, viewport);
+            return _root!;
+        }
+        finally
+        {
+            scroll?.EndLayoutPass();
+        }
+    }
+
+    /// <summary>Post-layout scroll measurement + offset re-clamp — see
+    /// <see cref="ScrollState"/>. No-op without a store.</summary>
+    private void MeasureScroll(Scroll.ScrollStateStore? scroll, Size viewport)
+    {
+        if (scroll is null) return;
+        Scroll.ScrollOverflowMeasurer.Measure(_root!, viewport, scroll);
+        scroll.ReconcileAfterLayout();
     }
 
     /// <summary>
