@@ -101,7 +101,11 @@ internal sealed class PositionLayout
             if (topPx is { } ty) dy = ty;
             else if (bottomPx is { } by) dy = -by;
 
-            box.Frame = box.Frame.Translate(dx, dy);
+            if (dx != 0 || dy != 0)
+            {
+                box.Frame = box.Frame.Translate(dx, dy);
+                _block.NoteFrameMoved(box); // ancestors' cached scroll extents now include a moved rect
+            }
         }
         else if (props.Kind is PositionKind.Sticky)
         {
@@ -112,7 +116,12 @@ internal sealed class PositionLayout
             // parent-content-box coordinates already.
             var (cbWidth, cbHeight) = ContainingBlockContentSizeOf(box.Parent);
             var cbLocal = new Rect(0, 0, cbWidth, cbHeight);
-            box.Frame = StickyLayout.ResolveOffset(box.Frame, cbLocal, props);
+            var resolved = StickyLayout.ResolveOffset(box.Frame, cbLocal, props);
+            if (resolved != box.Frame)
+            {
+                box.Frame = resolved;
+                _block.NoteFrameMoved(box); // see the relative case above
+            }
         }
 
         // Recurse into children with the (possibly shifted) origin baked in.
@@ -174,6 +183,13 @@ internal sealed class PositionLayout
             PlaceAbsoluteOrFixed(box, props, cb, parentContentOriginX, parentContentOriginY,
                 staticDocX: parentContentOriginX + box.StaticX,
                 staticDocY: parentContentOriginY + box.StaticY);
+
+            // The placement re-laid this box wholesale (out-of-flow boxes have
+            // no reuse key), so its scroll-extent chain is stale and an
+            // out-of-flow scroller owes a scoped re-measure. Conservative on
+            // purpose: when nothing changed, the re-measure overwrites
+            // identical geometry.
+            _block.NoteRelaid(box);
 
             // After placing, the box's frame is in *parent content* coords,
             // and we want to recurse into its children using its NEW
