@@ -101,11 +101,8 @@ internal sealed class PositionLayout
             if (topPx is { } ty) dy = ty;
             else if (bottomPx is { } by) dy = -by;
 
-            if (dx != 0 || dy != 0)
-            {
-                box.Frame = box.Frame.Translate(dx, dy);
-                _block.NoteFrameMoved(box); // ancestors' cached scroll extents now include a moved rect
-            }
+            var natural = NaturalFrameOf(box);
+            CommitShift(box, natural, natural.Translate(dx, dy));
         }
         else if (props.Kind is PositionKind.Sticky)
         {
@@ -116,12 +113,8 @@ internal sealed class PositionLayout
             // parent-content-box coordinates already.
             var (cbWidth, cbHeight) = ContainingBlockContentSizeOf(box.Parent);
             var cbLocal = new Rect(0, 0, cbWidth, cbHeight);
-            var resolved = StickyLayout.ResolveOffset(box.Frame, cbLocal, props);
-            if (resolved != box.Frame)
-            {
-                box.Frame = resolved;
-                _block.NoteFrameMoved(box); // see the relative case above
-            }
+            var natural = NaturalFrameOf(box);
+            CommitShift(box, natural, StickyLayout.ResolveOffset(natural, cbLocal, props));
         }
 
         // Recurse into children with the (possibly shifted) origin baked in.
@@ -130,6 +123,39 @@ internal sealed class PositionLayout
         // in case we want to add coverage later.
         foreach (var child in box.Children)
             ApplyRelativeOffsets(child, parentOriginX + box.Frame.X, parentOriginY + box.Frame.Y);
+    }
+
+    /// <summary>
+    /// The box's natural (pre-shift) frame. Normally that is the current
+    /// <see cref="Box.Box.Frame"/> — every layout seam that places a box
+    /// writes its natural position. But a box deeper than one level inside a
+    /// clean reused subtree is NOT re-placed by an incremental pass: its frame
+    /// still carries the shift this pass applied last time, and translating it
+    /// again would compound (the y=100 -> 150 -> 200 drift). The position pass
+    /// records the exact frame it writes (<see cref="Box.Box.RelShiftedFrame"/>);
+    /// seeing that same frame again means no seam re-placed the box, so the
+    /// recorded natural origin is the basis. Any re-lay writes a fresh frame
+    /// that no longer matches, which resets the basis to the live frame.
+    /// </summary>
+    private static Rect NaturalFrameOf(Box.Box box)
+        => box.RelShiftValid && box.Frame == box.RelShiftedFrame
+            ? new Rect(box.RelNaturalX, box.RelNaturalY, box.Frame.Width, box.Frame.Height)
+            : box.Frame;
+
+    /// <summary>Write the shifted frame and the idempotency bookkeeping for
+    /// <see cref="NaturalFrameOf"/>. Frames that did not move still record,
+    /// so a later pass can tell "unshifted" from "never visited".</summary>
+    private void CommitShift(Box.Box box, Rect natural, Rect shifted)
+    {
+        box.RelNaturalX = natural.X;
+        box.RelNaturalY = natural.Y;
+        box.RelShiftedFrame = shifted;
+        box.RelShiftValid = true;
+        if (shifted != box.Frame)
+        {
+            box.Frame = shifted;
+            _block.NoteFrameMoved(box); // ancestors' cached scroll extents now include a moved rect
+        }
     }
 
     // ---------------------------------------------------------------------
