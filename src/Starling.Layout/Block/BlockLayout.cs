@@ -272,9 +272,9 @@ internal sealed class BlockLayout
         if (child.Kind == BoxKind.AnonymousBlock) return;
 
         ResolveBoxModel(child, containerWidth);
-        var width = ContentWidth(child, containerWidth);
-
         var explicitHeight = ResolveHeight(child.Style, PropertyId.Height, containerHeight, _viewport, allowAuto: true);
+        var width = ContentWidth(child, containerWidth, TransferredWidth(child, explicitHeight));
+
         double childContentHeight;
         if (IsFlexContainer(child.Style))
         {
@@ -291,7 +291,9 @@ internal sealed class BlockLayout
             childContentHeight = LayoutChildren(child, width, explicitHeight, measure: false);
         }
 
-        var resolvedHeight = explicitHeight ?? childContentHeight;
+        var resolvedHeight = explicitHeight
+            ?? TransferredHeight(child, width, containerHeight, childContentHeight)
+            ?? childContentHeight;
         var fullHeight = resolvedHeight + child.Padding.Vertical + child.Border.Vertical;
         var fullWidth = width + child.Padding.Horizontal + child.Border.Horizontal;
         var outerWidth = fullWidth + child.Margin.Horizontal;
@@ -404,7 +406,11 @@ internal sealed class BlockLayout
         cursorY += collapseTop;
         first = false;
 
-        var width = ContentWidth(child, containerWidth);
+        // Height first: a definite height plus a preferred aspect ratio can
+        // transfer into an auto width (css-sizing-4 §5), so the width
+        // resolution below needs it.
+        var explicitHeight = ResolveHeight(child.Style, PropertyId.Height, containerHeight, _viewport, allowAuto: true);
+        var width = ContentWidth(child, containerWidth, TransferredWidth(child, explicitHeight));
 
         // CSS 2.1 §10.3.3 — resolve `auto` horizontal margins for non-replaced
         // block-level elements in normal flow. Only when `width` is not `auto`
@@ -415,7 +421,6 @@ internal sealed class BlockLayout
         // Flex container: hand off to the flex formatting context. Flex sizes
         // its items inside the container's content box; the result replaces
         // what block stacking would have produced.
-        var explicitHeight = ResolveHeight(child.Style, PropertyId.Height, containerHeight, _viewport, allowAuto: true);
         double childContentHeight;
         if (IsFlexContainer(child.Style))
         {
@@ -432,7 +437,9 @@ internal sealed class BlockLayout
             childContentHeight = LayoutChildren(child, width, explicitHeight, measure, reuseHeight);
         }
 
-        var resolvedHeight = explicitHeight ?? childContentHeight;
+        var resolvedHeight = explicitHeight
+            ?? TransferredHeight(child, width, containerHeight, childContentHeight)
+            ?? childContentHeight;
         var fullHeight = resolvedHeight + child.Padding.Vertical + child.Border.Vertical;
 
         child.Frame = new Rect(
@@ -579,38 +586,188 @@ internal sealed class BlockLayout
             ResolveBorderWidth(box.Style, PropertyId.BorderLeftWidth, PropertyId.BorderLeftStyle, _viewport));
     }
 
-    private double ContentWidth(Box.Box box, double containerWidth)
+    private double ContentWidth(Box.Box box, double containerWidth, double? transferredWidth = null)
     {
-        // CSS 2.1 §10.4: tentative width is `width` if specified, otherwise the
+        // CSS 2.1 §10.4 + css-sizing-3 §5: tentative width is `width` when it
+        // resolves — a length/percentage or an intrinsic sizing keyword — else
+        // the aspect-ratio transferred size (css-sizing-4 §5), else the
         // available space within the parent. The tentative width is then
-        // clamped by `max-width` (upper bound) and `min-width` (lower bound).
+        // clamped by `max-width` (upper bound) and `min-width` (lower bound),
+        // which accept the same intrinsic keywords on the inline axis.
         // Honouring max-width is what makes the classic "max-width: 35em"
         // narrow-column layout work (justinjackson.ca/words.html, MDN, etc).
-        var explicitWidth = ResolveLength(box.Style, PropertyId.Width, containerWidth, _viewport, allowAuto: true);
-        double tentative;
-        if (explicitWidth is { } w)
-        {
-            tentative = w;
-        }
-        else
-        {
-            var available = containerWidth - box.Margin.Horizontal - box.Border.Horizontal - box.Padding.Horizontal;
-            tentative = Math.Max(0, available);
-        }
+        var available = Math.Max(0, containerWidth - box.Margin.Horizontal - box.Border.Horizontal - box.Padding.Horizontal);
 
-        // max-width: `none` (the initial value) is a no-op; any concrete length
-        // or percentage clamps the tentative width down.
-        var maxWidth = ResolveMaxLength(box.Style, PropertyId.MaxWidth, containerWidth, _viewport);
+        double tentative;
+        if (TryResolveIntrinsicWidth(box.Style?.Get(PropertyId.Width), box, available, containerWidth, out var intrinsic))
+            tentative = intrinsic;
+        else if (ResolveLength(box.Style, PropertyId.Width, containerWidth, _viewport, allowAuto: true) is { } w)
+            tentative = w;
+        else if (transferredWidth is { } tw)
+            tentative = tw;
+        else
+            tentative = available;
+
+        // max-width: `none` (the initial value) is a no-op; any concrete length,
+        // percentage, or intrinsic keyword clamps the tentative width down.
+        double? maxWidth;
+        if (TryResolveIntrinsicWidth(box.Style?.Get(PropertyId.MaxWidth), box, available, containerWidth, out var maxIntrinsic))
+            maxWidth = maxIntrinsic;
+        else
+            maxWidth = ResolveMaxLength(box.Style, PropertyId.MaxWidth, containerWidth, _viewport);
         if (maxWidth is { } mx && tentative > mx)
             tentative = mx;
 
         // min-width: initial value `0` is a no-op; a concrete length/percentage
-        // expands the box back up when it's narrower than the floor.
-        var minWidth = ResolveLength(box.Style, PropertyId.MinWidth, containerWidth, _viewport) ?? 0;
+        // (or intrinsic keyword) expands the box back up when it's narrower
+        // than the floor.
+        double minWidth;
+        if (TryResolveIntrinsicWidth(box.Style?.Get(PropertyId.MinWidth), box, available, containerWidth, out var minIntrinsic))
+            minWidth = minIntrinsic;
+        else
+            minWidth = ResolveLength(box.Style, PropertyId.MinWidth, containerWidth, _viewport) ?? 0;
         if (tentative < minWidth)
             tentative = minWidth;
 
         return Math.Max(0, tentative);
+    }
+
+    /// <summary>
+    /// css-sizing-3 §4-5 — resolve an intrinsic sizing keyword on the inline
+    /// axis. <c>min-content</c> is the narrowest wrap (probe at zero width),
+    /// <c>max-content</c> the no-wrap width (probe at a huge width),
+    /// <c>fit-content</c> clamps the stretch size between the two, and
+    /// <c>fit-content(&lt;length-percentage&gt;)</c> substitutes its argument
+    /// for the stretch size. Probes are cached per box per pass. Returns false
+    /// for every other value. (The block axis never reaches here — in a
+    /// horizontal writing mode the keywords behave as <c>auto</c> there, see
+    /// <see cref="ResolveHeight"/>.)
+    /// </summary>
+    private bool TryResolveIntrinsicWidth(CssValue? value, Box.Box box, double available, double containerWidth, out double resolved)
+    {
+        switch (value)
+        {
+            case CssKeyword { Name: "min-content" }:
+                resolved = MinContentWidth(box);
+                return true;
+            case CssKeyword { Name: "max-content" }:
+                resolved = MaxContentWidth(box, containerWidth);
+                return true;
+            case CssKeyword { Name: "fit-content" }:
+                resolved = FitContentWidth(box, available, containerWidth);
+                return true;
+            case CssFunctionValue { Name: "fit-content" } f when f.Arguments.Count == 1:
+            {
+                // fit-content(size) = min(max-content, max(min-content, size)).
+                double? size = f.Arguments[0] switch
+                {
+                    CssLength len => ToPx(len, _viewport),
+                    CssPercentage pct => containerWidth * pct.Value / 100d,
+                    _ => null,
+                };
+                if (size is { } s)
+                {
+                    resolved = FitContentWidth(box, s, containerWidth);
+                    return true;
+                }
+                resolved = 0;
+                return false;
+            }
+            default:
+                resolved = 0;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Min-content inline size (css-sizing-3 §4.2): probe at zero available
+    /// width so every soft-wrap opportunity breaks; the widest unbreakable run
+    /// (longest word, widest replaced box) remains. Cached per box per pass.
+    /// </summary>
+    internal double MinContentWidth(Box.Box box)
+    {
+        if (!box.SubtreeDirty && box.CachedMinContentWidth is { } cached) return cached;
+        LayoutItem(box, 0d, null, measure: true);
+        var min = IntrinsicSizes.ContentExtent(box);
+        box.CachedMinContentWidth = min;
+        return min;
+    }
+
+    /// <summary>
+    /// Max-content (no-wrap) inline size (css-sizing-3 §4.1): probe at a huge
+    /// width so nothing soft-wraps and read the used content extent. Cached
+    /// per box per pass.
+    /// </summary>
+    internal double MaxContentWidth(Box.Box box, double containerWidth)
+    {
+        if (box.Kind != BoxKind.AnonymousBlock && IsFlexContainer(box.Style))
+        {
+            // A flex container's max-content size is structural (Flexbox §9.9):
+            // probing it at a huge width would let any flex-grow item balloon
+            // to the probe width. FlexLayout owns that computation.
+            var flex = new Starling.Layout.Flex.FlexLayout(this, _viewport);
+            return flex.NaturalWidth(box, containerWidth);
+        }
+        if (!box.SubtreeDirty && box.CachedMaxContentWidth is { } cached) return cached;
+        LayoutItem(box, IntrinsicSizes.ProbeWidth, null, measure: true);
+        var max = IntrinsicSizes.ContentExtent(box);
+        box.CachedMaxContentWidth = max;
+        return max;
+    }
+
+    /// <summary>
+    /// css-sizing-3 §5.3 fit-content: clamp the stretch size between
+    /// min-content and max-content — shrink-to-fit with the caller's stretch
+    /// size in place of the available space.
+    /// </summary>
+    private double FitContentWidth(Box.Box box, double stretch, double containerWidth)
+    {
+        var min = MinContentWidth(box);
+        var max = MaxContentWidth(box, containerWidth);
+        return Math.Min(max, Math.Max(min, stretch));
+    }
+
+    /// <summary>
+    /// css-sizing-4 §5 transferred inline size: when `width` is auto, `height`
+    /// is definite, and the box has a preferred aspect ratio, the tentative
+    /// width is height × ratio (min/max-width then clamp it as usual).
+    /// </summary>
+    private static double? TransferredWidth(Box.Box child, double? explicitHeight)
+    {
+        if (explicitHeight is not { } h || HasExplicitWidth(child.Style)) return null;
+        if (!IntrinsicSizes.TryGetPreferredRatio(child.Style, out var ratio)) return null;
+        return h * ratio;
+    }
+
+    /// <summary>
+    /// css-sizing-4 §5 transferred block size: when `height` is auto and the
+    /// box has a preferred aspect ratio, the used height is width / ratio,
+    /// clamped by the derived axis's own min/max (§5.2.1). With min-height at
+    /// its initial value the automatic content-based minimum (§5.2.2) still
+    /// lets overflowing in-flow content grow the box past the transferred size
+    /// (capped by max-height); an explicit positive min-height replaces that
+    /// automatic minimum. Returns null when the box has no preferred ratio.
+    /// </summary>
+    private double? TransferredHeight(Box.Box child, double usedWidth, double? containerHeight, double contentHeight)
+    {
+        if (!IntrinsicSizes.TryGetPreferredRatio(child.Style, out var ratio)) return null;
+        var transferred = usedWidth / ratio;
+
+        double? maxH = child.Style?.Get(PropertyId.MaxHeight) is CssKeyword { Name: "none" }
+            ? null
+            : ResolveHeight(child.Style, PropertyId.MaxHeight, containerHeight, _viewport, allowAuto: true);
+        var minH = ResolveHeight(child.Style, PropertyId.MinHeight, containerHeight, _viewport, allowAuto: true);
+
+        if (maxH is { } mx && transferred > mx) transferred = mx;
+        if (minH is { } mn && transferred < mn) transferred = mn;
+
+        if (minH is not { } floor || floor <= 0)
+        {
+            var contentFloor = contentHeight;
+            if (maxH is { } cap && contentFloor > cap) contentFloor = cap;
+            if (transferred < contentFloor) transferred = contentFloor;
+        }
+        return transferred;
     }
 
     // max-* properties accept the keyword `none` (the initial value) to mean
@@ -657,6 +814,10 @@ internal sealed class BlockLayout
             CssCalc calc => ResolveCalcPx(calc, containerHeight, viewport) ?? (allowAuto ? null : 0),
             CssKeyword k when k.Name == "auto" => allowAuto ? null : 0,
             CssKeyword k when k.Name == "none" => 0,
+            // css-sizing-3 §5 — the intrinsic sizing keywords refer to the
+            // inline axis; on the block axis in a horizontal writing mode
+            // (the only mode this engine lays out) they behave as `auto`.
+            CssKeyword k when k.Name is "min-content" or "max-content" or "fit-content" => allowAuto ? null : 0,
             _ => null,
         };
     }
