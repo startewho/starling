@@ -228,94 +228,94 @@ public static class SvgImageDecoder
         PushClipPath(el, transform, ctx);
         try
         {
-        // filter="url(#id)" / mask="url(#id)": render the element to an offscreen
-        // layer, apply the effect, then composite. Skipped (rendered normally)
-        // when the effect is unsupported or already mid-application.
-        if (!ctx.ActiveEffects.Contains(el)
-            && TryRenderWithEffects(canvas, el, style, transform, ctx))
-            return;
+            // filter="url(#id)" / mask="url(#id)": render the element to an offscreen
+            // layer, apply the effect, then composite. Skipped (rendered normally)
+            // when the effect is unsupported or already mid-application.
+            if (!ctx.ActiveEffects.Contains(el)
+                && TryRenderWithEffects(canvas, el, style, transform, ctx))
+                return;
 
-        switch (name)
-        {
-            case "switch":
-                // Render only the first child whose conditional-processing
-                // attributes are all satisfied (SVG 1.1 §5.8).
-                foreach (var child in el.Elements())
-                {
-                    if (SwitchChildMatches(child))
+            switch (name)
+            {
+                case "switch":
+                    // Render only the first child whose conditional-processing
+                    // attributes are all satisfied (SVG 1.1 §5.8).
+                    foreach (var child in el.Elements())
                     {
-                        RenderElement(canvas, child, style, transform, ctx);
+                        if (SwitchChildMatches(child))
+                        {
+                            RenderElement(canvas, child, style, transform, ctx);
+                            break;
+                        }
+                    }
+                    break;
+                case "svg" when el.Parent is not null:
+                    // A nested <svg> establishes its own viewport: it offsets content
+                    // by (x,y), optionally maps a viewBox, and clips to width×height.
+                    RenderNestedSvg(canvas, el, style, transform, ctx);
+                    break;
+                case "g":
+                case "svg":
+                case "a":
+                    // Group opacity compositing: a <g opacity=…> where opacity < 1
+                    // must composite children into an offscreen layer first, then
+                    // blend at the group opacity. Otherwise overlapping children
+                    // double-blend through the inherited per-child Opacity.
+                    // SVG 1.1 §14.6 / Compositing and Blending §7.
+                    if (style.GroupOpacity < 1f - float.Epsilon && name == "g")
+                        RenderGroupWithOpacity(canvas, el, style, transform, ctx);
+                    else
+                        RenderChildren(canvas, el, style, transform, ctx);
+                    break;
+                case "use":
+                    RenderUse(canvas, el, style, transform, ctx);
+                    break;
+                case "text":
+                    RenderText(canvas, el, style, transform, ctx);
+                    break;
+                case "path":
+                    {
+                        var p = SvgPathParser.Parse(Attr(el, "d"));
+                        DrawShape(canvas, p, style, transform, ctx);
+                        RenderMarkers(canvas, p, style, transform, ctx);
                         break;
                     }
-                }
-                break;
-            case "svg" when el.Parent is not null:
-                // A nested <svg> establishes its own viewport: it offsets content
-                // by (x,y), optionally maps a viewBox, and clips to width×height.
-                RenderNestedSvg(canvas, el, style, transform, ctx);
-                break;
-            case "g":
-            case "svg":
-            case "a":
-                // Group opacity compositing: a <g opacity=…> where opacity < 1
-                // must composite children into an offscreen layer first, then
-                // blend at the group opacity. Otherwise overlapping children
-                // double-blend through the inherited per-child Opacity.
-                // SVG 1.1 §14.6 / Compositing and Blending §7.
-                if (style.GroupOpacity < 1f - float.Epsilon && name == "g")
-                    RenderGroupWithOpacity(canvas, el, style, transform, ctx);
-                else
+                case "rect":
+                    DrawShape(canvas, BuildRect(el, ctx.Viewport), style, transform, ctx);
+                    break;
+                case "circle":
+                    DrawShape(canvas, BuildCircle(el, ctx.Viewport), style, transform, ctx);
+                    break;
+                case "ellipse":
+                    DrawShape(canvas, BuildEllipse(el, ctx.Viewport), style, transform, ctx);
+                    break;
+                case "line":
+                    {
+                        var p = BuildLine(el, ctx.Viewport);
+                        DrawShape(canvas, p, style, transform, ctx, strokeOnly: true);
+                        RenderMarkers(canvas, p, style, transform, ctx);
+                        break;
+                    }
+                case "polyline":
+                    {
+                        var p = BuildPoly(el, close: false);
+                        DrawShape(canvas, p, style, transform, ctx);
+                        RenderMarkers(canvas, p, style, transform, ctx);
+                        break;
+                    }
+                case "polygon":
+                    {
+                        var p = BuildPoly(el, close: true);
+                        DrawShape(canvas, p, style, transform, ctx);
+                        RenderMarkers(canvas, p, style, transform, ctx);
+                        break;
+                    }
+                default:
+                    // Unknown element: ignore but descend (some wrappers, e.g.
+                    // <switch>, hold renderable children).
                     RenderChildren(canvas, el, style, transform, ctx);
-                break;
-            case "use":
-                RenderUse(canvas, el, style, transform, ctx);
-                break;
-            case "text":
-                RenderText(canvas, el, style, transform, ctx);
-                break;
-            case "path":
-            {
-                var p = SvgPathParser.Parse(Attr(el, "d"));
-                DrawShape(canvas, p, style, transform, ctx);
-                RenderMarkers(canvas, p, style, transform, ctx);
-                break;
+                    break;
             }
-            case "rect":
-                DrawShape(canvas, BuildRect(el, ctx.Viewport), style, transform, ctx);
-                break;
-            case "circle":
-                DrawShape(canvas, BuildCircle(el, ctx.Viewport), style, transform, ctx);
-                break;
-            case "ellipse":
-                DrawShape(canvas, BuildEllipse(el, ctx.Viewport), style, transform, ctx);
-                break;
-            case "line":
-            {
-                var p = BuildLine(el, ctx.Viewport);
-                DrawShape(canvas, p, style, transform, ctx, strokeOnly: true);
-                RenderMarkers(canvas, p, style, transform, ctx);
-                break;
-            }
-            case "polyline":
-            {
-                var p = BuildPoly(el, close: false);
-                DrawShape(canvas, p, style, transform, ctx);
-                RenderMarkers(canvas, p, style, transform, ctx);
-                break;
-            }
-            case "polygon":
-            {
-                var p = BuildPoly(el, close: true);
-                DrawShape(canvas, p, style, transform, ctx);
-                RenderMarkers(canvas, p, style, transform, ctx);
-                break;
-            }
-            default:
-                // Unknown element: ignore but descend (some wrappers, e.g.
-                // <switch>, hold renderable children).
-                RenderChildren(canvas, el, style, transform, ctx);
-                break;
-        }
         }
         finally
         {
@@ -744,38 +744,38 @@ public static class SvgImageDecoder
             switch (prim.Name.LocalName)
             {
                 case "feGaussianBlur":
-                {
-                    var sd = (Attr(prim, "stdDeviation") ?? "0").Split([' ', ','], StringSplitOptions.RemoveEmptyEntries);
-                    float sigma = sd.Length > 0 && float.TryParse(sd[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : 0f;
-                    // Clamp to the layer extent: a blur wider than the image adds
-                    // nothing visible and a huge kernel can throw or stall.
-                    sigma = Math.Clamp(sigma * scale, 0f, Math.Max(layer.Width, layer.Height));
-                    if (sigma > 0.01f)
                     {
-                        try { layer.Mutate(x => x.GaussianBlur(sigma)); }
-                        catch { /* degrade to the unblurred layer */ }
+                        var sd = (Attr(prim, "stdDeviation") ?? "0").Split([' ', ','], StringSplitOptions.RemoveEmptyEntries);
+                        float sigma = sd.Length > 0 && float.TryParse(sd[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : 0f;
+                        // Clamp to the layer extent: a blur wider than the image adds
+                        // nothing visible and a huge kernel can throw or stall.
+                        sigma = Math.Clamp(sigma * scale, 0f, Math.Max(layer.Width, layer.Height));
+                        if (sigma > 0.01f)
+                        {
+                            try { layer.Mutate(x => x.GaussianBlur(sigma)); }
+                            catch { /* degrade to the unblurred layer */ }
+                        }
+                        return layer;
                     }
-                    return layer;
-                }
                 case "feOffset":
-                {
-                    float dx = (ParseLength(Attr(prim, "dx")) ?? 0) * scale;
-                    float dy = (ParseLength(Attr(prim, "dy")) ?? 0) * scale;
-                    var shifted = new Image<Rgba32>(layer.Width, layer.Height, new Rgba32(0, 0, 0, 0));
-                    shifted.Mutate(x => x.DrawImage(layer, new Point((int)MathF.Round(dx), (int)MathF.Round(dy)), 1f));
-                    return shifted;
-                }
+                    {
+                        float dx = (ParseLength(Attr(prim, "dx")) ?? 0) * scale;
+                        float dy = (ParseLength(Attr(prim, "dy")) ?? 0) * scale;
+                        var shifted = new Image<Rgba32>(layer.Width, layer.Height, new Rgba32(0, 0, 0, 0));
+                        shifted.Mutate(x => x.DrawImage(layer, new Point((int)MathF.Round(dx), (int)MathF.Round(dy)), 1f));
+                        return shifted;
+                    }
                 case "feFlood":
-                {
-                    var color = SvgColor.TryParse(Attr(prim, "flood-color") ?? "black", Color.Black, out var fc, out var none) && !none
-                        ? fc : Color.Black;
-                    if (float.TryParse(Attr(prim, "flood-opacity"), NumberStyles.Float, CultureInfo.InvariantCulture, out var fo))
-                        color = ApplyAlpha(color, Math.Clamp(fo, 0f, 1f)) ?? color;
-                    var region = FilterRegion(el, transform, ctx);
-                    var flood = new Image<Rgba32>(layer.Width, layer.Height, new Rgba32(0, 0, 0, 0));
-                    flood.Mutate(x => x.Paint(fc => fc.Fill(Brushes.Solid(color), new RectanglePolygon(region))));
-                    return flood;
-                }
+                    {
+                        var color = SvgColor.TryParse(Attr(prim, "flood-color") ?? "black", Color.Black, out var fc, out var none) && !none
+                            ? fc : Color.Black;
+                        if (float.TryParse(Attr(prim, "flood-opacity"), NumberStyles.Float, CultureInfo.InvariantCulture, out var fo))
+                            color = ApplyAlpha(color, Math.Clamp(fo, 0f, 1f)) ?? color;
+                        var region = FilterRegion(el, transform, ctx);
+                        var flood = new Image<Rgba32>(layer.Width, layer.Height, new Rgba32(0, 0, 0, 0));
+                        flood.Mutate(x => x.Paint(fc => fc.Fill(Brushes.Solid(color), new RectanglePolygon(region))));
+                        return flood;
+                    }
             }
         }
         return null;

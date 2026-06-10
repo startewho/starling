@@ -67,34 +67,34 @@ public sealed class TypeMapper(WebIdlModel model)
         switch (r.Name)
         {
             case "sequence":
-            {
-                string elem = Map(r.TypeArgs[0], pos).CSharp;
-                string cs = pos == TypePosition.Parameter ? $"IEnumerable<{elem}>" : $"IReadOnlyList<{elem}>";
-                return Nullable(new MappedType(cs, TypeKind.Sequence, false), r.Nullable);
-            }
+                {
+                    string elem = Map(r.TypeArgs[0], pos).CSharp;
+                    string cs = pos == TypePosition.Parameter ? $"IEnumerable<{elem}>" : $"IReadOnlyList<{elem}>";
+                    return Nullable(new MappedType(cs, TypeKind.Sequence, false), r.Nullable);
+                }
             case "FrozenArray":
-            {
-                string elem = Map(r.TypeArgs[0], pos).CSharp;
-                return Nullable(new MappedType($"IReadOnlyList<{elem}>", TypeKind.FrozenArray, false), r.Nullable);
-            }
+                {
+                    string elem = Map(r.TypeArgs[0], pos).CSharp;
+                    return Nullable(new MappedType($"IReadOnlyList<{elem}>", TypeKind.FrozenArray, false), r.Nullable);
+                }
             case "ObservableArray":
-            {
-                string elem = Map(r.TypeArgs[0], pos).CSharp;
-                return Nullable(new MappedType($"IList<{elem}>", TypeKind.ObservableArray, false), r.Nullable);
-            }
+                {
+                    string elem = Map(r.TypeArgs[0], pos).CSharp;
+                    return Nullable(new MappedType($"IList<{elem}>", TypeKind.ObservableArray, false), r.Nullable);
+                }
             case "record":
-            {
-                string val = Map(r.TypeArgs[1], pos).CSharp;
-                return Nullable(new MappedType($"IReadOnlyDictionary<string, {val}>", TypeKind.Record, false), r.Nullable);
-            }
+                {
+                    string val = Map(r.TypeArgs[1], pos).CSharp;
+                    return Nullable(new MappedType($"IReadOnlyDictionary<string, {val}>", TypeKind.Record, false), r.Nullable);
+                }
             case "Promise":
-            {
-                var inner = r.TypeArgs[0];
-                string cs = inner.Name == "undefined" && !inner.IsUnion
-                    ? "Task"
-                    : $"Task<{Map(inner, TypePosition.Return).CSharp}>";
-                return new MappedType(cs, TypeKind.Promise, false);
-            }
+                {
+                    var inner = r.TypeArgs[0];
+                    string cs = inner.Name == "undefined" && !inner.IsUnion
+                        ? "Task"
+                        : $"Task<{Map(inner, TypePosition.Return).CSharp}>";
+                    return new MappedType(cs, TypeKind.Promise, false);
+                }
         }
 
         if (Primitives.TryGetValue(r.Name, out var prim))

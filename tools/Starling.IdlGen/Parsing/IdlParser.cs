@@ -108,8 +108,12 @@ public sealed class IdlParser
         var members = ParseMemberBlockOrForward();
         return new IdlInterface
         {
-            Name = name, ExtendedAttributes = ext, Partial = partial,
-            Mixin = mixin, Inherits = inherits, Members = members,
+            Name = name,
+            ExtendedAttributes = ext,
+            Partial = partial,
+            Mixin = mixin,
+            Inherits = inherits,
+            Members = members,
         };
     }
 
@@ -156,7 +160,11 @@ public sealed class IdlParser
             ExpectPunct(";");
             members.Add(new IdlDictionaryMember
             {
-                Name = mname, Type = type, Required = required, Default = def, ExtendedAttributes = memExt,
+                Name = mname,
+                Type = type,
+                Required = required,
+                Default = def,
+                ExtendedAttributes = memExt,
             });
         }
         ExpectPunct("}");
@@ -247,8 +255,12 @@ public sealed class IdlParser
             string name = ExpectIdentifier();
             member = new IdlAttribute
             {
-                Name = name, Type = type, Readonly = isReadonly, Static = isStatic,
-                Stringifier = isStringifier, Inherit = isInherit,
+                Name = name,
+                Type = type,
+                Readonly = isReadonly,
+                Static = isStatic,
+                Stringifier = isStringifier,
+                Inherit = isInherit,
             };
             ExpectPunct(";");
         }
@@ -302,8 +314,12 @@ public sealed class IdlParser
             ExpectPunct(";");
             member = new IdlOperation
             {
-                Name = name, ReturnType = ret, Arguments = args,
-                Static = isStatic, Special = special, Stringifier = isStringifier,
+                Name = name,
+                ReturnType = ret,
+                Arguments = args,
+                Static = isStatic,
+                Special = special,
+                Stringifier = isStringifier,
             };
         }
 
@@ -444,8 +460,12 @@ public sealed class IdlParser
         IdlDefaultValue? def = TryPunct("=") ? ParseDefaultValue() : null;
         return new IdlArgument
         {
-            Name = name, Type = type, Optional = optional, Variadic = variadic,
-            Default = def, ExtendedAttributes = ext,
+            Name = name,
+            Type = type,
+            Optional = optional,
+            Variadic = variadic,
+            Default = def,
+            ExtendedAttributes = ext,
         };
     }
 

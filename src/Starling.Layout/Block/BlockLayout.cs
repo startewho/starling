@@ -726,22 +726,22 @@ internal sealed class BlockLayout
                 resolved = FitContentWidth(box, available, containerWidth);
                 return true;
             case CssFunctionValue { Name: "fit-content" } f when f.Arguments.Count == 1:
-            {
-                // fit-content(size) = min(max-content, max(min-content, size)).
-                double? size = f.Arguments[0] switch
                 {
-                    CssLength len => ToPx(len, _viewport),
-                    CssPercentage pct => containerWidth * pct.Value / 100d,
-                    _ => null,
-                };
-                if (size is { } s)
-                {
-                    resolved = FitContentWidth(box, s, containerWidth);
-                    return true;
+                    // fit-content(size) = min(max-content, max(min-content, size)).
+                    double? size = f.Arguments[0] switch
+                    {
+                        CssLength len => ToPx(len, _viewport),
+                        CssPercentage pct => containerWidth * pct.Value / 100d,
+                        _ => null,
+                    };
+                    if (size is { } s)
+                    {
+                        resolved = FitContentWidth(box, s, containerWidth);
+                        return true;
+                    }
+                    resolved = 0;
+                    return false;
                 }
-                resolved = 0;
-                return false;
-            }
             default:
                 resolved = 0;
                 return false;

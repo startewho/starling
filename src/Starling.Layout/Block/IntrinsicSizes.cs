@@ -49,29 +49,29 @@ internal static class IntrinsicSizes
             case CssNumber n:
                 return Validate(n.Value, ref ratio);
             case CssValueList list:
-            {
-                // `16 / 9` parses as [number, "/" keyword, number]; an
-                // accompanying `auto` adds a keyword entry on either side.
-                double? first = null;
-                double? second = null;
-                for (var i = 0; i < list.Values.Count; i++)
                 {
-                    switch (list.Values[i])
+                    // `16 / 9` parses as [number, "/" keyword, number]; an
+                    // accompanying `auto` adds a keyword entry on either side.
+                    double? first = null;
+                    double? second = null;
+                    for (var i = 0; i < list.Values.Count; i++)
                     {
-                        case CssKeyword { Name: "auto" }:
-                            hasAuto = true;
-                            break;
-                        case CssNumber num when first is null:
-                            first = num.Value;
-                            break;
-                        case CssNumber num when second is null:
-                            second = num.Value;
-                            break;
+                        switch (list.Values[i])
+                        {
+                            case CssKeyword { Name: "auto" }:
+                                hasAuto = true;
+                                break;
+                            case CssNumber num when first is null:
+                                first = num.Value;
+                                break;
+                            case CssNumber num when second is null:
+                                second = num.Value;
+                                break;
+                        }
                     }
+                    if (first is not { } w) return false;
+                    return Validate(second is { } h ? w / h : w, ref ratio);
                 }
-                if (first is not { } w) return false;
-                return Validate(second is { } h ? w / h : w, ref ratio);
-            }
             default:
                 return false;
         }
