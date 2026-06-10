@@ -980,6 +980,15 @@ public sealed class StarlingEngine
         PrimeDeclarativeAnimations(page);
         page.Style.AnimationEngine.Tick(nowMs);
         page.Style.TransitionEngine.Tick(nowMs);
+        // Dispatch the animation/transition DOM events the engines queued —
+        // boundary facts from the ticks above plus transitionrun facts the
+        // previous frame's style pass recorded. This runs before this frame's
+        // style/paint work, matching the HTML event-loop's "update animations
+        // and send events" step, and never from inside Compose (listeners
+        // mutate the DOM). JS listeners are bridged onto the host EventTarget,
+        // so they run on this thread — the same one that pumps rAF callbacks.
+        Css.Animations.AnimationEventDispatcher.DispatchPending(
+            page.Style.AnimationEngine, page.Style.TransitionEngine);
     }
 
     /// <summary>
