@@ -62,6 +62,7 @@ public sealed class LaidOutPage : IDisposable
         Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
         ScrollState = scrollState ?? new Starling.Layout.Scroll.ScrollStateStore();
+        ScrollOffsetLookup = ScrollState.GetOffset;
         Root = root;
         Document = document;
         Style = style;
@@ -91,6 +92,15 @@ public sealed class LaidOutPage : IDisposable
     /// relayout successors so offsets survive reflows.
     /// </summary>
     public Starling.Layout.Scroll.ScrollStateStore ScrollState { get; }
+
+    /// <summary>
+    /// <see cref="ScrollState"/>'s per-element offset lookup, pre-bound once at
+    /// construction in the shape the paint and hit-test paths take
+    /// (<c>DisplayListBuilder</c>'s <c>scrollOffsets</c> func,
+    /// <c>BoxHitTester.HitTest</c>). Cached so per-frame renders do not
+    /// allocate a fresh delegate per present.
+    /// </summary>
+    public Func<Element, (double X, double Y)> ScrollOffsetLookup { get; }
 
     /// <summary>
     /// The live JS context for this page, or null for pages without scripts (or
