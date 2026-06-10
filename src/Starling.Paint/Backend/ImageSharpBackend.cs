@@ -637,6 +637,9 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
                     canvas.Draw(Pens.Solid(ToColor(roundStroke.Color), (float)roundStroke.Width), path);
                 }
                 break;
+            case DrawBorderSides borderSides:
+                DrawBorderSides(canvas, borderSides);
+                break;
             case DrawBoxShadow shadow:
                 if (!BoxShadowIntersectsTarget(shadow, transforms.Peek(), target)) return;
                 DrawBoxShadow(canvas, shadow, scale, pendingImageSources);
@@ -2381,6 +2384,230 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             G(r.TopRightX, by), G(r.TopRightY, by),
             G(r.BottomRightX, by), G(r.BottomRightY, by),
             G(r.BottomLeftX, by), G(r.BottomLeftY, by));
+    }
+
+    // --- Tier 4 items 11+12 — outline + dashed/dotted/double border sides ----
+
+    /// <summary>
+    /// Rasterizes a <see cref="DisplayList.DrawBorderSides"/>: each border side
+    /// is drawn separately between its corner boundaries. For a square corner
+    /// the horizontal sides own the corner pixels and the vertical sides start
+    /// inside the adjacent band; for a rounded corner every side’s straight
+    /// run stops at the radius tangent and the corner arc is stroked SOLID in
+    /// the adjacent side’s color (v1 simplification — dashes do not follow
+    /// the curve). One path is built per side, so a dashed side costs a single
+    /// fill regardless of dash count.
+    /// </summary>
+    private static void DrawBorderSides(DrawingCanvas canvas, DrawBorderSides b)
+    {
+        var x = (float)b.Bounds.X;
+        var y = (float)b.Bounds.Y;
+        var w = (float)b.Bounds.Width;
+        var h = (float)b.Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var right = x + w;
+        var bottom = y + h;
+
+        // Corner radii clamped to the half extents, like BuildRoundedRectPath.
+        var maxX = w / 2f;
+        var maxY = h / 2f;
+        float Clamp(double v, float max) => Math.Clamp((float)v, 0f, max);
+        var tlx = Clamp(b.Radii.TopLeftX, maxX); var tly = Clamp(b.Radii.TopLeftY, maxY);
+        var trx = Clamp(b.Radii.TopRightX, maxX); var tryy = Clamp(b.Radii.TopRightY, maxY);
+        var brx = Clamp(b.Radii.BottomRightX, maxX); var bry = Clamp(b.Radii.BottomRightY, maxY);
+        var blx = Clamp(b.Radii.BottomLeftX, maxX); var bly = Clamp(b.Radii.BottomLeftY, maxY);
+
+        var topW = (float)b.TopWidth;
+        var rightW = (float)b.RightWidth;
+        var bottomW = (float)b.BottomWidth;
+        var leftW = (float)b.LeftWidth;
+
+        var paintTop = topW > 0 && b.TopStyle != BorderSideStyle.None && b.TopColor.A > 0;
+        var paintRight = rightW > 0 && b.RightStyle != BorderSideStyle.None && b.RightColor.A > 0;
+        var paintBottom = bottomW > 0 && b.BottomStyle != BorderSideStyle.None && b.BottomColor.A > 0;
+        var paintLeft = leftW > 0 && b.LeftStyle != BorderSideStyle.None && b.LeftColor.A > 0;
+
+        if (paintTop)
+        {
+            var x0 = tlx > 0 ? x + tlx : x;
+            var x1 = trx > 0 ? right - trx : right;
+            DrawBorderSideRun(canvas, horizontal: true, x0, x1, edge: y, inward: 1f, topW, ToColor(b.TopColor), b.TopStyle);
+        }
+        if (paintBottom)
+        {
+            var x0 = blx > 0 ? x + blx : x;
+            var x1 = brx > 0 ? right - brx : right;
+            DrawBorderSideRun(canvas, horizontal: true, x0, x1, edge: bottom, inward: -1f, bottomW, ToColor(b.BottomColor), b.BottomStyle);
+        }
+        if (paintLeft)
+        {
+            var y0 = tly > 0 ? y + tly : y + (paintTop ? topW : 0f);
+            var y1 = bly > 0 ? bottom - bly : bottom - (paintBottom ? bottomW : 0f);
+            DrawBorderSideRun(canvas, horizontal: false, y0, y1, edge: x, inward: 1f, leftW, ToColor(b.LeftColor), b.LeftStyle);
+        }
+        if (paintRight)
+        {
+            var y0 = tryy > 0 ? y + tryy : y + (paintTop ? topW : 0f);
+            var y1 = bry > 0 ? bottom - bry : bottom - (paintBottom ? bottomW : 0f);
+            DrawBorderSideRun(canvas, horizontal: false, y0, y1, edge: right, inward: -1f, rightW, ToColor(b.RightColor), b.RightStyle);
+        }
+
+        // Rounded corners: stroke each quarter arc solid along the band’s
+        // centre line (v1 — the dash pattern does not continue around the
+        // curve). The arc takes the adjacent horizontal side’s color when
+        // that side paints, else the vertical side’s.
+        if (tlx > 0 || tly > 0)
+            DrawSolidCornerArc(canvas, x + tlx, y + tly, tlx, tly, sx: -1f, sy: -1f, paintTop, paintLeft, topW, leftW, b.TopColor, b.LeftColor);
+        if (trx > 0 || tryy > 0)
+            DrawSolidCornerArc(canvas, right - trx, y + tryy, trx, tryy, sx: 1f, sy: -1f, paintTop, paintRight, topW, rightW, b.TopColor, b.RightColor);
+        if (brx > 0 || bry > 0)
+            DrawSolidCornerArc(canvas, right - brx, bottom - bry, brx, bry, sx: 1f, sy: 1f, paintBottom, paintRight, bottomW, rightW, b.BottomColor, b.RightColor);
+        if (blx > 0 || bly > 0)
+            DrawSolidCornerArc(canvas, x + blx, bottom - bly, blx, bly, sx: -1f, sy: 1f, paintBottom, paintLeft, bottomW, leftW, b.BottomColor, b.LeftColor);
+    }
+
+    /// <summary>
+    /// Draws one border side’s straight run. <paramref name="a0"/> /
+    /// <paramref name="a1"/> bound the run along the side’s axis
+    /// (<paramref name="horizontal"/> picks the axis), <paramref name="edge"/>
+    /// is the box edge coordinate on the cross axis, and
+    /// <paramref name="inward"/> is +1 when the band grows toward larger
+    /// cross-axis values (top / left) or −1 (bottom / right). Dash geometry:
+    /// dashed → rectangular dashes, 2:1 dash:gap, a dash anchored at each end;
+    /// dotted → round dots of diameter <paramref name="thickness"/> spaced
+    /// about twice the width, inset one radius from the run ends; double →
+    /// two strokes each one third of the width with the middle third empty.
+    /// All segments of a side land in one path, so the side costs one fill.
+    /// </summary>
+    private static void DrawBorderSideRun(DrawingCanvas canvas, bool horizontal, float a0, float a1, float edge, float inward, float thickness, Color color, BorderSideStyle style)
+    {
+        var run = a1 - a0;
+        if (run <= 0 || thickness <= 0) return;
+        var near = inward > 0 ? edge : edge - thickness;
+        var pb = new PathBuilder();
+        switch (style)
+        {
+            case BorderSideStyle.Dashed:
+            {
+                // run = n·dash + (n−1)·gap with dash = 2·gap, n picked so the
+                // gap stays close to one border width.
+                var n = Math.Max(1, (int)Math.Round((run / thickness + 1d) / 3d));
+                var gap = run / (3f * n - 1f);
+                var dash = 2f * gap;
+                for (var i = 0; i < n; i++)
+                {
+                    var s = a0 + i * (dash + gap);
+                    AddBandRect(pb, horizontal, s, s + dash, near, thickness);
+                }
+                break;
+            }
+            case BorderSideStyle.Dotted:
+            {
+                var r = thickness / 2f;
+                var cross = edge + inward * r;
+                var c0 = a0 + r;
+                var c1 = a1 - r;
+                var span = c1 - c0;
+                if (span <= 0)
+                {
+                    var mid = (a0 + a1) / 2f;
+                    AddDotFigure(pb, horizontal ? mid : cross, horizontal ? cross : mid, r);
+                }
+                else
+                {
+                    var intervals = Math.Max(1, (int)Math.Round(span / (2f * thickness)));
+                    var step = span / intervals;
+                    for (var i = 0; i <= intervals; i++)
+                    {
+                        var c = c0 + i * step;
+                        AddDotFigure(pb, horizontal ? c : cross, horizontal ? cross : c, r);
+                    }
+                }
+                break;
+            }
+            case BorderSideStyle.Double:
+            {
+                var third = thickness / 3f;
+                var nearOuter = inward > 0 ? edge : edge - third;
+                var nearInner = inward > 0 ? edge + 2f * third : edge - thickness;
+                AddBandRect(pb, horizontal, a0, a1, nearOuter, third);
+                AddBandRect(pb, horizontal, a0, a1, nearInner, third);
+                break;
+            }
+            default:
+                AddBandRect(pb, horizontal, a0, a1, near, thickness);
+                break;
+        }
+        canvas.Fill(Brushes.Solid(color), pb.Build());
+    }
+
+    /// <summary>Adds one axis-aligned band rectangle figure to <paramref name="pb"/>.</summary>
+    private static void AddBandRect(PathBuilder pb, bool horizontal, float s0, float s1, float near, float t)
+    {
+        pb.StartFigure();
+        if (horizontal)
+        {
+            pb.MoveTo(new PointF(s0, near));
+            pb.LineTo(new PointF(s1, near));
+            pb.LineTo(new PointF(s1, near + t));
+            pb.LineTo(new PointF(s0, near + t));
+        }
+        else
+        {
+            pb.MoveTo(new PointF(near, s0));
+            pb.LineTo(new PointF(near + t, s0));
+            pb.LineTo(new PointF(near + t, s1));
+            pb.LineTo(new PointF(near, s1));
+        }
+        pb.CloseFigure();
+    }
+
+    /// <summary>
+    /// Adds a circular dot figure (four cubic Bézier quadrants) to
+    /// <paramref name="pb"/> so a whole dotted side stays one path.
+    /// </summary>
+    private static void AddDotFigure(PathBuilder pb, float cx, float cy, float r)
+    {
+        var k = ArcBezierK * r;
+        pb.StartFigure();
+        pb.MoveTo(new PointF(cx + r, cy));
+        pb.AddCubicBezier(new PointF(cx + r, cy), new PointF(cx + r, cy + k), new PointF(cx + k, cy + r), new PointF(cx, cy + r));
+        pb.AddCubicBezier(new PointF(cx, cy + r), new PointF(cx - k, cy + r), new PointF(cx - r, cy + k), new PointF(cx - r, cy));
+        pb.AddCubicBezier(new PointF(cx - r, cy), new PointF(cx - r, cy - k), new PointF(cx - k, cy - r), new PointF(cx, cy - r));
+        pb.AddCubicBezier(new PointF(cx, cy - r), new PointF(cx + k, cy - r), new PointF(cx + r, cy - k), new PointF(cx + r, cy));
+        pb.CloseFigure();
+    }
+
+    /// <summary>
+    /// Strokes one rounded-border quarter arc solid along the band centre
+    /// line. (<paramref name="cx"/>, <paramref name="cy"/>) is the corner
+    /// ellipse centre, <paramref name="rx"/>/<paramref name="ry"/> the outer
+    /// corner radii, and <paramref name="sx"/>/<paramref name="sy"/> point
+    /// from the centre toward the box corner (−1,−1 = top-left). The pen is
+    /// as wide as the wider adjacent painted side.
+    /// </summary>
+    private static void DrawSolidCornerArc(DrawingCanvas canvas, float cx, float cy, float rx, float ry, float sx, float sy, bool hPainted, bool vPainted, float hW, float vW, CssColor hColor, CssColor vColor)
+    {
+        if (!hPainted && !vPainted) return;
+        var penW = Math.Max(hPainted ? hW : 0f, vPainted ? vW : 0f);
+        if (penW <= 0) return;
+        var color = hPainted ? hColor : vColor;
+
+        // Centre-line radii: the outer radius pulled in by half the adjacent
+        // side’s width on each axis.
+        var rcx = Math.Max(0f, rx - (vPainted ? vW : penW) / 2f);
+        var rcy = Math.Max(0f, ry - (hPainted ? hW : penW) / 2f);
+        if (rcx <= 0 && rcy <= 0) return;
+
+        // S sits on the horizontal side’s centre line, E on the vertical’s.
+        var s = new PointF(cx, cy + sy * rcy);
+        var e = new PointF(cx + sx * rcx, cy);
+        var c1 = new PointF(cx + sx * ArcBezierK * rcx, s.Y);
+        var c2 = new PointF(e.X, cy + sy * ArcBezierK * rcy);
+        var pb = new PathBuilder();
+        pb.MoveTo(s);
+        pb.AddCubicBezier(s, c1, c2, e);
+        canvas.Draw(Pens.Solid(ToColor(color), penW), pb.Build());
     }
 
     public void Dispose()

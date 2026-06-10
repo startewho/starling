@@ -147,6 +147,8 @@ internal static class DisplayListContentHash
         DrawBoxShadow s => s.Blur,
         StrokeRect s => s.Width / 2,
         StrokeRoundedRect s => s.Width / 2,
+        // Anti-aliased dash/dot/arc edges can touch the border-box boundary.
+        DrawBorderSides b => Math.Max(Math.Max(b.TopWidth, b.BottomWidth), Math.Max(b.LeftWidth, b.RightWidth)) / 2,
         _ => 0,
     };
 
@@ -267,6 +269,23 @@ internal static class DisplayListContentHash
                 HashFonts(ref h, d.FontFamilies);
                 HashBool(ref h, d.Bold);
                 HashBool(ref h, d.Italic);
+                break;
+            case DrawBorderSides bs:
+                Tag(ref h, 15);
+                HashRect(ref h, bs.Bounds);
+                HashRadii(ref h, bs.Radii);
+                HashDouble(ref h, bs.TopWidth);
+                HashDouble(ref h, bs.RightWidth);
+                HashDouble(ref h, bs.BottomWidth);
+                HashDouble(ref h, bs.LeftWidth);
+                HashColor(ref h, bs.TopColor);
+                HashColor(ref h, bs.RightColor);
+                HashColor(ref h, bs.BottomColor);
+                HashColor(ref h, bs.LeftColor);
+                HashInt(ref h, (int)bs.TopStyle);
+                HashInt(ref h, (int)bs.RightStyle);
+                HashInt(ref h, (int)bs.BottomStyle);
+                HashInt(ref h, (int)bs.LeftStyle);
                 break;
             case DrawTextShadow s:
                 Tag(ref h, 14);

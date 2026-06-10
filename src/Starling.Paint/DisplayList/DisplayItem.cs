@@ -421,3 +421,54 @@ public sealed record FillMaskedBackground(
     double MaskOffsetY,
     MaskRepeatMode MaskRepeat,
     MaskModeKind Mode = MaskModeKind.MatchSource) : DisplayItem;
+
+// ---------------------------------------------------------------------------
+// CSS Backgrounds 3 §4.2 border-style (dashed / dotted / double) and CSS UI 4
+// §3 outline painting. Appended at the end per the shared-paint-file etiquette.
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Line style for one border side (the painted subset of CSS Backgrounds 3
+/// §4.2 <c>border-style</c>). <see cref="None"/> covers <c>none</c>/<c>hidden</c>
+/// (side not painted); <c>groove</c>/<c>ridge</c>/<c>inset</c>/<c>outset</c>
+/// are mapped to <see cref="Solid"/> by the builder at this fidelity.
+/// </summary>
+public enum BorderSideStyle
+{
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+}
+
+/// <summary>
+/// Paints the four border sides of a box where at least one painted side uses
+/// a non-solid style (dashed / dotted / double). <paramref name="Bounds"/> is
+/// the border box. The backend draws each side separately between its corner
+/// boundaries: for a square corner the horizontal sides own the corner and the
+/// vertical sides start inside the adjacent band; for a rounded corner every
+/// side's run stops at the radius tangent and the corner arc is painted as a
+/// SOLID quarter ring (documented v1 simplification — dashes do not follow the
+/// curve). Dash geometry per side: dashed = rectangular dashes at a 2:1
+/// dash:gap ratio anchored at both run ends; dotted = round dots of diameter
+/// equal to the side width spaced about twice the width apart; double = two
+/// parallel strokes each one-third of the side width with the middle third
+/// empty. The outline emitter reuses this primitive for non-solid outline
+/// styles on the expanded ring box.
+/// </summary>
+public sealed record DrawBorderSides(
+    Rect Bounds,
+    CornerRadii Radii,
+    double TopWidth,
+    double RightWidth,
+    double BottomWidth,
+    double LeftWidth,
+    CssColor TopColor,
+    CssColor RightColor,
+    CssColor BottomColor,
+    CssColor LeftColor,
+    BorderSideStyle TopStyle,
+    BorderSideStyle RightStyle,
+    BorderSideStyle BottomStyle,
+    BorderSideStyle LeftStyle) : DisplayItem;
