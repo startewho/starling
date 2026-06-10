@@ -39,10 +39,20 @@ public sealed class TransitionEngine
 
     private double _nowMs;
 
+    // Pending transition DOM-event facts (transitionrun / transitionstart /
+    // transitionend / transitioncancel) recorded as transitions are created,
+    // replaced and completed. The embedder drains these after the frame's
+    // style pass and dispatches real DOM events at a safe point — never
+    // synchronously from inside the style/compose path, because listeners
+    // mutate the DOM.
+    private readonly List<AnimationEventRecord> _pendingEvents = new();
+
     /// <summary>
     /// Snapshot of an active transition for a given (element, property).
     /// Immutable once created — a new value for the same key replaces the
-    /// record rather than mutating it.
+    /// record rather than mutating it. (The single exception is
+    /// <see cref="ActiveTransition.StartEventFired"/>, DOM-event bookkeeping
+    /// that does not affect sampling.)
     /// </summary>
     public sealed record ActiveTransition(
         Element Element,
@@ -55,6 +65,11 @@ public sealed class TransitionEngine
         TimingFunction TimingFunction)
     {
         public double EndMs => StartMs + DelayMs + DurationMs;
+
+        /// <summary>True once the <c>transitionstart</c> DOM-event fact was
+        /// queued (the playback head entered the active phase). Event
+        /// bookkeeping only — sampling never reads it.</summary>
+        internal bool StartEventFired;
     }
 
     /// <summary>
@@ -114,9 +129,15 @@ public sealed class TransitionEngine
         if (!IsPropertyTransitioned(property, readProperty))
         {
             // No transition declared for this property — record the new
-            // effective value and skip animating.
+            // effective value and skip animating. An in-flight transition for
+            // the property is canceled (CSS Transitions 2: it leaves the set
+            // of running transitions early, so transitioncancel fires).
             _lastEffective[key] = newValue;
-            _active.Remove(key);
+            if (_active.TryGetValue(key, out var dropped))
+            {
+                QueueEvent(AnimationEventKind.TransitionCancel, dropped);
+                _active.Remove(key);
+            }
             return;
         }
 
@@ -128,9 +149,15 @@ public sealed class TransitionEngine
         {
             // Zero-duration transitions are no-ops by spec (the new value
             // takes effect immediately) — short-circuit instead of pushing
-            // a transition that would complete on the next tick anyway.
+            // a transition that would complete on the next tick anyway. An
+            // in-flight transition snapping to the new value this way is
+            // canceled, not completed.
             _lastEffective[key] = newValue;
-            _active.Remove(key);
+            if (_active.TryGetValue(key, out var snapped))
+            {
+                QueueEvent(AnimationEventKind.TransitionCancel, snapped);
+                _active.Remove(key);
+            }
             return;
         }
 
@@ -150,9 +177,13 @@ public sealed class TransitionEngine
             if (Equals(prior.To, newValue))
                 return;
             fromValue = Sample(prior, _nowMs);
+            // The in-flight transition is replaced before it completed —
+            // it fires transitioncancel, then the replacement fires its own
+            // transitionrun below.
+            QueueEvent(AnimationEventKind.TransitionCancel, prior);
         }
 
-        _active[key] = new ActiveTransition(
+        var created = new ActiveTransition(
             Element: element,
             Property: property,
             From: fromValue,
@@ -161,6 +192,11 @@ public sealed class TransitionEngine
             DurationMs: duration,
             DelayMs: delay,
             TimingFunction: timing);
+        _active[key] = created;
+        // transitionrun fires when the transition is created — the start of
+        // its delay phase (CSS Transitions 2 §events). transitionstart waits
+        // for the active phase and is queued by Tick.
+        QueueEvent(AnimationEventKind.TransitionRun, created);
         // _lastEffective stays at `previous` until the next Tick computes a
         // sample — that way the next OnComputedValueChanged still sees the
         // pre-transition value as the comparison baseline if the cascade
@@ -203,9 +239,18 @@ public sealed class TransitionEngine
         {
             var sample = Sample(t, _nowMs);
             _lastEffective[key] = sample;
+            if (!t.StartEventFired && _nowMs >= t.StartMs + t.DelayMs)
+            {
+                // The playback head entered the active phase: transitionstart
+                // (CSS Transitions 2 §events). A tick that jumps straight past
+                // the end still queues start first, then end below — in order.
+                t.StartEventFired = true;
+                QueueEvent(AnimationEventKind.TransitionStart, t);
+            }
             if (_nowMs >= t.EndMs)
             {
                 completed++;
+                QueueEvent(AnimationEventKind.TransitionEnd, t);
                 (toRemove ??= []).Add(key);
             }
         }
@@ -252,7 +297,12 @@ public sealed class TransitionEngine
     public void Forget(Element element)
     {
         var keys = _active.Keys.Where(k => ReferenceEquals(k.Item1, element)).ToList();
-        foreach (var k in keys) _active.Remove(k);
+        foreach (var k in keys)
+        {
+            // Destroyed before completing — transitioncancel, not transitionend.
+            QueueEvent(AnimationEventKind.TransitionCancel, _active[k]);
+            _active.Remove(k);
+        }
         var keys2 = _lastEffective.Keys.Where(k => ReferenceEquals(k.Item1, element)).ToList();
         foreach (var k in keys2) _lastEffective.Remove(k);
     }
@@ -262,7 +312,40 @@ public sealed class TransitionEngine
     {
         _active.Clear();
         _lastEffective.Clear();
+        _pendingEvents.Clear();
         _nowMs = 0;
+    }
+
+    /// <summary>True when the engine queued transition DOM-event facts not yet drained.</summary>
+    public bool HasPendingEvents => _pendingEvents.Count > 0;
+
+    /// <summary>Move all pending transition DOM-event facts into
+    /// <paramref name="into"/> (appended in fire order) and clear the queue.
+    /// The embedder calls this after the frame's style pass and dispatches the
+    /// corresponding DOM events (see <see cref="AnimationEventDispatcher"/>).</summary>
+    public void DrainPendingEvents(List<AnimationEventRecord> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        if (_pendingEvents.Count == 0) return;
+        into.AddRange(_pendingEvents);
+        _pendingEvents.Clear();
+    }
+
+    /// <summary>Queue one transition DOM-event fact for <paramref name="t"/>.
+    /// elapsedTime follows CSS Transitions 2: seconds, excluding the delay
+    /// phase — zero for run/start unless the delay is negative, the full
+    /// duration for end, and the time spent in the active phase for cancel.</summary>
+    private void QueueEvent(AnimationEventKind kind, ActiveTransition t)
+    {
+        var elapsedMs = kind switch
+        {
+            AnimationEventKind.TransitionRun or AnimationEventKind.TransitionStart
+                => Math.Min(Math.Max(-t.DelayMs, 0), t.DurationMs),
+            AnimationEventKind.TransitionEnd => t.DurationMs,
+            _ => Math.Min(Math.Max(_nowMs - t.StartMs - t.DelayMs, 0), t.DurationMs),
+        };
+        _pendingEvents.Add(new AnimationEventRecord(
+            t.Element, kind, PropertyName(t.Property), elapsedMs / 1000.0));
     }
 
     private static CssValue Sample(ActiveTransition t, double nowMs)
