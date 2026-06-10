@@ -449,6 +449,9 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             _renderSession.ResetForNavigation();
             _viewportCaptureRenderer?.ResetForNavigation();
+            // Fresh page load = fresh scroll store with its root at (0,0);
+            // re-baseline the two-way root sync against it.
+            _rootScrollSynced = default;
         }
 
 
