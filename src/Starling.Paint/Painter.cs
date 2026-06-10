@@ -306,7 +306,8 @@ public sealed class Painter
         IImageResolver? images,
         FontFaceRegistry? webFonts,
         double nowMs,
-        LayoutRect? clipViewport = null)
+        LayoutRect? clipViewport = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(style);
@@ -314,7 +315,11 @@ public sealed class Painter
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory);
+            // The page's scroll store rides through the per-frame relayout so
+            // scrollports + scrollable overflow stay fresh during pure
+            // animation frames (scroll-model.md WP2), and the display list
+            // paints each scroll container's subtree at its stored offset.
+            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory) { ScrollState = scrollState };
             Starling.Layout.Box.BlockBox root;
             using (StarlingTelemetry.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
@@ -323,7 +328,9 @@ public sealed class Painter
             using (StarlingTelemetry.Span("paint", "display_list"))
             {
                 var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
-                displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images, scrollOffsets: null, canvasRect);
+                displayList = new DisplayListBuilder().Build(
+                    root, clipViewport, styleOverride: null, images: images,
+                    scrollOffsets: scrollState is null ? null : scrollState.GetOffset, canvasRect);
             }
 
             using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
