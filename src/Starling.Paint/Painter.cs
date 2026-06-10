@@ -108,7 +108,13 @@ public sealed class Painter
 
         PaintList displayList;
         using (StarlingTelemetry.Span("paint", "display_list"))
-            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+        {
+            // The rendered bitmap covers the clip viewport when one is given,
+            // otherwise the layout viewport — that area is the CSS canvas the
+            // root (or body) background propagates onto.
+            var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
+            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images, scrollOffsets: null, canvasRect);
+        }
 
         using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
@@ -164,7 +170,13 @@ public sealed class Painter
 
         PaintList displayList;
         using (StarlingTelemetry.Span("paint", "display_list"))
-            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+        {
+            // The rendered bitmap covers the clip viewport when one is given,
+            // otherwise the layout viewport — that area is the CSS canvas the
+            // root (or body) background propagates onto.
+            var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
+            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images, scrollOffsets: null, canvasRect);
+        }
 
         using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
