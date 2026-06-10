@@ -25,20 +25,38 @@ public sealed class DecodedImage : IDisposable
     private readonly bool _pooled;
     private readonly int _length;
 
-    private DecodedImage(int width, int height, byte[] buffer, int length, bool pooled)
+    private DecodedImage(int width, int height, int intrinsicWidth, int intrinsicHeight, byte[] buffer, int length, bool pooled)
     {
         Width = width;
         Height = height;
+        IntrinsicWidth = intrinsicWidth;
+        IntrinsicHeight = intrinsicHeight;
         _buffer = buffer;
         _length = length;
         _pooled = pooled;
     }
 
-    /// <summary>Intrinsic image width in pixels.</summary>
+    /// <summary>Pixel-buffer width in pixels (the decoded bitmap's width).</summary>
     public int Width { get; }
 
-    /// <summary>Intrinsic image height in pixels.</summary>
+    /// <summary>Pixel-buffer height in pixels (the decoded bitmap's height).</summary>
     public int Height { get; }
+
+    /// <summary>
+    /// The source image's true intrinsic width in pixels. Equal to
+    /// <see cref="Width"/> unless the decoder clamped the decode resolution of
+    /// a very large image, in which case the pixel buffer is a high-quality
+    /// downscale and this carries the original width. Layout and
+    /// background-size math must use the intrinsic dimensions; pixel access
+    /// (strides, source rects) must use <see cref="Width"/>/<see cref="Height"/>.
+    /// </summary>
+    public int IntrinsicWidth { get; }
+
+    /// <summary>
+    /// The source image's true intrinsic height in pixels. See
+    /// <see cref="IntrinsicWidth"/>.
+    /// </summary>
+    public int IntrinsicHeight { get; }
 
     /// <summary>
     /// Tightly-packed, top-down, straight-alpha RGBA8888 pixels:
@@ -60,8 +78,20 @@ public sealed class DecodedImage : IDisposable
     /// exactly <c>width * height * 4</c> bytes long.
     /// </summary>
     public static DecodedImage CreatePooled(int width, int height, Action<Span<byte>> fill)
+        => CreatePooled(width, height, width, height, fill);
+
+    /// <summary>
+    /// Like <see cref="CreatePooled(int,int,Action{Span{byte}})"/> but for a
+    /// resolution-clamped decode: the pixel buffer is
+    /// <paramref name="width"/>×<paramref name="height"/> while
+    /// <paramref name="intrinsicWidth"/>/<paramref name="intrinsicHeight"/>
+    /// carry the source image's true dimensions for layout.
+    /// </summary>
+    public static DecodedImage CreatePooled(int width, int height, int intrinsicWidth, int intrinsicHeight, Action<Span<byte>> fill)
     {
         ArgumentNullException.ThrowIfNull(fill);
+        if (intrinsicWidth <= 0) throw new ArgumentOutOfRangeException(nameof(intrinsicWidth));
+        if (intrinsicHeight <= 0) throw new ArgumentOutOfRangeException(nameof(intrinsicHeight));
         var length = CheckedLength(width, height);
         var buffer = ArrayPool<byte>.Shared.Rent(length);
         try
@@ -73,7 +103,7 @@ public sealed class DecodedImage : IDisposable
             ArrayPool<byte>.Shared.Return(buffer);
             throw;
         }
-        return new DecodedImage(width, height, buffer, length, pooled: true);
+        return new DecodedImage(width, height, intrinsicWidth, intrinsicHeight, buffer, length, pooled: true);
     }
 
     /// <summary>
@@ -90,7 +120,7 @@ public sealed class DecodedImage : IDisposable
             throw new ArgumentException(
                 $"Buffer is {buffer.Length} bytes; need at least {length} for {width}x{height} RGBA8888.",
                 nameof(buffer));
-        return new DecodedImage(width, height, buffer, length, pooled: false);
+        return new DecodedImage(width, height, width, height, buffer, length, pooled: false);
     }
 
     private static int CheckedLength(int width, int height)

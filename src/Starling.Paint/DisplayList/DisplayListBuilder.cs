@@ -781,7 +781,9 @@ public sealed class DisplayListBuilder
 
         // background-size — default `auto auto` keeps the image at native
         // dimensions. A single length applies to width with height = auto.
-        var (renderW, renderH) = ResolveBackgroundSize(layerSize, boxW, boxH, decoded.Width, decoded.Height);
+        // Native size is the *intrinsic* size in CSS px, which can exceed the
+        // pixel buffer when the decode was resolution-clamped.
+        var (renderW, renderH) = ResolveBackgroundSize(layerSize, boxW, boxH, decoded.IntrinsicWidth, decoded.IntrinsicHeight);
         if (renderW <= 0 || renderH <= 0) return;
 
         // background-position — where the rendered image's top-left lands
@@ -805,7 +807,8 @@ public sealed class DisplayListBuilder
         var destH = destBottom - destY;
         if (destW <= 0 || destH <= 0) return;
 
-        // Map the clipped destination rect back to source pixel coords.
+        // Map the clipped destination rect back to source pixel coords —
+        // pixel-buffer dims here, because SourceRect addresses the buffer.
         var scaleX = decoded.Width / renderW;
         var scaleY = decoded.Height / renderH;
         var srcX = (destX - imgX) * scaleX;
@@ -943,8 +946,10 @@ public sealed class DisplayListBuilder
 
         var boxW = box.Frame.Width;
         var boxH = box.Frame.Height;
-        var nativeMaskW = maskImage?.Width ?? boxW;
-        var nativeMaskH = maskImage?.Height ?? boxH;
+        // Intrinsic dims: the mask's native CSS-px size, independent of any
+        // decode-resolution clamp on the pixel buffer.
+        var nativeMaskW = maskImage?.IntrinsicWidth ?? boxW;
+        var nativeMaskH = maskImage?.IntrinsicHeight ?? boxH;
         var (renderW, renderH) = ResolveBackgroundSize(style.Get(PropertyId.MaskSize), boxW, boxH, nativeMaskW, nativeMaskH);
         if (renderW <= 0 || renderH <= 0) return null;
 
