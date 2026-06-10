@@ -234,7 +234,11 @@ public sealed class LayoutSession
         var reference = new BoxTreeBuilder(_style, _images, nowMs).Build(document);
         var block = new BlockLayout(measurer, viewport, abort, incremental: false);
         block.Layout(reference);
-        new PositionLayout(block, viewport).LayoutPositioned(reference);
+        // Same sticky mode as the produced tree: with a store attached, sticky
+        // frames stay natural on both sides (the reference pass re-records
+        // identical constraints, a harmless overwrite); without one, both
+        // sides apply the clamped-relative fallback.
+        new PositionLayout(block, viewport, ScrollState).LayoutPositioned(reference);
 
         var divergence = Verification.LayoutVerifier.FindFirstDivergence(_root!, reference);
         if (divergence is { } d)
@@ -266,7 +270,7 @@ public sealed class LayoutSession
         var root = _root!;
         var block = new BlockLayout(measurer, viewport, abort, incremental) { RelaidScrollerSink = scrollSink };
         block.Layout(root);
-        var positioning = new PositionLayout(block, viewport);
+        var positioning = new PositionLayout(block, viewport, ScrollState);
         positioning.LayoutPositioned(root);
     }
 

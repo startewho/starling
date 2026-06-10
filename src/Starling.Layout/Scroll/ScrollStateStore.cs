@@ -63,7 +63,14 @@ public sealed class ScrollStateStore
         public int Generation;          // last layout pass that measured this entry
     }
 
+    private struct StickyEntry
+    {
+        public StickyConstraints C;
+        public int Generation;      // last layout pass that recorded this entry
+    }
+
     private readonly Dictionary<Element, Entry> _entries = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Element, StickyEntry> _sticky = new(ReferenceEqualityComparer.Instance);
     private readonly List<Element> _scratch = [];
     private Entry _root;
     private int _generation;
@@ -95,6 +102,93 @@ public sealed class ScrollStateStore
     /// funcs (<c>DisplayListBuilder.Build</c> et al.). (0,0) for non-scrollers.</summary>
     public (double X, double Y) GetOffset(Element element)
         => _entries.TryGetValue(element, out var e) ? (e.X, e.Y) : (0, 0);
+
+    /// <summary>True when any sticky element recorded constraints in the last
+    /// layout. Lets hot read paths (client rects) skip per-element shift
+    /// lookups entirely on the overwhelmingly common sticky-free page.</summary>
+    public bool HasStickyEntries => _sticky.Count > 0;
+
+    /// <summary>The layout-time sticky constraints for <paramref name="element"/>,
+    /// or false when the last layout recorded none (the element is not sticky,
+    /// or no scroll model was attached to its layout).</summary>
+    public bool TryGetStickyConstraints(Element element, out StickyConstraints constraints)
+    {
+        if (_sticky.TryGetValue(element, out var e))
+        {
+            constraints = e.C;
+            return true;
+        }
+        constraints = default;
+        return false;
+    }
+
+    /// <summary>
+    /// The paint-time sticky shift for <paramref name="element"/> at the
+    /// current scroll offsets — pure arithmetic over the recorded
+    /// <see cref="StickyConstraints"/> and the bound scroller's offset, no
+    /// layout (browser-plan/scroll-model.md). (0,0) for non-sticky elements.
+    /// Shaped like <see cref="GetOffset"/> so paint/hit-test/rect paths can
+    /// pre-bind it once. Runs per sticky box per scroll tick: two dictionary
+    /// reads plus branches, nothing allocated.
+    /// </summary>
+    public (double X, double Y) GetStickyShift(Element element)
+    {
+        if (_sticky.Count == 0 || !_sticky.TryGetValue(element, out var e))
+            return (0, 0);
+
+        ref readonly var c = ref e.C;
+        double offX, offY, portW, portH;
+        if (c.Scroller is null)
+        {
+            offX = _root.X; offY = _root.Y; portW = _root.PortW; portH = _root.PortH;
+        }
+        else if (_entries.TryGetValue(c.Scroller, out var sc))
+        {
+            offX = sc.X; offY = sc.Y; portW = sc.PortW; portH = sc.PortH;
+        }
+        else
+        {
+            // The scroller's entry vanished mid-frame (it will reconcile on
+            // the next layout). Treat as unscrolled rather than guessing.
+            offX = 0; offY = 0; portW = 0; portH = 0;
+        }
+
+        return (ComputeAxisShift(c.NaturalX - offX, c.Width, c.Left, c.Right, portW,
+                    c.NaturalX - c.CbX, c.CbRight - (c.NaturalX + c.Width)),
+                ComputeAxisShift(c.NaturalY - offY, c.Height, c.Top, c.Bottom, portH,
+                    c.NaturalY - c.CbY, c.CbBottom - (c.NaturalY + c.Height)));
+    }
+
+    /// <summary>
+    /// One axis of the sticky shift. <paramref name="position"/> is the
+    /// element's natural start edge in scrollport space (natural − offset).
+    /// The doc's formula for <c>top: T</c>: when that position falls below
+    /// <c>T</c>, shift down by the difference; mirrored for the end inset
+    /// against the scrollport extent; and the result is clamped so the box
+    /// never leaves its containing block — the available slack toward the end
+    /// is <c>containingBlock.end − natural.end</c>, toward the start
+    /// <c>natural.start − containingBlock.start</c>. When both insets are set
+    /// and the scrollport is too small to honor both, the start inset is
+    /// applied last and wins — the CSS over-constrained precedence
+    /// (top/left beat bottom/right).
+    /// </summary>
+    private static double ComputeAxisShift(
+        double position, double size, double? startInset, double? endInset,
+        double portExtent, double slackToStart, double slackToEnd)
+    {
+        var target = position;
+        if (endInset is { } e && target + size > portExtent - e)
+            target = portExtent - e - size;
+        if (startInset is { } st && target < st)
+            target = st;
+        var shift = target - position;
+        if (shift == 0) return 0;
+
+        // Containing-block clamp; a box larger than its CB has no slack.
+        var lo = -Math.Max(0, slackToStart);
+        var hi = Math.Max(0, slackToEnd);
+        return Math.Clamp(shift, lo, hi);
+    }
 
     /// <summary>True when any entry (or the root) owes a scroll event.</summary>
     public bool HasPendingEvents
@@ -209,6 +303,31 @@ public sealed class ScrollStateStore
         _root.Generation = _generation;
     }
 
+    /// <summary>Record one sticky element's layout-time constraints. Runs from
+    /// the position pass, which walks the full tree every pass (full and
+    /// incremental alike), so every live sticky element re-records each pass
+    /// and stale entries are swept by generation in the reconcile steps.</summary>
+    internal void RecordSticky(Element element, in StickyConstraints constraints)
+    {
+        _sticky[element] = new StickyEntry { C = constraints, Generation = _generation };
+    }
+
+    /// <summary>Drop sticky entries the pass that just ended did not re-record
+    /// (the element left the tree or stopped being sticky). Shared by the full
+    /// and scoped reconciles — unlike scroll geometry, sticky constraints are
+    /// re-recorded by EVERY pass, so the generation test is exact for both.</summary>
+    private void SweepStickyEntries()
+    {
+        if (_sticky.Count == 0) return;
+        _scratch.Clear();
+        foreach (var kv in _sticky)
+            if (kv.Value.Generation != _generation)
+                _scratch.Add(kv.Key);
+        foreach (var el in _scratch)
+            _sticky.Remove(el);
+        _scratch.Clear();
+    }
+
     /// <summary>
     /// Post-layout reconcile: re-clamp every entry against the geometry the
     /// pass just measured. When content shrank or a scrollport grew, the
@@ -220,6 +339,7 @@ public sealed class ScrollStateStore
     /// </summary>
     internal void ReconcileAfterLayout()
     {
+        SweepStickyEntries();
         ClampEntry(ref _root);
 
         if (_entries.Count == 0) return;
@@ -250,6 +370,7 @@ public sealed class ScrollStateStore
     /// </summary>
     internal void ClampAllEntries()
     {
+        SweepStickyEntries();
         ClampEntry(ref _root);
 
         if (_entries.Count == 0) return;
