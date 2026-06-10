@@ -18,9 +18,12 @@ public sealed record ComplexSelector(IReadOnlyList<ComplexSelectorPart> Parts)
         get
         {
             if (Parts.Count == 0) return null;
-            foreach (var simple in RightmostCompound.SimpleSelectors)
+            // Indexed loop: this property is read once per selector match, and foreach
+            // over the interface-typed list boxes a List enumerator each time.
+            var simples = RightmostCompound.SimpleSelectors;
+            for (var i = 0; i < simples.Count; i++)
             {
-                if (simple is PseudoElementSelector pe)
+                if (simples[i] is PseudoElementSelector pe)
                     return pe.Kind;
             }
             return null;

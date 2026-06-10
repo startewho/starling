@@ -82,6 +82,13 @@ internal static class DisplayListContentHash
                 case PopClip:
                     entries.Add(new Entry(item, alwaysFold: true, default));
                     continue;
+                // Filter brackets affect every pixel the group paints (a blur
+                // mixes neighbouring tiles), so fold them into every tile's
+                // hash — a chain change re-rasters the whole layer.
+                case PushFilter:
+                case PopFilter:
+                    entries.Add(new Entry(item, alwaysFold: true, default));
+                    continue;
             }
 
             if (DisplayItemBounds.TryGet(item, out var local))
@@ -147,6 +154,8 @@ internal static class DisplayListContentHash
         DrawBoxShadow s => s.Blur,
         StrokeRect s => s.Width / 2,
         StrokeRoundedRect s => s.Width / 2,
+        // Anti-aliased dash/dot/arc edges can touch the border-box boundary.
+        DrawBorderSides b => Math.Max(Math.Max(b.TopWidth, b.BottomWidth), Math.Max(b.LeftWidth, b.RightWidth)) / 2,
         _ => 0,
     };
 
@@ -268,6 +277,23 @@ internal static class DisplayListContentHash
                 HashBool(ref h, d.Bold);
                 HashBool(ref h, d.Italic);
                 break;
+            case DrawBorderSides bs:
+                Tag(ref h, 15);
+                HashRect(ref h, bs.Bounds);
+                HashRadii(ref h, bs.Radii);
+                HashDouble(ref h, bs.TopWidth);
+                HashDouble(ref h, bs.RightWidth);
+                HashDouble(ref h, bs.BottomWidth);
+                HashDouble(ref h, bs.LeftWidth);
+                HashColor(ref h, bs.TopColor);
+                HashColor(ref h, bs.RightColor);
+                HashColor(ref h, bs.BottomColor);
+                HashColor(ref h, bs.LeftColor);
+                HashInt(ref h, (int)bs.TopStyle);
+                HashInt(ref h, (int)bs.RightStyle);
+                HashInt(ref h, (int)bs.BottomStyle);
+                HashInt(ref h, (int)bs.LeftStyle);
+                break;
             case DrawTextShadow s:
                 Tag(ref h, 14);
                 HashString(ref h, s.Text);
@@ -281,6 +307,31 @@ internal static class DisplayListContentHash
                 HashFonts(ref h, s.FontFamilies);
                 HashBool(ref h, s.Bold);
                 HashBool(ref h, s.Italic);
+                break;
+            case StrokeSegments seg:
+                Tag(ref h, 16);
+                HashDouble(ref h, seg.X0);
+                HashDouble(ref h, seg.Y0);
+                HashDouble(ref h, seg.X1);
+                HashDouble(ref h, seg.Y1);
+                HashDouble(ref h, seg.X2);
+                HashDouble(ref h, seg.Y2);
+                HashColor(ref h, seg.Color);
+                HashDouble(ref h, seg.Width);
+                break;
+            case PushFilter pf:
+                Tag(ref h, 17);
+                HashRect(ref h, pf.Bounds);
+                HashFilters(ref h, pf.Filters);
+                break;
+            case PopFilter:
+                Tag(ref h, 18);
+                break;
+            case DrawBackdropFilter bf:
+                Tag(ref h, 19);
+                HashRect(ref h, bf.Bounds);
+                HashRadii(ref h, bf.Radii);
+                HashFilters(ref h, bf.Filters);
                 break;
             default:
                 // Unknown item kind: fold a distinct discriminator so its mere
@@ -333,6 +384,20 @@ internal static class DisplayListContentHash
         HashInt(ref h, families.Count);
         for (var i = 0; i < families.Count; i++)
             HashString(ref h, families[i]);
+    }
+
+    private static void HashFilters(ref ulong h, IReadOnlyList<FilterFunction> filters)
+    {
+        HashInt(ref h, filters.Count);
+        for (var i = 0; i < filters.Count; i++)
+        {
+            var f = filters[i];
+            HashInt(ref h, (int)f.Kind);
+            HashDouble(ref h, f.Amount);
+            HashDouble(ref h, f.OffsetX);
+            HashDouble(ref h, f.OffsetY);
+            HashColor(ref h, f.Color ?? CssColor.Black);
+        }
     }
 
     private static void HashRect(ref ulong h, Rect r)

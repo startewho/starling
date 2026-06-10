@@ -46,6 +46,19 @@ public abstract class Box
     public Edges Padding { get; internal set; }
     public Edges Border { get; internal set; }
 
+    /// <summary>
+    /// Hypothetical static position of an out-of-flow box (CSS 2.1 §10.3.7 /
+    /// §10.6.4): where the in-flow pass WOULD have placed its top-left, in the
+    /// parent's content-box coordinate space (same space as <see cref="Frame"/>).
+    /// Recorded by the flow pass when it skips a `position:absolute|fixed`
+    /// child; consumed by <c>PositionLayout</c> when an axis has BOTH insets
+    /// auto. Defaults to (0,0) — the parent's content origin — which is also
+    /// the recorded value for flex containers (sole-item flex-start
+    /// approximation, CSS Flexbox §4.1).
+    /// </summary>
+    internal double StaticX;
+    internal double StaticY;
+
     // ---- Incremental-layout cache (see Starling.Layout.Incremental) ----------
     //
     // These back constraint-space-keyed subtree reuse. They are written only on
@@ -93,6 +106,82 @@ public abstract class Box
     internal Starling.Layout.Incremental.ConstraintSpace? LaidConstraintMeasure;
     internal double MeasuredHeight;
 
+    /// <summary>
+    /// Flex/grid-item layout reuse keys (the <c>BlockLayout.LayoutItem</c>
+    /// seam). Flex items bypass <see cref="LaidConstraint"/>'s LayoutBlock
+    /// check — they dispatch straight to the nested formatting context — so
+    /// without their own keys every measure→final sequence re-lays the whole
+    /// subtree, and N nested flex levels cost ~3^N full passes (x.com's
+    /// ~40-deep all-flex DOM never finished). One slot each for the last
+    /// measurement-mode and last final-mode item layout: same constraints on a
+    /// clean subtree replay the content extent in O(1) (descendant frames are
+    /// parent-relative, so the subtree needs no touch-up). Gated on
+    /// <see cref="SubtreeDirty"/> like every other reuse key.
+    /// </summary>
+    internal Starling.Layout.Incremental.ConstraintSpace? ItemMeasureConstraint;
+    internal double ItemMeasuredContent;
+    internal Starling.Layout.Incremental.ConstraintSpace? ItemLaidConstraint;
+    internal double ItemLaidContent;
+
+    // ---- Scroll-measurement cache (see Starling.Layout.Scroll) ----------------
+    //
+    // Written by ScrollOverflowMeasurer and the layout seams that re-lay a box;
+    // never read by layout itself. The classification is memoized per box
+    // because Style is immutable for a box's lifetime (a style change rebuilds
+    // the box). The subtree extent is relative to the box's own frame origin,
+    // so pure repositioning of a clean subtree never invalidates it.
+
+    /// <summary>Lazily memoized overflow/position classification — see
+    /// <see cref="Scroll.ScrollOverflowMeasurer.Classify"/>. Replaces the five
+    /// per-pass CssValue keyword reads the measurer used to do per box.</summary>
+    internal Scroll.ScrollBoxFlags ScrollFlags;
+
+    /// <summary>True when <see cref="ScrollExtentRight"/>/<see cref="ScrollExtentBottom"/>
+    /// describe this subtree as currently laid out. Cleared (chain-to-root) by
+    /// every seam that re-lays the box when a scroll store is attached, so a
+    /// scoped re-measure descends only into relaid subtrees.</summary>
+    internal bool ScrollExtentValid;
+
+    /// <summary>Cached scrollable-extent of this box's subtree (border box union
+    /// of non-clipped, non-fixed descendants), relative to the box's own frame
+    /// origin. Only meaningful while <see cref="ScrollExtentValid"/> is true.</summary>
+    internal double ScrollExtentRight;
+    internal double ScrollExtentBottom;
+
+    /// <summary>True while the box sits in the layout session's relaid-scroller
+    /// queue, so a box laid several times in one pass is queued exactly once.</summary>
+    internal bool ScrollMeasureQueued;
+
+    // ---- position:relative / sticky shift bookkeeping (PositionLayout) -------
+    //
+    // The position pass translates relative (and fallback-sticky) frames in
+    // place after every layout pass. An incremental pass reuses clean subtrees
+    // without rewriting their interior frames, so a box deeper than one level
+    // inside a reused subtree still carries the previous pass's shifted frame
+    // when the pass runs again — re-shifting it compounds (y=100 -> 150 -> 200
+    // across passes that touch only an unrelated sibling). The pass records
+    // the natural (pre-shift) origin and the exact frame it wrote; when it
+    // sees that same frame again it recomputes the shift from the natural
+    // origin instead of stacking a second shift on top.
+
+    /// <summary>True when <see cref="RelShiftedFrame"/> /
+    /// <see cref="RelNaturalX"/> / <see cref="RelNaturalY"/> describe the last
+    /// relative/sticky shift the position pass applied to this box.</summary>
+    internal bool RelShiftValid;
+
+    /// <summary>The exact frame the position pass last wrote (natural +
+    /// shift). When the current <see cref="Frame"/> still equals it, no layout
+    /// seam re-placed the box since, so the natural origin below is the basis
+    /// for this pass's shift. Any seam that re-lays the box writes a fresh
+    /// (natural) frame, which no longer matches and resets the basis.</summary>
+    internal Rect RelShiftedFrame;
+
+    /// <summary>Natural (pre-shift) frame origin recorded when the shift was
+    /// applied. The shift is a pure translation, so width/height need no
+    /// bookkeeping.</summary>
+    internal double RelNaturalX;
+    internal double RelNaturalY;
+
     public void AppendChild(Box child)
     {
         ArgumentNullException.ThrowIfNull(child);
@@ -128,6 +217,12 @@ public sealed class TextBox : Box
     /// changed text node in place (the box structure is unchanged by a text
     /// edit); the inline pass re-shapes from the new value.</summary>
     public string Text { get; internal set; }
+
+    /// <summary>True when this run is a form control's synthesized
+    /// <c>placeholder</c> text (an empty text input/textarea showing its
+    /// <c>placeholder</c> attribute). The painter renders it in the UA's
+    /// muted placeholder gray instead of the element's <c>color</c>.</summary>
+    public bool IsPlaceholder { get; init; }
 
     /// <summary>
     /// Populated by the inline formatting context: one entry per line fragment

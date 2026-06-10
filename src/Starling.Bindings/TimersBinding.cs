@@ -118,10 +118,23 @@ public static class TimersBinding
             return JsValue.Undefined;
         }, isConstructor: false);
 
+        // ---- queueMicrotask(callback) — HTML §8.5 ---------------------------
+        // Enqueues directly on the realm's microtask queue (not the timer
+        // wheel): the callback runs at the current drain, before any timer.
+        var queueMicrotask = new JsNativeFunction(realm, "queueMicrotask", 1, (_, args) =>
+        {
+            var cb = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (!AbstractOperations.IsCallable(cb))
+                throw new JsThrow(realm.NewTypeError("queueMicrotask callback is not callable"));
+            realm.Microtasks.Enqueue(() => InvokeHandler(runtime, cb, Array.Empty<JsValue>()));
+            return JsValue.Undefined;
+        }, isConstructor: false);
+
         DefineGlobal(realm, "setTimeout", setTimeout);
         DefineGlobal(realm, "setInterval", setInterval);
         DefineGlobal(realm, "clearTimeout", clearTimeout);
         DefineGlobal(realm, "clearInterval", clearInterval);
+        DefineGlobal(realm, "queueMicrotask", queueMicrotask);
     }
 
     private static void DefineGlobal(JsRealm realm, string name, JsNativeFunction fn)
@@ -201,6 +214,10 @@ public static class TimersBinding
     {
         if (value.IsObject)
         {
+            // Prefer the full stack (message + frames) when the throw carried
+            // one — a bare message is useless for minified-bundle failures.
+            var stack = value.AsObject.Get("stack");
+            if (stack.IsString) return stack.AsString;
             var msg = value.AsObject.Get("message");
             if (!msg.IsUndefined) return JsValue.ToStringValue(msg);
         }

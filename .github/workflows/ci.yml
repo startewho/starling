@@ -26,7 +26,9 @@ jobs:
           submodules: recursive
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          # global.json pins the exact SDK (currently the .NET 11 preview).
+          # Install from it so CI always matches the repo's pinned SDK.
+          global-json-file: global.json
       - name: Install native codec libs (Linux)
         if: runner.os == 'Linux'
         # Starling.Codecs' Linux decoder tests dlopen these at runtime; the
@@ -85,7 +87,8 @@ jobs:
           submodules: recursive
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          # Match the SDK pinned in global.json (the .NET 11 preview).
+          global-json-file: global.json
       - name: dotnet format
         # Compiles, so needs the SixLabors license — skip on fork PRs (no
         # secret). The interop-policy grep below needs no build and still runs.
@@ -139,7 +142,8 @@ jobs:
           submodules: recursive
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          # Match the SDK pinned in global.json (the .NET 11 preview).
+          global-json-file: global.json
       - name: Restore (locked)
         run: dotnet restore --locked-mode
       - name: Build

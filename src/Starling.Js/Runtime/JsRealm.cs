@@ -21,6 +21,17 @@ public sealed class JsRealm
     /// <summary>Optional host hook for <c>console.clear()</c>.</summary>
     public Action? ConsoleClear { get; set; }
 
+    /// <summary>HostPromiseRejectionTracker(promise, "reject") — invoked when a
+    /// promise is rejected with no reactions attached. The runtime queues the
+    /// promise and reports it at the end of the next microtask drain unless
+    /// <see cref="OnRejectionHandled"/> retracts it first.</summary>
+    public Action<JsPromise>? OnUnhandledRejection { get; set; }
+
+    /// <summary>HostPromiseRejectionTracker(promise, "handle") — invoked when a
+    /// reaction is attached to an already-rejected, previously-unhandled
+    /// promise (late <c>.catch</c>).</summary>
+    public Action<JsPromise>? OnRejectionHandled { get; set; }
+
     internal Dictionary<string, System.Diagnostics.Stopwatch> ConsoleTimers { get; } = new(StringComparer.Ordinal);
     internal Dictionary<string, int> ConsoleCounts { get; } = new(StringComparer.Ordinal);
     internal int ConsoleGroupDepth { get; set; }
@@ -187,6 +198,8 @@ public sealed class JsRealm
     public JsObject? MouseEventPrototype { get; set; }
     public JsObject? KeyboardEventPrototype { get; set; }
     public JsObject? FocusEventPrototype { get; set; }
+    public JsObject? AnimationEventPrototype { get; set; }
+    public JsObject? TransitionEventPrototype { get; set; }
     public JsObject? DomExceptionPrototype { get; set; }
     public JsObject? WindowPrototype { get; set; }
     public JsObject? EventTargetConstructor { get; set; }

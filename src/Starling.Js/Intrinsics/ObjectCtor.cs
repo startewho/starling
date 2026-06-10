@@ -536,31 +536,54 @@ public static class ObjectCtor
         return JsValue.Boolean(AbstractOperations.SameValue(a, b));
     }
 
-    /// <summary>§20.1.2.7 Object.fromEntries. This implementation accepts an
-    /// array-like object of <c>[key, value]</c> pairs. General iterable input
-    /// is not consumed yet.</summary>
+    /// <summary>§20.1.2.7 Object.fromEntries — consumes any iterable of
+    /// <c>[key, value]</c> pairs via the iterator protocol (§7.4), so Maps,
+    /// generators, and entries() iterators all work. Plain array-likes
+    /// (length + indexed access) stay as a fallback for objects without
+    /// <c>@@iterator</c>.</summary>
     private static JsValue FromEntries(JsRealm realm, JsValue[] args)
     {
-        if (args.Length == 0 || !args[0].IsObject)
+        var srcV = args.Length > 0 ? args[0] : JsValue.Undefined;
+        if (!srcV.IsObject && !srcV.IsString)
             throw new JsThrow(realm.NewTypeError("Object.fromEntries requires an iterable"));
-        var src = args[0].AsObject;
         var result = realm.NewOrdinaryObject();
+
+        if (ArrayCtor.HasIteratorMethod(realm, srcV))
+        {
+            var record = AbstractOperations.GetIterator(realm, realm.ActiveVm, srcV);
+            while (true)
+            {
+                var step = AbstractOperations.IteratorStep(realm, realm.ActiveVm, ref record);
+                if (step is null) break;
+                var entryV = AbstractOperations.IteratorValue(realm.ActiveVm, step.Value);
+                AddEntry(realm, result, entryV);
+            }
+            return JsValue.Object(result);
+        }
+
+        var src = srcV.AsObject;
         var lengthV = src.Get("length");
         if (!lengthV.IsNumber)
-            throw new JsThrow(realm.NewTypeError("Object.fromEntries: iterable has no length"));
+            throw new JsThrow(realm.NewTypeError("Object.fromEntries: source is not iterable or array-like"));
         var len = (int)lengthV.AsNumber;
         for (var i = 0; i < len; i++)
-        {
-            var entryV = src.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            if (!entryV.IsObject)
-                throw new JsThrow(realm.NewTypeError("Object.fromEntries: entry must be an object"));
-            var entry = entryV.AsObject;
-            var key = AbstractOperations.ToPropertyKey(entry.Get("0"));
-            var val = entry.Get("1");
-            result.DefineOwnProperty(key,
-                PropertyDescriptor.Data(val, writable: true, enumerable: true, configurable: true));
-        }
+            AddEntry(realm, result,
+                src.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         return JsValue.Object(result);
+    }
+
+    /// <summary>§20.1.2.7 steps 5.d–5.k (the adder closure): each entry must
+    /// be an object; its <c>0</c>/<c>1</c> properties become the key/value of
+    /// a new enumerable data property.</summary>
+    private static void AddEntry(JsRealm realm, JsObject result, JsValue entryV)
+    {
+        if (!entryV.IsObject)
+            throw new JsThrow(realm.NewTypeError("Object.fromEntries: entry must be an object"));
+        var entry = entryV.AsObject;
+        var key = AbstractOperations.ToPropertyKey(entry.Get("0"));
+        var val = entry.Get("1");
+        result.DefineOwnProperty(key,
+            PropertyDescriptor.Data(val, writable: true, enumerable: true, configurable: true));
     }
 
     /// <summary>§20.1.2.13 Object.hasOwn(obj, key).</summary>

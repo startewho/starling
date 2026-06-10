@@ -47,7 +47,8 @@ public sealed class CompositedPageRenderer : IDisposable
         IImageResolver? images = null,
         Func<Box, bool>? isAnimatingLayerRoot = null,
         Func<Element, (double X, double Y)>? scrollOffsets = null,
-        IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null)
+        IReadOnlyList<SurfaceOverlayLayer>? drawingOverlays = null,
+        Func<Element, (double X, double Y)>? stickyShifts = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -57,7 +58,8 @@ public sealed class CompositedPageRenderer : IDisposable
             var tree = new LayerTreeBuilder(styleOverride, images,
                 isAnimatingLayerRoot: isAnimatingLayerRoot,
                 layerIdFor: _tiles.LayerIdFor,
-                scrollOffsets: scrollOffsets).Build(root);
+                scrollOffsets: scrollOffsets,
+                stickyShifts: stickyShifts).Build(root);
             var compositor = new Starling.Paint.Compositor.Compositor(_backend, _tiles);
             return compositor.RenderGpuTextures(tree, viewport, scale, drawingOverlays);
         }

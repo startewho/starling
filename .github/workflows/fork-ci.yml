@@ -58,7 +58,8 @@ jobs:
           submodules: recursive
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          # Match the SDK pinned in global.json (the .NET 11 preview).
+          global-json-file: global.json
       - name: Install native codec libs (Linux)
         # Mirrors ci.yml: Starling.Codecs' Linux decoder tests dlopen these.
         run: sudo apt-get update && sudo apt-get install -y libpng16-16 libjpeg-turbo8 libwebp7

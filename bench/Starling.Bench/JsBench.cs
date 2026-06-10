@@ -46,8 +46,8 @@ public class JsBench
     [GlobalSetup]
     public void Setup()
     {
-        _sumLoopChunk  = JsCompiler.CompileForEval(new JsParser(SumLoopSrc).ParseProgram());
-        _fibChunk      = JsCompiler.CompileForEval(new JsParser(FibRecursiveSrc).ParseProgram());
+        _sumLoopChunk = JsCompiler.CompileForEval(new JsParser(SumLoopSrc).ParseProgram());
+        _fibChunk = JsCompiler.CompileForEval(new JsParser(FibRecursiveSrc).ParseProgram());
         _objAllocChunk = JsCompiler.CompileForEval(new JsParser(ObjectAllocSrc).ParseProgram());
     }
 

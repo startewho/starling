@@ -1,0 +1,218 @@
+{
+  "//": "Override layer for the Web IDL bindings generator. 'skip' lists members the emitter must not generate. They keep the Starling binding. 'override' supplies a custom getter/setter the emitter uses instead of the mechanical CLR mapping. Each entry says why.",
+  "requiredSurface": [
+    "Node.nodeType",
+    "Node.nodeName",
+    "Node.ownerDocument",
+    "Node.parentNode",
+    "Node.childNodes",
+    "Node.firstChild",
+    "Node.lastChild",
+    "Node.previousSibling",
+    "Node.nextSibling",
+    "Node.nodeValue",
+    "Node.textContent",
+    "Node.getRootNode",
+    "Node.hasChildNodes",
+    "Node.cloneNode",
+    "Node.isEqualNode",
+    "Node.isSameNode",
+    "Node.compareDocumentPosition",
+    "Node.contains",
+    "Node.insertBefore",
+    "Node.appendChild",
+    "Node.replaceChild",
+    "Node.removeChild",
+    "Element.localName",
+    "Element.tagName",
+    "Element.id",
+    "Element.className",
+    "Element.classList",
+    "Element.attributes",
+    "Element.children",
+    "Element.getAttribute",
+    "Element.setAttribute",
+    "Element.removeAttribute",
+    "Element.hasAttribute",
+    "Element.getElementsByTagName",
+    "Element.getElementsByClassName",
+    "Element.querySelector",
+    "Element.querySelectorAll",
+    "Element.matches",
+    "Element.closest",
+    "Document.documentElement",
+    "Document.body",
+    "Document.head",
+    "Document.title",
+    "Document.getElementById",
+    "Document.getElementsByTagName",
+    "Document.getElementsByClassName",
+    "Document.getElementsByName",
+    "Document.querySelector",
+    "Document.querySelectorAll",
+    "Document.createElement",
+    "Document.createTextNode",
+    "Document.createComment",
+    "Document.createDocumentFragment",
+    "CharacterData.data",
+    "CharacterData.length"
+  ],
+  "skip": [
+    "Document.createElement",
+    "Document.createAttribute",
+    "Document.createAttributeNS",
+    "Node.cloneNode",
+    "EventTarget.addEventListener",
+    "EventTarget.removeEventListener",
+    "EventTarget.dispatchEvent",
+    "Element.innerHTML",
+    "Element.outerHTML",
+    "Element.insertAdjacentHTML",
+    "Document.createEvent",
+    "Document.body",
+    "Document.head",
+    "Document.title",
+    "Document.getElementsByName",
+    "Document.createElementNS",
+    "Document.createCDATASection",
+    "Document.adoptNode",
+    "Document.importNode",
+    "Document.implementation",
+    "Element.getAttributeNode",
+    "Element.getAttributeNodeNS",
+    "Element.setAttributeNode",
+    "Element.setAttributeNodeNS",
+    "Element.removeAttributeNode"
+  ],
+  "skipReason": {
+    "Document.createElement": "Must pick the HTML element-class prototype (HTMLDivElement and so on) so instanceof works, and apply HTML tag casing. A plain wrap of Document.CreateElement gives the generic Element prototype, so this stays with the Starling binding.",
+    "Document.createAttribute": "HTML documents lowercase the attribute name and the binding validates the name. A direct call skips that, so this stays with the Starling binding.",
+    "Document.createAttributeNS": "Namespace and qualified-name validation plus null-namespace handling need custom logic, so this stays with the Starling binding.",
+    "Node.cloneNode": "Cloning goes through a binding-specific deep/shallow clone that rewraps the subtree with correct prototypes, so this stays with the Starling binding.",
+    "EventTarget.addEventListener": "The listener registry maps JS listener object identity to host delegates and supports the handleEvent protocol and once/capture/passive options. This is coupled to the JS object model and stays with the Starling binding.",
+    "EventTarget.removeEventListener": "Pairs with addEventListener's JS-identity listener registry. This stays with the Starling binding.",
+    "EventTarget.dispatchEvent": "Re-enters the JS engine per listener through the event path. This is coupled to the binding event loop and stays with the Starling binding.",
+    "Element.innerHTML": "Setter runs the HTML fragment-parsing algorithm and the getter runs the serializer (Starling.Html). This is coupled to the parser and stays with the Starling binding.",
+    "Element.outerHTML": "Same HTML parser/serializer coupling as innerHTML. This stays with the Starling binding.",
+    "Element.insertAdjacentHTML": "Runs the HTML fragment parser at a position. This stays with the Starling binding.",
+    "Document.createEvent": "Legacy event factory that constructs the right Event subtype and wrapper; stays with the Starling binding.",
+    "Document.body": "HTML document-tree access is already installed by NodeBindings and stays with the Starling binding.",
+    "Document.head": "HTML document-tree access is already installed by NodeBindings and stays with the Starling binding.",
+    "Document.title": "The Starling binding implements title lookup and setter behavior over the real title element.",
+    "Document.getElementsByName": "HTML legacy lookup returns a live NodeList and stays with the Starling binding.",
+    "Document.createElementNS": "Must pick the right element-class prototype and validate the namespace and qualified name, like createElement. A plain wrap gives the generic Element prototype, so this stays with the Starling binding.",
+    "Document.createCDATASection": "HTML documents reject this with NotSupportedError and the wrapper needs the CDATASection prototype, so this stays with the Starling binding.",
+    "Document.adoptNode": "Adopting rewraps the moved subtree with the correct prototypes in the new document, like cloneNode, so this stays with the Starling binding.",
+    "Document.importNode": "Importing clones into this document and rewraps the subtree with the correct prototypes, like cloneNode, so this stays with the Starling binding.",
+    "Document.implementation": "Returns the DOMImplementation host object, which the Starling binding builds and caches, so this stays with the Starling binding.",
+    "Element.getAttributeNode": "Returns an Attr (the CLR AttrNode) through the Attr-specific wrapper, so this stays with the Starling binding.",
+    "Element.getAttributeNodeNS": "Returns an Attr through the Attr-specific wrapper, so this stays with the Starling binding.",
+    "Element.setAttributeNode": "Takes and returns an Attr through the Attr-specific wrapper and moves the node between elements, so this stays with the Starling binding.",
+    "Element.setAttributeNodeNS": "Takes and returns an Attr through the Attr-specific wrapper, so this stays with the Starling binding.",
+    "Element.removeAttributeNode": "Matches the Attr by reference and raises NotFoundError, returning the removed Attr through the Attr-specific wrapper, so this stays with the Starling binding."
+  },
+    "//dispatch": "Thin bindings that dispatch to a Starling DOM impl method (the Chromium model). The DOM impl does the spec validation and raises a typed DomException, which the binding translates.",
+  "dispatch": {
+    "Node.appendChild": { "impl": "PreInsert", "params": ["Node"], "trailing": ["null"], "raises": true, "returns": "node" },
+    "Node.insertBefore": { "impl": "PreInsert", "params": ["Node", "Node?"], "raises": true, "returns": "node" },
+    "Node.removeChild": { "impl": "PreRemove", "params": ["Node"], "raises": true, "returns": "node" },
+    "Node.replaceChild": { "impl": "PreReplace", "params": ["Node", "Node"], "raises": true, "returns": "node" },
+    "Node.contains": { "impl": "Contains", "params": ["Node?"], "returns": "bool" },
+    "Node.isSameNode": { "impl": "IsSameNode", "params": ["Node?"], "returns": "bool" },
+    "Node.isEqualNode": { "impl": "IsEqualNode", "params": ["Node?"], "returns": "bool" },
+    "Node.getRootNode": { "impl": "GetRootNode", "params": [], "returns": "node" },
+    "Node.compareDocumentPosition": { "impl": "CompareDocumentPosition", "params": ["Node"], "returns": "number" },
+    "Node.normalize": { "impl": "Normalize", "params": [], "returns": "void" },
+
+    "Element.before": { "impl": "Before", "params": ["...NodeOrString"], "returns": "void" },
+    "Element.after": { "impl": "After", "params": ["...NodeOrString"], "returns": "void" },
+    "Element.replaceWith": { "impl": "ReplaceWith", "params": ["...NodeOrString"], "returns": "void" },
+    "Element.remove": { "impl": "RemoveFromParent", "params": [], "returns": "void" },
+    "Element.append": { "impl": "Append", "params": ["...NodeOrString"], "returns": "void" },
+    "Element.prepend": { "impl": "Prepend", "params": ["...NodeOrString"], "returns": "void" },
+    "Element.replaceChildren": { "impl": "ReplaceChildren", "params": ["...NodeOrString"], "returns": "void" },
+
+    "CharacterData.before": { "impl": "Before", "params": ["...NodeOrString"], "returns": "void" },
+    "CharacterData.after": { "impl": "After", "params": ["...NodeOrString"], "returns": "void" },
+    "CharacterData.replaceWith": { "impl": "ReplaceWith", "params": ["...NodeOrString"], "returns": "void" },
+    "CharacterData.remove": { "impl": "RemoveFromParent", "params": [], "returns": "void" },
+
+    "Document.append": { "impl": "Append", "params": ["...NodeOrString"], "returns": "void" },
+    "Document.prepend": { "impl": "Prepend", "params": ["...NodeOrString"], "returns": "void" },
+    "Document.replaceChildren": { "impl": "ReplaceChildren", "params": ["...NodeOrString"], "returns": "void" },
+
+    "DocumentFragment.append": { "impl": "Append", "params": ["...NodeOrString"], "returns": "void" },
+    "DocumentFragment.prepend": { "impl": "Prepend", "params": ["...NodeOrString"], "returns": "void" },
+    "DocumentFragment.replaceChildren": { "impl": "ReplaceChildren", "params": ["...NodeOrString"], "returns": "void" },
+
+    "DocumentType.before": { "impl": "Before", "params": ["...NodeOrString"], "returns": "void" },
+    "DocumentType.after": { "impl": "After", "params": ["...NodeOrString"], "returns": "void" },
+    "DocumentType.replaceWith": { "impl": "ReplaceWith", "params": ["...NodeOrString"], "returns": "void" },
+    "DocumentType.remove": { "impl": "RemoveFromParent", "params": [], "returns": "void" },
+
+    "Element.getAttributeNS": { "impl": "GetAttributeNS", "params": ["string?", "string"], "returns": "string" },
+    "Element.setAttributeNS": { "impl": "SetAttributeNS", "params": ["string?", "string", "string"], "returns": "void" },
+    "Element.removeAttributeNS": { "impl": "RemoveAttributeNS", "params": ["string?", "string"], "returns": "void" },
+    "Element.hasAttributeNS": { "impl": "HasAttributeNS", "params": ["string?", "string"], "returns": "bool" },
+    "Element.hasAttributes": { "impl": "HasAttributes", "params": [], "returns": "bool" },
+    "Element.getAttributeNames": { "impl": "GetAttributeNames", "params": [], "returns": "stringarray" },
+    "Element.toggleAttribute": { "impl": "ToggleAttribute", "params": ["string", "bool?"], "returns": "bool" },
+    "Element.getElementsByTagName": { "impl": "GetElementsByTagName", "params": ["string"], "returns": "htmlcollection" },
+    "Element.getElementsByClassName": { "impl": "GetElementsByClassName", "params": ["string"], "returns": "htmlcollection" },
+    "Document.getElementsByTagName": { "impl": "GetElementsByTagName", "params": ["string"], "returns": "htmlcollection" },
+    "Document.getElementsByClassName": { "impl": "GetElementsByClassName", "params": ["string"], "returns": "htmlcollection" },
+    "Element.getElementsByTagNameNS": { "impl": "GetElementsByTagNameNS", "params": ["string?", "string"], "returns": "htmlcollection" },
+    "Document.getElementsByTagNameNS": { "impl": "GetElementsByTagNameNS", "params": ["string?", "string"], "returns": "htmlcollection" },
+
+    "Element.querySelector": { "impl": "QuerySelectorEngine.First", "static": true, "passRealm": true, "params": ["string"], "returns": "node" },
+    "Element.querySelectorAll": { "impl": "QuerySelectorEngine.All", "static": true, "passRealm": true, "params": ["string"], "returns": "array" },
+    "Element.matches": { "impl": "QuerySelectorEngine.Matches", "static": true, "passRealm": true, "params": ["string"], "returns": "bool" },
+    "Element.webkitMatchesSelector": { "impl": "QuerySelectorEngine.Matches", "static": true, "passRealm": true, "params": ["string"], "returns": "bool" },
+    "Element.closest": { "impl": "QuerySelectorEngine.Closest", "static": true, "passRealm": true, "params": ["string"], "returns": "node" },
+
+    "Document.querySelector": { "impl": "QuerySelectorEngine.First", "static": true, "passRealm": true, "params": ["string"], "returns": "node" },
+    "Document.querySelectorAll": { "impl": "QuerySelectorEngine.All", "static": true, "passRealm": true, "params": ["string"], "returns": "array" },
+
+    "DocumentFragment.querySelector": { "impl": "QuerySelectorEngine.First", "static": true, "passRealm": true, "params": ["string"], "returns": "node" },
+    "DocumentFragment.querySelectorAll": { "impl": "QuerySelectorEngine.All", "static": true, "passRealm": true, "params": ["string"], "returns": "array" }
+  },
+  "override": {
+    "Node.nodeType": {
+      "//": "The CLR node discriminator is the NodeKind enum (named Kind), not a numeric NodeType property; expose its integer DOM spec code, which is what nodeType returns.",
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h ? JsValue.Number((double)(int)h.Kind) : JsValue.Undefined"
+    },
+    "Node.childNodes": {
+      "//": "Starling returns a real JS Array of children (like querySelectorAll).",
+      "getter": "(thisV, _) => IdlMarshal.WrapNodeArray(realm, DomWrappers.UnwrapAs<Node>(thisV)?.ChildNodes ?? System.Array.Empty<Node>())"
+    },
+    "Element.children": {
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } e ? IdlMarshal.WrapHtmlCollection(realm, () => e.ChildElements()) : JsValue.Null"
+    },
+    "Document.children": {
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Document>(thisV) is { } d ? IdlMarshal.WrapHtmlCollection(realm, () => d.ChildElements()) : JsValue.Null"
+    },
+    "DocumentFragment.children": {
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<DocumentFragment>(thisV) is { } f ? IdlMarshal.WrapHtmlCollection(realm, () => f.ChildElements()) : JsValue.Null"
+    },
+    "Element.classList": {
+      "//": "Cache the DOMTokenList wrapper on the JS element object so el.classList === el.classList.",
+      "getter": "(thisV, _) => { if (DomWrappers.UnwrapElement(thisV) is not { } e || !thisV.IsObject) return JsValue.Null; var w = thisV.AsObject; var cached = w.Get(\"__classList__\"); if (!cached.IsUndefined) return cached; var o = JsValue.Object(NodeBindings.BuildDomTokenList(realm, e)); w.Set(\"__classList__\", o); return o; }"
+    },
+    "Element.attributes": {
+      "//": "Cache the NamedNodeMap wrapper on the JS element object for stable identity.",
+      "getter": "(thisV, _) => { if (DomWrappers.UnwrapElement(thisV) is not { } e || !thisV.IsObject) return JsValue.Null; var w = thisV.AsObject; var cached = w.Get(\"__attributes__\"); if (!cached.IsUndefined) return cached; var o = JsValue.Object(new JsNamedNodeMapObject(realm, e)); w.Set(\"__attributes__\", o); return o; }"
+    },
+    "Node.nodeName": {
+      "//": "HTML uppercases an element's node name and special nodes have fixed names. Reuse the Starling NormalizeNodeName helper.",
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Node>(thisV) is { } h ? JsValue.String(NodeBindings.NormalizeNodeName(h)) : JsValue.String(\"\")"
+    },
+    "Element.tagName": {
+      "//": "ASCII-uppercase the tag name only for HTML-namespace elements (DOM 4.9).",
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h ? JsValue.String(h.Namespace == Element.HtmlNamespace ? h.TagName.ToUpperInvariant() : h.TagName) : JsValue.String(\"\")"
+    },
+    "Element.namespaceURI": {
+      "//": "The CLR Element.Namespace is a non-null string ('' for the null namespace); namespaceURI returns null in that case (DOM 4.9).",
+      "getter": "(thisV, _) => DomWrappers.UnwrapAs<Element>(thisV) is { } h ? IdlMarshal.WrapString(string.IsNullOrEmpty(h.Namespace) ? null : h.Namespace) : JsValue.Null"
+    }
+  }
+}

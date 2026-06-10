@@ -52,6 +52,7 @@ internal sealed class StarlingScriptSession : IScriptSession
     // the loop's monotonic clock without rewinding the load-time advance.
     private long _liveBaselineMs;
     private bool _liveStarted;
+    private long _livePrevElapsedMs;
 
     private Action<ConsoleLevel, string> _consoleSink = static (_, _) => { };
 
@@ -167,6 +168,13 @@ internal sealed class StarlingScriptSession : IScriptSession
         {
             throw new ScriptThrow(DescribeThrow(ex.Value), jsStack: ExtractJsStack(ex.Value), ex);
         }
+        catch (Starling.Js.Parse.JsParseException ex)
+        {
+            // A source-level syntax error is a SyntaxError at the JS layer
+            // (HTML §4.12.1 fires `error`); it must never escape as a native
+            // exception that JS try/catch can't see.
+            throw new ScriptThrow($"SyntaxError: {ex.Message}", jsStack: null, ex);
+        }
     }
 
     /// <summary>Pull the JS-side <c>error.stack</c> string off a thrown Error
@@ -280,18 +288,23 @@ internal sealed class StarlingScriptSession : IScriptSession
             return true;
         }
 
-        if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
-        {
-            _loop.AdvanceBy(SimulatedStepMs);
-            return true;
-        }
-
+        // Dynamic <script src> fetches run BEFORE the clock advances: a real
+        // browser's network wins the race against watchdog timers (webpack's
+        // chunk loader arms a 120 s timeout per injected script — advancing
+        // the simulated clock first fires that timeout before the script ever
+        // executes, and every chunk load "times out").
         if (_dynamicRunner.HasPending)
         {
             // Synchronous drain of the queued dynamic scripts. Each fetch+run
             // can enqueue more work (chained loaders) or kick more microtasks,
             // observed on the next PumpOnce iteration.
             _dynamicRunner.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
+            return true;
+        }
+
+        if (_loop.PendingTimerCount > 0 || _loop.PendingAnimationFrameCount > 0)
+        {
+            _loop.AdvanceBy(SimulatedStepMs);
             return true;
         }
 
@@ -308,10 +321,30 @@ internal sealed class StarlingScriptSession : IScriptSession
 
     public bool HasPendingHostAsyncWork => FetchBinding.HasPendingFetches(_runtime);
 
+    /// <summary>HTML §4.12.1 step 8 — only a classic-JavaScript <c>type</c>
+    /// (empty/missing, or a JavaScript MIME essence) makes the element a
+    /// runnable classic script. Data blocks (<c>application/ld+json</c> and
+    /// friends, which React apps inject for structured data) and module
+    /// scripts must NOT be fed to the classic parser.</summary>
+    private static bool IsClassicJavascriptType(Element script)
+    {
+        var type = script.GetAttribute("type");
+        if (string.IsNullOrWhiteSpace(type))
+            return string.IsNullOrWhiteSpace(script.GetAttribute("language"));
+        var essence = type.Trim();
+        return essence.Equals("text/javascript", StringComparison.OrdinalIgnoreCase)
+            || essence.Equals("application/javascript", StringComparison.OrdinalIgnoreCase)
+            || essence.Equals("application/ecmascript", StringComparison.OrdinalIgnoreCase)
+            || essence.Equals("text/ecmascript", StringComparison.OrdinalIgnoreCase);
+    }
+
     public void OnScriptElementConnected(Node scriptEl)
     {
         ArgumentNullException.ThrowIfNull(scriptEl);
         if (scriptEl is not Element { LocalName: "script" } script) return;
+
+        // Data blocks (ld+json etc.) and non-classic types never run here.
+        if (!IsClassicJavascriptType(script)) return;
 
         // Script-inserted external scripts (and any async-flagged script) are
         // async by default — defer them to the dynamic-script pump rather than
@@ -356,6 +389,23 @@ internal sealed class StarlingScriptSession : IScriptSession
         return _document.MutationVersion != before;
     }
 
+    public bool DispatchScrollEvents(IReadOnlyList<Element> scrolledElements, bool documentScrolled)
+    {
+        ArgumentNullException.ThrowIfNull(scrolledElements);
+        if (_disposed) return false;
+        if (scrolledElements.Count == 0 && !documentScrolled) return false;
+
+        // Same shape as DispatchEvent: run with the VM active so the bridged
+        // JS listeners execute, drain the microtasks they queue on exit, and
+        // report whether any listener mutated the DOM. The dispatcher never
+        // re-reads the scroll store, so a listener that writes an offset
+        // re-flags it for the NEXT frame's drain — no same-frame recursion.
+        var before = _document.MutationVersion;
+        _runtime.WithActiveVm(() =>
+            ScrollEventDispatcher.Dispatch(_runtime.Realm, _document, scrolledElements, documentScrolled));
+        return _document.MutationVersion != before;
+    }
+
     public bool PumpFrame(long elapsedMs)
     {
         if (_disposed) return false;
@@ -363,17 +413,28 @@ internal sealed class StarlingScriptSession : IScriptSession
         {
             _liveBaselineMs = _loop.NowMilliseconds;
             _liveStarted = true;
+            _livePrevElapsedMs = Math.Max(0, elapsedMs);
         }
 
         var before = _document.MutationVersion;
-        var target = _liveBaselineMs + Math.Max(0, elapsedMs);
+        // Clamp the per-tick clock advance. When the UI thread stalls (a heavy
+        // relayout on a script-busy page), the next tick would otherwise
+        // teleport the simulated clock by the whole stall — long watchdog
+        // timers (webpack arms a 120s timeout per injected chunk script) then
+        // fire before the async script drain ever runs, and every chunk load
+        // "times out". Browsers clamp/throttle timers across stalls the same
+        // way. Pending work catches up at up to 1s of simulated time per tick.
+        const long MaxTickAdvanceMs = 1_000;
+        var nowElapsed = Math.Max(0, elapsedMs);
+        var advance = Math.Clamp(nowElapsed - _livePrevElapsedMs, 0, MaxTickAdvanceMs);
+        _livePrevElapsedMs = nowElapsed;
+        var target = _loop.NowMilliseconds + advance;
         _runtime.WithActiveVm(() =>
         {
-            // RunFrame requires a non-decreasing clock; only advance when real
-            // time has moved past the loop's current now. WithActiveVm drains the
-            // realm microtask queue (promise + fetch resolve jobs) on exit
-            // regardless, so a no-advance tick still services completions.
-            if (target > _loop.NowMilliseconds)
+            // RunFrame requires a non-decreasing clock; a zero-advance tick
+            // still drains the realm microtask queue on WithActiveVm exit, so
+            // promise/fetch completions are serviced regardless.
+            if (advance > 0)
                 _loop.RunFrame(target);
         });
 

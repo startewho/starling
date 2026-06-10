@@ -5,7 +5,15 @@ namespace Starling.Js.Ast;
 /// <summary>
 /// Base for every JS expression node. ES2024 §13.
 /// </summary>
-public abstract record Expression(JsPosition Start, JsPosition End) : AstNode(Start, End);
+public abstract record Expression(JsPosition Start, JsPosition End) : AstNode(Start, End)
+{
+    /// <summary>§13.3 — true when this expression was written inside its own
+    /// parentheses. A parenthesized sub-expression terminates an
+    /// OptionalChain: in <c>(a?.b).c</c> the nullish short-circuit covers only
+    /// <c>a?.b</c>, so <c>.c</c> still evaluates (and throws on undefined).
+    /// Set by the parser, read by the compiler's chain-exit logic.</summary>
+    public bool IsParenthesized { get; set; }
+}
 
 // -----------------------------------------------------------------------
 // Literals + identifier + this

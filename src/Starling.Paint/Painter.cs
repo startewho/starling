@@ -108,7 +108,13 @@ public sealed class Painter
 
         PaintList displayList;
         using (StarlingTelemetry.Span("paint", "display_list"))
-            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+        {
+            // The rendered bitmap covers the clip viewport when one is given,
+            // otherwise the layout viewport — that area is the CSS canvas the
+            // root (or body) background propagates onto.
+            var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
+            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images, scrollOffsets: null, canvasRect);
+        }
 
         using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
@@ -164,7 +170,13 @@ public sealed class Painter
 
         PaintList displayList;
         using (StarlingTelemetry.Span("paint", "display_list"))
-            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+        {
+            // The rendered bitmap covers the clip viewport when one is given,
+            // otherwise the layout viewport — that area is the CSS canvas the
+            // root (or body) background propagates onto.
+            var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
+            displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images, scrollOffsets: null, canvasRect);
+        }
 
         using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
         {
@@ -232,8 +244,9 @@ public sealed class Painter
         Func<Element, StyleSheet?>? externalStylesheet = null,
         FontFaceRegistry? webFonts = null,
         ColorScheme colorScheme = ColorScheme.Light,
-        CancellationToken ct = default)
-        => LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme, ct);
+        CancellationToken ct = default,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
+        => LayoutDocumentWithStyle(document, viewport, defaultFontSize, images, externalStylesheet, webFonts, nowMs: null, colorScheme, ct, scrollState);
 
     /// <summary>Layout overload that threads a frame timestamp through the
     /// cascade. See the matching RenderDocument overload for semantics. The
@@ -248,7 +261,8 @@ public sealed class Painter
         FontFaceRegistry? webFonts,
         double? nowMs,
         ColorScheme colorScheme = ColorScheme.Light,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -259,7 +273,11 @@ public sealed class Painter
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory, ct);
+            // The engine session's per-document scroll store rides along so
+            // this pass refreshes scrollports + scrollable overflow and
+            // re-clamps stored offsets (scroll-model.md WP1). Null for
+            // callers without a session (one-shot raster paths).
+            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory, ct) { ScrollState = scrollState };
             Starling.Layout.Box.BlockBox root;
             using (StarlingTelemetry.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
@@ -288,7 +306,8 @@ public sealed class Painter
         IImageResolver? images,
         FontFaceRegistry? webFonts,
         double nowMs,
-        LayoutRect? clipViewport = null)
+        LayoutRect? clipViewport = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(style);
@@ -296,14 +315,24 @@ public sealed class Painter
         var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
         try
         {
-            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory);
+            // The page's scroll store rides through the per-frame relayout so
+            // scrollports + scrollable overflow stay fresh during pure
+            // animation frames (scroll-model.md WP2), and the display list
+            // paints each scroll container's subtree at its stored offset.
+            var layoutEngine = new LayoutEngineImpl(style, measurer, images, _loggerFactory) { ScrollState = scrollState };
             Starling.Layout.Box.BlockBox root;
             using (StarlingTelemetry.Span("paint", "layout"))
                 root = layoutEngine.LayoutDocument(document, viewport, nowMs);
 
             PaintList displayList;
             using (StarlingTelemetry.Span("paint", "display_list"))
-                displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+            {
+                var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
+                displayList = new DisplayListBuilder().Build(
+                    root, clipViewport, styleOverride: null, images: images,
+                    scrollOffsets: scrollState is null ? null : scrollState.GetOffset, canvasRect,
+                    stickyShifts: scrollState is null ? null : scrollState.GetStickyShift);
+            }
 
             using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
             {
@@ -443,6 +472,12 @@ public sealed class Painter
     {
         if (node is Element element)
         {
+            // HTML §4.12.2 — with scripting enabled <noscript> content is inert
+            // fallback. The engine always has scripting, so a <style>/<link>
+            // inside <noscript> must not join the cascade: x.com's no-JS block
+            // is `#react-root{display:none!important}` + a white body — applying
+            // it blanks the whole app.
+            if (element.LocalName == "noscript") return;
             if (element.LocalName == "style")
             {
                 var source = element.TextContent;

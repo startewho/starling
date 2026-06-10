@@ -16,6 +16,10 @@
     <!-- The Jint backend subscribes to the same Document mutation hooks to
          implement a real MutationObserver, matching the canonical backend. -->
     <InternalsVisibleTo Include="Starling.Bindings.Jint" />
+    <!-- The CSS animation/transition engines dispatch engine-generated
+         animationstart/transitionend/... DOM events and mark them trusted
+         (Event.IsTrusted has an internal setter). -->
+    <InternalsVisibleTo Include="Starling.Css" />
     <!-- Tests exercise the internal mutation hooks directly. -->
     <InternalsVisibleTo Include="Starling.Dom.Tests" />
   </ItemGroup>

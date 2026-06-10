@@ -218,6 +218,13 @@ public static class XhrBinding
         x.Cts = new CancellationTokenSource();
         FireEvent(realm, x, "loadstart");
 
+        // STARLING_DIAG_NET=1 — surface every XHR through the JS console so
+        // page-level data flows (graphql calls and their status/size) are
+        // observable from the browser MCP without instrumenting the page.
+        var diagNet = Environment.GetEnvironmentVariable("STARLING_DIAG_NET") == "1";
+        if (diagNet)
+            realm.ConsoleSink(ConsoleLevel.Info, $"[net:xhr] {x.Method} {x.RequestUrl}");
+
         _ = Task.Run(async () =>
         {
             try
@@ -228,6 +235,9 @@ public static class XhrBinding
                     if (x.Aborted) return;
                     if (result.IsErr)
                     {
+                        if (diagNet)
+                            realm.ConsoleSink(ConsoleLevel.Warn,
+                                $"[net:xhr] ERR {x.Method} {x.RequestUrl}: {result.Error}");
                         x.ReadyState = 4;
                         x.Status = 0;
                         FireReadyStateChange(realm, x);
@@ -236,6 +246,9 @@ public static class XhrBinding
                         return;
                     }
                     var resp = result.Value;
+                    if (diagNet)
+                        realm.ConsoleSink(ConsoleLevel.Info,
+                            $"[net:xhr] {resp.StatusCode} {x.Method} {x.RequestUrl} ({resp.Body.Length} bytes)");
                     x.Status = resp.StatusCode;
                     x.StatusText = resp.ReasonPhrase ?? "";
                     x.ResponseUrl = x.RequestUrl;
@@ -298,11 +311,19 @@ public static class XhrBinding
 
     private static string ResolveUrl(string input, Document? document)
     {
-        if (Uri.TryCreate(input, UriKind.Absolute, out var abs)) return abs.ToString();
-        var baseUrl = document is null ? null : WindowBinding.UrlForDocumentOrNull(document);
-        if (baseUrl is not null && Uri.TryCreate(new Uri(baseUrl), input, out var combined))
-            return combined.ToString();
-        return input;
+        // WHATWG URL resolution — System.Uri.ToString() canonically UNESCAPES
+        // the query (%7B/%22 → {/"), which corrupts percent-encoded JSON query
+        // params (x.com's graphql `variables=` got 400s) and diverges from
+        // every browser. The Starling parser preserves percent-escapes.
+        var baseRaw = document is null ? null : WindowBinding.UrlForDocumentOrNull(document);
+        global::Starling.Url.Url? baseUrl = null;
+        if (baseRaw is not null)
+        {
+            var parsedBase = StarlingUrlParser.Parse(baseRaw);
+            if (parsedBase.IsOk) baseUrl = parsedBase.Value;
+        }
+        var parsed = StarlingUrlParser.Parse(input, baseUrl);
+        return parsed.IsOk ? parsed.Value.ToString() : input;
     }
 
     private static JsValue MakeArrayBuffer(JsRealm realm, byte[] bytes)

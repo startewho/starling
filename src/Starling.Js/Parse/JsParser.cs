@@ -1287,6 +1287,7 @@ public ref partial struct JsParser
                     Expect(JsTokenKind.RParen, "expected ')' to close grouping");
                     var seq = new SequenceExpression(parts, parts[0].Start, parts[^1].End);
                     _parenthesized.Add(seq);
+                    seq.IsParenthesized = true;
                     return seq;
                 }
                 Expect(JsTokenKind.RParen, "expected ')' to close grouping");
@@ -1294,6 +1295,7 @@ public ref partial struct JsParser
                 // grouped unary base of `**` (e.g. `(-1) ** 2`) is accepted while
                 // a bare one (`-1 ** 2`) is rejected as an early error.
                 _parenthesized.Add(inner);
+                inner.IsParenthesized = true;
                 return inner;
             case JsTokenKind.LBracket:
                 return ParseArrayLiteral();

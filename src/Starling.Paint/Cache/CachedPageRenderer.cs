@@ -56,7 +56,8 @@ internal sealed class CachedPageRenderer
         int pageVersion,
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
-        Func<Element, (double X, double Y)>? scrollOffsets = null)
+        Func<Element, (double X, double Y)>? scrollOffsets = null,
+        Func<Element, (double X, double Y)>? stickyShifts = null)
     {
         ArgumentNullException.ThrowIfNull(root);
 
@@ -75,7 +76,7 @@ internal sealed class CachedPageRenderer
         if (HasFixedOrScrollSubtree(root, pageVersion))
         {
             _cache.Invalidate();
-            return SeedAndServe(root, viewport, scale, pageVersion, device, styleOverride, images, scrollOffsets);
+            return SeedAndServe(root, viewport, scale, pageVersion, device, styleOverride, images, scrollOffsets, stickyShifts);
         }
 
         if (_cache.TryServe(viewport, scale, pageVersion, out var hit))
@@ -86,7 +87,7 @@ internal sealed class CachedPageRenderer
         // Full miss: one strip equal to the whole device rect. Paint it, seed,
         // and serve from the now-complete cache.
         if (strips.Count == 1 && strips[0].Equals(device))
-            return SeedAndServe(root, viewport, scale, pageVersion, device, styleOverride, images, scrollOffsets);
+            return SeedAndServe(root, viewport, scale, pageVersion, device, styleOverride, images, scrollOffsets, stickyShifts);
 
         // Partial: paint each newly-exposed strip, then slide the cache window onto
         // the new viewport — retaining the still-visible overlap and dropping the
@@ -98,7 +99,7 @@ internal sealed class CachedPageRenderer
         {
             foreach (var strip in strips)
             {
-                var bmp = PaintStrip(root, strip, scale, styleOverride, images, scrollOffsets);
+                var bmp = PaintStrip(root, strip, scale, styleOverride, images, scrollOffsets, stickyShifts);
                 // Track the raster's real device rect (origin + actual size); a
                 // fractional scale's ceil can differ from the requested strip.
                 painted.Add((new DeviceRect(strip.X, strip.Y, bmp.Width, bmp.Height), bmp));
@@ -108,7 +109,7 @@ internal sealed class CachedPageRenderer
             {
                 // Stale key slipped past the strip computation — reseed wholesale.
                 _cache.Invalidate();
-                return SeedAndServe(root, viewport, scale, pageVersion, device, styleOverride, images, scrollOffsets);
+                return SeedAndServe(root, viewport, scale, pageVersion, device, styleOverride, images, scrollOffsets, stickyShifts);
             }
         }
         finally
@@ -127,9 +128,10 @@ internal sealed class CachedPageRenderer
         DeviceRect device,
         Func<Box, ComputedStyle?>? styleOverride,
         IImageResolver? images,
-        Func<Element, (double X, double Y)>? scrollOffsets)
+        Func<Element, (double X, double Y)>? scrollOffsets,
+        Func<Element, (double X, double Y)>? stickyShifts)
     {
-        using var full = PaintStrip(root, device, scale, styleOverride, images, scrollOffsets);
+        using var full = PaintStrip(root, device, scale, styleOverride, images, scrollOffsets, stickyShifts);
         // Reset against the raster's real device rect (origin + actual size); a
         // fractional scale's ceil can differ from the request by a pixel.
         var seedRect = new DeviceRect(device.X, device.Y, full.Width, full.Height);
@@ -158,10 +160,11 @@ internal sealed class CachedPageRenderer
         float scale,
         Func<Box, ComputedStyle?>? styleOverride,
         IImageResolver? images,
-        Func<Element, (double X, double Y)>? scrollOffsets)
+        Func<Element, (double X, double Y)>? scrollOffsets,
+        Func<Element, (double X, double Y)>? stickyShifts)
     {
         var pageViewport = new LayoutRect(strip.X / scale, strip.Y / scale, strip.Width / scale, strip.Height / scale);
-        PaintList list = new DisplayListBuilder().Build(root, pageViewport, styleOverride, images, scrollOffsets);
+        PaintList list = new DisplayListBuilder().Build(root, pageViewport, styleOverride, images, scrollOffsets, canvasRect: null, stickyShifts: stickyShifts);
         return _backend.Render(list, pageViewport, scale);
     }
 
@@ -176,11 +179,18 @@ internal sealed class CachedPageRenderer
     private static bool ContainsFixedOrScrollHint(Box box)
     {
         if ((box.Hints & LayerHint.Fixed) != LayerHint.None) return true;
-        if (box.Style is { } style && IsScrollContainer(style)) return true;
+        if (box.Style is { } style && (IsScrollContainer(style) || IsSticky(style))) return true;
         foreach (var child in box.Children)
             if (ContainsFixedOrScrollHint(child)) return true;
         return false;
     }
+
+    // position:sticky repaints at a scroll-dependent position (scroll-model.md
+    // WP5), so cached strips would bake one scroll configuration in — same
+    // bypass as fixed subtrees.
+    private static bool IsSticky(ComputedStyle style)
+        => style.Get(PropertyId.Position) is Starling.Css.Values.CssKeyword k
+           && k.Name.Equals("sticky", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsScrollContainer(ComputedStyle style)
         => IsScrollKeyword(style.Get(PropertyId.OverflowX))

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Starling.Js.Runtime;
 
 /// <summary>
@@ -314,15 +316,7 @@ public static class AbstractOperations
             JsNativeFunction nat => CallNative(nat, thisValue, args),
             JsFunction fn => vm is not null
                 ? vm.CallFunction(fn, thisValue, args)
-                // wp:M3-83 — host invokes a foreign-realm JS function with no
-                // ambient VM (e.g. Function.prototype.call on a foreign function,
-                // where the install-site realm's ActiveVm is null because the
-                // host VM is the one on the stack). Recover via the callee's own
-                // realm: §9.3.1 [[Realm]] is the right context for the body, and
-                // its owner runtime publishes its primary VM as ActiveVm.
-                : fn.Realm?.OwnerRuntime is { } owner
-                    ? owner.WithActiveVm(foreignVm => foreignVm.CallFunction(fn, thisValue, args))
-                    : throw new InvalidOperationException("VM required to call JS function"),
+                : CallForeignRealm(fn, thisValue, args),
             JsBoundFunction bf => Call(vm, JsValue.Object(bf.Target), bf.BoundThis,
                 ConcatBoundArgs(bf.BoundArgs, args)),
             JsProxy proxy => proxy.ProxyCall(thisValue, args),
@@ -332,6 +326,21 @@ public static class AbstractOperations
 
     private static JsValue CallNative(JsNativeFunction nat, JsValue thisValue, JsValue[] args)
         => nat.Body(thisValue, args);
+
+    /// <summary>wp:M3-83 — host invokes a foreign-realm JS function with no
+    /// ambient VM (e.g. Function.prototype.call on a foreign function, where
+    /// the install-site realm's ActiveVm is null because the host VM is the
+    /// one on the stack). Recover via the callee's own realm: §9.3.1 [[Realm]]
+    /// is the right context for the body, and its owner runtime publishes its
+    /// primary VM as ActiveVm. Kept out of <see cref="Call"/> so the lambda's
+    /// closure is allocated only on this cold path — inlined into Call, the
+    /// capture forces a display-class allocation on every dispatch (measured
+    /// 123 MB of churn on an x.com load).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static JsValue CallForeignRealm(JsFunction fn, JsValue thisValue, JsValue[] args)
+        => fn.Realm?.OwnerRuntime is { } owner
+            ? owner.WithActiveVm(foreignVm => foreignVm.CallFunction(fn, thisValue, args))
+            : throw new InvalidOperationException("VM required to call JS function");
 
     /// <summary>§7.3.14 Call step 2 — calling a non-callable is a TypeError.
     /// Uses the realm's TypeError when a VM is available so embedders observe a
@@ -352,16 +361,23 @@ public static class AbstractOperations
             JsNativeFunction nat => nat.Body(JsValue.Object(newTarget), args),
             JsFunction fn => vm is not null
                 ? vm.ConstructFunction(fn, args, newTarget)
-                // wp:M3-83 — mirror Call's foreign-realm fallback for [[Construct]].
-                : fn.Realm?.OwnerRuntime is { } owner
-                    ? owner.WithActiveVm(foreignVm => foreignVm.ConstructFunction(fn, args, newTarget))
-                    : throw new InvalidOperationException("VM required to construct JS function"),
+                : ConstructForeignRealm(fn, args, newTarget),
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
                 ConcatBoundArgs(bf.BoundArgs, args), newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
             _ => throw new JsThrow(JsValue.String($"not a constructor: {ctor.AsObject}")),
         };
     }
+
+    /// <summary>wp:M3-83 — mirror <see cref="CallForeignRealm"/> for
+    /// [[Construct]]: a VM-less host construct of a foreign-realm function
+    /// runs on that realm's own VM. Kept out of <see cref="Construct"/> so
+    /// the lambda's closure is allocated only on this cold path.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static JsValue ConstructForeignRealm(JsFunction fn, JsValue[] args, JsObject newTarget)
+        => fn.Realm?.OwnerRuntime is { } owner
+            ? owner.WithActiveVm(foreignVm => foreignVm.ConstructFunction(fn, args, newTarget))
+            : throw new InvalidOperationException("VM required to construct JS function");
 
     /// <summary>§7.2.10 SameValue — like StrictEqual but +0 ≠ -0 and NaN = NaN.</summary>
     public static bool SameValue(JsValue a, JsValue b)
