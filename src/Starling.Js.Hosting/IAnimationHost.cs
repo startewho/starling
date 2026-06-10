@@ -34,6 +34,20 @@ public interface IAnimationHost
     /// <summary>Animation play state: "idle" | "running" | "paused" | "finished".</summary>
     string PlayState(int id);
 
+    /// <summary>Animation.playbackRate (default 1; 1 when the id is unknown).</summary>
+    double PlaybackRate(int id);
+
+    /// <summary>Set Animation.playbackRate. Mid-flight changes preserve the
+    /// playback head. 0 freezes playback; negative values clamp to 0 (reverse
+    /// playback is unsupported — the binding rejects negatives up front).</summary>
+    void SetPlaybackRate(int id, double rate);
+
+    /// <summary>Register observers fired once when the animation transitions to
+    /// finished (naturally on a tick, or via <see cref="Finish"/>) and once when
+    /// it is canceled. The callbacks may run on the engine tick thread — they
+    /// must only hand off (e.g. enqueue a microtask), never re-enter JS.</summary>
+    void Observe(int id, Action onFinished, Action onCanceled);
+
     /// <summary>Current document-timeline value (ms) — backs
     /// <c>Animation.startTime</c>/<c>timeline.currentTime</c>.</summary>
     double TimelineNow { get; }

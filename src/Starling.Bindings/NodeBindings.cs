@@ -1281,6 +1281,12 @@ public static class NodeBindings
             DomWrappers.UnwrapElement(thisV) is { } e
                 ? WebAnimationsBinding.Animate(realm, e, args)
                 : JsValue.Undefined, length: 2);
+        // Web Animations 1 §6: element.getAnimations() — the element's live
+        // script animations (declarative CSS animations not surfaced yet).
+        EventTargetBinding.DefineMethod(realm, elProto, "getAnimations", (thisV, _) =>
+            DomWrappers.UnwrapElement(thisV) is { } e
+                ? WebAnimationsBinding.GetAnimations(realm, e)
+                : JsValue.Object(new JsArray(realm, Array.Empty<JsValue>())), length: 0);
 
         // Layout-readback APIs — consult the realm's optional ILayoutHost
         // snapshot. With no host (e.g. JS run outside the engine pipeline)
@@ -1464,6 +1470,11 @@ public static class NodeBindings
     {
         var docProto = new JsObject(realm.NodePrototype);
         realm.DocumentPrototype = docProto;
+
+        // Web Animations 1 §5.3: document.getAnimations() — all live script
+        // animations in the document (declarative CSS animations not yet).
+        EventTargetBinding.DefineMethod(realm, docProto, "getAnimations", (_, _) =>
+            WebAnimationsBinding.GetAnimations(realm, null), length: 0);
 
         EventTargetBinding.DefineAccessor(realm, docProto, "documentElement", (thisV, _) =>
             DomWrappers.UnwrapDocument(thisV)?.DocumentElement is { } e
