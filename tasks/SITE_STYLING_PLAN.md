@@ -5,6 +5,34 @@ ranks engine work by visible impact on those two sites. It comes from a
 2026-06-09 audit of the layout, paint, and animation code plus a feature
 count of what each site's CSS actually uses.
 
+> ## Status — all five tiers implemented (2026-06-10)
+>
+> Every numbered item below landed on `feat/js-stack-trampoline`, each
+> through an adversarially reviewed agent slice with review findings
+> fixed before merge. `tasks/SPEC_COVERAGE.md` rows are synced.
+>
+> Exit checks: the x.com fixture renders with primary column 600px at
+> x=224 (Chromium 217/600), sidebar 290px at x=854 (Chromium 837/290),
+> UserName y=291 (Chromium 293) — within the ~25px target everywhere
+> except the tabs row (y=393 vs 436, a text-metrics gap outside this
+> plan). The GitHub fixture through the Aspire harness now paints the
+> correct dark canvas, logo, and header chrome.
+>
+> Known follow-ups, in rough priority order:
+> 1. GitHub homepage body content is still mostly absent in a static
+>    render — needs its own root-cause pass (JS hydration, web-font and
+>    image fetch in headless, possibly residual layout). Not a CSS-tier
+>    item.
+> 2. x.com tabs-row offset: text metrics / line-height vs Chromium.
+> 3. Scroll WP6 (promoted scroll layers — tile reuse on scroll) from
+>    browser-plan/scroll-model.md.
+> 4. backdrop-filter on the GPU canvas / tile paths and cross-layer
+>    backdrops (CPU flat path is correct).
+> 5. Borders on absolutely positioned boxes never paint (PositionLayout
+>    zeroes Border edges — PendingFact in `InlineThemePaintTests`).
+> 6. Client rects keep the document-space convention (no ancestor scroll
+>    subtraction); stuck-sticky rects follow it.
+
 Fixtures for checking progress:
 
 - `testdata/sites/github/` — logged-out GitHub homepage snapshot. Serve it
