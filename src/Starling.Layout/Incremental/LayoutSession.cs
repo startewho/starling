@@ -108,13 +108,20 @@ public sealed class LayoutSession
         try
         {
             ResetScrollQueue(); // an aborted earlier pass must not leak queue flags
+            // Pessimistically mark the caches incoherent for the duration of
+            // the pass: if it throws (navigation supersede, Stop abort) after
+            // stamping some scrollers, their queue entries are gone and a
+            // later scoped pass would never re-measure them. The success
+            // paths below re-assert coherence.
+            var cachesWereCoherent = _scrollCachesCoherent;
+            _scrollCachesCoherent = false;
 
             if (_root is not null && viewport == _viewport && TryReconcile(batch, nowMs))
             {
                 // Scoped scroll measurement needs the extent caches to mirror
                 // the tree, which holds only if every relayout since the last
                 // full measure ran with the invalidation hooks (sink) on.
-                var scoped = scroll is not null && _scrollCachesCoherent;
+                var scoped = scroll is not null && cachesWereCoherent;
                 using (StarlingTelemetry.Span("layout", "incremental.relayout"))
                     RunLayout(measurer, viewport, abort, incremental: true,
                         scrollSink: scoped ? _relaidScrollers : null);

@@ -90,7 +90,15 @@ internal sealed class BlockLayout
     internal double LayoutItem(Box.Box item, double containerWidth, double? containerHeight, bool measure = false, bool reuseHeight = false)
     {
         if (item.Kind == BoxKind.AnonymousBlock)
+        {
+            // The early return must still invalidate the scroll-extent cache
+            // chain: a re-wrapped bare-text flex/grid item otherwise keeps a
+            // valid-but-stale extent and the scoped scroll measure diverges
+            // from a full layout. NoteRelaid never queues an anonymous box
+            // (it has no element); it only clears the chain to the root.
+            NoteRelaid(item);
             return _inline.Layout(item, containerWidth, measure);
+        }
 
         // Item-level reuse — the flex/grid measure→final choreography lays the
         // same item several times per pass (basis measure, min measure, final
