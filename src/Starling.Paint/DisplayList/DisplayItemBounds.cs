@@ -23,6 +23,10 @@ internal static class DisplayItemBounds
             case StrokeRect s: bounds = s.Bounds; return true;
             case FillRoundedRect rf: bounds = rf.Bounds; return true;
             case StrokeRoundedRect rs: bounds = rs.Bounds; return true;
+            case DrawBoxShadow { Inset: true } ish:
+                // Inner shadows are clipped to the padding box the item carries.
+                bounds = ish.Bounds;
+                return true;
             case DrawBoxShadow sh:
                 // The painted shadow is the box grown by spread+blur, offset.
                 var pad = sh.Spread + sh.Blur;

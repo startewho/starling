@@ -2279,10 +2279,16 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
     /// resolution, blurred by a Gaussian of σ = blur/2, then blitted at the
     /// shadow offset through the same canvas transform every other primitive
     /// uses (so the device <paramref name="scale"/> composes correctly). Inset
-    /// shadows are not painted (parsed only); the builder filters them out.
+    /// layers branch to <see cref="DrawInsetBoxShadow"/>.
     /// </summary>
     private void DrawBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, float scale, DisposableBag pendingImageSources)
     {
+        if (shadow.Inset)
+        {
+            DrawInsetBoxShadow(canvas, shadow, pendingImageSources);
+            return;
+        }
+
         if (!TryGetBoxShadowRasterGeometry(shadow, out var geometry)) return;
 
         var key = BoxShadowCacheKey.From(shadow, geometry);
@@ -2315,9 +2321,111 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         return shadowImage;
     }
 
+    /// <summary>
+    /// Paints a single inset box-shadow layer (CSS Backgrounds 3 §7.1.1). The
+    /// display item's <c>Bounds</c> is the element's PADDING box and its
+    /// <c>Radii</c> the padding-box inner radii — the builder resolves both.
+    /// The shadow is the region between the padding edge and the inner
+    /// silhouette (the padding box translated by (OffsetX, OffsetY) and shrunk
+    /// by Spread on every side), rasterized offscreen as an opaque plane with
+    /// the silhouette knocked out, blurred by a Gaussian of σ = Blur/2, then
+    /// clipped to the rounded padding box and blitted through the canvas
+    /// transform. A positive OffsetX shifts the silhouette right and thickens
+    /// the LEFT band, matching the spec's offset direction for inner shadows
+    /// (verified against Chromium).
+    /// </summary>
+    private void DrawInsetBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, DisposableBag pendingImageSources)
+    {
+        if (shadow.Color.A == 0) return;
+        var padW = shadow.Bounds.Width;
+        var padH = shadow.Bounds.Height;
+        if (padW <= 0 || padH <= 0) return;
+
+        var blur = Math.Max(0, shadow.Blur);
+        var margin = (int)Math.Ceiling(blur * 1.5) + 2;
+        var imgW = (int)Math.Ceiling(padW) + 2 * margin;
+        var imgH = (int)Math.Ceiling(padH) + 2 * margin;
+        if ((long)imgW * imgH > 64_000_000L) return;
+
+        var key = BoxShadowCacheKey.FromInset(shadow, imgW, imgH, margin);
+        if (!_boxShadowCache.TryGet(key, out var shadowImage))
+        {
+            shadowImage = RasterizeInsetBoxShadow(shadow, imgW, imgH, margin);
+            _boxShadowCache.Put(key, shadowImage, pendingImageSources);
+        }
+
+        var dest = new LayoutRect(shadow.Bounds.X - margin, shadow.Bounds.Y - margin, imgW, imgH);
+        canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), ToRectF(dest), _resampler);
+    }
+
+    private static Image<Rgba32> RasterizeInsetBoxShadow(DrawBoxShadow shadow, int imgW, int imgH, int margin)
+    {
+        // "As if everything outside the padding edge were opaque": start from
+        // a fully filled plane (margins included, so the blur at the padding
+        // edge samples opaque neighbours), then knock the silhouette out.
+        var shadowImage = new Image<Rgba32>(imgW, imgH, new Rgba32(shadow.Color.R, shadow.Color.G, shadow.Color.B, shadow.Color.A));
+
+        // Inner silhouette: the padding box translated by the offset, shrunk
+        // by the spread (positive spread thickens the shadow ring; negative
+        // grows the silhouette and thins it). Its radii shrink/grow with it.
+        var holeW = shadow.Bounds.Width - 2 * shadow.Spread;
+        var holeH = shadow.Bounds.Height - 2 * shadow.Spread;
+        if (holeW > 0 && holeH > 0)
+        {
+            var hole = new LayoutRect(
+                margin + shadow.OffsetX + shadow.Spread,
+                margin + shadow.OffsetY + shadow.Spread,
+                holeW,
+                holeH);
+            KnockOutAlphaByPath(shadowImage, BuildClipPath(hole, GrowRadii(shadow.Radii, -shadow.Spread)));
+        }
+
+        if (shadow.Blur > 0)
+            shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
+
+        // Clip to the (rounded) padding box — this also clears the bleed
+        // margins, so the blit never paints outside the padding edge.
+        ApplyClipMask(shadowImage, BuildClipPath(new LayoutRect(margin, margin, shadow.Bounds.Width, shadow.Bounds.Height), shadow.Radii));
+        return shadowImage;
+    }
+
+    /// <summary>
+    /// Zero the alpha of <paramref name="layer"/> inside
+    /// <paramref name="holePath"/> (anti-aliased: partially covered edge
+    /// pixels keep partial alpha). The inverse of <see cref="ApplyClipMask"/>
+    /// — used by the inset box-shadow rasterizer to cut the inner silhouette
+    /// out of the opaque shadow plane before blurring.
+    /// </summary>
+    private static void KnockOutAlphaByPath(Image<Rgba32> layer, IPath holePath)
+    {
+        using var holeMask = new Image<Rgba32>(layer.Width, layer.Height, new Rgba32(0, 0, 0, 0));
+        holeMask.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(Color.White), holePath)));
+
+        var height = Math.Min(layer.Height, holeMask.Height);
+        layer.ProcessPixelRows(holeMask, (targetAccessor, maskAccessor) =>
+        {
+            for (var y = 0; y < height; y++)
+            {
+                var targetRow = targetAccessor.GetRowSpan(y);
+                var maskRow = maskAccessor.GetRowSpan(y);
+                var width = Math.Min(targetRow.Length, maskRow.Length);
+                for (var x = 0; x < width; x++)
+                {
+                    // Multiply by the inverse mask coverage: full coverage
+                    // erases, edge coverage feathers, none keeps the fill.
+                    var a = (targetRow[x].A * (255 - maskRow[x].A) + 127) / 255;
+                    targetRow[x].A = (byte)a;
+                }
+            }
+        });
+    }
+
     private static bool BoxShadowIntersectsTarget(DrawBoxShadow shadow, Matrix2D current, LayoutRect target)
-        => TryGetBoxShadowRasterGeometry(shadow, out var geometry)
-           && Intersects(TransformedAabb(geometry.Destination, current), target);
+        => shadow.Inset
+            // Inner shadows are clipped to the padding box the item carries.
+            ? Intersects(TransformedAabb(shadow.Bounds, current), target)
+            : TryGetBoxShadowRasterGeometry(shadow, out var geometry)
+              && Intersects(TransformedAabb(geometry.Destination, current), target);
 
     private static bool TryGetBoxShadowRasterGeometry(DrawBoxShadow shadow, out BoxShadowRasterGeometry geometry)
     {
