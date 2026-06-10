@@ -130,11 +130,19 @@ internal sealed class BlockLayout
         {
             item.ItemMeasureConstraint = cs;
             item.ItemMeasuredContent = content;
+            // This measurement REWROTE the subtree's frames (e.g. the
+            // 1,000,000px max-content probe). Any earlier final-pass frames
+            // are gone, so the final-pass reuse key must not match until a
+            // real final pass runs again.
+            item.ItemLaidConstraint = null;
         }
         else
         {
             item.ItemLaidConstraint = cs;
             item.ItemLaidContent = content;
+            // A final pass rewrites frames too — a prior measurement's stamp
+            // no longer describes them, only its returned extent (which is
+            // all measure replay hands out, so that stamp stays valid).
             // The final pass is authoritative for frames — descendants are
             // clean from here on.
             item.SubtreeDirty = false;
