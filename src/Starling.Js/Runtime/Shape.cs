@@ -86,39 +86,119 @@ internal sealed class Shape
         }
     }
 
+    // ── Flattening heuristics ────────────────────────────────────────────
+    // The flattened table is only a lookup accelerator; the transition chain
+    // itself is the source of truth. Flattening eagerly on first lookup was
+    // the engine's single largest retained-memory cost (x.com at peak: 251 MB
+    // of Dictionary<string,ShapeProp> entries — 39% of the managed heap —
+    // across ~36k shapes), because every looked-up shape copied its parent's
+    // whole table: a chain of N properties materialized N tables of sizes
+    // 1..N. A shape now flattens only when it is BOTH deep and warm:
+    //  - SlotCount <= FlattenSlotThreshold: never flatten. Walking <= 8
+    //    parent links (one reference load + ordinal compare each) costs about
+    //    the same as a single dictionary probe, and small shapes are the
+    //    overwhelming majority.
+    //  - Deeper shapes flatten once their lookup count reaches their own
+    //    depth, min(SlotCount, FlattenLookupCap). Scaling the threshold with
+    //    depth makes the table cost-proportional: a table of N entries is only
+    //    built after ~N lookups' worth of chain-walk work, so a shape that is
+    //    grown and read a handful of times per property (the React/spread
+    //    pattern — each intermediate shape of a growing object sees ~2-4
+    //    lookups, regardless of depth) never flattens, while a shape that
+    //    keeps fielding lookups pays the one-time flatten and from then on
+    //    behaves exactly like the old always-flattened code. The cap bounds
+    //    the pre-flatten walk work for very wide objects (a 10k-slot shape
+    //    flattens after 256 lookups, not 10k).
+    private const int FlattenSlotThreshold = 8;
+    private const int FlattenLookupCap = 256;
+
+    /// <summary>Approximate lookup counter for the heat heuristic. Plain
+    /// (no Interlocked/volatile) on purpose: under a race a lost increment
+    /// merely delays flattening and a duplicate one triggers it early —
+    /// <see cref="Flatten"/> itself is gated, so the table is built once.</summary>
+    private int _lookups;
+
     /// <summary>Look up a string key in this shape. Returns false if absent.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public bool TryGet(string key, out ShapeProp prop)
     {
-        return Table.TryGetValue(key, out prop);
+        var t = _table;
+        if (t is not null) return t.TryGetValue(key, out prop);
+        return TryGetSlow(key, out prop);
     }
 
-    public bool Contains(string key) => Table.ContainsKey(key);
-
-    private Dictionary<string, ShapeProp> Table
+    public bool Contains(string key)
     {
-        get
+        var t = _table;
+        if (t is not null) return t.ContainsKey(key);
+        return TryGetSlow(key, out _);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private bool TryGetSlow(string key, out ShapeProp prop)
+    {
+        if (SlotCount > FlattenSlotThreshold)
         {
-            var t = _table;
-            if (t is not null) return t;
-            lock (_gate)
-            {
-                if (_table is not null) return _table;
-                if (_parent is null)
-                {
-                    t = new Dictionary<string, ShapeProp>(StringComparer.Ordinal);
-                }
-                else
-                {
-                    // Copy the parent's flattened table and add our one entry.
-                    // O(n) once per shape, then cached and shared by every object
-                    // of this shape.
-                    t = new Dictionary<string, ShapeProp>(_parent.Table, StringComparer.Ordinal);
-                    t[_key!] = new ShapeProp(AddedSlot, _flags);
-                }
-                _table = t;
-                return t;
-            }
+            var n = ++_lookups;
+            if (n >= SlotCount || n >= FlattenLookupCap)
+                return Flatten().TryGetValue(key, out prop);
         }
+
+        // Chain walk — allocation-free. Each link holds the one key it added
+        // (keys are unique along a chain: a Transition is only taken for a key
+        // the shape does not already contain). A materialized ancestor table
+        // answers for the entire chain above it, so deep-but-cold children of
+        // a hot flattened shape stop after a few links.
+        var s = this;
+        while (s._key is not null)
+        {
+            if (string.Equals(s._key, key, System.StringComparison.Ordinal))
+            {
+                prop = new ShapeProp(s.AddedSlot, s._flags);
+                return true;
+            }
+            s = s._parent!;
+            var t = s._table;
+            if (t is not null) return t.TryGetValue(key, out prop);
+        }
+        prop = default;
+        return false;
+    }
+
+    /// <summary>Materialize this shape's flattened table. Copies from the
+    /// nearest ancestor that already has one — never forcing ancestors to
+    /// flatten — and chain-walks only the links in between.</summary>
+    private Dictionary<string, ShapeProp> Flatten()
+    {
+        lock (_gate)
+        {
+            if (_table is not null) return _table;
+            var anchor = _parent;
+            while (anchor is not null && anchor._table is null) anchor = anchor._parent;
+            var t = new Dictionary<string, ShapeProp>(SlotCount, StringComparer.Ordinal);
+            if (anchor?._table is { } src)
+                foreach (var kv in src) t.Add(kv.Key, kv.Value);
+            for (var s = this; !ReferenceEquals(s, anchor) && s._key is not null; s = s._parent!)
+                t.Add(s._key, new ShapeProp(s.AddedSlot, s._flags));
+            _table = t;
+            return t;
+        }
+    }
+
+    /// <summary>The own properties in creation (slot) order — element <c>i</c>
+    /// describes slot <c>i</c>. One chain walk; never materializes the
+    /// flattened table. For bulk exports (dictionary-mode migration).</summary>
+    public ShapeProp[] OrderedProps()
+    {
+        if (SlotCount == 0) return System.Array.Empty<ShapeProp>();
+        var props = new ShapeProp[SlotCount];
+        var s = this;
+        while (s._key is not null)
+        {
+            props[s.AddedSlot] = new ShapeProp(s.AddedSlot, s._flags);
+            s = s._parent!;
+        }
+        return props;
     }
 
     /// <summary>The own string keys in creation (slot) order — the
