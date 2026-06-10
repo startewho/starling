@@ -268,12 +268,22 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
 
             using (StarlingTelemetry.Span("paint", "raster.command_record"))
             {
-                // The CPU image is allocated pre-filled with the background color, so
-                // the replay must not clear it again (clearWhite: false). ImageSharp
-                // rasterizes lazily when the Paint scope unwinds — no explicit flush.
-                image.Mutate(x => x.Paint(canvas =>
-                    ReplayList(canvas, list, width, height, scale, viewportTransform,
-                        clearWhite: false, pendingImageSources, flush: false)));
+                if (ContainsTopLevelBackdropFilter(list.Items))
+                {
+                    // backdrop-filter needs the pixels already painted under the
+                    // element, which the lazily-rasterizing canvas cannot give
+                    // mid-replay — replay in segments and snapshot between them.
+                    ReplayListCpuSegmented(image, list, width, height, scale, viewportTransform, pendingImageSources);
+                }
+                else
+                {
+                    // The CPU image is allocated pre-filled with the background color, so
+                    // the replay must not clear it again (clearWhite: false). ImageSharp
+                    // rasterizes lazily when the Paint scope unwinds — no explicit flush.
+                    image.Mutate(x => x.Paint(canvas =>
+                        ReplayList(canvas, list, width, height, scale, viewportTransform,
+                            clearWhite: false, pendingImageSources, flush: false)));
+                }
             }
 
             byte[] pixels;
@@ -394,6 +404,23 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             // end now points past the PopMask (or at items.Count if unbalanced).
             // Render the bracketed slice into an offscreen layer, apply mask, blit.
             ApplyMaskGroup(canvas, items, idx + 1, end - 1, pushMask, scale, pendingImageSources, transforms, target);
+            return end;
+        }
+
+        if (item is PushFilter pushFilter)
+        {
+            // Find the matching PopFilter (balanced nesting handles nested filters).
+            var depth = 1;
+            var end = idx + 1;
+            while (end < items.Count && depth > 0)
+            {
+                if (items[end] is PushFilter) depth++;
+                else if (items[end] is PopFilter) depth--;
+                end++;
+            }
+            // Render the bracketed slice into an offscreen layer, run the
+            // filter chain, blit the result (Filter Effects 1 §10).
+            ApplyFilterGroup(canvas, items, idx + 1, end - 1, pushFilter, scale, pendingImageSources, transforms, target);
             return end;
         }
 
@@ -549,60 +576,13 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
                 transforms.Pop();
                 break;
             case PushClip pushClip:
-                {
-                    // The ImageSharp batcher's PrepareCommand does:
-                    //   path = path.Transform(drawingOptions.Transform)   // draw path → device px
-                    //   path = path.Clip(drawingOptions.ShapeOptions, clipPaths) // boolean op
-                    // So:
-                    // 1. The clip paths must be in device-pixel space (pre-transformed).
-                    // 2. ShapeOptions.BooleanOperation must be Intersection (not the default
-                    //    Difference) so the clip path RESTRICTS the draw area, not subtracts it.
-                    var currentMatrix = ToCanvasMatrix(transforms.Peek(), scale);
-                    // BooleanOperation.Intersection: keep only the part of the draw path that
-                    // falls inside the clip region.
-                    var clippingOptions = new DrawingOptions
-                    {
-                        Transform = currentMatrix,
-                        ShapeOptions = new ShapeOptions { BooleanOperation = BooleanOperation.Intersection },
-                    };
-                    if (pushClip.Bounds.Width > 0 && pushClip.Bounds.Height > 0)
-                    {
-                        var clipPath = BuildClipPath(pushClip.Bounds, pushClip.Radii)
-                            .Transform(currentMatrix);
-                        canvas.Save(clippingOptions, clipPath);
-                    }
-                    else
-                    {
-                        // Zero-size clip: nothing can paint through. Save a balanced state.
-                        canvas.Save(clippingOptions);
-                    }
-                }
+                ApplyPushClip(canvas, pushClip, transforms.Peek(), scale);
                 break;
             case DisplayList.PopClip:
                 canvas.Restore();
                 break;
             case PushClipPath pushClipPath:
-                {
-                    // CSS Masking 1 §7 — clip-path basic shapes. Resolve the shape against
-                    // the element's reference box, build the IPath, transform it to device
-                    // pixel space, and push an Intersection clip onto the canvas stack.
-                    var currentMatrix = ToCanvasMatrix(transforms.Peek(), scale);
-                    var clippingOptions = new DrawingOptions
-                    {
-                        Transform = currentMatrix,
-                        ShapeOptions = new ShapeOptions { BooleanOperation = BooleanOperation.Intersection },
-                    };
-                    var shapePath = BuildBasicShapePath(pushClipPath.ClipPath, pushClipPath.ReferenceBox);
-                    if (shapePath is not null)
-                    {
-                        canvas.Save(clippingOptions, shapePath.Transform(currentMatrix));
-                    }
-                    else
-                    {
-                        // Degenerate or unsupported shape — save a balanced no-clip state.
-                        canvas.Save(clippingOptions);
-                    }
-                }
+                ApplyPushClipPath(canvas, pushClipPath, transforms.Peek(), scale);
                 break;
             case DisplayList.PopClipPath:
                 canvas.Restore();
@@ -671,6 +651,82 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             case PushMask:
             case PopMask:
                 break;
+            // PushFilter / PopFilter are processed by ApplyAt / ApplyFilterGroup;
+            // guard like the mask brackets.
+            case PushFilter:
+            case PopFilter:
+                break;
+            // backdrop-filter needs the pixels already painted UNDER the item,
+            // which a recording DrawingCanvas cannot read back mid-replay. The
+            // CPU path handles it via the segmented replay in
+            // ReplayListCpuSegmented; here (offscreen groups and the WebGPU
+            // canvas path) it is skipped — a documented v1 gap.
+            case DrawBackdropFilter:
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Pushes a (possibly rounded) rect clip onto the canvas state stack.
+    /// <paramref name="composed"/> is the CSS-space transform in effect when
+    /// the bracket opened — passed explicitly so the segmented backdrop replay
+    /// can re-open a still-open bracket in a later Paint scope with the same
+    /// matrix it was recorded with.
+    /// </summary>
+    private static void ApplyPushClip(DrawingCanvas canvas, PushClip pushClip, Matrix2D composed, float scale)
+    {
+        // The ImageSharp batcher's PrepareCommand does:
+        //   path = path.Transform(drawingOptions.Transform)   // draw path → device px
+        //   path = path.Clip(drawingOptions.ShapeOptions, clipPaths) // boolean op
+        // So:
+        // 1. The clip paths must be in device-pixel space (pre-transformed).
+        // 2. ShapeOptions.BooleanOperation must be Intersection (not the default
+        //    Difference) so the clip path RESTRICTS the draw area, not subtracts it.
+        var currentMatrix = ToCanvasMatrix(composed, scale);
+        // BooleanOperation.Intersection: keep only the part of the draw path that
+        // falls inside the clip region.
+        var clippingOptions = new DrawingOptions
+        {
+            Transform = currentMatrix,
+            ShapeOptions = new ShapeOptions { BooleanOperation = BooleanOperation.Intersection },
+        };
+        if (pushClip.Bounds.Width > 0 && pushClip.Bounds.Height > 0)
+        {
+            var clipPath = BuildClipPath(pushClip.Bounds, pushClip.Radii)
+                .Transform(currentMatrix);
+            canvas.Save(clippingOptions, clipPath);
+        }
+        else
+        {
+            // Zero-size clip: nothing can paint through. Save a balanced state.
+            canvas.Save(clippingOptions);
+        }
+    }
+
+    /// <summary>
+    /// CSS Masking 1 §7 — clip-path basic shapes. Resolve the shape against
+    /// the element's reference box, build the IPath, transform it to device
+    /// pixel space, and push an Intersection clip onto the canvas stack. Like
+    /// <see cref="ApplyPushClip"/>, <paramref name="composed"/> is explicit so
+    /// the segmented backdrop replay can re-open the bracket.
+    /// </summary>
+    private static void ApplyPushClipPath(DrawingCanvas canvas, PushClipPath pushClipPath, Matrix2D composed, float scale)
+    {
+        var currentMatrix = ToCanvasMatrix(composed, scale);
+        var clippingOptions = new DrawingOptions
+        {
+            Transform = currentMatrix,
+            ShapeOptions = new ShapeOptions { BooleanOperation = BooleanOperation.Intersection },
+        };
+        var shapePath = BuildBasicShapePath(pushClipPath.ClipPath, pushClipPath.ReferenceBox);
+        if (shapePath is not null)
+        {
+            canvas.Save(clippingOptions, shapePath.Transform(currentMatrix));
+        }
+        else
+        {
+            // Degenerate or unsupported shape — save a balanced no-clip state.
+            canvas.Save(clippingOptions);
         }
     }
 
@@ -2716,6 +2772,450 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         pb.MoveTo(s);
         pb.AddCubicBezier(s, c1, c2, e);
         canvas.Draw(Pens.Solid(ToColor(color), penW), pb.Build());
+    }
+
+    // --- Tier 4 item 18 — Filter Effects 1 `filter` + `backdrop-filter` ------
+
+    /// <summary>
+    /// Renders display-list items from <paramref name="start"/> to
+    /// <paramref name="end"/> (exclusive) into a transparent offscreen layer
+    /// (Filter Effects 1 §10 group rendering), runs the filter chain over it IN
+    /// ORDER, and blits the result through the current canvas transform. The
+    /// offscreen covers the union of the border box and the bracketed items'
+    /// painted bounds, padded by the chain's blur/offset halo
+    /// (<see cref="FilterFunction.HaloPadding"/>) so the Gaussian never samples
+    /// the layer edge — without the padding edges go dark and the blur is
+    /// cropped.
+    /// </summary>
+    private void ApplyFilterGroup(DrawingCanvas canvas, IReadOnlyList<DisplayItem> items, int start, int end,
+        PushFilter pushFilter, float scale, DisposableBag pendingImageSources, Stack<Matrix2D> transforms, LayoutRect target)
+    {
+        var filters = pushFilter.Filters;
+        var degenerate = filters.Count == 0
+            || pushFilter.Bounds.Width <= 0 || pushFilter.Bounds.Height <= 0;
+
+        LayoutRect bounds = default;
+        int px = 0, py = 0;
+        if (!degenerate)
+        {
+            // Union the bracket's painted extents with the border box
+            // (descendants may overflow it), then add the halo padding.
+            bounds = UnionGroupBounds(items, start, end, pushFilter.Bounds);
+            var pad = FilterFunction.HaloPadding(filters);
+            bounds = new LayoutRect(bounds.X - pad, bounds.Y - pad, bounds.Width + 2 * pad, bounds.Height + 2 * pad);
+            px = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
+            py = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+            // Same offscreen size guard as the mask group path.
+            degenerate = (long)px * py > 64L * 1024 * 1024;
+        }
+
+        if (degenerate)
+        {
+            // Nothing filterable (or an absurdly large surface) — replay the
+            // bracketed items inline so the content still paints.
+            var j = start;
+            while (j < end)
+                j = ApplyAt(canvas, items, j, scale, pendingImageSources, transforms, target);
+            return;
+        }
+
+        // Render the bracketed items into a transparent offscreen layer whose
+        // local origin is the padded bounds' top-left (same pattern as
+        // ApplyMaskGroup).
+        var layerViewportTransform = Matrix2D.Translate(-bounds.X, -bounds.Y).Multiply(transforms.Peek());
+        var contentLayer = new Image<Rgba32>(px, py, new Rgba32(0, 0, 0, 0));
+        pendingImageSources.Add(contentLayer);
+        contentLayer.Mutate(ctx => ctx.Paint(c =>
+        {
+            var layerTransforms = new Stack<Matrix2D>();
+            layerTransforms.Push(layerViewportTransform);
+            c.Save(new DrawingOptions { Transform = ToCanvasMatrix(layerViewportTransform, scale) });
+            var i = start;
+            while (i < end)
+                i = ApplyAt(c, items, i, scale, pendingImageSources, layerTransforms, target);
+            c.Restore();
+        }));
+
+        var filtered = ApplyFilterChain(contentLayer, filters, scale);
+        if (!ReferenceEquals(filtered, contentLayer))
+            pendingImageSources.Add(filtered); // canvas.DrawImage rasterizes lazily
+
+        canvas.DrawImage(filtered, new Rectangle(0, 0, px, py),
+            new RectangleF((float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height),
+            _resampler);
+    }
+
+    /// <summary>
+    /// Page-space AABB union of the items in [start, end) seeded with the
+    /// filter group's border box, tracking nested transform brackets the same
+    /// way the layer-bounds union does.
+    /// </summary>
+    private static LayoutRect UnionGroupBounds(IReadOnlyList<DisplayItem> items, int start, int end, LayoutRect seed)
+    {
+        var minX = seed.X;
+        var minY = seed.Y;
+        var maxX = seed.Right;
+        var maxY = seed.Bottom;
+        var transform = Matrix2D.Identity;
+        Stack<Matrix2D>? stack = null;
+        for (var i = start; i < end; i++)
+        {
+            var item = items[i];
+            switch (item)
+            {
+                case PushTransform p:
+                    stack ??= new Stack<Matrix2D>();
+                    stack.Push(transform);
+                    transform = transform.Multiply(p.Matrix);
+                    continue;
+                case DisplayList.PopTransform:
+                    if (stack is { Count: > 0 }) transform = stack.Pop();
+                    continue;
+            }
+            if (!DisplayItemBounds.TryGet(item, out var local)) continue;
+            var aabb = TransformedAabb(local, transform);
+            minX = Math.Min(minX, aabb.X);
+            minY = Math.Min(minY, aabb.Y);
+            maxX = Math.Max(maxX, aabb.Right);
+            maxY = Math.Max(maxY, aabb.Bottom);
+        }
+        return new LayoutRect(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    /// <summary>
+    /// Runs a resolved filter chain over <paramref name="layer"/> IN ORDER
+    /// (Filter Effects 1 §10.1 — order is observable: brightness→invert differs
+    /// from invert→brightness). The color functions map onto ImageSharp's
+    /// color-matrix processors, which use the same Rec.709 luminance weights as
+    /// the spec's matrices; blur runs the Gaussian at σ = radius/2 · scale (the
+    /// repo's box-shadow σ convention, at device resolution). Drop-shadow
+    /// rebuilds the layer (silhouette → blur → offset → source-over), so the
+    /// returned image may differ from the input; intermediates are disposed
+    /// here, the caller owns the input and the returned image.
+    /// </summary>
+    private static Image<Rgba32> ApplyFilterChain(Image<Rgba32> layer, IReadOnlyList<FilterFunction> filters, float scale)
+    {
+        var original = layer;
+        for (var i = 0; i < filters.Count; i++)
+        {
+            var f = filters[i];
+            switch (f.Kind)
+            {
+                case FilterFunctionKind.Blur:
+                {
+                    var sigma = (float)(FilterFunction.Sigma(f.Amount) * scale);
+                    if (sigma > 0)
+                        layer.Mutate(ctx => ctx.GaussianBlur(sigma));
+                    break;
+                }
+                case FilterFunctionKind.Brightness:
+                {
+                    var amount = (float)Math.Max(0, f.Amount);
+                    layer.Mutate(ctx => ctx.Brightness(amount));
+                    break;
+                }
+                case FilterFunctionKind.Contrast:
+                {
+                    var amount = (float)Math.Max(0, f.Amount);
+                    layer.Mutate(ctx => ctx.Contrast(amount));
+                    break;
+                }
+                case FilterFunctionKind.Saturate:
+                {
+                    var amount = (float)Math.Max(0, f.Amount);
+                    layer.Mutate(ctx => ctx.Saturate(amount));
+                    break;
+                }
+                case FilterFunctionKind.Grayscale:
+                {
+                    var amount = (float)Math.Clamp(f.Amount, 0, 1);
+                    if (amount > 0)
+                        layer.Mutate(ctx => ctx.Grayscale(amount));
+                    break;
+                }
+                case FilterFunctionKind.Sepia:
+                {
+                    var amount = (float)Math.Clamp(f.Amount, 0, 1);
+                    if (amount > 0)
+                        layer.Mutate(ctx => ctx.Sepia(amount));
+                    break;
+                }
+                case FilterFunctionKind.HueRotate:
+                {
+                    var degrees = (float)f.Amount;
+                    if (degrees != 0)
+                        layer.Mutate(ctx => ctx.Hue(degrees));
+                    break;
+                }
+                case FilterFunctionKind.Invert:
+                {
+                    // §10.1: c' = a·(1−c) + (1−a)·c = (1−2a)·c + a — an affine
+                    // color matrix (full channel flip at a = 1).
+                    var a = (float)Math.Clamp(f.Amount, 0, 1);
+                    if (a > 0)
+                    {
+                        var m = new ColorMatrix
+                        {
+                            M11 = 1 - 2 * a,
+                            M22 = 1 - 2 * a,
+                            M33 = 1 - 2 * a,
+                            M44 = 1,
+                            M51 = a,
+                            M52 = a,
+                            M53 = a,
+                        };
+                        layer.Mutate(ctx => ctx.Filter(m));
+                    }
+                    break;
+                }
+                case FilterFunctionKind.Opacity:
+                {
+                    var a = (float)Math.Clamp(f.Amount, 0, 1);
+                    if (a < 1)
+                        layer.Mutate(ctx => ctx.Opacity(a));
+                    break;
+                }
+                case FilterFunctionKind.DropShadow:
+                {
+                    var next = ApplyDropShadowFilter(layer, f, scale);
+                    if (!ReferenceEquals(layer, original))
+                        layer.Dispose(); // intermediate from a previous drop-shadow
+                    layer = next;
+                    break;
+                }
+            }
+        }
+        return layer;
+    }
+
+    /// <summary>
+    /// drop-shadow(ox oy blur color) — Filter Effects 1 §10.1: a blurred,
+    /// offset, tinted copy of the layer's alpha silhouette composited UNDER the
+    /// layer (like the text-shadow / box-shadow rasterizers: silhouette → blur
+    /// → offset → source over).
+    /// </summary>
+    private static Image<Rgba32> ApplyDropShadowFilter(Image<Rgba32> source, FilterFunction f, float scale)
+    {
+        var color = f.Color ?? CssColor.Black;
+
+        // Tint the source's alpha with the shadow color.
+        var shadow = new Image<Rgba32>(source.Width, source.Height, new Rgba32(0, 0, 0, 0));
+        shadow.ProcessPixelRows(source, (shadowAccessor, sourceAccessor) =>
+        {
+            var height = Math.Min(shadowAccessor.Height, sourceAccessor.Height);
+            for (var y = 0; y < height; y++)
+            {
+                var shadowRow = shadowAccessor.GetRowSpan(y);
+                var sourceRow = sourceAccessor.GetRowSpan(y);
+                var width = Math.Min(shadowRow.Length, sourceRow.Length);
+                for (var x = 0; x < width; x++)
+                {
+                    var a = (sourceRow[x].A * color.A + 127) / 255;
+                    shadowRow[x] = new Rgba32(color.R, color.G, color.B, (byte)a);
+                }
+            }
+        });
+
+        var sigma = (float)(FilterFunction.Sigma(f.Amount) * scale);
+        if (sigma > 0)
+            shadow.Mutate(ctx => ctx.GaussianBlur(sigma));
+
+        var dx = (int)Math.Round(f.OffsetX * scale);
+        var dy = (int)Math.Round(f.OffsetY * scale);
+        var result = new Image<Rgba32>(source.Width, source.Height, new Rgba32(0, 0, 0, 0));
+        result.Mutate(ctx =>
+        {
+            ctx.DrawImage(shadow, new Point(dx, dy), 1f);
+            ctx.DrawImage(source, new Point(0, 0), 1f);
+        });
+        shadow.Dispose(); // image.Mutate rasterizes immediately, unlike the canvas
+        return result;
+    }
+
+    /// <summary>
+    /// True when the list carries a <see cref="DrawBackdropFilter"/> outside
+    /// any mask/filter offscreen group — only those can read the real canvas
+    /// (a nested one would snapshot the group's transparent layer; skipped).
+    /// </summary>
+    private static bool ContainsTopLevelBackdropFilter(IReadOnlyList<DisplayItem> items)
+    {
+        var groupDepth = 0;
+        for (var i = 0; i < items.Count; i++)
+        {
+            switch (items[i])
+            {
+                case PushMask or PushFilter:
+                    groupDepth++;
+                    break;
+                case PopMask or PopFilter:
+                    if (groupDepth > 0) groupDepth--;
+                    break;
+                case DrawBackdropFilter when groupDepth == 0:
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// CPU replay that supports `backdrop-filter` (Filter Effects 2 §6). The
+    /// DrawingCanvas records lazily inside one Mutate/Paint scope, so canvas
+    /// pixels under an element cannot be read mid-replay; instead the list is
+    /// replayed in segments. Everything before a top-level
+    /// <see cref="DrawBackdropFilter"/> is rasterized into the image, the
+    /// region under the element's border box (plus blur halo) is snapshotted,
+    /// filtered, and drawn back clipped to the rounded border box, then replay
+    /// continues — the element's own background/content paints over the
+    /// filtered patch in the next segment. Transform/clip brackets still open
+    /// at a segment boundary are re-opened at the start of the next segment
+    /// with the matrices they were recorded with.
+    /// <para>
+    /// v1 simplifications: the snapshot reads the FLATTENED canvas painted so
+    /// far (no isolation/backdrop-root grouping for overlapping promoted
+    /// layers — which matches what this CPU path can see); ancestor clips do
+    /// not crop the patch (it is clipped to the element's own border box
+    /// only); the WebGPU canvas path skips backdrop-filter entirely.
+    /// </para>
+    /// </summary>
+    private void ReplayListCpuSegmented(Image<Rgba32> image, PaintList list, int width, int height, float scale,
+        Matrix2D viewportTransform, DisposableBag pendingImageSources)
+    {
+        var items = list.Items;
+        var transforms = new Stack<Matrix2D>();
+        transforms.Push(viewportTransform);
+        var openBrackets = new List<(DisplayItem Item, Matrix2D Matrix)>();
+        var target = new LayoutRect(0, 0, width / scale, height / scale);
+
+        var segmentStart = 0;
+        var groupDepth = 0;
+        var i = 0;
+        while (i < items.Count)
+        {
+            if (groupDepth == 0 && items[i] is DrawBackdropFilter backdrop)
+            {
+                ReplaySegment(image, items, segmentStart, i, scale, viewportTransform, pendingImageSources, transforms, openBrackets, target);
+                ApplyBackdropFilterCpu(image, backdrop, transforms.Peek(), scale);
+                segmentStart = i + 1;
+                i++;
+                continue;
+            }
+            switch (items[i])
+            {
+                case PushMask or PushFilter:
+                    groupDepth++;
+                    break;
+                case PopMask or PopFilter:
+                    if (groupDepth > 0) groupDepth--;
+                    break;
+            }
+            i++;
+        }
+        ReplaySegment(image, items, segmentStart, items.Count, scale, viewportTransform, pendingImageSources, transforms, openBrackets, target);
+    }
+
+    /// <summary>
+    /// Rasterizes items [start, end) into <paramref name="image"/> through one
+    /// Paint scope, re-opening the brackets left open by the previous segment
+    /// and recording the brackets still open at the end (with the composed
+    /// matrix each was opened under) so the next segment can re-open them.
+    /// </summary>
+    private void ReplaySegment(Image<Rgba32> image, IReadOnlyList<DisplayItem> items, int start, int end,
+        float scale, Matrix2D viewportTransform, DisposableBag pendingImageSources,
+        Stack<Matrix2D> transforms, List<(DisplayItem Item, Matrix2D Matrix)> openBrackets, LayoutRect target)
+    {
+        if (start >= end) return;
+        image.Mutate(x => x.Paint(canvas =>
+        {
+            canvas.Save(new DrawingOptions { Transform = ToCanvasMatrix(viewportTransform, scale) });
+            for (var b = 0; b < openBrackets.Count; b++)
+                ReopenBracket(canvas, openBrackets[b].Item, openBrackets[b].Matrix, scale);
+
+            var i = start;
+            while (i < end)
+            {
+                var item = items[i];
+                var next = ApplyAt(canvas, items, i, scale, pendingImageSources, transforms, target);
+                switch (item)
+                {
+                    // Bracket bookkeeping AFTER Apply so PushTransform records
+                    // the composed matrix (transforms.Peek() now includes it).
+                    case PushTransform or PushClip or PushClipPath:
+                        openBrackets.Add((item, transforms.Peek()));
+                        break;
+                    case DisplayList.PopTransform or DisplayList.PopClip or DisplayList.PopClipPath:
+                        if (openBrackets.Count > 0)
+                            openBrackets.RemoveAt(openBrackets.Count - 1);
+                        break;
+                }
+                i = next;
+            }
+
+            // Balance this Paint scope's Save stack: one Restore per bracket
+            // still open, plus the viewport Save.
+            for (var b = 0; b < openBrackets.Count; b++)
+                canvas.Restore();
+            canvas.Restore();
+        }));
+    }
+
+    /// <summary>Re-opens a bracket recorded by <see cref="ReplaySegment"/> in a
+    /// fresh Paint scope, using the composed matrix it was recorded with.</summary>
+    private static void ReopenBracket(DrawingCanvas canvas, DisplayItem item, Matrix2D matrix, float scale)
+    {
+        switch (item)
+        {
+            case PushTransform:
+                // The recorded matrix is already the fully composed transform.
+                canvas.Save(new DrawingOptions { Transform = ToCanvasMatrix(matrix, scale) });
+                break;
+            case PushClip pushClip:
+                ApplyPushClip(canvas, pushClip, matrix, scale);
+                break;
+            case PushClipPath pushClipPath:
+                ApplyPushClipPath(canvas, pushClipPath, matrix, scale);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Snapshots the canvas region under the backdrop item's border box
+    /// (expanded by the chain's blur halo so the Gaussian has real neighbours
+    /// at the edge), runs the filter chain over the patch, and draws it back
+    /// clipped to the rounded border box. The element's own background /
+    /// content items follow in the next segment and paint over the patch.
+    /// </summary>
+    private static void ApplyBackdropFilterCpu(Image<Rgba32> image, DrawBackdropFilter backdrop, Matrix2D current, float scale)
+    {
+        if (backdrop.Filters.Count == 0) return;
+        if (backdrop.Bounds.Width <= 0 || backdrop.Bounds.Height <= 0) return;
+
+        // Device-space AABB of the border box under the current transform,
+        // padded by the blur halo, clamped to the canvas.
+        var aabb = TransformedAabb(backdrop.Bounds, current);
+        var pad = FilterFunction.HaloPadding(backdrop.Filters);
+        var x0 = Math.Max(0, (int)Math.Floor((aabb.X - pad) * scale));
+        var y0 = Math.Max(0, (int)Math.Floor((aabb.Y - pad) * scale));
+        var x1 = Math.Min(image.Width, (int)Math.Ceiling((aabb.Right + pad) * scale));
+        var y1 = Math.Min(image.Height, (int)Math.Ceiling((aabb.Bottom + pad) * scale));
+        if (x1 <= x0 || y1 <= y0) return;
+
+        var region = new Rectangle(x0, y0, x1 - x0, y1 - y0);
+        var patch = image.Clone(ctx => ctx.Crop(region));
+        var filtered = ApplyFilterChain(patch, backdrop.Filters, scale);
+        if (!ReferenceEquals(filtered, patch))
+            patch.Dispose();
+
+        // Keep only the pixels inside the (rounded) border box: transform the
+        // CSS-px path to device pixels, shift it into patch-local coords, and
+        // zero the alpha outside it. The padded margin thus feeds the Gaussian
+        // but never paints back.
+        var clipPath = BuildClipPath(backdrop.Bounds, backdrop.Radii)
+            .Transform(ToCanvasMatrix(current, scale))
+            .Translate(-x0, -y0);
+        ApplyClipMask(filtered, clipPath);
+
+        image.Mutate(ctx => ctx.DrawImage(filtered, new Point(x0, y0), 1f));
+        filtered.Dispose(); // image.Mutate rasterizes immediately
     }
 
     public void Dispose()
