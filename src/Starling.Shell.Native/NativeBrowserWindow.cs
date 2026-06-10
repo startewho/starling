@@ -600,6 +600,11 @@ internal sealed class NativeBrowserWindow : IDisposable
         int activeIndex = 0;
         BrowserSession session = null!;   // assigned from the first tab below
         double scrollY = 0;
+        // The store-root offset scrollY was last synced against, either way.
+        // The shell owns root scroll in v1 (scroll-model.md, Decision 1); this
+        // snapshot lets the Update loop tell a store-driven root write (the JS
+        // bindings, WP3) from the value the shell itself last wrote.
+        double storeRootSyncedY = 0;
         LaidOutPage? page = null;
         int lastLayoutVersion = -1;
 
@@ -730,6 +735,17 @@ internal sealed class NativeBrowserWindow : IDisposable
 
         PushA11y();
 
+        // Mirror the shell's root scroll position into the page store's root
+        // entry (write-only: the store clamps and flags, dispatch waits for the
+        // frame pump). Reading the clamped value back keeps the snapshot stable
+        // against geometry rounding.
+        void SyncRootScrollToStore()
+        {
+            if (page is null) { storeRootSyncedY = 0; return; }
+            page.ScrollState.WriteRoot(0, scrollY);
+            storeRootSyncedY = page.ScrollState.Root.OffsetY;
+        }
+
         // ── Input ─────────────────────────────────────────────────────────────
         var input = window.CreateInput();
 
@@ -737,12 +753,46 @@ internal sealed class NativeBrowserWindow : IDisposable
         {
             var mouse = input.Mice[0];
 
-            mouse.Scroll += (_, wheel) =>
+            mouse.Scroll += (m, wheel) =>
             {
                 if (page is null) return;
+
+                // Inner scroll first: when the pointer is over the page region,
+                // route the wheel through the shared ScrollController so the
+                // deepest `overflow: scroll | auto` container with room takes
+                // the delta (latched per axis) into the page's scroll store.
+                // The loop presents every frame, so a consumed tick repaints on
+                // its own — no relayout, no synchronous event dispatch (the
+                // store's pending flags wait for the frame pump, WP4).
+                var pos = m.Position;
+                if (pos.X >= SidebarWidthCss && pos.Y >= ChromeHeightCss && !IsStatusBarPoint(pos.X, pos.Y))
+                {
+                    var hit = BoxHitTester.HitTest(
+                        page.Root,
+                        pos.X - SidebarWidthCss,
+                        (pos.Y - ChromeHeightCss) + scrollY,
+                        viewportX: 0,
+                        viewportY: scrollY,
+                        page.ScrollOffsetLookup);
+                    // Silk wheel deltas are lines, positive = up; negate into
+                    // content-space. No precision flag on this input path, so
+                    // every tick takes the lines x40 conversion.
+                    if (hit.Box is not null && ScrollController.TryScroll(
+                            page.ScrollState, hit.Box, -wheel.X, -wheel.Y, precise: false))
+                    {
+                        return;
+                    }
+                }
+
+                // Fall through to the shell-owned root scroller, mirrored into
+                // the store's root entry for the JS surface (WP3/WP4).
                 var maxScroll = Math.Max(0, page.DocumentHeight - PageViewportHeight(logicalH));
                 var newScroll = Math.Clamp(scrollY - wheel.Y * 40, 0, maxScroll);
-                if (newScroll != scrollY) { scrollY = newScroll; }
+                if (newScroll != scrollY)
+                {
+                    scrollY = newScroll;
+                    SyncRootScrollToStore();
+                }
             };
 
             mouse.MouseMove += (m, pos) =>
@@ -775,7 +825,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     pageY,
                     viewportX: 0,
                     viewportY: scrollY,
-                    scrollOffsets: null);
+                    page.ScrollOffsetLookup);
                 var cursor = BoxHitTester.ResolveCursor(hit);
                 SetCursor(m.Cursor, cursor, _log);
 
@@ -898,7 +948,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     pageX, pageY,
                     viewportX: 0,
                     viewportY: scrollY,
-                    scrollOffsets: null);
+                    page.ScrollOffsetLookup);
 
                 // Focus / text input
                 if (hit.Box?.Element is { } hitEl
@@ -1226,6 +1276,17 @@ internal sealed class NativeBrowserWindow : IDisposable
                 RefreshLayout();
             }
 
+            // Apply a store-driven root write (window.scrollTo, WP3 — script
+            // ran in PumpFrame above) back to the shell's root scroller. The
+            // storeRootSyncedY snapshot keeps the two-way sync from
+            // ping-ponging with the shell's own writes.
+            var rootState = page.ScrollState.Root;
+            if (rootState.OffsetY != storeRootSyncedY)
+            {
+                scrollY = rootState.OffsetY;
+                storeRootSyncedY = rootState.OffsetY;
+            }
+
             // Animation frame: advance the clock, re-sample the hovered scope at
             // the new time so a hover transition progresses, and present. Paced to
             // the frame budget; reduced-motion skips it entirely.
@@ -1395,6 +1456,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     PageRoot = page!.Root,
                     ScrollX = 0,
                     ScrollY = scrollY,
+                    PageScrollOffsets = page.ScrollOffsetLookup,
                     PageAnimating = box => IsAnimatingLayerRoot(page, box),
                     StyleOverride = StyleOverride,
                     Images = page.ImageResolver,
@@ -1621,6 +1683,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             var oldPage = page;
             renderer.ResetForNavigation();
             scrollY = 0;
+            storeRootSyncedY = 0; // fresh page load = fresh store, root at 0
             focusedInput = null;
             preedit = "";
             urlBarFocused = false;
@@ -1738,6 +1801,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             devtoolsOverlay = null;
             menuActive = false;
             menuOverlay = null;
+            SyncRootScrollToStore(); // this tab's page store may hold another tab's era
             renderer.ResetForNavigation();
             PushA11y();
         }
@@ -1847,6 +1911,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                 var viewportH = PageViewportHeight(logicalH);
                 var maxScroll = Math.Max(0, page.DocumentHeight - viewportH);
                 scrollY = Math.Clamp(f.Y - viewportH / 3, 0, maxScroll);
+                SyncRootScrollToStore();
                 findOverlay = BuildFindOverlay(f, PageViewportWidth(logicalW), page.DocumentHeight);
                 break;
             }
@@ -1905,7 +1970,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             {
                 var hit = BoxHitTester.HitTest(
                     page.Root, x - SidebarWidthCss, (y - ChromeHeightCss) + scrollY,
-                    viewportX: 0, viewportY: scrollY, scrollOffsets: null);
+                    viewportX: 0, viewportY: scrollY, page.ScrollOffsetLookup);
                 if (hit.LinkAnchor is { } a)
                 {
                     var href = a.GetAttribute("href");

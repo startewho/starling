@@ -93,6 +93,13 @@ public sealed class CompositedFrameRequest
     public BlockBox? OverlayRoot { get; init; }
     public BlockBox? ScreenOverlayRoot { get; init; }
 
+    /// <summary>Per-element scroll offsets for the page document's
+    /// <c>overflow: scroll | auto</c> containers, read from the page's
+    /// scroll store (<c>ScrollStateStore.GetOffset</c> shape). Threads into
+    /// the page layer tree only — chrome and overlays do not scroll
+    /// per-element.</summary>
+    public Func<Element, (double X, double Y)>? PageScrollOffsets { get; init; }
+
     /// <summary>
     /// Optional bottom chrome (status bar) — a strip below the page, to the right
     /// of the sidebar, the same width as the page region. Null leaves the page
@@ -306,7 +313,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.BottomChromeRoot,
             request.BottomChromeRightRoot,
             request.BottomChromeLeftWidthCss,
-            request.BottomChromeHeightCss);
+            request.BottomChromeHeightCss,
+            request.PageScrollOffsets);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface compositor did not present the frame.");
