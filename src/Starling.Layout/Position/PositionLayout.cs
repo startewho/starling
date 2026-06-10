@@ -23,13 +23,12 @@ namespace Starling.Layout.Position;
 /// </list>
 /// Simplifications relative to spec:
 /// <list type="bullet">
-///   <item>Static-position fallback when both <c>left</c> and <c>right</c>
-///   are <c>auto</c>: we use the containing block's left edge (offset 0)
-///   rather than threading the element's would-have-been in-flow position
-///   through the in-flow pass. This matches what most pages get visually
-///   when authors omit insets entirely (the result still snaps to the
-///   start of the containing block, which is the spec's static-position
-///   most of the time).</item>
+///   <item>Static-position fallback when both insets of an axis are
+///   <c>auto</c> uses the hypothetical position the flow pass recorded on
+///   the box (<see cref="Box.Box.StaticX"/>/<c>StaticY</c> — CSS 2.1
+///   §10.3.7/§10.6.4), approximated as the stack cursor at the parent's
+///   left content edge; sibling margin collapse and the flex sole-item
+///   alignment offsets are not replayed.</item>
 ///   <item>Margin auto on positioned elements: not yet centered against the
 ///   containing block; margins resolve to their computed value (zero by
 ///   default).</item>
@@ -43,10 +42,20 @@ internal sealed class PositionLayout
     private readonly Size _viewport;
     private readonly Rect _initialContainingBlock;
 
-    public PositionLayout(BlockLayout block, Size viewport)
+    /// <summary>The document's scroll store, when a scroll model is attached
+    /// (browser-plan/scroll-model.md WP5). With a store, every sticky element
+    /// keeps its natural in-flow frame and the pass records
+    /// <see cref="Scroll.StickyConstraints"/> instead — the shift is applied
+    /// at paint/hit-test/rect time from the bound scroller's live offset.
+    /// Without a store (no scroller exists), sticky stays on the
+    /// clamped-relative layout shift, keeping static renders pixel-identical.</summary>
+    private readonly Scroll.ScrollStateStore? _scroll;
+
+    public PositionLayout(BlockLayout block, Size viewport, Scroll.ScrollStateStore? scrollStore = null)
     {
         _block = block;
         _viewport = viewport;
+        _scroll = scrollStore;
         _initialContainingBlock = new Rect(0, 0, viewport.Width, viewport.Height);
     }
 
@@ -102,18 +111,24 @@ internal sealed class PositionLayout
             if (topPx is { } ty) dy = ty;
             else if (bottomPx is { } by) dy = -by;
 
-            box.Frame = box.Frame.Translate(dx, dy);
+            var natural = NaturalFrameOf(box);
+            CommitShift(box, natural, natural.Translate(dx, dy));
         }
-        else if (props.Kind is PositionKind.Sticky)
+        else if (props.Kind is PositionKind.Sticky && _scroll is null)
         {
-            // Sticky degrades to clamped-relative without scroll: the
-            // natural frame only shifts if an inset is violated relative
+            // No scroll model attached: sticky degrades to clamped-relative —
+            // the natural frame only shifts if an inset is violated relative
             // to the containing block's content rect. The CB-local space
             // is `(0, 0, cbWidth, cbHeight)` because `box.Frame` is in
-            // parent-content-box coordinates already.
+            // parent-content-box coordinates already. With a store, the box
+            // keeps its natural frame here and the positioning walk records
+            // StickyConstraints instead; the shift is paint-time arithmetic
+            // (scroll-model.md: layout frames never move, so the incremental
+            // reuse keys stay clean).
             var (cbWidth, cbHeight) = ContainingBlockContentSizeOf(box.Parent);
             var cbLocal = new Rect(0, 0, cbWidth, cbHeight);
-            box.Frame = StickyLayout.ResolveOffset(box.Frame, cbLocal, props);
+            var natural = NaturalFrameOf(box);
+            CommitShift(box, natural, StickyLayout.ResolveOffset(natural, cbLocal, props));
         }
 
         // Recurse into children with the (possibly shifted) origin baked in.
@@ -122,6 +137,45 @@ internal sealed class PositionLayout
         // in case we want to add coverage later.
         foreach (var child in box.Children)
             ApplyRelativeOffsets(child, parentOriginX + box.Frame.X, parentOriginY + box.Frame.Y);
+    }
+
+    /// <summary>
+    /// The box's natural (pre-shift) frame. Normally that is the current
+    /// <see cref="Box.Box.Frame"/> — every layout seam that places a box
+    /// writes its natural position. But a box deeper than one level inside a
+    /// clean reused subtree is NOT re-placed by an incremental pass: its frame
+    /// still carries the shift this pass applied last time, and translating it
+    /// again would compound (the y=100 -> 150 -> 200 drift). The position pass
+    /// records the exact frame it writes (<see cref="Box.Box.RelShiftedFrame"/>).
+    /// Every re-lay seam clears <see cref="Box.Box.RelShiftValid"/>
+    /// (<c>BlockLayout.NoteRelaid</c>), so a valid flag means no seam
+    /// re-placed the box and the recorded natural origin is the basis. The
+    /// frame-equality check stays as defense for frame writes outside the
+    /// instrumented seams (e.g. flex container repositioning of clean items):
+    /// a moved frame resets the basis to the live frame.
+    /// </summary>
+    private static Rect NaturalFrameOf(Box.Box box)
+        => box.RelShiftValid && box.Frame == box.RelShiftedFrame
+            ? new Rect(box.RelNaturalX, box.RelNaturalY, box.Frame.Width, box.Frame.Height)
+            : box.Frame;
+
+    /// <summary>Write the shifted frame and the idempotency bookkeeping for
+    /// <see cref="NaturalFrameOf"/>. Frames that did not move still record,
+    /// so a later pass can tell "unshifted" from "never visited".</summary>
+    private void CommitShift(Box.Box box, Rect natural, Rect shifted)
+    {
+        // Frame write + scroll bookkeeping first, idempotency bookkeeping
+        // last — re-lay seams clear RelShiftValid, so the valid flag must be
+        // the final write of the commit.
+        if (shifted != box.Frame)
+        {
+            box.Frame = shifted;
+            _block.NoteFrameMoved(box); // ancestors' cached scroll extents now include a moved rect
+        }
+        box.RelNaturalX = natural.X;
+        box.RelNaturalY = natural.Y;
+        box.RelShiftedFrame = shifted;
+        box.RelShiftValid = true;
     }
 
     // ---------------------------------------------------------------------
@@ -135,10 +189,17 @@ internal sealed class PositionLayout
         // any absolutely-positioned descendant. Walk depth-first and keep a
         // stack of (positioned ancestor → padding-box document rect).
         var ancestorStack = new System.Collections.Generic.Stack<Rect>();
-        Walk(root, parentContentOriginX: 0, parentContentOriginY: 0, ancestorStack);
+        Walk(root, parentContentOriginX: 0, parentContentOriginY: 0, ancestorStack,
+            scroller: null, scrollerPadX: 0, scrollerPadY: 0);
     }
 
-    private void Walk(Box.Box box, double parentContentOriginX, double parentContentOriginY, System.Collections.Generic.Stack<Rect> ancestorStack)
+    // scroller / scrollerPadX / scrollerPadY: the nearest scrolling-ancestor
+    // element for sticky descendants of this subtree (null = the root
+    // document scroller) and the document-space origin of its padding box —
+    // the scrollport origin every sticky constraint is expressed against.
+    // Only meaningful when a scroll store is attached.
+    private void Walk(Box.Box box, double parentContentOriginX, double parentContentOriginY, System.Collections.Generic.Stack<Rect> ancestorStack,
+        Starling.Dom.Element? scroller, double scrollerPadX, double scrollerPadY)
     {
         // box.Frame is the *border-box* rect in parent's content-box coords.
         var borderBoxDocX = parentContentOriginX + box.Frame.X;
@@ -157,6 +218,43 @@ internal sealed class PositionLayout
 
         var props = PositionParser.Parse(box.Style);
 
+        // Sticky constraints at layout time (scroll-model.md WP5): natural
+        // frame, containing block, resolved insets, and the one scroller this
+        // element binds to — everything scroll-time arithmetic needs, all in
+        // the scroller's padding-box (scrollport-origin) space. Recorded every
+        // pass; the store sweeps entries the pass did not re-record.
+        if (_scroll is { } scrollStore && props.Kind == PositionKind.Sticky && box.Element is { } stickyEl)
+        {
+            var (cbW, cbH) = ContainingBlockContentSizeOf(box.Parent);
+            var cbRight = parentContentOriginX + cbW - scrollerPadX;
+            var cbBottom = parentContentOriginY + cbH - scrollerPadY;
+            // When the containing block IS the bound scroller, the constraint
+            // rectangle is the scroller's scrollable area, not its (fixed)
+            // content box — otherwise the canonical "sticky header as direct
+            // child of the scroller" pins for only contentHeight−natural px
+            // and then stops dead mid-scroll. v1 models that as unbounded end
+            // edges, exact whenever element+inset fit inside the scrollport.
+            if (box.Parent is { } cbBox && ReferenceEquals(cbBox.Element, scroller) && scroller is not null)
+            {
+                cbRight = double.PositiveInfinity;
+                cbBottom = double.PositiveInfinity;
+            }
+            scrollStore.RecordSticky(stickyEl, new Scroll.StickyConstraints(
+                NaturalX: borderBoxDocX - scrollerPadX,
+                NaturalY: borderBoxDocY - scrollerPadY,
+                Width: box.Frame.Width,
+                Height: box.Frame.Height,
+                CbX: parentContentOriginX - scrollerPadX,
+                CbY: parentContentOriginY - scrollerPadY,
+                CbRight: cbRight,
+                CbBottom: cbBottom,
+                Top: props.Top.Resolve(cbH),
+                Right: props.Right.Resolve(cbW),
+                Bottom: props.Bottom.Resolve(cbH),
+                Left: props.Left.Resolve(cbW),
+                Scroller: scroller));
+        }
+
         // If this box is out-of-flow, position it now. The containing block
         // is the top-of-stack ancestor for absolute; or the viewport for
         // fixed.
@@ -172,7 +270,16 @@ internal sealed class PositionLayout
                 cb = ancestorStack.Count > 0 ? ancestorStack.Peek() : _initialContainingBlock;
             }
 
-            PlaceAbsoluteOrFixed(box, props, cb, parentContentOriginX, parentContentOriginY);
+            PlaceAbsoluteOrFixed(box, props, cb, parentContentOriginX, parentContentOriginY,
+                staticDocX: parentContentOriginX + box.StaticX,
+                staticDocY: parentContentOriginY + box.StaticY);
+
+            // The placement re-laid this box wholesale (out-of-flow boxes have
+            // no reuse key), so its scroll-extent chain is stale and an
+            // out-of-flow scroller owes a scoped re-measure. Conservative on
+            // purpose: when nothing changed, the re-measure overwrites
+            // identical geometry.
+            _block.NoteRelaid(box);
 
             // After placing, the box's frame is in *parent content* coords,
             // and we want to recurse into its children using its NEW
@@ -194,8 +301,22 @@ internal sealed class PositionLayout
         if (pushed)
             ancestorStack.Push(paddingBoxRect);
 
-        foreach (var child in box.Children)
-            Walk(child, contentOriginX, contentOriginY, ancestorStack);
+        // A scroll container rebinds sticky descendants to itself: they stick
+        // against the FIRST scroller up the chain, and outer scrollers move
+        // this whole subtree (constraints included) for free.
+        if (_scroll is not null && box.Element is not null
+            && (Scroll.ScrollOverflowMeasurer.Classify(box) & Scroll.ScrollBoxFlags.ScrollContainer) != 0)
+        {
+            foreach (var child in box.Children)
+                Walk(child, contentOriginX, contentOriginY, ancestorStack,
+                    box.Element, paddingBoxRect.X, paddingBoxRect.Y);
+        }
+        else
+        {
+            foreach (var child in box.Children)
+                Walk(child, contentOriginX, contentOriginY, ancestorStack,
+                    scroller, scrollerPadX, scrollerPadY);
+        }
 
         if (pushed)
             ancestorStack.Pop();
@@ -211,16 +332,26 @@ internal sealed class PositionLayout
         PositionedProps props,
         Rect cbDocRect,
         double parentContentOriginX,
-        double parentContentOriginY)
+        double parentContentOriginY,
+        double staticDocX,
+        double staticDocY)
     {
         // Resolve box-model values against the containing block (CSS spec:
         // percentage margins/padding on absolutely-positioned boxes resolve
         // against the containing block's *width*, just like normal).
         ResolveBoxModel(box, cbDocRect.Width);
 
-        // Resolve explicit width/height (auto → null).
+        // Resolve explicit width/height (auto → null). ResolveAxis consumes
+        // BORDER-BOX sizes, so a resolved content-box width/height gets the
+        // box's own padding + border added back — without that, a padded
+        // positioned box lost its padding from the frame (and the content
+        // width subtraction below removed it a second time).
         var widthResolved = BlockLayout.ResolveLength(box.Style, PropertyId.Width, cbDocRect.Width, _viewport, allowAuto: true);
         var heightResolved = BlockLayout.ResolveLength(box.Style, PropertyId.Height, cbDocRect.Height, _viewport, allowAuto: true);
+        if (widthResolved is { } wr)
+            widthResolved = wr + box.Padding.Horizontal + box.Border.Horizontal;
+        if (heightResolved is { } hr)
+            heightResolved = hr + box.Padding.Vertical + box.Border.Vertical;
 
         // Resolve insets against the containing block's content-box
         // dimensions.
@@ -232,7 +363,8 @@ internal sealed class PositionLayout
             explicitSize: widthResolved,
             startMargin: box.Margin.Left,
             endMargin: box.Margin.Right,
-            outerInsets: box.Padding.Horizontal + box.Border.Horizontal);
+            outerInsets: box.Padding.Horizontal + box.Border.Horizontal,
+            staticStart: staticDocX);
 
         // Default height: lay out children at the resolved width and use
         // their consumed height (block formatting context for descendants).
@@ -275,7 +407,8 @@ internal sealed class PositionLayout
             explicitSize: heightExplicit,
             startMargin: box.Margin.Top,
             endMargin: box.Margin.Bottom,
-            outerInsets: box.Padding.Vertical + box.Border.Vertical);
+            outerInsets: box.Padding.Vertical + box.Border.Vertical,
+            staticStart: staticDocY);
 
         // Document-space top-left of the element's *border box*.
         var docX = left + box.Margin.Left;
@@ -301,6 +434,8 @@ internal sealed class PositionLayout
     /// </list>
     /// Implements CSS 2.1 §10.3.7 (horizontal) / §10.6.4 (vertical),
     /// simplified — auto margins resolve to 0 rather than absorbing slack.
+    /// <paramref name="staticStart"/> is the document-space hypothetical
+    /// static position for this axis, used when BOTH insets are auto.
     /// </summary>
     private static (double Start, double End, double UsedSize) ResolveAxis(
         Inset startInset,
@@ -310,7 +445,8 @@ internal sealed class PositionLayout
         double? explicitSize,
         double startMargin,
         double endMargin,
-        double outerInsets)
+        double outerInsets,
+        double staticStart)
     {
         var s = startInset.Resolve(cbExtent);
         var e = endInset.Resolve(cbExtent);
@@ -320,8 +456,12 @@ internal sealed class PositionLayout
 
         if (s is null && e is null)
         {
-            // Both auto → static position. Simplification: snap to cb start.
-            startCoord = cbStart;
+            // Both auto → the hypothetical static position recorded by the
+            // flow pass (CSS 2.1 §10.3.7 rule 1 / §10.6.4 rule 1): the box
+            // stays where in-flow layout would have put it. x.com's fixed
+            // sidebar card has no insets at all — it must paint inside the
+            // sidebar (x≈837), not at the viewport origin.
+            startCoord = staticStart;
             usedSize = explicitSize ?? 0;
         }
         else if (s is { } sv && e is null)
@@ -370,16 +510,18 @@ internal sealed class PositionLayout
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §8.3/§8.4 — percentage margins/padding resolve against the
+        // containing block's width on all four sides (vertical included).
         box.Margin = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         // Border resolution is left at zero for the positioned scope — the

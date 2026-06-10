@@ -27,6 +27,13 @@ public sealed class JsPromise : JsObject
     public PromiseState State { get; private set; } = PromiseState.Pending;
     public JsValue Result { get; private set; } = JsValue.Undefined;
 
+    /// <summary>§27.2.6 [[PromiseIsHandled]] — true once any reaction has been
+    /// attached via PerformPromiseThen (await adopts through <c>then</c>, so
+    /// async machinery is covered). Drives HostPromiseRejectionTracker: a
+    /// rejection on an unhandled promise is reported through
+    /// <see cref="JsRealm.OnUnhandledRejection"/>.</summary>
+    public bool IsHandled { get; internal set; }
+
     /// <summary>Reactions queued while pending; flushed to the microtask
     /// queue at the moment of settlement (§27.2.1.6 TriggerPromiseReactions).</summary>
     internal List<PromiseReaction> FulfillReactions { get; } = new();

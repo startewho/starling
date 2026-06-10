@@ -105,7 +105,13 @@ public static class SelectorMatcher
         ArgumentNullException.ThrowIfNull(selectorList);
         ArgumentNullException.ThrowIfNull(element);
         context ??= new SelectorMatchContext();
-        return selectorList.Selectors.Any(selector => Matches(selector, element, context));
+        var selectors = selectorList.Selectors;
+        for (var i = 0; i < selectors.Count; i++)
+        {
+            if (Matches(selectors[i], element, context))
+                return true;
+        }
+        return false;
     }
 
     public static bool Matches(ComplexSelector selector, Element element, SelectorMatchContext? context = null)
@@ -156,19 +162,35 @@ public static class SelectorMatcher
         if (partIndex == 0)
             return true;
 
-        return part.CombinatorFromPrevious switch
+        // Explicit pointer walks (nearest-first, same order as the old Ancestors()/
+        // PreviousElementSiblings() iterators): the LINQ Any + iterator pair here was a
+        // dominant per-match allocation source in page-load GC profiles.
+        switch (part.CombinatorFromPrevious)
         {
-            SelectorCombinator.Child => ParentElement(element) is { } parent &&
-                MatchesFrom(selector, partIndex - 1, parent, context),
-            SelectorCombinator.Descendant => Ancestors(element)
-                .Any(ancestor => MatchesFrom(selector, partIndex - 1, ancestor, context)),
-            SelectorCombinator.NextSibling => PreviousElementSibling(element) is { } sibling &&
-                MatchesFrom(selector, partIndex - 1, sibling, context),
-            SelectorCombinator.SubsequentSibling => PreviousElementSiblings(element)
-                .Any(sibling => MatchesFrom(selector, partIndex - 1, sibling, context)),
-            SelectorCombinator.Column => false, // column combinator '||' is not implemented yet
-            _ => false,
-        };
+            case SelectorCombinator.Child:
+                return ParentElement(element) is { } parent &&
+                    MatchesFrom(selector, partIndex - 1, parent, context);
+            case SelectorCombinator.Descendant:
+                for (var ancestor = ParentElement(element); ancestor is not null; ancestor = ParentElement(ancestor))
+                {
+                    if (MatchesFrom(selector, partIndex - 1, ancestor, context))
+                        return true;
+                }
+                return false;
+            case SelectorCombinator.NextSibling:
+                return PreviousElementSibling(element) is { } sibling &&
+                    MatchesFrom(selector, partIndex - 1, sibling, context);
+            case SelectorCombinator.SubsequentSibling:
+                for (var prior = PreviousElementSibling(element); prior is not null; prior = PreviousElementSibling(prior))
+                {
+                    if (MatchesFrom(selector, partIndex - 1, prior, context))
+                        return true;
+                }
+                return false;
+            case SelectorCombinator.Column: // column combinator '||' is not implemented yet
+            default:
+                return false;
+        }
     }
 
     public static bool Matches(CompoundSelector selector, Element element, SelectorMatchContext? context = null)
@@ -181,8 +203,12 @@ public static class SelectorMatcher
 
     private static bool MatchesCompound(CompoundSelector selector, Element element, SelectorMatchContext context)
     {
-        foreach (var simple in selector.SimpleSelectors)
+        // Indexed loop: SimpleSelectors is interface-typed, so foreach boxes a List enumerator
+        // per compound check — measured as a top allocator during page-load selector matching.
+        var simples = selector.SimpleSelectors;
+        for (var i = 0; i < simples.Count; i++)
         {
+            var simple = simples[i];
             // Pseudo-element selectors are filtered at the ComplexSelector level via MatchWithResult.
             // They don't add a per-element constraint, so they pass here as long as they're terminal.
             if (simple is PseudoElementSelector)
@@ -263,10 +289,10 @@ public static class SelectorMatcher
             "first-child" => PreviousElementSibling(element) is null,
             "last-child" => NextElementSibling(element) is null,
             "only-child" => PreviousElementSibling(element) is null && NextElementSibling(element) is null,
-            "first-of-type" => PreviousElementSiblings(element).All(s => !SameType(s, element)),
-            "last-of-type" => NextElementSiblings(element).All(s => !SameType(s, element)),
-            "only-of-type" => PreviousElementSiblings(element).All(s => !SameType(s, element)) &&
-                NextElementSiblings(element).All(s => !SameType(s, element)),
+            "first-of-type" => !HasPrecedingSiblingOfSameType(element),
+            "last-of-type" => !HasFollowingSiblingOfSameType(element),
+            "only-of-type" => !HasPrecedingSiblingOfSameType(element) &&
+                !HasFollowingSiblingOfSameType(element),
             "nth-child" => MatchesNth(selector.Argument, element, context, ofType: false, fromEnd: false),
             "nth-last-child" => MatchesNth(selector.Argument, element, context, ofType: false, fromEnd: true),
             "nth-of-type" => selector.Argument is NthPattern nth1 && nth1.Matches(ElementIndex(element, ofType: true, fromEnd: false)),
@@ -282,15 +308,15 @@ public static class SelectorMatcher
             // (mirrors :focus-within). The host passes the innermost hovered
             // element as HoveredElement.
             "hover" => context.HoveredElement is not null &&
-                (context.HoveredElement == element || Ancestors(context.HoveredElement).Contains(element)),
+                (context.HoveredElement == element || HasAncestor(context.HoveredElement, element)),
             "active" => context.ActiveElement == element,
             "focus" => context.FocusedElement == element,
             "focus-visible" => context.FocusedElement == element,
             "focus-within" => context.FocusedElement is not null &&
-                (context.FocusedElement == element || Ancestors(context.FocusedElement).Contains(element)),
+                (context.FocusedElement == element || HasAncestor(context.FocusedElement, element)),
             "target" => context.TargetElement == element,
             "target-within" => context.TargetElement is not null &&
-                (context.TargetElement == element || Ancestors(context.TargetElement).Contains(element)),
+                (context.TargetElement == element || HasAncestor(context.TargetElement, element)),
             "checked" => element.HasAttribute("checked") || element.HasAttribute("selected"),
             "disabled" => element.HasAttribute("disabled"),
             "enabled" => !element.HasAttribute("disabled") && IsFormElement(element),
@@ -442,35 +468,57 @@ public static class SelectorMatcher
             {
                 SelectorCombinator.None => true, // descendant of scope is implicit
                 SelectorCombinator.Child => ParentElement(element) == scope,
-                SelectorCombinator.Descendant => Ancestors(element).Contains(scope) || element == scope,
+                SelectorCombinator.Descendant => element == scope || HasAncestor(element, scope),
                 SelectorCombinator.NextSibling => PreviousElementSibling(element) == scope,
-                SelectorCombinator.SubsequentSibling => PreviousElementSiblings(element).Contains(scope),
+                SelectorCombinator.SubsequentSibling => HasPrecedingSibling(element, scope),
                 _ => false,
             };
         }
 
-        return part.CombinatorFromPrevious switch
+        // Same allocation-free walks as MatchesFrom; order matches the old iterators.
+        switch (part.CombinatorFromPrevious)
         {
-            SelectorCombinator.Child => ParentElement(element) is { } parent &&
-                MatchScopedFrom(selector, partIndex - 1, parent, scope, context),
-            SelectorCombinator.Descendant => Ancestors(element)
-                .Any(ancestor => MatchScopedFrom(selector, partIndex - 1, ancestor, scope, context)),
-            SelectorCombinator.NextSibling => PreviousElementSibling(element) is { } sibling &&
-                MatchScopedFrom(selector, partIndex - 1, sibling, scope, context),
-            SelectorCombinator.SubsequentSibling => PreviousElementSiblings(element)
-                .Any(sibling => MatchScopedFrom(selector, partIndex - 1, sibling, scope, context)),
-            _ => false,
-        };
+            case SelectorCombinator.Child:
+                return ParentElement(element) is { } parent &&
+                    MatchScopedFrom(selector, partIndex - 1, parent, scope, context);
+            case SelectorCombinator.Descendant:
+                for (var ancestor = ParentElement(element); ancestor is not null; ancestor = ParentElement(ancestor))
+                {
+                    if (MatchScopedFrom(selector, partIndex - 1, ancestor, scope, context))
+                        return true;
+                }
+                return false;
+            case SelectorCombinator.NextSibling:
+                return PreviousElementSibling(element) is { } sibling &&
+                    MatchScopedFrom(selector, partIndex - 1, sibling, scope, context);
+            case SelectorCombinator.SubsequentSibling:
+                for (var prior = PreviousElementSibling(element); prior is not null; prior = PreviousElementSibling(prior))
+                {
+                    if (MatchScopedFrom(selector, partIndex - 1, prior, scope, context))
+                        return true;
+                }
+                return false;
+            default:
+                return false;
+        }
     }
 
     private static bool IsEmpty(Element element)
-        => element.ChildNodes.All(child => child switch
+    {
+        for (var child = element.FirstChild; child is not null; child = child.NextSibling)
         {
-            Element => false,
-            Text text => text.Data.Length == 0,
-            CData cdata => cdata.Data.Length == 0,
-            _ => true,
-        });
+            var nonEmpty = child switch
+            {
+                Element => true,
+                Text text => text.Data.Length != 0,
+                CData cdata => cdata.Data.Length != 0,
+                _ => false,
+            };
+            if (nonEmpty)
+                return false;
+        }
+        return true;
+    }
 
     /// <summary>:heading and :heading(&lt;list&gt;) (Selectors 5 §heading). Bare :heading matches any
     /// h1–h6. The functional form matches only when the element's heading level appears in the list.</summary>
@@ -667,17 +715,27 @@ public static class SelectorMatcher
         if (element.ParentNode is null)
             return 1;
 
-        var siblings = fromEnd ? ElementSiblingsFromEnd(element) : ElementSiblingsFromStart(element);
-        var index = 0;
-        foreach (var sibling in siblings)
+        // Walk sibling pointers from the element itself instead of enumerating the parent's
+        // child list (avoids the ChildNodes iterator + OfType/Reverse wrappers per nth check).
+        var index = 1; // the element always counts itself
+        if (fromEnd)
         {
-            if (!ofType || SameType(sibling, element))
-                index++;
-            if (sibling == element)
-                return index;
+            for (var sibling = NextElementSibling(element); sibling is not null; sibling = NextElementSibling(sibling))
+            {
+                if (!ofType || SameType(sibling, element))
+                    index++;
+            }
+        }
+        else
+        {
+            for (var sibling = PreviousElementSibling(element); sibling is not null; sibling = PreviousElementSibling(sibling))
+            {
+                if (!ofType || SameType(sibling, element))
+                    index++;
+            }
         }
 
-        return -1;
+        return index;
     }
 
     private static IEnumerable<Element> ElementSiblingsFromStart(Element element)
@@ -692,10 +750,44 @@ public static class SelectorMatcher
 
     private static Element? ParentElement(Element element) => element.ParentNode as Element;
 
-    private static IEnumerable<Element> Ancestors(Element element)
+    private static bool HasAncestor(Element element, Element candidate)
     {
         for (var current = ParentElement(element); current is not null; current = ParentElement(current))
-            yield return current;
+        {
+            if (current == candidate)
+                return true;
+        }
+        return false;
+    }
+
+    private static bool HasPrecedingSibling(Element element, Element candidate)
+    {
+        for (var sibling = PreviousElementSibling(element); sibling is not null; sibling = PreviousElementSibling(sibling))
+        {
+            if (sibling == candidate)
+                return true;
+        }
+        return false;
+    }
+
+    private static bool HasPrecedingSiblingOfSameType(Element element)
+    {
+        for (var sibling = PreviousElementSibling(element); sibling is not null; sibling = PreviousElementSibling(sibling))
+        {
+            if (SameType(sibling, element))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool HasFollowingSiblingOfSameType(Element element)
+    {
+        for (var sibling = NextElementSibling(element); sibling is not null; sibling = NextElementSibling(sibling))
+        {
+            if (SameType(sibling, element))
+                return true;
+        }
+        return false;
     }
 
     private static Element? PreviousElementSibling(Element element)
@@ -712,12 +804,6 @@ public static class SelectorMatcher
             if (sibling is Element siblingElement)
                 return siblingElement;
         return null;
-    }
-
-    private static IEnumerable<Element> PreviousElementSiblings(Element element)
-    {
-        for (var sibling = PreviousElementSibling(element); sibling is not null; sibling = PreviousElementSibling(sibling))
-            yield return sibling;
     }
 
     private static IEnumerable<Element> NextElementSiblings(Element element)

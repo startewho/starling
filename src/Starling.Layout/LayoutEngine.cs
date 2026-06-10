@@ -56,6 +56,16 @@ public sealed class LayoutEngine
     /// </summary>
     public bool VerifyLayout { get; init; } = LayoutVerifier.Enabled;
 
+    /// <summary>
+    /// Optional per-document scroll store (browser-plan/scroll-model.md WP1).
+    /// When set, every <c>LayoutDocument</c> call runs under the store's
+    /// layout gate (offset writes mid-pass throw in DEBUG), measures each
+    /// scroll container's scrollport + scrollable overflow after the position
+    /// pass, and re-clamps every stored offset against the fresh geometry.
+    /// Null (the default) leaves layout byte-for-byte unchanged.
+    /// </summary>
+    public Scroll.ScrollStateStore? ScrollState { get; init; }
+
     public BlockBox LayoutDocument(Document document, Size viewport)
         => LayoutDocument(document, viewport, nowMs: null);
 
@@ -69,12 +79,31 @@ public sealed class LayoutEngine
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var root = LayoutOnce(document, viewport, nowMs);
+        var scroll = ScrollState;
+        scroll?.BeginLayoutPass();
+        try
+        {
+            var root = LayoutOnce(document, viewport, nowMs);
 
-        if (VerifyLayout)
-            Verify(root, document, viewport, nowMs);
+            if (VerifyLayout)
+                Verify(root, document, viewport, nowMs);
 
-        return root;
+            if (scroll is not null)
+            {
+                // Measure after the position pass (LayoutOnce ran it): the
+                // overflow union includes positioned descendants, whose
+                // frames only exist now. Then re-clamp every stored offset
+                // against the fresh geometry.
+                Scroll.ScrollOverflowMeasurer.Measure(root, viewport, scroll);
+                scroll.ReconcileAfterLayout();
+            }
+
+            return root;
+        }
+        finally
+        {
+            scroll?.EndLayoutPass();
+        }
     }
 
     /// <summary>
@@ -126,7 +155,7 @@ public sealed class LayoutEngine
         // initial containing block and as the fixed-positioning anchor.
         using (StarlingTelemetry.Span("layout", "position"))
         {
-            var positioning = new Starling.Layout.Position.PositionLayout(block, viewport);
+            var positioning = new Starling.Layout.Position.PositionLayout(block, viewport, ScrollState);
             positioning.LayoutPositioned(root);
         }
 

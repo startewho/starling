@@ -28,7 +28,11 @@ internal sealed class EngineAnimationHost : IAnimationHost
     public EngineAnimationHost(AnimationEngine engine, Func<double>? clock = null)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
-        _clock = clock ?? (static () => 0);
+        // Default to the animation engine's own timeline: the live Engine
+        // constructs this host without a clock, and a zero clock would pin
+        // every element.animate() start at t=0 while sampling runs on the
+        // GUI stopwatch — instantly "finishing" any animation issued late.
+        _clock = clock ?? (() => engine.NowMs);
     }
 
     public double TimelineNow => _clock();
@@ -54,6 +58,14 @@ internal sealed class EngineAnimationHost : IAnimationHost
 
     public double CurrentTime(int id) => _byId.TryGetValue(id, out var i) ? i.ScriptCurrentTime() : 0;
     public void SetCurrentTime(int id, double ms) { if (_byId.TryGetValue(id, out var i)) i.ScriptSetCurrentTime(ms); }
+
+    public double PlaybackRate(int id) => _byId.TryGetValue(id, out var i) ? i.ScriptPlaybackRate : 1;
+    public void SetPlaybackRate(int id, double rate) { if (_byId.TryGetValue(id, out var i)) i.ScriptSetPlaybackRate(rate); }
+
+    public void Observe(int id, Action onFinished, Action onCanceled)
+    {
+        if (_byId.TryGetValue(id, out var i)) i.SetScriptObservers(onFinished, onCanceled);
+    }
 
     public string PlayState(int id)
     {

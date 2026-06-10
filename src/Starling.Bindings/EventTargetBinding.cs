@@ -365,6 +365,44 @@ public static class EventTargetBinding
             RelatedTarget = init.IsObject ? ResolveHost(init.AsObject.Get("relatedTarget")) : null,
         });
 
+        // ----- AnimationEvent / TransitionEvent (CSS Animations 1 §5, CSS
+        // Transitions 2 §events). Chain directly off Event.prototype — these
+        // are not UIEvents. Host-dispatched events (engine-fired
+        // animationstart / transitionend / ...) carry their values on the host
+        // subtype; JS-constructed ones copy the init dictionary into the host
+        // subtype so the same accessors serve both.
+        var animationEvProto = new JsObject(evProto);
+        realm.AnimationEventPrototype = animationEvProto;
+        DefineAccessor(realm, animationEvProto, "animationName", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.AnimationEvent a ? JsValue.String(a.AnimationName) : JsValue.String(""));
+        DefineAccessor(realm, animationEvProto, "elapsedTime", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.AnimationEvent a ? JsValue.Number(a.ElapsedTime) : JsValue.Number(0));
+        DefineAccessor(realm, animationEvProto, "pseudoElement", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.AnimationEvent a ? JsValue.String(a.PseudoElement) : JsValue.String(""));
+        DefineSubtypeCtor(realm, animationEvProto, "AnimationEvent", (type, init) =>
+            new Starling.Dom.Events.AnimationEvent(type, ReadInit(init))
+            {
+                AnimationName = StrOf(init, "animationName"),
+                ElapsedTime = NumOf(init, "elapsedTime"),
+                PseudoElement = StrOf(init, "pseudoElement"),
+            });
+
+        var transitionEvProto = new JsObject(evProto);
+        realm.TransitionEventPrototype = transitionEvProto;
+        DefineAccessor(realm, transitionEvProto, "propertyName", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.TransitionEvent tr ? JsValue.String(tr.PropertyName) : JsValue.String(""));
+        DefineAccessor(realm, transitionEvProto, "elapsedTime", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.TransitionEvent tr ? JsValue.Number(tr.ElapsedTime) : JsValue.Number(0));
+        DefineAccessor(realm, transitionEvProto, "pseudoElement", (t, _) =>
+            TryGetHostEvent(t, out var e) && e is Starling.Dom.Events.TransitionEvent tr ? JsValue.String(tr.PseudoElement) : JsValue.String(""));
+        DefineSubtypeCtor(realm, transitionEvProto, "TransitionEvent", (type, init) =>
+            new Starling.Dom.Events.TransitionEvent(type, ReadInit(init))
+            {
+                PropertyName = StrOf(init, "propertyName"),
+                ElapsedTime = NumOf(init, "elapsedTime"),
+                PseudoElement = StrOf(init, "pseudoElement"),
+            });
+
         var inputEvProto = new JsObject(uiEvProto);
         DefineSubtypeCtor(realm, inputEvProto, "InputEvent", (type, init) => new UiEvent(type, ReadInit(init)));
 
@@ -791,6 +829,8 @@ public static class EventTargetBinding
             KeyboardEvent => realm.KeyboardEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
             FocusEvent => realm.FocusEventPrototype ?? realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
             UiEvent => realm.UiEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            Starling.Dom.Events.AnimationEvent => realm.AnimationEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
+            Starling.Dom.Events.TransitionEvent => realm.TransitionEventPrototype ?? realm.EventPrototype ?? realm.ObjectPrototype,
             _ => realm.EventPrototype ?? realm.ObjectPrototype,
         };
 
@@ -858,8 +898,101 @@ public static class EventTargetBinding
         if (setter is not null)
             set = new JsNativeFunction(realm, $"set {name}", 1, setter, isConstructor: false);
         target.DefineOwnProperty(name,
-            PropertyDescriptor.Accessor(get, set, enumerable: false, configurable: true));
+            PropertyDescriptor.Accessor(get, set, enumerable: true, configurable: true));
     }
+
+    // ---- HTML §8.1.8 — IDL event handler attributes (onload, onerror, …)
+
+    /// <summary>Per-wrapper storage for IDL event handler values plus the set
+    /// of event types whose bridging host listener is already registered. The
+    /// bridge listener reads the CURRENT slot value at dispatch time (the spec's
+    /// "event handler processing algorithm" semantics), so reassigning or
+    /// clearing the property needs no listener churn.</summary>
+    private sealed class EventHandlerSlots
+    {
+        public readonly Dictionary<string, JsValue> Values = new(StringComparer.Ordinal);
+        public readonly HashSet<string> Registered = new(StringComparer.Ordinal);
+    }
+
+    private static readonly ConditionalWeakTable<JsObject, EventHandlerSlots> HandlerSlots = new();
+
+    /// <summary>Define an <c>on&lt;type&gt;</c> event-handler accessor pair on a
+    /// wrapper prototype (HTML §8.1.8.1). Setting a callable registers one
+    /// lazy bridge listener on the backing host EventTarget; the bridge invokes
+    /// whatever the slot holds when the event fires. Setting null (or any
+    /// non-callable) deactivates the handler. Bundlers rely on this shape —
+    /// webpack's chunk loader wires <c>script.onload</c>/<c>script.onerror</c>
+    /// as properties, never via addEventListener.</summary>
+    internal static void DefineEventHandlerAccessor(JsRealm realm, JsObject proto, string type)
+    {
+        DefineAccessor(realm, proto, "on" + type,
+            getter: (thisV, _) =>
+                thisV.IsObject
+                && HandlerSlots.TryGetValue(thisV.AsObject, out var slots)
+                && slots.Values.TryGetValue(type, out var v)
+                    ? v
+                    : JsValue.Null,
+            setter: (thisV, args) =>
+            {
+                if (!thisV.IsObject) return JsValue.Undefined;
+                var wrapper = thisV.AsObject;
+                var value = args.Length > 0 ? args[0] : JsValue.Undefined;
+                var slots = HandlerSlots.GetValue(wrapper, _ => new EventHandlerSlots());
+
+                if (!AbstractOperations.IsCallable(value))
+                {
+                    slots.Values.Remove(type);
+                    return JsValue.Undefined;
+                }
+
+                slots.Values[type] = value;
+                if (!slots.Registered.Add(type)) return JsValue.Undefined;
+
+                var host = ResolveHost(thisV);
+                if (host is null)
+                {
+                    // No backing host target — forget the registration so a
+                    // later set retries once the wrapper is bound.
+                    slots.Registered.Remove(type);
+                    return JsValue.Undefined;
+                }
+
+                host.AddEventListener(type, ev =>
+                {
+                    if (HandlerSlots.TryGetValue(wrapper, out var s)
+                        && s.Values.TryGetValue(type, out var h)
+                        && h.IsObject)
+                    {
+                        InvokeJsListener(realm, h.AsObject, ev);
+                    }
+                }, new AddEventListenerOptions(Capture: false, Once: false, Passive: false));
+                return JsValue.Undefined;
+            });
+    }
+
+    /// <summary>The GlobalEventHandlers + common element-level event types that
+    /// get <c>on*</c> accessors on the Element prototype. Order is cosmetic.</summary>
+    internal static readonly string[] ElementEventHandlerTypes =
+    {
+        "abort", "animationend", "animationiteration", "animationstart",
+        "auxclick", "beforeinput", "blur", "cancel", "canplay",
+        "canplaythrough", "change", "click", "close", "contextmenu",
+        "copy", "cut", "dblclick", "drag", "dragend", "dragenter",
+        "dragleave", "dragover", "dragstart", "drop", "durationchange",
+        "emptied", "ended", "error", "focus", "focusin", "focusout",
+        "input", "invalid", "keydown", "keypress", "keyup", "load",
+        "loadeddata", "loadedmetadata", "loadstart", "mousedown",
+        "mouseenter", "mouseleave", "mousemove", "mouseout", "mouseover",
+        "mouseup", "paste", "pause", "play", "playing", "pointercancel",
+        "pointerdown", "pointerenter", "pointerleave", "pointermove",
+        "pointerout", "pointerover", "pointerup", "progress", "ratechange",
+        "reset", "resize", "scroll", "scrollend", "seeked", "seeking",
+        "select", "selectionchange", "selectstart", "stalled", "submit",
+        "suspend", "timeupdate", "toggle", "touchcancel", "touchend",
+        "touchmove", "touchstart", "transitioncancel", "transitionend",
+        "transitionrun", "transitionstart", "volumechange", "waiting",
+        "wheel",
+    };
 }
 
 /// <summary>JS wrapper for a host <see cref="Event"/>. Identity is the spec

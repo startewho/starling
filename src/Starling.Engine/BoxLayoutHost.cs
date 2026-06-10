@@ -44,6 +44,14 @@ internal sealed class BoxLayoutHost : ILayoutHost
     /// used to drag in.</summary>
     private readonly Func<StyleEngine>? _cascadeOnlyBuilder;
 
+    /// <summary>The engine session's per-document scroll store
+    /// (browser-plan/scroll-model.md). Layout passes triggered through this
+    /// host refresh it (the recompute delegate threads it into
+    /// <c>Painter.LayoutDocumentWithStyle</c>), and the scroll-metric reads
+    /// below answer from it. Null when the owner has no store (legacy static
+    /// snapshots) — reads then report "not a scroll container".</summary>
+    private readonly Starling.Layout.Scroll.ScrollStateStore? _scrollState;
+
     private BlockBox? _root;
     private StyleEngine? _style;
     private int _laidOutVersion;
@@ -80,8 +88,10 @@ internal sealed class BoxLayoutHost : ILayoutHost
     /// a static snapshot — DOM mutations are not reflected.
     /// </summary>
     public BoxLayoutHost(BlockBox root, StyleEngine style,
-        Document? document = null, Func<string?, (BlockBox Root, StyleEngine Style)>? relayout = null)
+        Document? document = null, Func<string?, (BlockBox Root, StyleEngine Style)>? relayout = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
+        _scrollState = scrollState;
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(style);
         _root = root;
@@ -103,8 +113,10 @@ internal sealed class BoxLayoutHost : ILayoutHost
     /// document's <see cref="Document.LayoutInvalidationVersion"/>.
     /// </summary>
     public BoxLayoutHost(Document document, Func<string?, (BlockBox Root, StyleEngine Style)> relayout,
-        Func<StyleEngine>? cascadeOnlyBuilder = null)
+        Func<StyleEngine>? cascadeOnlyBuilder = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
+        _scrollState = scrollState;
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(relayout);
         _document = document;
@@ -264,10 +276,29 @@ internal sealed class BoxLayoutHost : ILayoutHost
             // origin walk DisplayListBuilder does, run bottom-up here.
             var x = box.Frame.X;
             var y = box.Frame.Y;
+            // Decision 2 (scroll-model.md): a stuck element reports the STUCK
+            // position, like Chromium. Layout keeps sticky frames natural, so
+            // the same store-computed paint shift is added here — for the box
+            // itself and for any stuck ancestor it rides on. Gated on the
+            // store actually holding sticky entries so the overwhelmingly
+            // common sticky-free read pays one count check, no lookups.
+            var sticky = _scrollState is { HasStickyEntries: true } ? _scrollState : null;
+            if (sticky is not null && box.Element is { } selfEl)
+            {
+                var (sx, sy) = sticky.GetStickyShift(selfEl);
+                x += sx;
+                y += sy;
+            }
             for (var p = box.Parent; p is not null; p = p.Parent)
             {
                 x += p.Frame.X + p.Border.Left + p.Padding.Left;
                 y += p.Frame.Y + p.Border.Top + p.Padding.Top;
+                if (sticky is not null && p.Element is { } ancestorEl)
+                {
+                    var (sx, sy) = sticky.GetStickyShift(ancestorEl);
+                    x += sx;
+                    y += sy;
+                }
             }
             rect = new LayoutRect(x, y, box.Frame.Width, box.Frame.Height);
             return true;
@@ -299,6 +330,80 @@ internal sealed class BoxLayoutHost : ILayoutHost
         }
         metrics = default;
         return false;
+    }
+
+    public bool TryGetScrollMetrics(Element element, out ScrollMetrics metrics)
+    {
+        if (_scrollState is null)
+        {
+            metrics = default;
+            return false;
+        }
+        // Same up-to-date rule as the offset metrics: a DOM mutation since the
+        // last layout forces a re-layout, which re-measures the store before
+        // we read it.
+        EnsureFresh("scroll-metrics");
+        if (_scrollState.TryGet(element, out var s))
+        {
+            // clientLeft/clientTop = border widths (CSSOM §7; overlay
+            // scrollbars, so no scrollbar term). The store keeps only sizes,
+            // so the per-side insets come from the box itself.
+            double clientLeft = 0, clientTop = 0;
+            if (_boxByElement.TryGetValue(element, out var box))
+            {
+                clientLeft = box.Border.Left;
+                clientTop = box.Border.Top;
+            }
+            metrics = new ScrollMetrics(
+                ScrollLeft: s.OffsetX,
+                ScrollTop: s.OffsetY,
+                ScrollWidth: s.OverflowWidth,
+                ScrollHeight: s.OverflowHeight,
+                ClientWidth: s.ScrollportWidth,
+                ClientHeight: s.ScrollportHeight,
+                ClientLeft: clientLeft,
+                ClientTop: clientTop);
+            return true;
+        }
+        metrics = default;
+        return false;
+    }
+
+    public ScrollMetrics GetRootScrollMetrics()
+    {
+        if (_scrollState is null) return default;
+        EnsureFresh("scroll-metrics");
+        var s = _scrollState.Root;
+        return new ScrollMetrics(
+            ScrollLeft: s.OffsetX,
+            ScrollTop: s.OffsetY,
+            ScrollWidth: s.OverflowWidth,
+            ScrollHeight: s.OverflowHeight,
+            ClientWidth: s.ScrollportWidth,
+            ClientHeight: s.ScrollportHeight);
+    }
+
+    /// <summary>Write side of the JS scroll surface
+    /// (browser-plan/scroll-model.md §JavaScript surface): flush layout if
+    /// dirty — the same up-to-date rule the offset metrics use, so the clamp
+    /// bound reflects the current DOM — then let the store clamp, store, and
+    /// flag the pending scroll event. Never triggers a relayout by itself:
+    /// the offset is paint/hit-test state, and the repaint rides the store's
+    /// pending-event flag (drained by the shells' frame pump, WP2/WP4).</summary>
+    public void SetScrollOffset(Element element, double x, double y)
+    {
+        if (_scrollState is null) return;
+        EnsureFresh("scroll-write");
+        _scrollState.Write(element, x, y);
+    }
+
+    /// <summary>Document-scroller variant of <see cref="SetScrollOffset"/>
+    /// (window.scrollTo / scrollBy, root-element scrollTop/scrollLeft).</summary>
+    public void SetRootScrollOffset(double x, double y)
+    {
+        if (_scrollState is null) return;
+        EnsureFresh("scroll-write");
+        _scrollState.WriteRoot(x, y);
     }
 
     public bool MatchMedia(string query)

@@ -58,8 +58,12 @@ public sealed class LaidOutPage : IDisposable
         float? defaultFontSize,
         ConnectionSecurity? security = null,
         StarlingHttpClient? http = null,
-        PageScripting? scripting = null)
+        PageScripting? scripting = null,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
+        ScrollState = scrollState ?? new Starling.Layout.Scroll.ScrollStateStore();
+        ScrollOffsetLookup = ScrollState.GetOffset;
+        StickyShiftLookup = ScrollState.GetStickyShift;
         Root = root;
         Document = document;
         Style = style;
@@ -80,6 +84,34 @@ public sealed class LaidOutPage : IDisposable
     public Document Document { get; }
 
     /// <summary>
+    /// The one shared scroll store for this document
+    /// (browser-plan/scroll-model.md): per-element clamped offsets,
+    /// scrollports, and scrollable overflow, refreshed by every layout pass
+    /// this page runs. The shells route wheel input through it (WP2) and the
+    /// bindings read it via <see cref="Starling.Bindings.ILayoutHost"/> (WP3).
+    /// Owned by the engine session: created with the page and transferred to
+    /// relayout successors so offsets survive reflows.
+    /// </summary>
+    public Starling.Layout.Scroll.ScrollStateStore ScrollState { get; }
+
+    /// <summary>
+    /// <see cref="ScrollState"/>'s per-element offset lookup, pre-bound once at
+    /// construction in the shape the paint and hit-test paths take
+    /// (<c>DisplayListBuilder</c>'s <c>scrollOffsets</c> func,
+    /// <c>BoxHitTester.HitTest</c>). Cached so per-frame renders do not
+    /// allocate a fresh delegate per present.
+    /// </summary>
+    public Func<Element, (double X, double Y)> ScrollOffsetLookup { get; }
+
+    /// <summary>
+    /// <see cref="ScrollState"/>'s per-element <c>position: sticky</c> paint
+    /// shift (<c>GetStickyShift</c>), pre-bound like
+    /// <see cref="ScrollOffsetLookup"/> so per-frame renders and hit tests do
+    /// not allocate a delegate per present (scroll-model.md WP5).
+    /// </summary>
+    public Func<Element, (double X, double Y)> StickyShiftLookup { get; }
+
+    /// <summary>
     /// The live JS context for this page, or null for pages without scripts (or
     /// non-interactive renders). The shell uses it to dispatch DOM events into
     /// page listeners and to pump timers/rAF/fetch after first paint. Owned by
@@ -96,7 +128,7 @@ public sealed class LaidOutPage : IDisposable
     /// until incremental layout first runs, or when the feature is off.
     /// </summary>
     internal LayoutSession GetOrCreateLayoutSession(ILoggerFactory loggerFactory)
-        => _layoutSession ??= new LayoutSession(Style, _images, loggerFactory);
+        => _layoutSession ??= new LayoutSession(Style, _images, loggerFactory) { ScrollState = ScrollState };
 
     /// <summary>Attach the live JS context after construction — used by the
     /// interactive path when the first-paint page is returned unchanged (no
@@ -168,7 +200,8 @@ public sealed class LaidOutPage : IDisposable
         _resourcesTransferred = true;
         var successor = new LaidOutPage(
             root, Document, style, viewport, Url, Title,
-            _images, _stylesheets, _webFonts, DefaultFontSize, Security, _http, _scripting);
+            _images, _stylesheets, _webFonts, DefaultFontSize, Security, _http, _scripting,
+            ScrollState);
         // The incremental session owns the retained tree across reflows, so it
         // rides along to the successor (which now exposes that tree as its Root).
         successor._layoutSession = _layoutSession;

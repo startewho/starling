@@ -19,6 +19,10 @@ public static class CssBoxShadowParser
     public static CssBoxShadow Parse(CssValue value)
     {
         ArgumentNullException.ThrowIfNull(value);
+        // Idempotent: the animation interpolator emits typed CssBoxShadow
+        // intermediates; pass them straight through.
+        if (value is CssBoxShadow typed)
+            return typed;
         if (value is CssKeyword { Name: var kw } && kw.Equals("none", StringComparison.OrdinalIgnoreCase))
             return CssBoxShadow.None;
 

@@ -188,19 +188,21 @@ internal sealed class ImageFetcher : IImageResolver, IDisposable
 
             // density-corrected intrinsic: if sizes gave us a CSS-px width,
             // scale height proportionally to preserve the source aspect
-            // ratio. Otherwise fall back to source pixel dims.
+            // ratio. Otherwise fall back to source intrinsic dims — the true
+            // image dimensions, even when the decode was resolution-clamped
+            // and the pixel buffer is smaller.
             double intrinsicW, intrinsicH;
-            if (correctedW > 0 && decoded.Width > 0 && decoded.Height > 0)
+            if (correctedW > 0 && decoded.IntrinsicWidth > 0 && decoded.IntrinsicHeight > 0)
             {
                 intrinsicW = correctedW;
                 intrinsicH = correctedH > 0
                     ? correctedH
-                    : correctedW * decoded.Height / decoded.Width;
+                    : correctedW * decoded.IntrinsicHeight / decoded.IntrinsicWidth;
             }
             else
             {
-                intrinsicW = decoded.Width;
-                intrinsicH = decoded.Height;
+                intrinsicW = decoded.IntrinsicWidth;
+                intrinsicH = decoded.IntrinsicHeight;
             }
             _byElement[img] = new ResolvedImage(intrinsicW, intrinsicH, decoded);
         }

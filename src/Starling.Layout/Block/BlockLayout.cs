@@ -31,6 +31,16 @@ internal sealed class BlockLayout
     // byte-for-byte unchanged. See Starling.Layout.Incremental.
     private readonly bool _incremental;
 
+    /// <summary>
+    /// When set (the layout session's incremental-relayout path with a scroll
+    /// store attached), every box this pass actually (re)lays out has its
+    /// cached scroll extents invalidated chain-to-root, and every relaid
+    /// scroll container is queued here for the post-pass scoped re-measure
+    /// (browser-plan/scroll-model.md WP1). Null everywhere else, making the
+    /// whole mechanism one null check per laid box.
+    /// </summary>
+    internal List<Box.Box>? RelaidScrollerSink { get; set; }
+
     public BlockLayout(ITextMeasurer measurer, Size viewport, CancellationToken abort = default, bool incremental = false)
     {
         _measurer = measurer;
@@ -80,7 +90,39 @@ internal sealed class BlockLayout
     internal double LayoutItem(Box.Box item, double containerWidth, double? containerHeight, bool measure = false, bool reuseHeight = false)
     {
         if (item.Kind == BoxKind.AnonymousBlock)
+        {
+            // The early return must still invalidate the scroll-extent cache
+            // chain: a re-wrapped bare-text flex/grid item otherwise keeps a
+            // valid-but-stale extent and the scoped scroll measure diverges
+            // from a full layout. NoteRelaid never queues an anonymous box
+            // (it has no element); it only clears the chain to the root.
+            NoteRelaid(item);
             return _inline.Layout(item, containerWidth, measure);
+        }
+
+        // Item-level reuse — the flex/grid measure→final choreography lays the
+        // same item several times per pass (basis measure, min measure, final
+        // contents), and each nested flex level multiplies that. A clean
+        // subtree relaid under identical constraints replays its content
+        // extent: measurement replay is return-value-only (callers that read
+        // frames don't pass reuseHeight), final replay leaves the
+        // parent-relative descendant frames exactly as the previous identical
+        // pass wrote them.
+        // Unlike the other reuse keys this one is NOT gated on _incremental:
+        // the one-shot path builds a fresh box tree per layout run, so a stamp
+        // can only ever be replayed within the same pass — where determinism
+        // makes it exact — and the within-pass replay is precisely what breaks
+        // the nested-flex exponential.
+        var cs = new ConstraintSpace(containerWidth, containerHeight, _viewport.Width, _viewport.Height);
+        if (!item.SubtreeDirty)
+        {
+            if (measure && reuseHeight && item.ItemMeasureConstraint == cs)
+                return item.ItemMeasuredContent;
+            if (!measure && item.ItemLaidConstraint == cs)
+                return item.ItemLaidContent;
+        }
+
+        double content;
         // A flex/grid item can itself be a flex container (nested flex — e.g. a
         // navbar's <ul> that is both an item of the nav row and a flex row of
         // its own <li>s). LayoutChildren would block-stack the inner items;
@@ -90,14 +132,41 @@ internal sealed class BlockLayout
         if (IsFlexContainer(item.Style))
         {
             var flex = new Starling.Layout.Flex.FlexLayout(this, _viewport);
-            return flex.Layout(item, containerWidth, containerHeight);
+            content = flex.Layout(item, containerWidth, containerHeight);
         }
-        if (IsGridContainer(item.Style))
+        else if (IsGridContainer(item.Style))
         {
             var grid = new Starling.Layout.Grid.GridLayout(this, _viewport);
-            return grid.Layout(item, containerWidth, containerHeight);
+            content = grid.Layout(item, containerWidth, containerHeight);
         }
-        return LayoutChildren(item, containerWidth, containerHeight, measure, reuseHeight);
+        else
+        {
+            content = LayoutChildren(item, containerWidth, containerHeight, measure, reuseHeight);
+        }
+
+        if (measure)
+        {
+            item.ItemMeasureConstraint = cs;
+            item.ItemMeasuredContent = content;
+            // This measurement REWROTE the subtree's frames (e.g. the
+            // 1,000,000px max-content probe). Any earlier final-pass frames
+            // are gone, so the final-pass reuse key must not match until a
+            // real final pass runs again.
+            item.ItemLaidConstraint = null;
+        }
+        else
+        {
+            item.ItemLaidConstraint = cs;
+            item.ItemLaidContent = content;
+            // A final pass rewrites frames too — a prior measurement's stamp
+            // no longer describes them, only its returned extent (which is
+            // all measure replay hands out, so that stamp stays valid).
+            // The final pass is authoritative for frames — descendants are
+            // clean from here on.
+            item.SubtreeDirty = false;
+        }
+        NoteRelaid(item);
+        return content;
     }
 
     /// <summary>
@@ -148,8 +217,18 @@ internal sealed class BlockLayout
             // cursor doesn't advance — they're placed in a second pass by
             // PositionLayout. The child's Frame is left at default (zero)
             // until that pass writes it.
+            // Record the hypothetical static position (§10.3.7/§10.6.4) the
+            // box would have had in this flow — the current stack cursor at
+            // the parent's left content edge — so the positioning pass can
+            // fall back to it when both insets of an axis are auto, instead
+            // of snapping to the containing block's origin. Margin collapse
+            // with the would-be previous sibling is approximated away.
             if (IsOutOfFlow(child.Style))
+            {
+                child.StaticX = 0;
+                child.StaticY = cursorY;
                 continue;
+            }
 
             var floatSide = GetFloatSide(child.Style);
             if (floatSide is not null)
@@ -212,9 +291,9 @@ internal sealed class BlockLayout
         if (child.Kind == BoxKind.AnonymousBlock) return;
 
         ResolveBoxModel(child, containerWidth);
-        var width = ContentWidth(child, containerWidth);
-
         var explicitHeight = ResolveHeight(child.Style, PropertyId.Height, containerHeight, _viewport, allowAuto: true);
+        var width = ContentWidth(child, containerWidth, TransferredWidth(child, explicitHeight));
+
         double childContentHeight;
         if (IsFlexContainer(child.Style))
         {
@@ -231,7 +310,9 @@ internal sealed class BlockLayout
             childContentHeight = LayoutChildren(child, width, explicitHeight, measure: false);
         }
 
-        var resolvedHeight = explicitHeight ?? childContentHeight;
+        var resolvedHeight = explicitHeight
+            ?? TransferredHeight(child, width, containerHeight, childContentHeight)
+            ?? childContentHeight;
         var fullHeight = resolvedHeight + child.Padding.Vertical + child.Border.Vertical;
         var fullWidth = width + child.Padding.Horizontal + child.Border.Horizontal;
         var outerWidth = fullWidth + child.Margin.Horizontal;
@@ -246,6 +327,12 @@ internal sealed class BlockLayout
             placement.Y + child.Margin.Top,
             fullWidth,
             fullHeight);
+
+        // Floats have no reuse key — this re-laid the box wholesale, so the
+        // scroll-extent caches up the chain are stale (and a float scroller
+        // owes a re-measure). Children laid above go through the stamped
+        // seams and report themselves.
+        NoteRelaid(child);
     }
 
     /// <summary>
@@ -292,6 +379,7 @@ internal sealed class BlockLayout
             cursorY += mCollapse;
             first = false;
             child.Frame = new Rect(child.Margin.Left, cursorY, child.Frame.Width, child.MeasuredHeight);
+            child.RelShiftValid = false; // fresh natural frame — see NoteRelaid
             cursorY += child.MeasuredHeight + child.Margin.Bottom;
             prevBottomMargin = child.Margin.Bottom;
             return;
@@ -313,6 +401,10 @@ internal sealed class BlockLayout
             cursorY += reuseCollapse;
             first = false;
             child.Frame = new Rect(child.Margin.Left, cursorY, child.Frame.Width, child.Frame.Height);
+            // This is a NATURAL stack position: a relative/sticky child reused
+            // in place must re-derive its shift from it, even when it lands
+            // exactly on the previous pass's shifted frame (see NoteRelaid).
+            child.RelShiftValid = false;
             cursorY += child.Frame.Height + child.Margin.Bottom;
             prevBottomMargin = child.Margin.Bottom;
             return;
@@ -344,7 +436,11 @@ internal sealed class BlockLayout
         cursorY += collapseTop;
         first = false;
 
-        var width = ContentWidth(child, containerWidth);
+        // Height first: a definite height plus a preferred aspect ratio can
+        // transfer into an auto width (css-sizing-4 §5), so the width
+        // resolution below needs it.
+        var explicitHeight = ResolveHeight(child.Style, PropertyId.Height, containerHeight, _viewport, allowAuto: true);
+        var width = ContentWidth(child, containerWidth, TransferredWidth(child, explicitHeight));
 
         // CSS 2.1 §10.3.3 — resolve `auto` horizontal margins for non-replaced
         // block-level elements in normal flow. Only when `width` is not `auto`
@@ -355,7 +451,6 @@ internal sealed class BlockLayout
         // Flex container: hand off to the flex formatting context. Flex sizes
         // its items inside the container's content box; the result replaces
         // what block stacking would have produced.
-        var explicitHeight = ResolveHeight(child.Style, PropertyId.Height, containerHeight, _viewport, allowAuto: true);
         double childContentHeight;
         if (IsFlexContainer(child.Style))
         {
@@ -372,7 +467,9 @@ internal sealed class BlockLayout
             childContentHeight = LayoutChildren(child, width, explicitHeight, measure, reuseHeight);
         }
 
-        var resolvedHeight = explicitHeight ?? childContentHeight;
+        var resolvedHeight = explicitHeight
+            ?? TransferredHeight(child, width, containerHeight, childContentHeight)
+            ?? childContentHeight;
         var fullHeight = resolvedHeight + child.Padding.Vertical + child.Border.Vertical;
 
         child.Frame = new Rect(
@@ -386,6 +483,44 @@ internal sealed class BlockLayout
         Stamp(child, cs, measure);
     }
 
+    /// <summary>
+    /// Scroll-measure bookkeeping for a box this pass actually (re)laid out:
+    /// its cached subtree extent (and every ancestor's) no longer describes
+    /// the tree, and if it is a scroll container it owes a scoped re-measure.
+    /// Queuing on a re-lay is deliberately conservative — re-recording
+    /// unchanged geometry is a harmless overwrite, while missing a changed
+    /// scroller would serve stale scroll ranges. No-op without a sink.
+    /// </summary>
+    internal void NoteRelaid(Box.Box box)
+    {
+        // A seam that (re)lays a box writes a fresh NATURAL frame, so the
+        // relative/sticky idempotency bookkeeping must die with it: keeping
+        // it would let a fresh natural frame that happens to equal the
+        // previous shifted frame re-base on a stale origin. Unconditional —
+        // the scroll sink gate below only governs measurement bookkeeping.
+        box.RelShiftValid = false;
+        var sink = RelaidScrollerSink;
+        if (sink is null) return;
+        Scroll.ScrollOverflowMeasurer.InvalidateExtentsToRoot(box);
+        if (box.Element is not null
+            && !box.ScrollMeasureQueued
+            && (Scroll.ScrollOverflowMeasurer.Classify(box) & Scroll.ScrollBoxFlags.ScrollContainer) != 0)
+        {
+            box.ScrollMeasureQueued = true;
+            sink.Add(box);
+        }
+    }
+
+    /// <summary>Scroll-measure bookkeeping for a frame moved in place by the
+    /// position pass (relative/sticky shift): the box's own cached extent is
+    /// frame-origin-relative and stays exact, but every ancestor's union now
+    /// includes a moved rect. No-op without a sink.</summary>
+    internal void NoteFrameMoved(Box.Box box)
+    {
+        if (RelaidScrollerSink is null) return;
+        Scroll.ScrollOverflowMeasurer.InvalidateExtentsToRoot(box);
+    }
+
     /// <summary>Record the constraint space a freshly laid-out box was computed
     /// under so a later frame can reuse it. The normal pass also clears the dirty
     /// mark; the measurement pass records only its own (height-only) reuse key and
@@ -394,6 +529,7 @@ internal sealed class BlockLayout
     private void Stamp(Box.Box box, ConstraintSpace cs, bool measure)
     {
         if (!_incremental) return;
+        NoteRelaid(box);
         if (measure)
         {
             box.LaidConstraintMeasure = cs;
@@ -494,16 +630,22 @@ internal sealed class BlockLayout
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §8.3/§8.4: percentage margins and padding on ALL FOUR sides
+        // resolve against the containing block's WIDTH — including the
+        // vertical ones. (That's what makes the `padding-bottom: %`
+        // aspect-ratio trick work: x.com's profile banner is
+        // `padding-bottom: 33.33%` of the column width, not of the viewport
+        // height.)
         box.Margin = new Edges(
-            ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         box.Border = new Edges(
@@ -513,44 +655,194 @@ internal sealed class BlockLayout
             ResolveBorderWidth(box.Style, PropertyId.BorderLeftWidth, PropertyId.BorderLeftStyle, _viewport));
     }
 
-    private double ContentWidth(Box.Box box, double containerWidth)
+    private double ContentWidth(Box.Box box, double containerWidth, double? transferredWidth = null)
     {
-        // CSS 2.1 §10.4: tentative width is `width` if specified, otherwise the
+        // CSS 2.1 §10.4 + css-sizing-3 §5: tentative width is `width` when it
+        // resolves — a length/percentage or an intrinsic sizing keyword — else
+        // the aspect-ratio transferred size (css-sizing-4 §5), else the
         // available space within the parent. The tentative width is then
-        // clamped by `max-width` (upper bound) and `min-width` (lower bound).
+        // clamped by `max-width` (upper bound) and `min-width` (lower bound),
+        // which accept the same intrinsic keywords on the inline axis.
         // Honouring max-width is what makes the classic "max-width: 35em"
         // narrow-column layout work (justinjackson.ca/words.html, MDN, etc).
-        var explicitWidth = ResolveLength(box.Style, PropertyId.Width, containerWidth, _viewport, allowAuto: true);
-        double tentative;
-        if (explicitWidth is { } w)
-        {
-            tentative = w;
-        }
-        else
-        {
-            var available = containerWidth - box.Margin.Horizontal - box.Border.Horizontal - box.Padding.Horizontal;
-            tentative = Math.Max(0, available);
-        }
+        var available = Math.Max(0, containerWidth - box.Margin.Horizontal - box.Border.Horizontal - box.Padding.Horizontal);
 
-        // max-width: `none` (the initial value) is a no-op; any concrete length
-        // or percentage clamps the tentative width down.
-        var maxWidth = ResolveMaxLength(box.Style, PropertyId.MaxWidth, containerWidth, _viewport);
+        double tentative;
+        if (TryResolveIntrinsicWidth(box.Style?.Get(PropertyId.Width), box, available, containerWidth, out var intrinsic))
+            tentative = intrinsic;
+        else if (ResolveLength(box.Style, PropertyId.Width, containerWidth, _viewport, allowAuto: true) is { } w)
+            tentative = w;
+        else if (transferredWidth is { } tw)
+            tentative = tw;
+        else
+            tentative = available;
+
+        // max-width: `none` (the initial value) is a no-op; any concrete length,
+        // percentage, or intrinsic keyword clamps the tentative width down.
+        double? maxWidth;
+        if (TryResolveIntrinsicWidth(box.Style?.Get(PropertyId.MaxWidth), box, available, containerWidth, out var maxIntrinsic))
+            maxWidth = maxIntrinsic;
+        else
+            maxWidth = ResolveMaxLength(box.Style, PropertyId.MaxWidth, containerWidth, _viewport);
         if (maxWidth is { } mx && tentative > mx)
             tentative = mx;
 
         // min-width: initial value `0` is a no-op; a concrete length/percentage
-        // expands the box back up when it's narrower than the floor.
-        var minWidth = ResolveLength(box.Style, PropertyId.MinWidth, containerWidth, _viewport) ?? 0;
+        // (or intrinsic keyword) expands the box back up when it's narrower
+        // than the floor.
+        double minWidth;
+        if (TryResolveIntrinsicWidth(box.Style?.Get(PropertyId.MinWidth), box, available, containerWidth, out var minIntrinsic))
+            minWidth = minIntrinsic;
+        else
+            minWidth = ResolveLength(box.Style, PropertyId.MinWidth, containerWidth, _viewport) ?? 0;
         if (tentative < minWidth)
             tentative = minWidth;
 
         return Math.Max(0, tentative);
     }
 
+    /// <summary>
+    /// css-sizing-3 §4-5 — resolve an intrinsic sizing keyword on the inline
+    /// axis. <c>min-content</c> is the narrowest wrap (probe at zero width),
+    /// <c>max-content</c> the no-wrap width (probe at a huge width),
+    /// <c>fit-content</c> clamps the stretch size between the two, and
+    /// <c>fit-content(&lt;length-percentage&gt;)</c> substitutes its argument
+    /// for the stretch size. Probes are cached per box per pass. Returns false
+    /// for every other value. (The block axis never reaches here — in a
+    /// horizontal writing mode the keywords behave as <c>auto</c> there, see
+    /// <see cref="ResolveHeight"/>.)
+    /// </summary>
+    private bool TryResolveIntrinsicWidth(CssValue? value, Box.Box box, double available, double containerWidth, out double resolved)
+    {
+        switch (value)
+        {
+            case CssKeyword { Name: "min-content" }:
+                resolved = MinContentWidth(box);
+                return true;
+            case CssKeyword { Name: "max-content" }:
+                resolved = MaxContentWidth(box, containerWidth);
+                return true;
+            case CssKeyword { Name: "fit-content" }:
+                resolved = FitContentWidth(box, available, containerWidth);
+                return true;
+            case CssFunctionValue { Name: "fit-content" } f when f.Arguments.Count == 1:
+                {
+                    // fit-content(size) = min(max-content, max(min-content, size)).
+                    double? size = f.Arguments[0] switch
+                    {
+                        CssLength len => ToPx(len, _viewport),
+                        CssPercentage pct => containerWidth * pct.Value / 100d,
+                        _ => null,
+                    };
+                    if (size is { } s)
+                    {
+                        resolved = FitContentWidth(box, s, containerWidth);
+                        return true;
+                    }
+                    resolved = 0;
+                    return false;
+                }
+            default:
+                resolved = 0;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Min-content inline size (css-sizing-3 §4.2): probe at zero available
+    /// width so every soft-wrap opportunity breaks; the widest unbreakable run
+    /// (longest word, widest replaced box) remains. Cached per box per pass.
+    /// </summary>
+    internal double MinContentWidth(Box.Box box)
+    {
+        if (!box.SubtreeDirty && box.CachedMinContentWidth is { } cached) return cached;
+        LayoutItem(box, 0d, null, measure: true);
+        var min = IntrinsicSizes.ContentExtent(box);
+        box.CachedMinContentWidth = min;
+        return min;
+    }
+
+    /// <summary>
+    /// Max-content (no-wrap) inline size (css-sizing-3 §4.1): probe at a huge
+    /// width so nothing soft-wraps and read the used content extent. Cached
+    /// per box per pass.
+    /// </summary>
+    internal double MaxContentWidth(Box.Box box, double containerWidth)
+    {
+        if (box.Kind != BoxKind.AnonymousBlock && IsFlexContainer(box.Style))
+        {
+            // A flex container's max-content size is structural (Flexbox §9.9):
+            // probing it at a huge width would let any flex-grow item balloon
+            // to the probe width. FlexLayout owns that computation.
+            var flex = new Starling.Layout.Flex.FlexLayout(this, _viewport);
+            return flex.NaturalWidth(box, containerWidth);
+        }
+        if (!box.SubtreeDirty && box.CachedMaxContentWidth is { } cached) return cached;
+        LayoutItem(box, IntrinsicSizes.ProbeWidth, null, measure: true);
+        var max = IntrinsicSizes.ContentExtent(box);
+        box.CachedMaxContentWidth = max;
+        return max;
+    }
+
+    /// <summary>
+    /// css-sizing-3 §5.3 fit-content: clamp the stretch size between
+    /// min-content and max-content — shrink-to-fit with the caller's stretch
+    /// size in place of the available space.
+    /// </summary>
+    private double FitContentWidth(Box.Box box, double stretch, double containerWidth)
+    {
+        var min = MinContentWidth(box);
+        var max = MaxContentWidth(box, containerWidth);
+        return Math.Min(max, Math.Max(min, stretch));
+    }
+
+    /// <summary>
+    /// css-sizing-4 §5 transferred inline size: when `width` is auto, `height`
+    /// is definite, and the box has a preferred aspect ratio, the tentative
+    /// width is height × ratio (min/max-width then clamp it as usual).
+    /// </summary>
+    private static double? TransferredWidth(Box.Box child, double? explicitHeight)
+    {
+        if (explicitHeight is not { } h || HasExplicitWidth(child.Style)) return null;
+        if (!IntrinsicSizes.TryGetPreferredRatio(child.Style, out var ratio)) return null;
+        return h * ratio;
+    }
+
+    /// <summary>
+    /// css-sizing-4 §5 transferred block size: when `height` is auto and the
+    /// box has a preferred aspect ratio, the used height is width / ratio,
+    /// clamped by the derived axis's own min/max (§5.2.1). With min-height at
+    /// its initial value the automatic content-based minimum (§5.2.2) still
+    /// lets overflowing in-flow content grow the box past the transferred size
+    /// (capped by max-height); an explicit positive min-height replaces that
+    /// automatic minimum. Returns null when the box has no preferred ratio.
+    /// </summary>
+    private double? TransferredHeight(Box.Box child, double usedWidth, double? containerHeight, double contentHeight)
+    {
+        if (!IntrinsicSizes.TryGetPreferredRatio(child.Style, out var ratio)) return null;
+        var transferred = usedWidth / ratio;
+
+        double? maxH = child.Style?.Get(PropertyId.MaxHeight) is CssKeyword { Name: "none" }
+            ? null
+            : ResolveHeight(child.Style, PropertyId.MaxHeight, containerHeight, _viewport, allowAuto: true);
+        var minH = ResolveHeight(child.Style, PropertyId.MinHeight, containerHeight, _viewport, allowAuto: true);
+
+        if (maxH is { } mx && transferred > mx) transferred = mx;
+        if (minH is { } mn && transferred < mn) transferred = mn;
+
+        if (minH is not { } floor || floor <= 0)
+        {
+            var contentFloor = contentHeight;
+            if (maxH is { } cap && contentFloor > cap) contentFloor = cap;
+            if (transferred < contentFloor) transferred = contentFloor;
+        }
+        return transferred;
+    }
+
     // max-* properties accept the keyword `none` (the initial value) to mean
     // "no upper bound". ResolveLength maps `none` to 0, which would collapse
     // the box; intercept it here so callers can skip the clamp.
-    private static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
+    internal static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
     {
         if (style is null) return null;
         var value = style.Get(property);
@@ -591,6 +883,10 @@ internal sealed class BlockLayout
             CssCalc calc => ResolveCalcPx(calc, containerHeight, viewport) ?? (allowAuto ? null : 0),
             CssKeyword k when k.Name == "auto" => allowAuto ? null : 0,
             CssKeyword k when k.Name == "none" => 0,
+            // css-sizing-3 §5 — the intrinsic sizing keywords refer to the
+            // inline axis; on the block axis in a horizontal writing mode
+            // (the only mode this engine lays out) they behave as `auto`.
+            CssKeyword k when k.Name is "min-content" or "max-content" or "fit-content" => allowAuto ? null : 0,
             _ => null,
         };
     }
@@ -625,7 +921,7 @@ internal sealed class BlockLayout
     /// <see cref="ToPx(CssLength, Size?)"/>: font-relative units use a 16px base
     /// and viewport units use <paramref name="viewport"/> (100px when unknown).
     /// </summary>
-    private static double? ResolveCalcPx(CssCalc calc, double? percentageBasis, Size? viewport)
+    internal static double? ResolveCalcPx(CssCalc calc, double? percentageBasis, Size? viewport)
     {
         var vw = viewport?.Width ?? 100d;
         var vh = viewport?.Height ?? 100d;

@@ -17,6 +17,13 @@ public static class CssGradientParser
 {
     public static bool TryParse(CssValue value, out CssGradient gradient)
     {
+        // Idempotent: the animation interpolator emits typed CssGradient
+        // intermediates; pass them straight through.
+        if (value is CssGradient typed)
+        {
+            gradient = typed;
+            return true;
+        }
         gradient = null!;
         if (value is not CssFunctionValue fn)
             return false;

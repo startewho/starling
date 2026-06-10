@@ -145,16 +145,35 @@ public static class WindowBinding
             PropertyDescriptor.Data(JsValue.Number(options.InnerHeight), writable: true, enumerable: true, configurable: true));
         global.DefineOwnProperty("devicePixelRatio",
             PropertyDescriptor.Data(JsValue.Number(1), writable: true, enumerable: true, configurable: true));
-        // HTML §6.6.2 window.scrollX / scrollY. No scrolled content yet — return 0.
-        global.DefineOwnProperty("scrollX",
-            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
-        global.DefineOwnProperty("scrollY",
-            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
-        // Legacy aliases for scrollX/scrollY (IE / older spec).
-        global.DefineOwnProperty("pageXOffset",
-            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
-        global.DefineOwnProperty("pageYOffset",
-            PropertyDescriptor.Data(JsValue.Number(0), writable: true, enumerable: true, configurable: true));
+        // CSSOM-View §4 window.screen. The headless/embedded "screen" is the
+        // viewport: real pages only use it for sizing heuristics (React Native
+        // Web's Dimensions reads screen.height at boot and throws when the
+        // object is absent).
+        global.DefineOwnProperty("screen",
+            PropertyDescriptor.Data(JsValue.Object(BuildScreen(realm, options.InnerWidth, options.InnerHeight)),
+                writable: true, enumerable: true, configurable: true));
+        // CSSOM View §4 window.scrollX / scrollY: the viewport's scroll
+        // offset, read live from the scroll store's root entry through the
+        // layout host (browser-plan/scroll-model.md). No host → 0, matching
+        // a never-scrolled document. pageXOffset/pageYOffset are the spec'd
+        // aliases. Readonly attributes per WebIDL: getter only.
+        EventTargetBinding.DefineAccessor(realm, global, "scrollX",
+            (_, _) => JsValue.Number(RootScrollMetricsFor(realm).ScrollLeft));
+        EventTargetBinding.DefineAccessor(realm, global, "scrollY",
+            (_, _) => JsValue.Number(RootScrollMetricsFor(realm).ScrollTop));
+        EventTargetBinding.DefineAccessor(realm, global, "pageXOffset",
+            (_, _) => JsValue.Number(RootScrollMetricsFor(realm).ScrollLeft));
+        EventTargetBinding.DefineAccessor(realm, global, "pageYOffset",
+            (_, _) => JsValue.Number(RootScrollMetricsFor(realm).ScrollTop));
+        // CSSOM View §4 window.scroll() / scrollTo() / scrollBy(): write the
+        // root entry through the host (flush-if-dirty, clamp, store, flag —
+        // no relayout). behavior:"smooth" is accepted and treated as instant.
+        EventTargetBinding.DefineMethod(realm, global, "scroll",
+            (_, args) => WindowScroll(realm, args, relative: false), length: 0);
+        EventTargetBinding.DefineMethod(realm, global, "scrollTo",
+            (_, args) => WindowScroll(realm, args, relative: false), length: 0);
+        EventTargetBinding.DefineMethod(realm, global, "scrollBy",
+            (_, args) => WindowScroll(realm, args, relative: true), length: 0);
 
         // 4) Window-as-EventTarget convenience: `addEventListener` already
         //    resolves through the prototype chain. Nothing more to do —
@@ -236,6 +255,22 @@ public static class WindowBinding
     /// binding should fall back to spec-permitted defaults.</summary>
     internal static ILayoutHost? LayoutHostForRealm(JsRealm realm)
         => RealmToLayoutHost.TryGetValue(realm, out var h) ? h : null;
+
+    /// <summary>The document scroller's metrics via the realm's layout host;
+    /// all-zero (never scrolled, never measured) when no host is installed.</summary>
+    private static ScrollMetrics RootScrollMetricsFor(JsRealm realm)
+        => LayoutHostForRealm(realm)?.GetRootScrollMetrics() ?? default;
+
+    /// <summary>window.scroll()/scrollTo()/scrollBy() — shared element/window
+    /// argument parsing lives in <see cref="NodeBindings.ParseScrollArgs"/>.</summary>
+    private static JsValue WindowScroll(JsRealm realm, JsValue[] args, bool relative)
+    {
+        if (LayoutHostForRealm(realm) is not { } host) return JsValue.Undefined;
+        var cur = host.GetRootScrollMetrics();
+        NodeBindings.ParseScrollArgs(args, relative, cur.ScrollLeft, cur.ScrollTop, out var x, out var y);
+        host.SetRootScrollOffset(x, y);
+        return JsValue.Undefined;
+    }
 
     /// <summary>Resolve the optional Web Animations host for the realm; null
     /// when no engine host was installed (the binding then exposes a no-op
@@ -483,6 +518,40 @@ public static class WindowBinding
         var url = UrlFor(realm, doc);
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "";
         try { return select(uri); } catch { return ""; }
+    }
+
+    /// <summary>CSSOM-View §4 Screen. Width/height mirror the viewport (the
+    /// embedded engine has no physical screen); colorDepth/pixelDepth are the
+    /// universal 24; orientation is a minimal ScreenOrientation-shaped object
+    /// (landscape/portrait derived from the aspect ratio, listener methods are
+    /// accepted and never fire).</summary>
+    private static JsObject BuildScreen(JsRealm realm, double width, double height)
+    {
+        var screen = new JsObject(realm.ObjectPrototype);
+        void Num(string name, double v) => screen.DefineOwnProperty(name,
+            PropertyDescriptor.Data(JsValue.Number(v), writable: false, enumerable: true, configurable: true));
+        Num("width", width);
+        Num("height", height);
+        Num("availWidth", width);
+        Num("availHeight", height);
+        Num("availLeft", 0);
+        Num("availTop", 0);
+        Num("colorDepth", 24);
+        Num("pixelDepth", 24);
+
+        var orientation = new JsObject(realm.ObjectPrototype);
+        orientation.DefineOwnProperty("type",
+            PropertyDescriptor.Data(JsValue.String(width >= height ? "landscape-primary" : "portrait-primary"),
+                writable: false, enumerable: true, configurable: true));
+        orientation.DefineOwnProperty("angle",
+            PropertyDescriptor.Data(JsValue.Number(0), writable: false, enumerable: true, configurable: true));
+        foreach (var m in new[] { "addEventListener", "removeEventListener" })
+            orientation.DefineOwnProperty(m, PropertyDescriptor.Data(
+                JsValue.Object(new JsNativeFunction(realm, m, 2, (_, _) => JsValue.Undefined, isConstructor: false)),
+                writable: true, enumerable: false, configurable: true));
+        screen.DefineOwnProperty("orientation",
+            PropertyDescriptor.Data(JsValue.Object(orientation), writable: false, enumerable: true, configurable: true));
+        return screen;
     }
 
     private static JsObject BuildNavigator(JsRealm realm, string? userAgent)

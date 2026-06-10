@@ -52,6 +52,46 @@ public interface ILayoutHost
     /// has no computed style.</summary>
     string GetComputedProperty(Element element, string propertyName);
 
+    /// <summary>Scroll metrics for <paramref name="element"/>'s scroll
+    /// container, read from the engine session's scroll store
+    /// (browser-plan/scroll-model.md): offsets clamped to the legal range,
+    /// scrollport (padding box) and scrollable overflow from the last layout.
+    /// Returns <c>false</c> when the element is not a scroll container — the
+    /// bindings then fall back to today's zeros / padding-box aliases. The
+    /// default implementation reports no scroll state, so hosts that predate
+    /// the store keep compiling unchanged.</summary>
+    bool TryGetScrollMetrics(Element element, out ScrollMetrics metrics)
+    {
+        metrics = default;
+        return false;
+    }
+
+    /// <summary>The document scroller's metrics — backs
+    /// <c>window.scrollX/scrollY</c> and the document element's
+    /// <c>scrollWidth</c>/<c>scrollHeight</c>. Default: all zeros (a
+    /// never-scrolled, never-measured document).</summary>
+    ScrollMetrics GetRootScrollMetrics() => default;
+
+    /// <summary>Write side of the element scroll surface (the
+    /// <c>scrollTop</c>/<c>scrollLeft</c> setters, <c>scrollTo</c>,
+    /// <c>scrollBy</c>, <c>scrollIntoView</c>). Per
+    /// browser-plan/scroll-model.md: flush layout if dirty (the same
+    /// up-to-date rule the offset metrics use), clamp to the legal range,
+    /// store, flag the pending scroll event — and never relayout. The repaint
+    /// rides the store's pending-event flag, which the shells' frame pump
+    /// drains. Writes to a non-scroller clamp to (0,0), CSSOM's no-op.
+    /// Default: ignored, so hosts that predate the store keep compiling.</summary>
+    void SetScrollOffset(Element element, double x, double y)
+    {
+    }
+
+    /// <summary>Document-scroller variant of <see cref="SetScrollOffset"/> —
+    /// backs <c>window.scrollTo</c>/<c>scrollBy</c> and the root element's
+    /// <c>scrollTop</c>/<c>scrollLeft</c> setters. Default: ignored.</summary>
+    void SetRootScrollOffset(double x, double y)
+    {
+    }
+
     /// <summary>Evaluates a CSS media query string (e.g. <c>"(max-width:
     /// 768px)"</c>) against the document's media context — viewport size,
     /// color scheme, etc. — backing <c>window.matchMedia(q).matches</c>.
@@ -69,6 +109,26 @@ public readonly record struct LayoutRect(double X, double Y, double Width, doubl
     public double Right => X + Width;
     public double Bottom => Y + Height;
 }
+
+/// <summary>CSSOM-View-shaped scroll metrics in CSS px:
+/// <c>scrollLeft</c>/<c>scrollTop</c> are the clamped offsets,
+/// <c>scrollWidth</c>/<c>scrollHeight</c> the scrollable overflow, and
+/// <c>clientWidth</c>/<c>clientHeight</c> the scrollport (padding box; no
+/// scrollbar inset — scrollbars are overlay style by decision).
+/// <c>clientLeft</c>/<c>clientTop</c> are the border-edge → padding-edge
+/// insets (CSSOM <c>clientLeft</c>/<c>clientTop</c>); the
+/// <c>scrollIntoView</c> walk uses them to locate the scroll origin inside
+/// the border box. Defaulted so pre-existing construction sites and fakes
+/// keep compiling.</summary>
+public readonly record struct ScrollMetrics(
+    double ScrollLeft,
+    double ScrollTop,
+    double ScrollWidth,
+    double ScrollHeight,
+    double ClientWidth,
+    double ClientHeight,
+    double ClientLeft = 0,
+    double ClientTop = 0);
 
 /// <summary>HTMLElement-shaped offset / client metrics in CSS px.</summary>
 public readonly record struct OffsetMetrics(

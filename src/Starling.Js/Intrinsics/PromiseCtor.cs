@@ -96,35 +96,35 @@ public static class PromiseCtor
             PropertyDescriptor.Data(JsValue.String("Promise"), writable: false, enumerable: false, configurable: true));
 
         // --------------------------------------------------------- Statics
-        DefineMethod(ctor, "resolve", (thisV, args) =>
+        DefineMethod(realm, ctor, "resolve", (thisV, args) =>
             ResolveStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(ctor, "reject", (thisV, args) =>
+        DefineMethod(realm, ctor, "reject", (thisV, args) =>
             RejectStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(ctor, "all", (thisV, args) =>
+        DefineMethod(realm, ctor, "all", (thisV, args) =>
             All(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(ctor, "allSettled", (thisV, args) =>
+        DefineMethod(realm, ctor, "allSettled", (thisV, args) =>
             AllSettled(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(ctor, "any", (thisV, args) =>
+        DefineMethod(realm, ctor, "any", (thisV, args) =>
             Any(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(ctor, "race", (thisV, args) =>
+        DefineMethod(realm, ctor, "race", (thisV, args) =>
             Race(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(ctor, "withResolvers", (thisV, args) => WithResolvers(realm), length: 0);
+        DefineMethod(realm, ctor, "withResolvers", (thisV, args) => WithResolvers(realm), length: 0);
 
         // --------------------------------------------------------- Prototype
-        DefineMethod(proto, "then", (thisV, args) =>
+        DefineMethod(realm, proto, "then", (thisV, args) =>
         {
             var onFulfilled = args.Length > 0 ? args[0] : JsValue.Undefined;
             var onRejected = args.Length > 1 ? args[1] : JsValue.Undefined;
             return Then(realm, thisV, onFulfilled, onRejected);
         }, length: 2);
 
-        DefineMethod(proto, "catch", (thisV, args) =>
+        DefineMethod(realm, proto, "catch", (thisV, args) =>
         {
             var onRejected = args.Length > 0 ? args[0] : JsValue.Undefined;
             return Then(realm, thisV, JsValue.Undefined, onRejected);
         }, length: 1);
 
-        DefineMethod(proto, "finally", (thisV, args) =>
+        DefineMethod(realm, proto, "finally", (thisV, args) =>
         {
             var onFinally = args.Length > 0 ? args[0] : JsValue.Undefined;
             return Finally(realm, thisV, onFinally);
@@ -247,13 +247,17 @@ public static class PromiseCtor
             EnqueueReactionJob(realm, reaction, value);
     }
 
-    /// <summary>§27.2.1.7 RejectPromise — symmetric to fulfill.</summary>
+    /// <summary>§27.2.1.7 RejectPromise — symmetric to fulfill. Step 7:
+    /// when the promise is not handled, HostPromiseRejectionTracker is told
+    /// so the host can report the rejection if no handler arrives.</summary>
     private static void RejectPromise(JsRealm realm, JsPromise promise, JsValue reason)
     {
         if (!promise.Reject(reason)) return;
         var reactions = promise.RejectReactions.ToArray();
         promise.FulfillReactions.Clear();
         promise.RejectReactions.Clear();
+        if (!promise.IsHandled)
+            realm.OnUnhandledRejection?.Invoke(promise);
         foreach (var reaction in reactions)
             EnqueueReactionJob(realm, reaction, reason);
     }
@@ -327,9 +331,18 @@ public static class PromiseCtor
                 EnqueueReactionJob(realm, fulfillReaction, self.Result);
                 break;
             case PromiseState.Rejected:
+                // HostPromiseRejectionTracker(promise, "handle") — a late
+                // handler retracts a queued unhandled-rejection report.
+                if (!self.IsHandled)
+                    realm.OnRejectionHandled?.Invoke(self);
                 EnqueueReactionJob(realm, rejectReaction, self.Result);
                 break;
         }
+
+        // §27.2.5.4.1 PerformPromiseThen step 12 — the promise now has a
+        // handler regardless of which callbacks were supplied (omitted ones
+        // become pass-through identity/thrower on the chained promise).
+        self.IsHandled = true;
 
         return JsValue.Object(capability.Promise);
     }
@@ -649,10 +662,14 @@ public static class PromiseCtor
 
     /// <summary>Install a builtin method descriptor (W=true, E=false, C=true)
     /// per §17 default attributes.</summary>
-    private static void DefineMethod(JsObject target, string name,
+    private static void DefineMethod(JsRealm realm, JsObject target, string name,
         Func<JsValue, JsValue[], JsValue> body, int length)
     {
         var fn = new JsNativeFunction(name, body, isConstructor: false);
+        // §10.3 — built-in functions inherit from %Function.prototype% so
+        // call/apply/bind work on them (`Promise.resolve.bind(Promise)` is a
+        // common bundle idiom).
+        fn.SetPrototypeOf(realm.FunctionPrototype);
         fn.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
         fn.DefineOwnProperty("length",

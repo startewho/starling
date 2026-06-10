@@ -138,8 +138,13 @@ internal sealed class ContinuationFrameState
     public required Chunk Chunk { get; init; }
     public required JsValue[] Stack { get; init; }
     public required JsValue[] Locals { get; init; }
+    /// <summary>Carries <see cref="CallFrame.LocalsEscaped"/> across the
+    /// suspension so the resumed frame still skips returning an escaped
+    /// locals array to the pool at completion.</summary>
+    public required bool LocalsEscaped { get; init; }
     public required IReadOnlyList<JsValue> Upvalues { get; init; }
-    public required Stack<TryFrame> TryStack { get; init; }
+    /// <summary>Null when the frame never entered a try (lazily created).</summary>
+    public required Stack<TryFrame>? TryStack { get; init; }
     public JsFunction? CurrentFunction { get; init; }
     public JsObject? NewTarget { get; init; }
     public EvalScope? EvalScope { get; init; }

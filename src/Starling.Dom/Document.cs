@@ -395,6 +395,17 @@ public sealed class Document : Node
         return null;
     }
 
+    /// <summary>The document's doctype child, or null. DOM §4.5 <c>doctype</c>.</summary>
+    public DocumentType? Doctype
+    {
+        get
+        {
+            for (var n = FirstChild; n is not null; n = n.NextSibling)
+                if (n is DocumentType dt) return dt;
+            return null;
+        }
+    }
+
     public IReadOnlyList<Element> GetElementsByTagName(string name)
     {
         ArgumentNullException.ThrowIfNull(name);

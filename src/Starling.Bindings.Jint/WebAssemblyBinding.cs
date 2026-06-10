@@ -450,7 +450,8 @@ internal static class WebAssemblyBinding
             try { result = action(); }
             catch (Exception ex) { exception = ExceptionDispatchInfo.Capture(ex); }
             finally { t_onWasmExecutionStack = false; }
-        }, WasmExecutionStackSize) { Name = "Starling Wasmtime invocation (Jint)" };
+        }, WasmExecutionStackSize)
+        { Name = "Starling Wasmtime invocation (Jint)" };
         thread.Start();
         thread.Join();
         exception?.Throw();

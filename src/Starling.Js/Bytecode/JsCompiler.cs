@@ -1009,28 +1009,28 @@ public sealed partial class JsCompiler
                 return;
             case WhileStatement w: PreallocateCapturedInStatement(w.Body); return;
             case DoWhileStatement dw: PreallocateCapturedInStatement(dw.Body); return;
+            // Loop heads: only `var` bindings are function-scoped and need a
+            // function-frame cell here. A captured loop-head let/const gets its
+            // per-iteration cell from the loop's own scope at emit time
+            // (ReserveForOfLetSlots / the for-init declare path); preallocating
+            // it into the function frame would plant a phantom TDZ-sentinel
+            // binding that shadows any same-named outer variable for every
+            // closure compiled later in the function — the sentinel is never
+            // initialized, so those closures throw ReferenceError on a name
+            // that should have resolved outward.
             case ForStatement f:
-                if (f.Init is VariableDeclaration fvd)
-                {
-                    var lex = fvd.Kind is "let" or "const";
-                    foreach (var d in fvd.Declarations) PreallocateCapturedInPattern(d.Id, lex);
-                }
+                if (f.Init is VariableDeclaration { Kind: "var" } fvd)
+                    foreach (var d in fvd.Declarations) PreallocateCapturedInPattern(d.Id, lexical: false);
                 PreallocateCapturedInStatement(f.Body);
                 return;
             case ForInStatement fi:
-                if (fi.Left is VariableDeclaration vdi)
-                {
-                    var lex = vdi.Kind is "let" or "const";
-                    foreach (var d in vdi.Declarations) PreallocateCapturedInPattern(d.Id, lex);
-                }
+                if (fi.Left is VariableDeclaration { Kind: "var" } vdi)
+                    foreach (var d in vdi.Declarations) PreallocateCapturedInPattern(d.Id, lexical: false);
                 PreallocateCapturedInStatement(fi.Body);
                 return;
             case ForOfStatement fo:
-                if (fo.Left is VariableDeclaration vdo)
-                {
-                    var lex = vdo.Kind is "let" or "const";
-                    foreach (var d in vdo.Declarations) PreallocateCapturedInPattern(d.Id, lex);
-                }
+                if (fo.Left is VariableDeclaration { Kind: "var" } vdo)
+                    foreach (var d in vdo.Declarations) PreallocateCapturedInPattern(d.Id, lexical: false);
                 PreallocateCapturedInStatement(fo.Body);
                 return;
             case SwitchStatement sw:
@@ -3738,7 +3738,82 @@ public sealed partial class JsCompiler
     private void RecordPos(AstNode node)
         => _b.RecordPosition(node.Start.Line, node.Start.Column);
 
+    // §13.3 OptionalChain — jump patches collected by every optional link of
+    // the chain currently being compiled. The chain ROOT (the outermost
+    // member/call node) creates the list and patches every jump to the
+    // instruction right after the whole chain, so `a?.b.c` yields undefined
+    // without reading `.c` when `a` is nullish. Null when no chain is active;
+    // independent sub-chains (computed keys, call arguments) suspend it via
+    // EmitNonChainSubexpression so they root themselves.
+    private List<int>? _chainExitJumps;
+
+    /// <summary>Does this member/call chain contain an optional (<c>?.</c>)
+    /// link? Walks down member objects / call callees. A parenthesized
+    /// sub-expression terminates the chain per §13.3 — but only when it is a
+    /// LINK; parentheses around the whole chain don't change its root.</summary>
+    private static bool HasOptionalLink(Expression e)
+    {
+        var first = true;
+        while (true)
+        {
+            if (!first && e.IsParenthesized) return false;
+            first = false;
+            switch (e)
+            {
+                case MemberExpression me:
+                    if (me.Optional) return true;
+                    e = me.Object;
+                    break;
+                case CallExpression ce:
+                    if (ce.Optional) return true;
+                    e = ce.Callee;
+                    break;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    /// <summary>Emit an expression that is NOT a link of the active optional
+    /// chain (a computed key or a call argument): the chain context is
+    /// suspended so an optional chain inside it short-circuits to its own
+    /// boundary, not the enclosing chain's exit.</summary>
+    private void EmitNonChainSubexpression(Expression e)
+    {
+        var saved = _chainExitJumps;
+        _chainExitJumps = null;
+        try { EmitExpression(e); }
+        finally { _chainExitJumps = saved; }
+    }
+
+    /// <summary>Route one optional link's "yield undefined" jump: into the
+    /// active chain context (the root patches it past the whole chain), or
+    /// patched locally when no chain is active (defensive fallback).</summary>
+    private void RouteChainExitJump(int jump)
+    {
+        if (_chainExitJumps is not null) _chainExitJumps.Add(jump);
+        else _b.PatchJump(jump);
+    }
+
     private void EmitMemberLoad(MemberExpression m)
+    {
+        var rootsChain = _chainExitJumps is null && HasOptionalLink(m);
+        if (rootsChain) _chainExitJumps = new List<int>();
+        try
+        {
+            EmitMemberLoadCore(m);
+        }
+        finally
+        {
+            if (rootsChain)
+            {
+                foreach (var j in _chainExitJumps!) _b.PatchJump(j);
+                _chainExitJumps = null;
+            }
+        }
+    }
+
+    private void EmitMemberLoadCore(MemberExpression m)
     {
         // Private name: obj.#name (and the optional form obj?.#name).
         if (!m.Computed && m.Property is PrivateNameExpression pne)
@@ -3754,11 +3829,10 @@ public sealed partial class JsCompiler
                 // base is nullish: drop it and yield undefined.
                 _b.Emit(Opcode.Pop);                  // []
                 _b.Emit(Opcode.LoadUndefined);        // [undefined]
-                var done = _b.EmitJump(Opcode.Jump);
+                RouteChainExitJump(_b.EmitJump(Opcode.Jump));
                 _b.PatchJump(notNullish);             // [obj]
                 RecordPos(m);
                 _b.EmitU16(Opcode.PrivateGet, _b.AddConstant(mangled)); // [value]
-                _b.PatchJump(done);
                 return;
             }
             RecordPos(m);
@@ -3772,11 +3846,11 @@ public sealed partial class JsCompiler
             var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one
             _b.Emit(Opcode.Pop);                  // []
             _b.Emit(Opcode.LoadUndefined);        // [undefined]
-            var done = _b.EmitJump(Opcode.Jump);
+            RouteChainExitJump(_b.EmitJump(Opcode.Jump));
             _b.PatchJump(notNullish);             // [obj]
             if (m.Computed)
             {
-                EmitExpression(m.Property);
+                EmitNonChainSubexpression(m.Property);
                 RecordPos(m);
                 _b.Emit(Opcode.LoadComputed);
             }
@@ -3786,12 +3860,11 @@ public sealed partial class JsCompiler
                 RecordPos(m);
                 _b.EmitProperty(Opcode.LoadProperty, _b.AddConstant(optionalName));
             }
-            _b.PatchJump(done);
             return;
         }
         if (m.Computed)
         {
-            EmitExpression(m.Property);
+            EmitNonChainSubexpression(m.Property);
             RecordPos(m);
             _b.Emit(Opcode.LoadComputed);
         }
@@ -3804,6 +3877,24 @@ public sealed partial class JsCompiler
     }
 
     private void EmitCall(CallExpression call)
+    {
+        var rootsChain = _chainExitJumps is null && HasOptionalLink(call);
+        if (rootsChain) _chainExitJumps = new List<int>();
+        try
+        {
+            EmitCallCore(call);
+        }
+        finally
+        {
+            if (rootsChain)
+            {
+                foreach (var j in _chainExitJumps!) _b.PatchJump(j);
+                _chainExitJumps = null;
+            }
+        }
+    }
+
+    private void EmitCallCore(CallExpression call)
     {
         if (call.Arguments.Count > 255)
             throw new NotSupportedException("more than 255 call args not supported");
@@ -3857,21 +3948,20 @@ public sealed partial class JsCompiler
             // method-call fast-path loaded `.method` off the nullish base
             // (undefined) and then issued CallMethod, throwing "not a function"
             // — e.g. Angular's `e.features?.forEach(...)`.
-            int? optDone = null;
             if (me.Optional)
             {
                 _b.Emit(Opcode.Dup);                                   // [obj, obj]
                 var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one → [obj]
                 _b.Emit(Opcode.Pop);                                   // [] (nullish base)
                 _b.Emit(Opcode.LoadUndefined);                         // [undefined]
-                optDone = _b.EmitJump(Opcode.Jump);                    // skip the call
+                RouteChainExitJump(_b.EmitJump(Opcode.Jump));          // skip the chain
                 _b.PatchJump(notNullish);                              // [obj] (proceed)
             }
 
             _b.Emit(Opcode.Dup);                // [obj, obj]
             if (me.Computed)
             {
-                EmitExpression(me.Property);    // [obj, obj, key]
+                EmitNonChainSubexpression(me.Property); // [obj, obj, key]
                 RecordPos(me);
                 _b.Emit(Opcode.LoadComputed);   // [obj, fn]
             }
@@ -3893,7 +3983,6 @@ public sealed partial class JsCompiler
             // still binds to obj when the method IS present (the method-call form
             // is preserved). This is distinct from me.Optional above, where a
             // nullish *base* short-circuits before the property is even loaded.
-            int? methodOptCallDone = null;
             if (call.Optional)
             {
                 _b.Emit(Opcode.Dup);                                     // [obj, fn, fn]
@@ -3901,7 +3990,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.Pop);                                     // [obj]
                 _b.Emit(Opcode.Pop);                                     // []
                 _b.Emit(Opcode.LoadUndefined);                           // [undefined]
-                methodOptCallDone = _b.EmitJump(Opcode.Jump);            // skip the call
+                RouteChainExitJump(_b.EmitJump(Opcode.Jump));            // skip the chain
                 _b.PatchJump(fnNotNullish);                              // [obj, fn] (proceed)
             }
 
@@ -3911,15 +4000,11 @@ public sealed partial class JsCompiler
                 EmitArgsAsArray(call.Arguments);
                 RecordPos(call);
                 _b.Emit(Opcode.CallApplyMethod);
-                if (optDone is { } optDoneSpread) _b.PatchJump(optDoneSpread);
-                if (methodOptCallDone is { } moSpread) _b.PatchJump(moSpread);
                 return;
             }
-            foreach (var arg in call.Arguments) EmitExpression(arg);
+            foreach (var arg in call.Arguments) EmitNonChainSubexpression(arg);
             RecordPos(call);
             _b.Emit(Opcode.CallMethod, (byte)call.Arguments.Count);
-            if (optDone is { } optDonePlain) _b.PatchJump(optDonePlain);
-            if (methodOptCallDone is { } moPlain) _b.PatchJump(moPlain);
             return;
         }
 
@@ -3944,7 +4029,7 @@ public sealed partial class JsCompiler
                 _b.Emit(Opcode.CallApplyMethod);
                 return;
             }
-            foreach (var arg in call.Arguments) EmitExpression(arg);
+            foreach (var arg in call.Arguments) EmitNonChainSubexpression(arg);
             RecordPos(call);
             _b.Emit(Opcode.CallMethod, (byte)call.Arguments.Count);
             return;
@@ -3975,7 +4060,7 @@ public sealed partial class JsCompiler
             // to closures it creates (which snapshot the store at creation).
             _b.HasDirectEval = true;
             EmitExpression(call.Callee);                  // [callee]
-            foreach (var arg in call.Arguments) EmitExpression(arg);
+            foreach (var arg in call.Arguments) EmitNonChainSubexpression(arg);
             RecordPos(call);
             _b.EmitU16(Opcode.DirectEval, descIdx);
             _b.EmitU8Raw(call.Arguments.Count);
@@ -3987,14 +4072,13 @@ public sealed partial class JsCompiler
         // §13.3 OptionalChain — `callee?.(args)`. A nullish callee short-circuits
         // to undefined without evaluating the arguments. (A non-nullish callee
         // that isn't callable still throws "not a function", per spec.)
-        int? optCallDone = null;
         if (call.Optional)
         {
             _b.Emit(Opcode.Dup);                                   // [callee, callee]
             var notNullish = _b.EmitJump(Opcode.JumpIfNotNullish); // pops one → [callee]
             _b.Emit(Opcode.Pop);                                   // [] (nullish callee)
             _b.Emit(Opcode.LoadUndefined);                         // [undefined]
-            optCallDone = _b.EmitJump(Opcode.Jump);                // skip the call
+            RouteChainExitJump(_b.EmitJump(Opcode.Jump));          // skip the chain
             _b.PatchJump(notNullish);                              // [callee] (proceed)
         }
 
@@ -4003,13 +4087,11 @@ public sealed partial class JsCompiler
             EmitArgsAsArray(call.Arguments);
             RecordPos(call);
             _b.Emit(Opcode.CallApply);
-            if (optCallDone is { } optCallDoneSpread) _b.PatchJump(optCallDoneSpread);
             return;
         }
-        foreach (var arg in call.Arguments) EmitExpression(arg);
+        foreach (var arg in call.Arguments) EmitNonChainSubexpression(arg);
         RecordPos(call);
         _b.Emit(Opcode.Call, (byte)call.Arguments.Count);
-        if (optCallDone is { } optCallDonePlain) _b.PatchJump(optCallDonePlain);
     }
 
     /// <summary>wp:M3-71 — is <paramref name="callee"/> a bare <c>eval</c>
@@ -4068,6 +4150,16 @@ public sealed partial class JsCompiler
     /// JsArray on the stack. Used by the CallApply / NewApply opcodes when
     /// at least one argument is a spread.</summary>
     private void EmitArgsAsArray(IReadOnlyList<Expression> args)
+    {
+        // Arguments are independent expressions, never links of an enclosing
+        // optional chain — suspend any active chain context for the duration.
+        var savedChain = _chainExitJumps;
+        _chainExitJumps = null;
+        try { EmitArgsAsArrayCore(args); }
+        finally { _chainExitJumps = savedChain; }
+    }
+
+    private void EmitArgsAsArrayCore(IReadOnlyList<Expression> args)
     {
         _b.Emit(Opcode.NewArray);
         var pushMode = false;

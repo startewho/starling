@@ -42,19 +42,25 @@ internal sealed class LayerTreeBuilder
     // content correctly — the same offsets the readback path's DisplayListBuilder
     // applies. Null when the page has no scrolled containers.
     private readonly Func<Starling.Dom.Element, (double X, double Y)>? _scrollOffsets;
+    // Per-element position:sticky paint shift (scroll-model.md WP5), threaded
+    // into every layer slice exactly like the scroll offsets — both read the
+    // same store. Null when the page has no scroll model.
+    private readonly Func<Starling.Dom.Element, (double X, double Y)>? _stickyShifts;
 
     public LayerTreeBuilder(
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         Func<Box, bool>? isAnimatingLayerRoot = null,
         Func<Box, long>? layerIdFor = null,
-        Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null)
+        Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null,
+        Func<Starling.Dom.Element, (double X, double Y)>? stickyShifts = null)
     {
         _styleOverride = styleOverride;
         _images = images;
         _isAnimatingLayerRoot = isAnimatingLayerRoot;
         _layerIdFor = layerIdFor;
         _scrollOffsets = scrollOffsets;
+        _stickyShifts = stickyShifts;
     }
 
     /// <summary>
@@ -106,7 +112,8 @@ internal sealed class LayerTreeBuilder
             suppressRootTransform: hasTransform,
             _styleOverride,
             _images,
-            _scrollOffsets);
+            _scrollOffsets,
+            _stickyShifts);
 
         var bounds = UnionBounds(slice);
 

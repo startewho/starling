@@ -10,6 +10,11 @@
 [Ll]ogs/
 BenchmarkDotNet.Artifacts/
 
+# Vendored opentelemetry-proto: the [Ll]ogs/ rule above otherwise swallows the
+# logs signal protos, leaving the daemon's Logs collector types ungenerated.
+!src/Starling.Telemetry.Daemon/Protos/**/logs/
+!src/Starling.Telemetry.Daemon/Protos/**/logs/**
+
 # Build results
 *.user
 *.userosscache

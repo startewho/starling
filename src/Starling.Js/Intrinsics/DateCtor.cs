@@ -396,7 +396,124 @@ public static class DateCtor
             return any.ToUnixTimeMilliseconds();
         }
 
+        // Legacy "loose" formats every browser accepts (§21.4.3.2 leaves
+        // non-ISO strings implementation-defined, but the web depends on
+        // these): "Tue Jun 09 20:00:00 +0000 2026" (Twitter's created_at),
+        // "Tue Jun 09 2026 20:00:00 GMT+0000 (Coordinated Universal Time)"
+        // (Date.prototype.toString round-trip), "Jun 9, 2026" and friends.
+        if (TryParseLegacy(s, out var legacy))
+            return legacy;
+
         return double.NaN;
+    }
+
+    /// <summary>Token-based parser for the loose date forms: any order of
+    /// weekday (ignored), month name, day, 4-digit year, hh:mm[:ss[.fff]],
+    /// and a UTC offset ("+0000", "GMT+01:00", "Z", bare "GMT"/"UTC").
+    /// Parenthesized zone names are stripped. Without an offset the time is
+    /// taken as UTC, matching this engine's ISO fallback behaviour.</summary>
+    private static bool TryParseLegacy(string input, out double ms)
+    {
+        ms = double.NaN;
+        var noParen = System.Text.RegularExpressions.Regex.Replace(input, @"\([^)]*\)", " ");
+        var tokens = noParen.Split(new[] { ' ', ',', '\t' }, System.StringSplitOptions.RemoveEmptyEntries);
+        int month = -1, day = -1, year = int.MinValue;
+        int hour = 0, minute = 0, second = 0, milli = 0;
+        var offsetMinutes = 0;
+        var sawTime = false;
+
+        foreach (var raw in tokens)
+        {
+            var tok = raw;
+            if (tok.StartsWith("GMT", System.StringComparison.OrdinalIgnoreCase)
+                || tok.StartsWith("UTC", System.StringComparison.OrdinalIgnoreCase))
+            {
+                tok = tok[3..];
+                if (tok.Length == 0) continue; // bare GMT/UTC → offset 0
+            }
+            if (tok is "Z" or "z") continue;
+
+            if (tok[0] is '+' or '-')
+            {
+                var sign = tok[0] == '-' ? -1 : 1;
+                var digits = tok[1..].Replace(":", "");
+                if (digits.Length != 4 || !int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var hhmm))
+                    return false;
+                offsetMinutes = sign * (hhmm / 100 * 60 + hhmm % 100);
+                continue;
+            }
+
+            if (tok.Contains(':'))
+            {
+                var fracSplit = tok.Split('.');
+                var parts = fracSplit[0].Split(':');
+                if (parts.Length is < 2 or > 3) return false;
+                if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out hour)) return false;
+                if (!int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out minute)) return false;
+                if (parts.Length == 3 && !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out second)) return false;
+                if (fracSplit.Length == 2)
+                {
+                    var frac = fracSplit[1].PadRight(3, '0')[..3];
+                    if (!int.TryParse(frac, NumberStyles.None, CultureInfo.InvariantCulture, out milli)) return false;
+                }
+                sawTime = true;
+                continue;
+            }
+
+            if (char.IsAsciiDigit(tok[0]))
+            {
+                if (!int.TryParse(tok, NumberStyles.None, CultureInfo.InvariantCulture, out var num)) return false;
+                if (tok.Length >= 3 || num > 31)
+                {
+                    if (year != int.MinValue) return false;
+                    year = num;
+                }
+                else if (day < 0)
+                {
+                    day = num;
+                }
+                else if (year == int.MinValue)
+                {
+                    // "MMM d yy"-style trailing 2-digit year (1900-window not
+                    // applied — browsers map 0-99 via the full-year rule only
+                    // for Date(y, m) construction, strings keep the literal).
+                    year = num;
+                }
+                else return false;
+                continue;
+            }
+
+            // Month or weekday name (weekday ignored). Anything else → fail.
+            var name = tok.Length > 3 ? tok[..3] : tok;
+            var monthIdx = System.Array.FindIndex(MonthShort,
+                m => string.Equals(m, name, System.StringComparison.OrdinalIgnoreCase));
+            if (monthIdx >= 0)
+            {
+                if (month >= 0) return false;
+                month = monthIdx + 1;
+                continue;
+            }
+            var isWeekday = System.Array.Exists(WeekdayShort,
+                w => string.Equals(w, name, System.StringComparison.OrdinalIgnoreCase));
+            if (!isWeekday) return false;
+        }
+
+        if (month < 0 || day < 1 || day > 31 || year == int.MinValue) return false;
+        if (hour > 24 || minute > 59 || second > 59) return false;
+        if (!sawTime && (hour != 0 || minute != 0)) return false;
+
+        try
+        {
+            var dto = new System.DateTimeOffset(year, month, day, 0, 0, 0, System.TimeSpan.Zero);
+            ms = dto.ToUnixTimeMilliseconds()
+                + hour * 3_600_000L + minute * 60_000L + second * 1_000L + milli
+                - offsetMinutes * 60_000L;
+            return true;
+        }
+        catch (System.ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------

@@ -7,17 +7,22 @@ namespace Starling.Layout.Flex;
 
 /// <summary>
 /// Flex layout (CSS Flex Box Layout Module Level 1, simplified). Handles
-/// <c>flex-direction</c>, <c>flex-wrap</c> (multi-line, row containers),
-/// <c>order</c>, <c>justify-content</c>, <c>align-items</c>, the <c>flex</c>
-/// shorthand + individual <c>flex-grow</c>/<c>shrink</c>/<c>basis</c>,
-/// <c>min-width</c>/<c>min-height</c> (and the automatic content minimum), and
+/// <c>flex-direction</c>, <c>flex-wrap</c> (multi-line rows, and columns with
+/// a definite height), <c>order</c>, <c>justify-content</c>,
+/// <c>align-items</c>/<c>align-self</c> (including first-baseline alignment
+/// in row containers), <c>align-content</c> (multi-line cross distribution +
+/// line stretching), the <c>flex</c> shorthand + individual
+/// <c>flex-grow</c>/<c>shrink</c>/<c>basis</c>,
+/// <c>min-width</c>/<c>min-height</c> (and the automatic content minimum),
+/// <c>max-width</c>/<c>max-height</c> clamping with violation freezing +
+/// free-space redistribution (CSS Flexbox §9.7), and
 /// <c>gap</c>/<c>row-gap</c>/<c>column-gap</c>.
 /// Out of scope (deferred):
 /// <list type="bullet">
-///   <item><c>flex-wrap</c> for column containers — falls back to a single line.</item>
-///   <item><c>align-content</c> (lines stack flex-start) and <c>align-self</c>.</item>
-///   <item>True baseline alignment (currently falls back to <c>flex-start</c>).</item>
-///   <item><c>max-width</c>/<c>max-height</c> clamping of the flex base size.</item>
+///   <item><c>wrap-reverse</c> cross-axis line reversal — wraps like <c>wrap</c>.</item>
+///   <item>Baseline alignment in column containers — falls back to <c>flex-start</c>.</item>
+///   <item>A line's cross size doesn't grow for baseline-shifted items
+///   (max ascent + max descent), so a shifted item can overflow its line.</item>
 /// </list>
 /// </summary>
 /// <remarks>
@@ -93,7 +98,19 @@ internal sealed class FlexLayout
         // a flex line and shoving the real content off-screen.
         var children = new List<Box.Box>(container.Children.Count);
         foreach (var c in container.Children)
-            if (!BlockLayout.IsOutOfFlow(c.Style)) children.Add(c);
+        {
+            if (!BlockLayout.IsOutOfFlow(c.Style))
+            {
+                children.Add(c);
+                continue;
+            }
+            // CSS Flexbox §4.1: the static position of an absolutely
+            // positioned flex child is as if it were the sole flex item —
+            // approximated as the container's content-box origin
+            // (flex-start / flex-start; align/justify offsets are skipped).
+            c.StaticX = 0;
+            c.StaticY = 0;
+        }
         if (children.Count == 0)
             return explicitHeight ?? 0;
 
@@ -113,17 +130,24 @@ internal sealed class FlexLayout
             var itemProps = FlexParser.ParseItem(child.Style);
             var basis = ResolveBasis(child, itemProps.Basis, props, containerWidth, explicitHeight);
             var minMain = ResolveMinMainSize(child, props, containerWidth, explicitHeight, basis);
+            var maxMain = ResolveMaxMainSize(child, props, containerWidth, explicitHeight);
             items[i] = new Item
             {
                 Box = child,
                 Props = itemProps,
                 Basis = basis,
-                // Hypothetical main size = flex base size clamped up to the
-                // minimum (CSS Flexbox §9.7.3). Free-space distribution below
-                // works from this, so an item with `min-width` larger than its
-                // content doesn't get over-grown neighbours and overflow the row.
-                MainSize = Math.Max(basis, minMain),
+                // Hypothetical main size = flex base size clamped by the used
+                // min/max main sizes (CSS Flexbox §9.7 step 1; min wins over
+                // max, CSS 2.1 §10.4). Line breaking and free-space
+                // distribution work from this, so an item with `min-width`
+                // larger than its content doesn't get over-grown neighbours,
+                // and a `max-width` item (x.com's 600px-max primary column in
+                // a 920px slot) hands its slack to siblings instead of
+                // overflowing the row.
+                MainSize = Math.Max(minMain, Math.Min(basis, maxMain)),
                 MinMain = minMain,
+                MaxMain = maxMain,
+                MaxCross = ResolveMaxCrossSize(child, props, containerWidth, explicitHeight),
                 MainPad = props.IsRow
                     ? child.Padding.Horizontal + child.Border.Horizontal
                     : child.Padding.Vertical + child.Border.Vertical,
@@ -140,49 +164,97 @@ internal sealed class FlexLayout
         StableOrderSort(items);
 
         // ---- step 3: collect items into flex lines (CSS Flexbox §9.3) ----
-        // Multi-line wrap is supported for row containers (where real-world
-        // wrapping lives — e.g. a footer whose `width:100%` banner forces the
-        // link groups onto a second line). Column wrap falls back to a single
-        // line. Each line is then sized and positioned independently; lines
-        // stack along the cross axis.
-        var lines = BreakIntoLines(items, props, mainSize);
+        // Wrapping needs a definite main size to break against: rows always
+        // have one (the container width); a column wraps only when its height
+        // is definite — with `height: auto` the container grows to fit, so
+        // nothing ever overflows onto a second line. Lines stack along the
+        // cross axis (downward for rows, rightward for columns).
+        var lines = BreakIntoLines(items, props, mainSize, mainIsDefinite);
 
-        var crossCursor = 0d;
-        var firstLineUsedMain = 0d;
+        // ---- step 4: measure each line — main-axis distribution plus each
+        // item's hypothetical cross size; the line's natural cross size is
+        // its largest item cross extent.
+        var lineCross = new double[lines.Count];
+        var lineJustifyMain = new double[lines.Count];
+        var maxUsedMain = 0d;
         for (var li = 0; li < lines.Count; li++)
         {
             var (start, count) = lines[li];
-            var (lineCross, usedMain) = LayoutLine(
+            var (cross, usedMain, justifyMain) = MeasureLine(
                 items, start, count, props, mainSize, mainIsDefinite, minMainFloor,
-                containerWidth, crossSize,
-                crossOffset: crossCursor, singleLine: lines.Count == 1);
-            if (li == 0) firstLineUsedMain = usedMain;
-            crossCursor += lineCross + props.CrossGap;
+                containerWidth, crossSize);
+            lineCross[li] = cross;
+            lineJustifyMain[li] = justifyMain;
+            if (usedMain > maxUsedMain) maxUsedMain = usedMain;
         }
-        var totalCross = lines.Count > 0 ? crossCursor - props.CrossGap : 0;
 
-        // Row: consumed content height is the stacked line cross sizes (or the
-        // explicit container cross when a single line fills it). Column: the
-        // single line's main extent.
+        // ---- step 5: align-content — size and place the lines in the
+        // container's cross space (CSS Flexbox §8.4 / §9.4 step 8). The cross
+        // size is definite for a column (its width) and for a row with an
+        // explicit height; an indefinite cross has no free space, so lines
+        // stack at their natural sizes separated by the cross gap.
+        var containerCross = props.IsRow ? crossSize : containerWidth;
+        var crossDefinite = !double.IsNaN(containerCross) && containerCross > 0;
+        double leadingCross = 0, betweenCross = props.CrossGap;
+        if (crossDefinite && lines.Count == 1)
+        {
+            // §9.4 step 8: a single-line container with a definite cross size
+            // uses it as the line's cross size; align-content has no effect
+            // on single-line containers.
+            lineCross[0] = containerCross;
+        }
+        else if (crossDefinite)
+        {
+            var linesTotal = props.CrossGap * (lines.Count - 1);
+            for (var li = 0; li < lineCross.Length; li++) linesTotal += lineCross[li];
+            var free = containerCross - linesTotal;
+            if (props.ContentAlign == AlignContent.Stretch && free > 0)
+            {
+                // §8.4 `stretch`: split the positive free space equally among
+                // the lines, growing each line's cross size.
+                var grow = free / lines.Count;
+                for (var li = 0; li < lineCross.Length; li++) lineCross[li] += grow;
+                free = 0;
+            }
+            (leadingCross, betweenCross) = ResolveCrossAxisSpacing(
+                props.ContentAlign, free, lines.Count, props.CrossGap);
+        }
+
+        // ---- step 6: position each line's items at the line's final cross
+        // size and offset.
+        var crossCursor = leadingCross;
+        var totalCross = props.CrossGap * Math.Max(0, lines.Count - 1);
+        for (var li = 0; li < lines.Count; li++)
+        {
+            var (start, count) = lines[li];
+            PositionLine(items, start, count, props, lineCross[li], crossCursor, lineJustifyMain[li], crossSize);
+            crossCursor += lineCross[li] + betweenCross;
+            totalCross += lineCross[li];
+        }
+
+        // Row: consumed content height is the stacked line cross sizes,
+        // raised to the explicit container cross when the lines fit inside
+        // it. Column: the tallest line's main extent, raised to a
+        // `min-height` floor when one is set so the box never collapses
+        // below it.
         if (props.IsRow)
-            return !double.IsNaN(crossSize) && crossSize > 0 && lines.Count == 1 ? crossSize : totalCross;
-        // Column with `height: auto`: the consumed main extent is the content,
-        // raised to a `min-height` floor when one is set so the box never
-        // collapses below it.
-        return Math.Max(firstLineUsedMain, minMainFloor ?? 0);
+            return crossDefinite ? Math.Max(containerCross, totalCross) : totalCross;
+        return Math.Max(maxUsedMain, minMainFloor ?? 0);
     }
 
     /// <summary>
-    /// Partition items into flex lines. Row containers with <c>flex-wrap</c>
-    /// break to a new line when the next item's outer (border-box + gap) main
-    /// size would overflow the container's main size; the first item on a line
-    /// is always kept even if it alone overflows. Everything else (nowrap, or
-    /// column) is a single line.
+    /// Partition items into flex lines. A wrapping container with a definite
+    /// main size (rows always; columns only with an explicit height) breaks
+    /// to a new line when the next item's outer (border-box + gap) main size
+    /// would overflow the container's main size; the first item on a line is
+    /// always kept even if it alone overflows. Everything else (nowrap, or a
+    /// column sized by its content) is a single line. <c>wrap-reverse</c>
+    /// wraps like <c>wrap</c> — cross-axis line reversal is deferred.
     /// </summary>
-    private static List<(int Start, int Count)> BreakIntoLines(Item[] items, FlexContainerProps props, double mainSize)
+    private static List<(int Start, int Count)> BreakIntoLines(Item[] items, FlexContainerProps props, double mainSize, bool mainIsDefinite)
     {
         var lines = new List<(int, int)>();
-        if (!props.IsWrap || !props.IsRow)
+        if (!props.IsWrap || !mainIsDefinite)
         {
             lines.Add((0, items.Length));
             return lines;
@@ -208,17 +280,16 @@ internal sealed class FlexLayout
     }
 
     /// <summary>
-    /// Lay out one flex line (items[start..start+count]) along the main axis at
-    /// the container's main size and at <paramref name="crossOffset"/> on the
-    /// cross axis. Distributes main free space (grow/shrink, min-clamped),
-    /// resolves the line's cross size, applies align-items, lays each item's
-    /// contents, and writes every item's Frame. Returns the line's cross size
-    /// (border-box) and its used main extent.
+    /// Measure one flex line (items[start..start+count]): distribute main
+    /// free space (grow/shrink, min/max-clamped) and resolve each item's
+    /// hypothetical cross size. Returns the line's natural cross size (its
+    /// largest item cross extent), its used main extent, and the main size
+    /// the free-space math ran against (consumed again when positioning).
     /// </summary>
-    private (double LineCross, double UsedMain) LayoutLine(
+    private (double LineCross, double UsedMain, double JustifyMain) MeasureLine(
         Item[] items, int start, int count, FlexContainerProps props,
         double mainSize, bool mainIsDefinite, double? minMainFloor,
-        double containerWidth, double crossSize, double crossOffset, bool singleLine)
+        double containerWidth, double crossSize)
     {
         var end = start + count;
 
@@ -236,61 +307,77 @@ internal sealed class FlexLayout
         var justifyMain = mainIsDefinite
             ? mainSize
             : Math.Max(contentMain, minMainFloor ?? 0);
-        var free = justifyMain - outerSum - gapTotal;
 
-        if (free > 0)
-        {
-            var totalGrow = 0d;
-            for (var i = start; i < end; i++) totalGrow += items[i].Props.Grow;
-            if (totalGrow > 0)
-                for (var i = start; i < end; i++)
-                    items[i].MainSize += free * (items[i].Props.Grow / totalGrow);
-        }
-        else if (free < 0)
-        {
-            // Simplified shrink: weighted by flex-shrink only (the spec
-            // multiplies by basis to make larger items absorb more
-            // overflow — that's a TODO for the full algorithm).
-            var totalShrink = 0d;
-            for (var i = start; i < end; i++) totalShrink += items[i].Props.Shrink;
-            if (totalShrink > 0)
-                for (var i = start; i < end; i++)
-                    items[i].MainSize = items[i].MainSize + free * (items[i].Props.Shrink / totalShrink);
-        }
+        ResolveFlexibleLengths(items, start, end, justifyMain, gapTotal);
 
-        // CSS Flexbox §4.5 — clamp each item's used main size to its minimum so
-        // it never shrinks below its content/min-width (else nowrap text in a
-        // too-narrow container overlaps — Google's footer link groups).
-        for (var i = start; i < end; i++)
-            items[i].MainSize = Math.Max(0, Math.Max(items[i].MainSize, items[i].MinMain));
-
-        // Cross size of each item, then the line's cross extent.
+        // Cross size of each item, then the line's natural cross extent.
         var maxCrossOuter = 0d;
         for (var i = start; i < end; i++)
         {
             var crossSelf = MeasureCrossSize(items[i].Box, props, items[i].MainSize, containerWidth, crossSize);
+            // CSS Flexbox §4.5: the used cross size is clamped by the item's
+            // cross min/max (max-height for row, max-width for column). Clamp
+            // before the line cross size is taken so a capped item doesn't
+            // inflate the line.
+            if (crossSelf > items[i].MaxCross) crossSelf = items[i].MaxCross;
             items[i].CrossSize = crossSelf;
             maxCrossOuter = Math.Max(maxCrossOuter, crossSelf + items[i].CrossPad);
         }
 
-        // The explicit container cross size only sizes the line when it is the
-        // only line; with several lines each takes its content cross size and
-        // they stack (align-content: flex-start).
-        var lineCrossSize = singleLine && !double.IsNaN(crossSize) && crossSize > 0 ? crossSize : maxCrossOuter;
+        var usedMain = gapTotal;
+        for (var i = start; i < end; i++) usedMain += items[i].MainSize + items[i].MainPad;
 
-        // align-items: stretch grows auto-cross items to the line. A percentage
+        return (maxCrossOuter, usedMain, justifyMain);
+    }
+
+    /// <summary>
+    /// Position one measured flex line at its final cross size
+    /// (<paramref name="lineCrossSize"/>, possibly grown by align-content
+    /// stretch) and cross offset: per-item align-self/align-items stretching,
+    /// final content layout, first-baseline alignment (row containers), then
+    /// main + cross frame placement.
+    /// </summary>
+    private void PositionLine(
+        Item[] items, int start, int count, FlexContainerProps props,
+        double lineCrossSize, double crossOffset, double justifyMain, double crossSize)
+    {
+        var end = start + count;
+
+        // align-self: auto (the initial) resolves to the container's
+        // align-items; anything else overrides it per item (CSS Flexbox
+        // §8.3). Stretch grows auto-cross items to the line. A percentage
         // cross size that resolved to `auto` (indefinite container cross, see
         // MeasureCrossSize) is auto for stretch too.
         var crossIndefinite = props.IsRow && double.IsNaN(crossSize);
         for (var i = start; i < end; i++)
-            if (props.Align == AlignItems.Stretch && ChildCrossSizeIsAuto(items[i].Box, props, crossIndefinite))
-                items[i].CrossSize = Math.Max(0, lineCrossSize - items[i].CrossPad);
+            if ((items[i].Props.AlignSelf ?? props.Align) == AlignItems.Stretch
+                && ChildCrossSizeIsAuto(items[i].Box, props, crossIndefinite))
+                // Stretch is clamped by the item's cross max size (CSS Flexbox
+                // §9.4.11): a row item with `max-height` (or a column item with
+                // `max-width`) never stretches past its cap.
+                items[i].CrossSize = Math.Min(items[i].MaxCross, Math.Max(0, lineCrossSize - items[i].CrossPad));
 
         for (var i = start; i < end; i++)
             LayoutItemContents(items[i], props);
 
+        // First-baseline alignment (CSS Flexbox §8.3, row containers): the
+        // line's shared baseline sits maxAscent below its cross-start edge,
+        // and every participating item shifts down so its own first baseline
+        // lands there. Runs after the final content layout above so the text
+        // fragments it reads carry their final positions.
+        var maxAscent = 0d;
+        if (props.IsRow)
+        {
+            for (var i = start; i < end; i++)
+            {
+                if ((items[i].Props.AlignSelf ?? props.Align) != AlignItems.Baseline) continue;
+                items[i].Ascent = ItemFirstBaseline(ref items[i]);
+                if (items[i].Ascent > maxAscent) maxAscent = items[i].Ascent;
+            }
+        }
+
         // Position along main + cross.
-        var usedMain = gapTotal;
+        var usedMain = props.MainGap * Math.Max(0, count - 1);
         for (var i = start; i < end; i++) usedMain += items[i].MainSize + items[i].MainPad;
 
         var (leadingMain, betweenMain) = ResolveMainAxisSpacing(props.Justify, justifyMain, usedMain, count, props.MainGap);
@@ -305,7 +392,10 @@ internal sealed class FlexLayout
             // For *-reverse the main-start edge is on the far end; mirror the
             // logical position while keeping paint order.
             var mainPos = props.IsReverse ? justifyMain - cursor - mainExtent : cursor;
-            var cross = crossOffset + ResolveCrossOffset(props.Align, lineCrossSize, crossExtent);
+            var align = item.Props.AlignSelf ?? props.Align;
+            var cross = crossOffset + (props.IsRow && align == AlignItems.Baseline
+                ? maxAscent - item.Ascent
+                : ResolveCrossOffset(align, lineCrossSize, crossExtent));
 
             item.Box.Frame = props.IsRow
                 ? new Rect(mainPos, cross, mainExtent, crossExtent)
@@ -313,8 +403,6 @@ internal sealed class FlexLayout
 
             cursor += mainExtent + betweenMain;
         }
-
-        return (lineCrossSize, usedMain);
     }
 
     /// <summary>
@@ -337,6 +425,135 @@ internal sealed class FlexLayout
         }
     }
 
+    /// <summary>
+    /// CSS Flexbox §9.7 — resolve flexible lengths for one line. Items start
+    /// at their flex base size, free space is distributed by flex factor, each
+    /// item is clamped by its used min/max main size, and clamp violators are
+    /// FROZEN at the clamp; the loop then redistributes the remaining free
+    /// space among the unfrozen items until no item violates. A single clamp
+    /// pass without redistribution under-fills the line: x.com's 600px-max
+    /// primary column kept 920px of slot reserved, shoving the sidebar
+    /// off-screen.
+    /// Simplifications kept from the previous pass (both documented spec
+    /// deviations, not regressions): shrink is weighted by flex-shrink alone
+    /// (the spec scales it by the base size), and a flex-factor sum below 1
+    /// still distributes all the free space.
+    /// </summary>
+    private static void ResolveFlexibleLengths(Item[] items, int start, int end, double mainSize, double gapTotal)
+    {
+        // §9.7 step 1 — grow when the hypothetical outer sizes underfill the
+        // line, shrink when they overflow it. MainSize holds the hypothetical
+        // (min/max-clamped base) size on entry.
+        var hypoOuter = gapTotal;
+        for (var i = start; i < end; i++) hypoOuter += items[i].MainSize + items[i].MainPad;
+        var growing = hypoOuter < mainSize;
+
+        // §9.7 step 2 — freeze inflexible items at their hypothetical size:
+        // zero flex factor, or the clamp already moved them against the flex
+        // direction (growing an item whose base exceeds its hypothetical size
+        // would re-violate max immediately; same for shrink vs min).
+        var unfrozen = 0;
+        for (var i = start; i < end; i++)
+        {
+            var factor = growing ? items[i].Props.Grow : items[i].Props.Shrink;
+            items[i].Frozen = factor <= 0
+                || (growing && items[i].Basis > items[i].MainSize)
+                || (!growing && items[i].Basis < items[i].MainSize);
+            if (!items[i].Frozen) unfrozen++;
+        }
+
+        // §9.7 step 4 — distribute, clamp, freeze violators, repeat. Every
+        // round either freezes all items (zero total violation) or at least
+        // one violator, so the loop terminates in <= item count rounds.
+        const double epsilon = 0.0001;
+        while (unfrozen > 0)
+        {
+            // Remaining free space from frozen targets + unfrozen base sizes.
+            var used = gapTotal;
+            var totalFactor = 0d;
+            for (var i = start; i < end; i++)
+            {
+                used += items[i].MainPad + (items[i].Frozen ? items[i].MainSize : items[i].Basis);
+                if (!items[i].Frozen)
+                    totalFactor += growing ? items[i].Props.Grow : items[i].Props.Shrink;
+            }
+            var remaining = mainSize - used;
+            var distribute = totalFactor > 0
+                && ((growing && remaining > 0) || (!growing && remaining < 0));
+
+            var totalViolation = 0d;
+            for (var i = start; i < end; i++)
+            {
+                if (items[i].Frozen) continue;
+                var factor = growing ? items[i].Props.Grow : items[i].Props.Shrink;
+                var target = items[i].Basis;
+                if (distribute) target += remaining * (factor / totalFactor);
+                var clamped = Math.Max(items[i].MinMain, Math.Min(target, items[i].MaxMain));
+                if (clamped < 0) clamped = 0;
+                items[i].MainSize = clamped;
+                items[i].Violation = clamped - target;
+                totalViolation += items[i].Violation;
+            }
+
+            if (totalViolation > epsilon)
+            {
+                // Min violations dominate: freeze the min violators.
+                for (var i = start; i < end; i++)
+                    if (!items[i].Frozen && items[i].Violation > 0)
+                    {
+                        items[i].Frozen = true;
+                        unfrozen--;
+                    }
+            }
+            else if (totalViolation < -epsilon)
+            {
+                // Max violations dominate: freeze the max violators.
+                for (var i = start; i < end; i++)
+                    if (!items[i].Frozen && items[i].Violation < 0)
+                    {
+                        items[i].Frozen = true;
+                        unfrozen--;
+                    }
+            }
+            else
+            {
+                break; // zero total violation — every target is final
+            }
+        }
+    }
+
+    /// <summary>
+    /// The item's used maximum main size (max-width for row, max-height for
+    /// column), or <see cref="double.PositiveInfinity"/> when `none`.
+    /// Percentages resolve against the same basis as the minimum
+    /// (<see cref="ResolveMinMainSize"/>).
+    /// </summary>
+    private double ResolveMaxMainSize(Box.Box child, FlexContainerProps props, double containerWidth, double? containerHeight)
+    {
+        if (child.Kind == BoxKind.AnonymousBlock || child.Style is null) return double.PositiveInfinity;
+        var maxProp = props.IsRow ? PropertyId.MaxWidth : PropertyId.MaxHeight;
+        var basisPx = props.IsRow ? containerWidth : (containerHeight ?? _viewport.Height);
+        var max = BlockLayout.ResolveMaxLength(child.Style, maxProp, basisPx, _viewport);
+        return max is { } m ? Math.Max(0, m) : double.PositiveInfinity;
+    }
+
+    /// <summary>
+    /// The item's used maximum cross size (max-height for row, max-width for
+    /// column), or <see cref="double.PositiveInfinity"/> when `none`. A
+    /// percentage against an indefinite cross basis (row container with auto
+    /// height) behaves as `none` (CSS 2.1 §10.7).
+    /// </summary>
+    private double ResolveMaxCrossSize(Box.Box child, FlexContainerProps props, double containerWidth, double? containerHeight)
+    {
+        if (child.Kind == BoxKind.AnonymousBlock || child.Style is null) return double.PositiveInfinity;
+        var maxProp = props.IsRow ? PropertyId.MaxHeight : PropertyId.MaxWidth;
+        if (props.IsRow && containerHeight is null && child.Style.Get(maxProp) is CssPercentage)
+            return double.PositiveInfinity;
+        var basisPx = props.IsRow ? (containerHeight ?? _viewport.Height) : containerWidth;
+        var max = BlockLayout.ResolveMaxLength(child.Style, maxProp, basisPx, _viewport);
+        return max is { } m ? Math.Max(0, m) : double.PositiveInfinity;
+    }
+
     private struct Item
     {
         public Box.Box Box;
@@ -346,7 +563,27 @@ internal sealed class FlexLayout
         /// <summary>Used minimum main size: explicit min-width/height, else the
         /// automatic content-based minimum. The item never shrinks below this.</summary>
         public double MinMain;
+        /// <summary>Used maximum main size (max-width for row, max-height for
+        /// column); <see cref="double.PositiveInfinity"/> when `none`. The item
+        /// never grows past this.</summary>
+        public double MaxMain;
+        /// <summary>Used maximum cross size (max-height for row, max-width for
+        /// column); <see cref="double.PositiveInfinity"/> when `none`.</summary>
+        public double MaxCross;
+        /// <summary>Scratch state for <see cref="ResolveFlexibleLengths"/>:
+        /// item is fixed at its current <see cref="MainSize"/> and takes no
+        /// further part in free-space distribution.</summary>
+        public bool Frozen;
+        /// <summary>Scratch state for <see cref="ResolveFlexibleLengths"/>:
+        /// clamped target minus unclamped target from the latest round
+        /// (positive = min violation, negative = max violation).</summary>
+        public double Violation;
         public double CrossSize;
+        /// <summary>Scratch state for the baseline pass in
+        /// <see cref="PositionLine"/>: distance from the item's border-box
+        /// top to its first text baseline (or to the synthesized margin-box
+        /// bottom edge when it has no text).</summary>
+        public double Ascent;
         /// <summary>Main-axis padding + border (both edges), in px.</summary>
         public double MainPad;
         /// <summary>Cross-axis padding + border (both edges), in px.</summary>
@@ -394,6 +631,12 @@ internal sealed class FlexLayout
             if (explicitMin is { } m) return Math.Max(0, m);
         }
 
+        // Flexbox §4.5: the automatic minimum applies only when the item's
+        // main-axis overflow is visible. A clipping item (the classic
+        // nowrap + hidden + text-overflow:ellipsis label) shrinks freely.
+        var overflowProp = props.IsRow ? PropertyId.OverflowX : PropertyId.OverflowY;
+        if (child.Style.Get(overflowProp) is CssKeyword { Name: not "visible" }) return 0;
+
         // min-*: auto → automatic (content-based) minimum, capped at the base
         // size (min-content is always <= max-content/basis, so this is mostly a
         // guard against pathological measurements).
@@ -422,7 +665,9 @@ internal sealed class FlexLayout
             child.CachedMinContentWidth = min;
             return min;
         }
-        return _block.LayoutItem(child, containerWidth, null, measure: true);
+        // Column: the caller consumes only the returned content height, so a
+        // clean subtree may replay it (reuseHeight) instead of re-laying.
+        return _block.LayoutItem(child, containerWidth, null, measure: true, reuseHeight: true);
     }
 
     /// <summary>
@@ -439,8 +684,8 @@ internal sealed class FlexLayout
             return Math.Min(containerWidth, NaturalWidth(child, containerWidth));
         }
         // Column direction: measure the child's natural height at the
-        // container width.
-        return _block.LayoutItem(child, containerWidth, null, measure: true);
+        // container width. Return-value-only consumer → replayable.
+        return _block.LayoutItem(child, containerWidth, null, measure: true, reuseHeight: true);
     }
 
     /// <summary>
@@ -456,7 +701,7 @@ internal sealed class FlexLayout
     /// main gaps (row), or max of items' cross-content sizes (column).
     /// Recursive so it survives arbitrary nesting.
     /// </summary>
-    private double NaturalWidth(Box.Box box, double containerWidth)
+    internal double NaturalWidth(Box.Box box, double containerWidth)
     {
         if (box.Kind == BoxKind.AnonymousBlock || !BlockLayout.IsFlexContainer(box.Style))
         {
@@ -694,9 +939,82 @@ internal sealed class FlexLayout
             AlignItems.FlexEnd => free,
             AlignItems.Center => free / 2d,
             AlignItems.Stretch => 0, // already resized to lineCross above
-            AlignItems.Baseline => 0, // TODO: real baseline alignment
+            // Row baseline items are positioned by the baseline pass in
+            // PositionLine before this is consulted; reaching here means a
+            // column container, where baseline falls back to flex-start.
+            AlignItems.Baseline => 0,
             _ => 0,
         };
+    }
+
+    /// <summary>
+    /// Resolve the leading offset + between-line spacing for
+    /// <c>align-content</c> (CSS Flexbox §8.4). Mirrors
+    /// <see cref="ResolveMainAxisSpacing"/>: the cross gap is a minimum and
+    /// the space-* distributions add on top. <c>stretch</c> consumed its free
+    /// space growing the lines, so any remainder packs like flex-start.
+    /// </summary>
+    private static (double Leading, double Between) ResolveCrossAxisSpacing(AlignContent align, double free, int lineCount, double gap)
+    {
+        if (free < 0) free = 0;
+        return align switch
+        {
+            AlignContent.FlexEnd => (free, gap),
+            AlignContent.Center => (free / 2d, gap),
+            AlignContent.SpaceBetween when lineCount > 1
+                => (0, gap + free / (lineCount - 1)),
+            AlignContent.SpaceAround when lineCount > 0
+                => (free / (lineCount * 2d), gap + free / lineCount),
+            AlignContent.SpaceEvenly when lineCount > 0
+                => (free / (lineCount + 1d), gap + free / (lineCount + 1d)),
+            _ => (0, gap), // flex-start, stretch, degenerate space-*
+        };
+    }
+
+    /// <summary>
+    /// The item's first-baseline ascent: distance from its border-box top to
+    /// the baseline of the first text fragment in its subtree, accumulating
+    /// frame + border/padding offsets exactly like the painter does. An item
+    /// with no text synthesizes its baseline from the margin-box bottom edge
+    /// (CSS Flexbox §8.5 / CSS 2.1 §10.8.1 fallback).
+    /// </summary>
+    private static double ItemFirstBaseline(ref readonly Item item)
+    {
+        var box = item.Box;
+        if (TryFindFirstBaseline(box, box.Border.Top + box.Padding.Top, out var ascent))
+            return ascent;
+        return item.CrossSize + item.CrossPad + box.Margin.Bottom;
+    }
+
+    /// <summary>
+    /// Depth-first search for the first in-flow text fragment under
+    /// <paramref name="box"/>. <paramref name="contentTop"/> is the offset of
+    /// the box's content area from the flex item's border-box top; fragments
+    /// are stored in their enclosing block's content space, so the first
+    /// fragment's Y + Baseline lands on the alphabetic baseline.
+    /// </summary>
+    private static bool TryFindFirstBaseline(Box.Box box, double contentTop, out double baseline)
+    {
+        foreach (var child in box.Children)
+        {
+            if (child is TextBox tb)
+            {
+                if (tb.Fragments.Count > 0)
+                {
+                    var frag = tb.Fragments[0];
+                    baseline = contentTop + child.Frame.Y + frag.Y + frag.Baseline;
+                    return true;
+                }
+                continue;
+            }
+            // Out-of-flow descendants take no part in the in-flow line boxes,
+            // so they don't contribute a baseline.
+            if (BlockLayout.IsOutOfFlow(child.Style)) continue;
+            if (TryFindFirstBaseline(child, contentTop + child.Frame.Y + child.Border.Top + child.Padding.Top, out baseline))
+                return true;
+        }
+        baseline = 0;
+        return false;
     }
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
@@ -714,16 +1032,18 @@ internal sealed class FlexLayout
             return;
         }
 
+        // CSS 2.1 §8.3/§8.4 — percentage margins/padding resolve against the
+        // containing block's width on all four sides (vertical included).
         box.Margin = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         box.Border = new Edges(

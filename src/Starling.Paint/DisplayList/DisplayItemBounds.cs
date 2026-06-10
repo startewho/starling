@@ -20,9 +20,15 @@ internal static class DisplayItemBounds
         {
             case FillRect f: bounds = f.Bounds; return true;
             case FillGradient g: bounds = g.Bounds; return true;
-            case StrokeRect s: bounds = s.Bounds; return true;
+            // Strokes are drawn centre-line on the rect path, so the painted
+            // ring overhangs Bounds by half the pen width on every side.
+            case StrokeRect s: bounds = InflateByPen(s.Bounds, s.Width); return true;
             case FillRoundedRect rf: bounds = rf.Bounds; return true;
-            case StrokeRoundedRect rs: bounds = rs.Bounds; return true;
+            case StrokeRoundedRect rs: bounds = InflateByPen(rs.Bounds, rs.Width); return true;
+            case DrawBoxShadow { Inset: true } ish:
+                // Inner shadows are clipped to the padding box the item carries.
+                bounds = ish.Bounds;
+                return true;
             case DrawBoxShadow sh:
                 // The painted shadow is the box grown by spread+blur, offset.
                 var pad = sh.Spread + sh.Blur;
@@ -33,6 +39,9 @@ internal static class DisplayItemBounds
                     sh.Bounds.Height + 2 * pad);
                 return true;
             case DrawImage i: bounds = i.Bounds; return true;
+            // Per-side styled borders paint inside the border box (dots are
+            // inset, the corner arc pen stays within the band).
+            case DrawBorderSides bs: bounds = bs.Bounds; return true;
             case DrawText t:
                 // Glyph run sits on the baseline; cover ascent above and a small
                 // descent below so the AABB encloses the rasterized glyphs.
@@ -42,6 +51,14 @@ internal static class DisplayItemBounds
                 // Decoration lines span the full glyph box.
                 bounds = new Rect(d.X, d.BaselineY - d.FontSize, d.Width, d.FontSize * 1.3);
                 return true;
+            case StrokeSegments seg:
+                // Polyline AABB, inflated by half the pen width (round caps).
+                var sminX = Math.Min(seg.X0, Math.Min(seg.X1, seg.X2));
+                var sminY = Math.Min(seg.Y0, Math.Min(seg.Y1, seg.Y2));
+                var smaxX = Math.Max(seg.X0, Math.Max(seg.X1, seg.X2));
+                var smaxY = Math.Max(seg.Y0, Math.Max(seg.Y1, seg.Y2));
+                bounds = InflateByPen(new Rect(sminX, sminY, smaxX - sminX, smaxY - sminY), seg.Width);
+                return true;
             case DrawTextShadow s:
                 // Offset + blurred copy of the glyph run.
                 bounds = new Rect(
@@ -50,10 +67,33 @@ internal static class DisplayItemBounds
                     EstimateShadowWidth(s) + 2 * s.Blur,
                     s.FontSize * 1.3 + 2 * s.Blur);
                 return true;
+            case PushFilter pf:
+                // The filtered group can spill past the border box: the
+                // Gaussian tail and a drop-shadow offset both paint outside it
+                // (same reasoning as the outer DrawBoxShadow halo). Bracketed
+                // content bounds are unioned separately by callers that walk
+                // the items; this entry contributes the border box + halo.
+                var halo = FilterFunction.HaloPadding(pf.Filters);
+                bounds = new Rect(
+                    pf.Bounds.X - halo,
+                    pf.Bounds.Y - halo,
+                    pf.Bounds.Width + 2 * halo,
+                    pf.Bounds.Height + 2 * halo);
+                return true;
+            case DrawBackdropFilter bf:
+                // The filtered backdrop patch is clipped to the border box.
+                bounds = bf.Bounds;
+                return true;
             default:
                 bounds = Rect.Empty;
                 return false;
         }
+    }
+
+    private static Rect InflateByPen(Rect r, double penWidth)
+    {
+        var half = penWidth / 2;
+        return new Rect(r.X - half, r.Y - half, r.Width + penWidth, r.Height + penWidth);
     }
 
     private static double EstimateTextWidth(DrawText t)

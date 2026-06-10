@@ -1,0 +1,16 @@
+{
+  "//": "Per-interface minimum member-coverage percentages. The CoverageGateTests test and the `coverage` command fail when a target interface drops below its floor, so coverage can only ratchet up. Every interface in BindingsEmitter.CoreDomInterfaces must have a gate here. After a coverage gain, raise the floor to lock it in. Get current numbers from: dotnet run --project tools/Starling.IdlGen -- coverage",
+  "gates": {
+    "EventTarget": 100,
+    "Node": 97,
+    "Element": 51,
+    "Document": 50,
+    "CharacterData": 100,
+    "Comment": 100,
+    "Text": 28,
+    "DocumentFragment": 90,
+    "DocumentType": 100,
+    "ProcessingInstruction": 50,
+    "Attr": 85
+  }
+}

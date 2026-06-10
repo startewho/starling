@@ -613,8 +613,17 @@ internal sealed class BoxTreeBuilder
             "submit" => "Submit",
             "reset" => "Reset",
             "button" => "",
-            _ => input.GetAttribute("placeholder") ?? "",
+            _ => null,
         };
+        if (fallback is null)
+        {
+            // Text-entry inputs: the placeholder attribute supplies the muted
+            // hint text. Flag the run so the painter draws it in the UA
+            // placeholder gray instead of the element's color.
+            if (input.GetAttribute("placeholder") is { Length: > 0 } placeholder)
+                box.AppendChild(new TextBox(placeholder, style) { IsPlaceholder = true });
+            return;
+        }
         if (!string.IsNullOrEmpty(fallback))
             box.AppendChild(new TextBox(fallback, style));
     }
@@ -637,9 +646,9 @@ internal sealed class BoxTreeBuilder
         }
 
         // Like text inputs, the placeholder shows until the user types — focus
-        // alone does not clear it.
+        // alone does not clear it. Flagged so the painter mutes it.
         if (element.GetAttribute("placeholder") is { Length: > 0 } placeholder)
-            box.AppendChild(new TextBox(placeholder, style));
+            box.AppendChild(new TextBox(placeholder, style) { IsPlaceholder = true });
     }
 
     private static string SelectedOptionLabel(Element select)

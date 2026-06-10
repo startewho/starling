@@ -99,9 +99,26 @@ internal sealed class InlineLayout
             }
         }
 
+        var contentHeight = cursorY + currentLineHeight;
+
+        // CSS UI 4 §7 (text-overflow: ellipsis) + the legacy -webkit-line-clamp
+        // pattern: both are fragment surgery on the finished lines, applied
+        // before alignment so paint just draws the kept fragments. The block's
+        // own style lives on the anonymous wrapper's parent (the wrapper only
+        // inherits text properties).
+        var blockStyle = container.Kind == BoxKind.AnonymousBlock
+            ? container.Parent?.Style
+            : container.Style;
+        if (blockStyle is not null && fragments.Count > 0)
+        {
+            contentHeight = ApplyEllipsisAndClamp(
+                blockStyle, availableWidth, contentHeight,
+                fragments, placedImages, placedAtomics, measure);
+        }
+
         if (!measure)
             AlignLines(container.Style, availableWidth, fragments, placedImages, placedAtomics);
-        return cursorY + currentLineHeight;
+        return contentHeight;
     }
 
     private void LayoutText(
@@ -957,6 +974,20 @@ internal sealed class InlineLayout
         var ih = image.IntrinsicHeight > 0 ? image.IntrinsicHeight : 1;
         var ratio = iw / ih;
 
+        // css-sizing-4 §5.1 — the aspect-ratio property can override the
+        // natural ratio: a bare <ratio> always wins; `auto && <ratio>` defers
+        // to the natural ratio when the replaced element has one.
+        var cssRatioOverrides = false;
+        if (Block.IntrinsicSizes.TryGetAspectRatio(style, out var cssRatio, out var ratioHasAuto))
+        {
+            var hasNaturalRatio = image.IntrinsicWidth > 0 && image.IntrinsicHeight > 0;
+            if (!ratioHasAuto || !hasNaturalRatio)
+            {
+                ratio = cssRatio;
+                cssRatioOverrides = true;
+            }
+        }
+
         var specW = Block.BlockLayout.ResolveLength(style, PropertyId.Width, availableWidth, _viewport, allowAuto: true);
         // Height percentages need a known containing-block height; in inline
         // context we don't have one, so leave height as auto when authored
@@ -994,8 +1025,10 @@ internal sealed class InlineLayout
         }
         else
         {
+            // Both axes auto: natural width, and the height follows the
+            // (possibly css-overridden) preferred ratio.
             w = iw;
-            h = ih;
+            h = cssRatioOverrides ? w / ratio : ih;
         }
 
         // §10.4 min/max constraints. When the constrained axis was derived
@@ -1113,6 +1146,326 @@ internal sealed class InlineLayout
                 atomic.Frame = atomic.Frame with { X = atomic.Frame.X + offset };
             }
         }
+    }
+
+    // ---- text-overflow: ellipsis + -webkit-line-clamp ------------------------
+
+    private const string EllipsisText = "\u2026";
+
+    /// <summary>
+    /// Post-finalization line surgery (CSS UI 4 §7 / CSS Overflow 4 §5). Two
+    /// behaviours share the machinery:
+    /// <list type="bullet">
+    ///   <item><c>text-overflow: ellipsis</c> on a block whose
+    ///   <c>overflow-x</c> is not <c>visible</c> and whose white-space
+    ///   prevents wrapping: every line whose inline content overflows the
+    ///   content box is truncated at the content edge and a single U+2026
+    ///   glyph that fits inside the box is appended.</item>
+    ///   <item>the legacy clamp pattern — <c>display:-webkit-box</c> +
+    ///   <c>-webkit-box-orient:vertical</c> + <c>-webkit-line-clamp:N</c> —
+    ///   caps the box at N line boxes, drops every later line's fragments
+    ///   (so paint and overflow geometry exclude them), and ellipsizes
+    ///   line N.</item>
+    /// </list>
+    /// Cold path: the common case exits on two style reads. Bidi/RTL ellipsis
+    /// placement is out of scope — lines are truncated at their right edge.
+    /// </summary>
+    private double ApplyEllipsisAndClamp(
+        ComputedStyle blockStyle,
+        double availableWidth,
+        double contentHeight,
+        List<(TextBox Owner, int Index)> fragments,
+        List<ImageBox> placedImages,
+        List<InlineBox> placedAtomics,
+        bool measure)
+    {
+        var clampLines = ResolveLineClamp(blockStyle);
+        var ellipsisActive = clampLines == 0 && ResolveEllipsisActive(blockStyle);
+        if (clampLines == 0 && !ellipsisActive) return contentHeight;
+
+        // Distinct line tops, ascending. Every fragment on a line carries the
+        // exact cursorY it was placed at, so exact-equality grouping is sound
+        // (AlignLines groups the same way).
+        var lineTops = new List<double>();
+        foreach (var (owner, index) in fragments)
+        {
+            var y = owner.Fragments[index].Y;
+            if (!lineTops.Contains(y)) lineTops.Add(y);
+        }
+        lineTops.Sort();
+
+        var dropped = new HashSet<(TextBox Owner, int Index)>();
+        var clampCut = double.PositiveInfinity;
+        var forcedLineTop = double.NaN;
+
+        if (clampLines > 0 && lineTops.Count > clampLines)
+        {
+            // Lines stack contiguously, so the top of line N+1 is the bottom
+            // of line N — the clamped content height.
+            clampCut = lineTops[clampLines];
+            forcedLineTop = lineTops[clampLines - 1];
+            foreach (var fragRef in fragments)
+            {
+                if (fragRef.Owner.Fragments[fragRef.Index].Y >= clampCut)
+                    dropped.Add(fragRef);
+            }
+            // Replaced / atomic inline boxes on clamped-away lines: zero the
+            // frame so paint and overflow geometry exclude them.
+            foreach (var image in placedImages)
+            {
+                if (image.Frame.Y >= clampCut - 0.0001)
+                    image.Frame = new Rect(image.Frame.X, clampCut, 0, 0);
+            }
+            foreach (var atomic in placedAtomics)
+            {
+                if (atomic.Frame.Y >= clampCut - 0.0001)
+                    atomic.Frame = new Rect(atomic.Frame.X, clampCut, 0, 0);
+            }
+            contentHeight = clampCut;
+        }
+
+        // Ellipsizing must never affect intrinsic sizing (CSS UI 4 §7.1.1):
+        // a min-content probe at width 0 would otherwise drop every fragment
+        // and report the ellipsis advance as the text's minimum width. The
+        // clamp's height capping above IS real content height, so measure
+        // passes keep it; only the fragment surgery is paint-affecting.
+        if (measure) return contentHeight;
+
+        const double overflowTolerance = 0.05;
+        for (var i = 0; i < lineTops.Count; i++)
+        {
+            var top = lineTops[i];
+            if (top >= clampCut) continue; // line dropped by the clamp
+            var force = top.Equals(forcedLineTop); // the clamp's last visible line
+            if (!force)
+            {
+                if (!ellipsisActive) continue;
+                // Ellipsize only lines that actually overflow the content box.
+                double rightmost = 0;
+                foreach (var (owner, index) in fragments)
+                {
+                    if (dropped.Contains((owner, index))) continue;
+                    var frag = owner.Fragments[index];
+                    if (frag.Y != top) continue;
+                    rightmost = Math.Max(rightmost, frag.X + frag.Width);
+                }
+                if (rightmost <= availableWidth + overflowTolerance) continue;
+            }
+            EllipsizeLine(blockStyle, top, availableWidth, fragments, dropped);
+        }
+
+        RemoveDroppedFragments(fragments, dropped);
+        return contentHeight;
+    }
+
+    /// <summary>
+    /// Truncate one finished line so its content plus a single U+2026 glyph
+    /// fits inside the content box, then append that glyph as a regular
+    /// fragment (so paint draws it like any other text). The ellipsis is
+    /// measured with the block's own font per CSS UI 4 §7.1.1; it is attached
+    /// to the truncated run's TextBox so it paints with that run's color.
+    /// </summary>
+    private void EllipsizeLine(
+        ComputedStyle blockStyle,
+        double lineTop,
+        double availableWidth,
+        List<(TextBox Owner, int Index)> fragments,
+        HashSet<(TextBox Owner, int Index)> dropped)
+    {
+        // The line's surviving fragments in X order. The master list is
+        // append-ordered (X-ascending within a line); sort defensively.
+        var line = new List<(TextBox Owner, int Index)>();
+        foreach (var fragRef in fragments)
+        {
+            if (dropped.Contains(fragRef)) continue;
+            if (fragRef.Owner.Fragments[fragRef.Index].Y.Equals(lineTop)) line.Add(fragRef);
+        }
+        if (line.Count == 0) return;
+        line.Sort(static (a, b) =>
+            a.Owner.Fragments[a.Index].X.CompareTo(b.Owner.Fragments[b.Index].X));
+
+        var blockFontSize = ResolveFontSize(blockStyle);
+        var blockSpec = ResolveFontSpec(blockStyle);
+        var ellipsisShaped = _measurer.Shape(EllipsisText, blockFontSize, blockSpec);
+        var ellipsisWidth = ellipsisShaped.Advance;
+
+        // Content must end by `limit` so the ellipsis itself stays inside the
+        // box. If the box is narrower than the glyph the ellipsis is placed at
+        // the line origin and overflow clipping crops it (CSS UI 4 §7.1.1).
+        var limit = Math.Max(0, availableWidth - ellipsisWidth);
+        const double tolerance = 0.05;
+
+        double end = 0;
+        var endSet = false;
+        var attachAt = -1; // index in `line` of the last kept fragment
+
+        for (var i = 0; i < line.Count; i++)
+        {
+            var (owner, index) = line[i];
+            var frag = owner.Fragments[index];
+            if (frag.X + frag.Width <= limit + tolerance)
+            {
+                end = frag.X + frag.Width;
+                endSet = true;
+                attachAt = i;
+                continue;
+            }
+
+            // Boundary fragment: keep the longest prefix whose advance fits
+            // between the fragment start and the limit; drop the remainder and
+            // every later fragment on the line.
+            var room = limit - frag.X;
+            var keptChars = 0;
+            if (room > tolerance)
+            {
+                var runStyle = owner.Style ?? blockStyle;
+                var runFontSize = ResolveFontSize(runStyle);
+                var runSpec = ResolveFontSpec(runStyle);
+                double acc = 0;
+                while (keptChars < frag.Text.Length)
+                {
+                    var w = _measurer.MeasureWidth(frag.Text[keptChars].ToString(), runFontSize, runSpec);
+                    if (acc + w > room + tolerance) break;
+                    acc += w;
+                    keptChars++;
+                }
+                if (keptChars > 0)
+                {
+                    var slice = frag.Text[..keptChars];
+                    var shaped = _measurer.Shape(slice, runFontSize, runSpec);
+                    // Re-shaping the slice can come out a hair wider than the
+                    // per-char sum (kerning); back off until it fits.
+                    while (keptChars > 1 && shaped.Advance > room + tolerance)
+                    {
+                        keptChars--;
+                        slice = frag.Text[..keptChars];
+                        shaped = _measurer.Shape(slice, runFontSize, runSpec);
+                    }
+                    owner.Fragments[index] = frag with { Text = slice, Width = shaped.Advance, Shaped = shaped };
+                    end = frag.X + shaped.Advance;
+                    endSet = true;
+                    attachAt = i;
+                }
+            }
+            if (keptChars == 0) dropped.Add(line[i]);
+
+            for (var j = i + 1; j < line.Count; j++) dropped.Add(line[j]);
+            break;
+        }
+
+        // Trim kept trailing whitespace so the ellipsis hugs the text.
+        while (attachAt >= 0)
+        {
+            var (owner, index) = line[attachAt];
+            if (!IsWhitespaceText(owner.Fragments[index].Text)) break;
+            dropped.Add(line[attachAt]);
+            attachAt--;
+            while (attachAt >= 0 && dropped.Contains(line[attachAt])) attachAt--;
+            if (attachAt >= 0)
+            {
+                var prev = line[attachAt].Owner.Fragments[line[attachAt].Index];
+                end = prev.X + prev.Width;
+            }
+            else
+            {
+                endSet = false;
+            }
+        }
+
+        // Append the U+2026 fragment after the kept content (or at the line
+        // origin when nothing survived).
+        var anchor = attachAt >= 0 ? line[attachAt] : line[0];
+        var anchorFrag = anchor.Owner.Fragments[anchor.Index];
+        var x = endSet ? end : anchorFrag.X;
+        anchor.Owner.Fragments.Add(new TextFragment(
+            EllipsisText, x, lineTop, ellipsisWidth, anchorFrag.Height, anchorFrag.Baseline, ellipsisShaped));
+        fragments.Add((anchor.Owner, anchor.Owner.Fragments.Count - 1));
+    }
+
+    private static bool IsWhitespaceText(string text)
+    {
+        foreach (var c in text)
+        {
+            if (c is not (' ' or '\t')) return false;
+        }
+        return text.Length > 0;
+    }
+
+    /// <summary>
+    /// Physically remove dropped fragments from their owners and re-index the
+    /// master list (surgery invalidated its (Owner, Index) pairs) so
+    /// <see cref="AlignLines"/> sees a coherent view.
+    /// </summary>
+    private static void RemoveDroppedFragments(
+        List<(TextBox Owner, int Index)> fragments,
+        HashSet<(TextBox Owner, int Index)> dropped)
+    {
+        if (dropped.Count == 0) return;
+
+        // Distinct owners in first-appearance order.
+        var owners = new List<TextBox>();
+        var seen = new HashSet<TextBox>();
+        foreach (var (owner, _) in fragments)
+        {
+            if (seen.Add(owner)) owners.Add(owner);
+        }
+
+        // Per-owner descending-index removal keeps earlier indices stable.
+        var perOwner = new Dictionary<TextBox, List<int>>();
+        foreach (var (owner, index) in dropped)
+        {
+            if (!perOwner.TryGetValue(owner, out var list))
+            {
+                list = [];
+                perOwner[owner] = list;
+            }
+            list.Add(index);
+        }
+        foreach (var (owner, indices) in perOwner)
+        {
+            indices.Sort();
+            for (var i = indices.Count - 1; i >= 0; i--)
+                owner.Fragments.RemoveAt(indices[i]);
+        }
+
+        fragments.Clear();
+        foreach (var owner in owners)
+        {
+            for (var i = 0; i < owner.Fragments.Count; i++)
+                fragments.Add((owner, i));
+        }
+    }
+
+    /// <summary>
+    /// The classic ellipsis combo (CSS UI 4 §7): <c>text-overflow:ellipsis</c>
+    /// + <c>overflow-x</c> not <c>visible</c> + white-space that prevents
+    /// wrapping. Only the single-keyword form is recognized (the two-value /
+    /// &lt;string&gt; forms are not supported).
+    /// </summary>
+    private static bool ResolveEllipsisActive(ComputedStyle style)
+    {
+        if (style.Get(PropertyId.TextOverflow) is not CssKeyword { Name: "ellipsis" })
+            return false;
+        if (style.Get(PropertyId.OverflowX) is not CssKeyword overflowX
+            || overflowX.Name == "visible")
+            return false;
+        return !WhiteSpaceMode.Resolve(style).Wrap;
+    }
+
+    /// <summary>
+    /// The legacy clamp trio: <c>display:-webkit-box</c> +
+    /// <c>-webkit-box-orient:vertical</c> + <c>-webkit-line-clamp:N</c>.
+    /// Returns N (≥ 1) when all three are present, else 0.
+    /// </summary>
+    private static int ResolveLineClamp(ComputedStyle style)
+    {
+        if (style.Get(PropertyId.LineClamp) is not CssNumber clamp || clamp.Value < 1)
+            return 0;
+        if (style.Get(PropertyId.Display) is not CssKeyword { Name: "-webkit-box" })
+            return 0;
+        if (style.Get(PropertyId.BoxOrient) is not CssKeyword { Name: "vertical" })
+            return 0;
+        return (int)clamp.Value;
     }
 
     private abstract record InlineRun;

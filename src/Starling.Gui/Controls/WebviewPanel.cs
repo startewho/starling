@@ -142,13 +142,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // can register the reverse transition for elements that leave the scope.
     private HashSet<DomElement> _hoverScope = [];
 
-    // Per-element scroll offsets for `overflow: scroll | auto` containers
-    // (the in-page sidebar nav, code blocks, etc.). The painter translates
-    // each container's subtree by -offset on every frame; the wheel handler
-    // mutates entries and triggers a repaint. Keyed by DomElement (stable
-    // across in-place relayouts), reset when the Document changes.
-    private readonly Dictionary<DomElement, (double X, double Y)> _scrollOffsets = new();
-    private DomDocument? _scrollOffsetsDocument;
+    // The Document the panel last showed — tells an in-place relayout (same
+    // Document: resize / edit / animation) from a navigation so ShowPage knows
+    // when to drop the render caches. Per-element scroll offsets live in the
+    // engine page's ScrollStateStore now (browser-plan/scroll-model.md WP2):
+    // one store per page load, transferred across relayouts, no panel copy.
+    private DomDocument? _shownDocument;
+
+    // The store root offset the panel last synced with the outer ScrollViewer,
+    // in either direction. The shells own root scroll in v1; OnScrollChanged
+    // writes the ScrollViewer offset into the store's root entry, and the live
+    // tick applies a store-driven root write (window.scrollTo, WP3) back to
+    // the ScrollViewer. This snapshot is how the tick tells "the store moved"
+    // from "we already synced this value".
+    private (double X, double Y) _rootScrollSynced;
 
     private (double X, double Y)? _selectAnchor;
     private bool _selecting;
@@ -435,13 +442,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // keyed by slice content hash, so an unchanged layer re-blits from cache
         // and only genuinely changed layers re-raster. The flat scroll cache is
         // dropped either way because its version-keyed pixels would otherwise blit
-        // stale. _scrollOffsetsDocument still holds the PREVIOUS
+        // stale. _shownDocument still holds the PREVIOUS
         // document here (it is updated below), so it tells navigation from relayout.
-        var isNavigation = !ReferenceEquals(_scrollOffsetsDocument, page.Document);
+        var isNavigation = !ReferenceEquals(_shownDocument, page.Document);
         if (isNavigation)
         {
             _renderSession.ResetForNavigation();
             _viewportCaptureRenderer?.ResetForNavigation();
+            // Fresh page load = fresh scroll store with its root at (0,0);
+            // re-baseline the two-way root sync against it.
+            _rootScrollSynced = default;
         }
 
 
@@ -463,15 +473,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _hoverOverrides = null;
             _hoverScope.Clear();
 
-            // Per-element scroll offsets survive in-place relayouts (window resize
-            // keeps the same Document) but reset on navigation. Tracking the
-            // Document reference lets us distinguish the two without an explicit
-            // signal from MainWindow.
-            if (!ReferenceEquals(_scrollOffsetsDocument, page.Document))
-            {
-                _scrollOffsets.Clear();
-                _scrollOffsetsDocument = page.Document;
-            }
+            // Per-element scroll offsets ride the engine page's store: they
+            // survive in-place relayouts (the store transfers to the relayout
+            // successor) and reset on navigation (a fresh page load builds a
+            // fresh store). Only the navigation marker needs updating here.
+            _shownDocument = page.Document;
 
             _currentScale = GetRenderScale();
             _pageSurfaceHost?.UpdateScale(_currentScale);
@@ -674,6 +680,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
                 DrawingOverlays = drawingOverlays,
                 ScrollOffsets = scrollLookup,
+                StickyShifts = _currentPage.StickyShiftLookup,
                 PageVersion = PageRenderVersion(),
                 AnimationTick = _animationTickPresent,
             }, _surfaceTarget))
@@ -799,15 +806,26 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 : box => (overrides is null ? null : ResolveOverride(box, overrides))
                          ?? (animate ? AnimatedStyle(_currentPage!, box) : null);
 
-        Func<DomElement, (double X, double Y)>? scrollLookup = _scrollOffsets.Count == 0
-            ? null
-            : el => _scrollOffsets.TryGetValue(el, out var off) ? off : (0d, 0d);
+        // Per-container offsets come straight off the page's scroll store;
+        // the delegate is cached on the page, so no per-frame allocation.
+        var scrollLookup = _currentPage?.ScrollOffsetLookup;
 
         return (styleOverride, scrollLookup);
     }
 
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
+        // Root scroller stays shell-owned in v1 (scroll-model.md, Decision 1):
+        // mirror the ScrollViewer offset into the store's root entry so
+        // window.scrollX/Y (WP3) and the root scroll event (WP4) read truth.
+        // Write-only here — no dispatch, the store just sets its pending flag.
+        if (_currentPage is { } page)
+        {
+            page.ScrollState.WriteRoot(_scroll.Offset.X, _scroll.Offset.Y);
+            var root = page.ScrollState.Root;
+            _rootScrollSynced = (root.OffsetX, root.OffsetY);
+        }
+
         // Re-run IntersectionObservers for the new viewport before painting so
         // reveal-on-scroll content that just entered view is part of this frame.
         if (_currentPage?.Scripting is { } scripting)
@@ -894,17 +912,18 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private BoxHitTester.HitResult HitTestPage(double x, double y)
     {
         if (_currentPage is null) return default;
-        Func<DomElement, (double X, double Y)>? lookup = _scrollOffsets.Count == 0
-            ? null
-            : el => _scrollOffsets.TryGetValue(el, out var off) ? off : (0d, 0d);
-        return BoxHitTester.HitTest(_currentPage.Root, x, y, _scroll.Offset.X, _scroll.Offset.Y, lookup);
+        return BoxHitTester.HitTest(
+            _currentPage.Root, x, y, _scroll.Offset.X, _scroll.Offset.Y,
+            _currentPage.ScrollOffsetLookup, _currentPage.StickyShiftLookup);
     }
 
-    // Wheel handler: walks the ancestor chain at the pointer to find the
-    // deepest `overflow: scroll | auto` box with room to scroll in the wheel
-    // direction. When found, the box's scroll offset is updated and the page
-    // repainted; the event is marked Handled so the outer ScrollViewer does
-    // not also scroll. Falls through to the outer ScrollViewer otherwise.
+    // Wheel handler: routes the delta through the shared ScrollController,
+    // which finds the deepest `overflow: scroll | auto` container with room
+    // to move (latched per axis) and writes the page's scroll store. A
+    // consumed delta marks the event Handled and schedules a repaint — never
+    // a relayout, and never a synchronous event dispatch (the store's
+    // pending flags are drained by the frame pump, WP4). An unconsumed delta
+    // falls through to the outer Avalonia ScrollViewer.
     private void OnPageWheel(object? sender, PointerWheelEventArgs e)
     {
         if (_currentPage is null) return;
@@ -914,76 +933,18 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var hit = HitTestPage(doc.Value.X, doc.Value.Y);
         if (hit.Box is null) return;
 
-        // Wheel deltas in Avalonia are in "lines" (positive = up/right, the
-        // direction the content moves). Multiply to a sensible CSS-px step;
-        // 40 px per line is the platform-default ballpark.
-        const double LinePx = 40d;
-        var dx = -e.Delta.X * LinePx;
-        var dy = -e.Delta.Y * LinePx;
+        // Avalonia wheel deltas are in lines (positive = up/right, the
+        // direction the content moves); negate into content-space deltas.
+        // Avalonia 12 exposes no precision flag on wheel events, so trackpads
+        // arrive as fractional lines and take the same x40 conversion.
+        if (!ScrollController.TryScroll(
+                _currentPage.ScrollState, hit.Box, -e.Delta.X, -e.Delta.Y, precise: false))
+        {
+            return;
+        }
 
-        if (!TryScrollContainer(hit.Box, dx, dy)) return;
         e.Handled = true;
         RenderViewportRegion();
-    }
-
-    /// <summary>
-    /// Walk from <paramref name="box"/> up the parent chain looking for a
-    /// scroll container that can absorb a wheel delta of (<paramref name="dx"/>,
-    /// <paramref name="dy"/>) — i.e. its content overflows its frame in the
-    /// requested direction and its current offset isn't already pinned at the
-    /// extreme. Returns true when an offset was updated.
-    /// </summary>
-    private bool TryScrollContainer(LayoutBox box, double dx, double dy)
-    {
-        for (var node = (LayoutBox?)box; node is not null; node = node.Parent)
-        {
-            var style = node.Style;
-            if (style is null || node.Element is not { } el) continue;
-            var scrollsX = IsScrollAxisKeyword(style.Get(PropertyId.OverflowX));
-            var scrollsY = IsScrollAxisKeyword(style.Get(PropertyId.OverflowY));
-            if (!scrollsX && !scrollsY) continue;
-
-            var contentSize = ContentExtent(node);
-            var visibleW = Math.Max(0, node.Frame.Width - node.Padding.Horizontal - node.Border.Horizontal);
-            var visibleH = Math.Max(0, node.Frame.Height - node.Padding.Vertical - node.Border.Vertical);
-            var maxX = scrollsX ? Math.Max(0, contentSize.W - visibleW) : 0;
-            var maxY = scrollsY ? Math.Max(0, contentSize.H - visibleH) : 0;
-            if (maxX <= 0 && maxY <= 0) continue;
-
-            _scrollOffsets.TryGetValue(el, out var current);
-            var newX = Math.Clamp(current.X + (scrollsX ? dx : 0), 0, maxX);
-            var newY = Math.Clamp(current.Y + (scrollsY ? dy : 0), 0, maxY);
-            if (newX == current.X && newY == current.Y) continue; // hit the rail, keep looking
-            _scrollOffsets[el] = (newX, newY);
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsScrollAxisKeyword(Starling.Css.Values.CssValue? value)
-        => value is Starling.Css.Values.CssKeyword { Name: var n }
-           && (n.Equals("scroll", StringComparison.OrdinalIgnoreCase)
-               || n.Equals("auto", StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Bounding extent of <paramref name="box"/>'s in-flow descendants in its
-    /// own content-box coordinates — i.e. how far the scrolled content
-    /// reaches. Children whose frames poke past the box's visible width/height
-    /// give us the scroll-extent maxima.
-    /// </summary>
-    private static (double W, double H) ContentExtent(LayoutBox box)
-    {
-        double maxX = 0, maxY = 0;
-        foreach (var child in box.Children)
-        {
-            var right = child.Frame.X + child.Frame.Width;
-            var bottom = child.Frame.Y + child.Frame.Height;
-            if (right > maxX) maxX = right;
-            if (bottom > maxY) maxY = bottom;
-        }
-
-        return (maxX, maxY);
     }
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
@@ -1689,6 +1650,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             }
         }
 
+        // Apply a store-driven root write (window.scrollTo / scrollTop on the
+        // document scroller, WP3) back to the outer ScrollViewer. Script ran
+        // above, so any root write it made is visible now; the ScrollViewer
+        // remains the root scroller of record (Decision 1) and its
+        // ScrollChanged re-syncs the store to the value it actually applied.
+        ApplyStoreRootScroll(page);
+
         // Animation loop: advance the page's animation/transition clock and
         // repaint while anything is in flight (no DOM mutation required). When
         // it settles we simply stop repainting, leaving the final frame in
@@ -1739,6 +1707,19 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _liveTimer.Stop();
             _boundScripting = null;
         }
+    }
+
+    /// <summary>Moves the outer ScrollViewer to the store's root offset when
+    /// something other than the panel wrote it (the JS bindings, WP3). The
+    /// <see cref="_rootScrollSynced"/> snapshot tells a store-driven write
+    /// apart from the value the panel itself last synced, so the two-way sync
+    /// cannot ping-pong.</summary>
+    private void ApplyStoreRootScroll(LaidOutPage page)
+    {
+        var root = page.ScrollState.Root;
+        if (root.OffsetX == _rootScrollSynced.X && root.OffsetY == _rootScrollSynced.Y) return;
+        _rootScrollSynced = (root.OffsetX, root.OffsetY);
+        _scroll.Offset = new Vector(root.OffsetX, root.OffsetY);
     }
 
     /// <summary>Re-lay-out + repaint after the live loop mutated the DOM,

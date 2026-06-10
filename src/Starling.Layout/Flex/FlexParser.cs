@@ -46,13 +46,20 @@ internal static class FlexParser
 
         // `align-items: normal` resolves to `stretch` in flex containers
         // (CSS Box Alignment §5.3).
-        var align = Keyword(style, PropertyId.AlignItems, "stretch") switch
+        var align = MapAlignItems(Keyword(style, PropertyId.AlignItems, "stretch"));
+
+        // `align-content: normal` behaves as `stretch` in flex containers
+        // (CSS Box Alignment §6.2). Baseline content-distribution takes its
+        // start/end fallback (CSS Box Alignment §9.3).
+        var contentAlign = Keyword(style, PropertyId.AlignContent, "normal") switch
         {
-            "flex-start" or "start" or "self-start" => AlignItems.FlexStart,
-            "flex-end" or "end" or "self-end" => AlignItems.FlexEnd,
-            "center" => AlignItems.Center,
-            "baseline" or "first baseline" or "last baseline" => AlignItems.Baseline,
-            _ => AlignItems.Stretch,
+            "flex-start" or "start" or "baseline" or "first baseline" => AlignContent.FlexStart,
+            "flex-end" or "end" or "last baseline" => AlignContent.FlexEnd,
+            "center" => AlignContent.Center,
+            "space-between" => AlignContent.SpaceBetween,
+            "space-around" => AlignContent.SpaceAround,
+            "space-evenly" => AlignContent.SpaceEvenly,
+            _ => AlignContent.Stretch, // normal | stretch
         };
 
         // `gap`'s initial computed value is the `normal` keyword, which for
@@ -60,7 +67,7 @@ internal static class FlexParser
         var rowGap = ResolveGap(style, PropertyId.RowGap, crossAxisBasisPx, viewport);
         var columnGap = ResolveGap(style, PropertyId.ColumnGap, mainAxisBasisPx, viewport);
 
-        return new FlexContainerProps(direction, wrap, justify, align, rowGap, columnGap);
+        return new FlexContainerProps(direction, wrap, justify, align, contentAlign, rowGap, columnGap);
     }
 
     public static FlexItemProps ParseItem(ComputedStyle? style)
@@ -70,8 +77,28 @@ internal static class FlexParser
         var shrink = NumberOr(style, PropertyId.FlexShrink, fallback: 1);
         var basis = ParseBasis(style);
         var order = (int)Math.Round(NumberOrZero(style, PropertyId.Order));
-        return new FlexItemProps(grow, Math.Max(0, shrink), basis, order);
+        // `align-self: auto` (the initial) defers to the container's
+        // align-items at layout time (CSS Flexbox §8.3).
+        AlignItems? alignSelf = null;
+        if (style?.Get(PropertyId.AlignSelf) is CssKeyword self
+            && !self.Name.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            alignSelf = MapAlignItems(self.Name.ToLowerInvariant());
+        }
+        return new FlexItemProps(grow, Math.Max(0, shrink), basis, order, alignSelf);
     }
+
+    /// <summary>Map an align-items/align-self keyword to its enum value;
+    /// <c>normal</c>, <c>stretch</c>, and anything unrecognised land on
+    /// stretch (CSS Box Alignment §5.3).</summary>
+    private static AlignItems MapAlignItems(string keyword) => keyword switch
+    {
+        "flex-start" or "start" or "self-start" => AlignItems.FlexStart,
+        "flex-end" or "end" or "self-end" => AlignItems.FlexEnd,
+        "center" => AlignItems.Center,
+        "baseline" or "first baseline" or "last baseline" => AlignItems.Baseline,
+        _ => AlignItems.Stretch,
+    };
 
     /// <summary>
     /// Resolve a child's <c>flex-basis</c> to a fixed pixel length, or
