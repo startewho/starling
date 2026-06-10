@@ -20,9 +20,11 @@ internal static class DisplayItemBounds
         {
             case FillRect f: bounds = f.Bounds; return true;
             case FillGradient g: bounds = g.Bounds; return true;
-            case StrokeRect s: bounds = s.Bounds; return true;
+            // Strokes are drawn centre-line on the rect path, so the painted
+            // ring overhangs Bounds by half the pen width on every side.
+            case StrokeRect s: bounds = InflateByPen(s.Bounds, s.Width); return true;
             case FillRoundedRect rf: bounds = rf.Bounds; return true;
-            case StrokeRoundedRect rs: bounds = rs.Bounds; return true;
+            case StrokeRoundedRect rs: bounds = InflateByPen(rs.Bounds, rs.Width); return true;
             case DrawBoxShadow { Inset: true } ish:
                 // Inner shadows are clipped to the padding box the item carries.
                 bounds = ish.Bounds;
@@ -61,6 +63,12 @@ internal static class DisplayItemBounds
                 bounds = Rect.Empty;
                 return false;
         }
+    }
+
+    private static Rect InflateByPen(Rect r, double penWidth)
+    {
+        var half = penWidth / 2;
+        return new Rect(r.X - half, r.Y - half, r.Width + penWidth, r.Height + penWidth);
     }
 
     private static double EstimateTextWidth(DrawText t)

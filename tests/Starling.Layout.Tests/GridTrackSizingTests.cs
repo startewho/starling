@@ -46,6 +46,42 @@ public sealed class GridTrackSizingTests
     }
 
     [TestMethod]
+    [Spec("css-grid-2", "https://www.w3.org/TR/css-grid-2/#track-sizing", section: "7.2.1")]
+    public void Percentage_row_against_indefinite_height_behaves_as_auto_and_keeps_its_slot()
+    {
+        // 50% of an indefinite container height behaves as auto — the track
+        // must still occupy its slot. Dropping it would shift the 100px size
+        // onto row 1 and push item b into an implicit zero-height row.
+        var root = Layout("""
+            <body style="margin:0"><div id="g" style="display:grid; width:400px; grid-template-rows:50% 100px">
+              <div id="a"></div><div id="b"></div>
+            </div></body>
+            """, new Size(1000, 600));
+
+        var a = ById(root, "a")!;
+        var b = ById(root, "b")!;
+        a.Frame.Height.Should().Be(0, "an auto row with empty content collapses");
+        b.Frame.Y.Should().Be(0);
+        b.Frame.Height.Should().Be(100, "the 100px definition stays on the second track");
+    }
+
+    [TestMethod]
+    [Spec("css-grid-2", "https://www.w3.org/TR/css-grid-2/#track-sizing", section: "7.2.1")]
+    public void Percent_calc_row_against_indefinite_height_behaves_as_auto_and_keeps_its_slot()
+    {
+        var root = Layout("""
+            <body style="margin:0"><div id="g" style="display:grid; width:400px; grid-template-rows:calc(50% - 10px) 100px">
+              <div id="a"></div><div id="b"></div>
+            </div></body>
+            """, new Size(1000, 600));
+
+        ById(root, "a")!.Frame.Height.Should().Be(0);
+        var b = ById(root, "b")!;
+        b.Frame.Y.Should().Be(0);
+        b.Frame.Height.Should().Be(100);
+    }
+
+    [TestMethod]
     [Spec("css-grid-2", "https://www.w3.org/TR/css-grid-2/#fr-unit", section: "11.7")]
     public void Fr_rows_split_a_definite_height_proportionally()
     {
