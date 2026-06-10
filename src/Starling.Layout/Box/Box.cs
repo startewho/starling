@@ -152,6 +152,36 @@ public abstract class Box
     /// queue, so a box laid several times in one pass is queued exactly once.</summary>
     internal bool ScrollMeasureQueued;
 
+    // ---- position:relative / sticky shift bookkeeping (PositionLayout) -------
+    //
+    // The position pass translates relative (and fallback-sticky) frames in
+    // place after every layout pass. An incremental pass reuses clean subtrees
+    // without rewriting their interior frames, so a box deeper than one level
+    // inside a reused subtree still carries the previous pass's shifted frame
+    // when the pass runs again — re-shifting it compounds (y=100 -> 150 -> 200
+    // across passes that touch only an unrelated sibling). The pass records
+    // the natural (pre-shift) origin and the exact frame it wrote; when it
+    // sees that same frame again it recomputes the shift from the natural
+    // origin instead of stacking a second shift on top.
+
+    /// <summary>True when <see cref="RelShiftedFrame"/> /
+    /// <see cref="RelNaturalX"/> / <see cref="RelNaturalY"/> describe the last
+    /// relative/sticky shift the position pass applied to this box.</summary>
+    internal bool RelShiftValid;
+
+    /// <summary>The exact frame the position pass last wrote (natural +
+    /// shift). When the current <see cref="Frame"/> still equals it, no layout
+    /// seam re-placed the box since, so the natural origin below is the basis
+    /// for this pass's shift. Any seam that re-lays the box writes a fresh
+    /// (natural) frame, which no longer matches and resets the basis.</summary>
+    internal Rect RelShiftedFrame;
+
+    /// <summary>Natural (pre-shift) frame origin recorded when the shift was
+    /// applied. The shift is a pure translation, so width/height need no
+    /// bookkeeping.</summary>
+    internal double RelNaturalX;
+    internal double RelNaturalY;
+
     public void AppendChild(Box child)
     {
         ArgumentNullException.ThrowIfNull(child);
