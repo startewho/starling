@@ -94,7 +94,19 @@ internal sealed class FlexLayout
         // a flex line and shoving the real content off-screen.
         var children = new List<Box.Box>(container.Children.Count);
         foreach (var c in container.Children)
-            if (!BlockLayout.IsOutOfFlow(c.Style)) children.Add(c);
+        {
+            if (!BlockLayout.IsOutOfFlow(c.Style))
+            {
+                children.Add(c);
+                continue;
+            }
+            // CSS Flexbox §4.1: the static position of an absolutely
+            // positioned flex child is as if it were the sole flex item —
+            // approximated as the container's content-box origin
+            // (flex-start / flex-start; align/justify offsets are skipped).
+            c.StaticX = 0;
+            c.StaticY = 0;
+        }
         if (children.Count == 0)
             return explicitHeight ?? 0;
 
