@@ -405,6 +405,12 @@ public sealed class DisplayListBuilder
                 // Borders. Painter renders one stroke per side that has a non-zero width.
                 EmitBorders(box, frameX, frameY, activeList, current, cull, style, radii);
             }
+
+            // CSS UI 4 §3 — outline: a ring painted OUTSIDE the border edge,
+            // taking no layout space. Emitted here, before any descendant
+            // overflow PushClip bracket opens, so the element's own overflow
+            // clip never crops its outline (ancestor clips still apply).
+            EmitOutline(box, frameX, frameY, activeList, current, cull, style, radii);
         }
 
         // Inline content: text fragments live on TextBoxes, positioned in their
@@ -1172,6 +1178,31 @@ public sealed class DisplayListBuilder
         var bottomColor = style.GetColor(PropertyId.BorderBottomColor);
         var leftColor = style.GetColor(PropertyId.BorderLeftColor);
 
+        // css-backgrounds-3 §4.2 — per-side border styles. Any painted side
+        // with a dashed / dotted / double style routes the whole border
+        // through the per-side primitive (the backend draws each side between
+        // its corner boundaries); the all-solid fast paths below stay as-is.
+        var topStyle = ReadBorderSideStyle(style, PropertyId.BorderTopStyle);
+        var rightStyle = ReadBorderSideStyle(style, PropertyId.BorderRightStyle);
+        var bottomStyle = ReadBorderSideStyle(style, PropertyId.BorderBottomStyle);
+        var leftStyle = ReadBorderSideStyle(style, PropertyId.BorderLeftStyle);
+        if ((top > 0 && topStyle is not (BorderSideStyle.Solid or BorderSideStyle.None))
+            || (right > 0 && rightStyle is not (BorderSideStyle.Solid or BorderSideStyle.None))
+            || (bottom > 0 && bottomStyle is not (BorderSideStyle.Solid or BorderSideStyle.None))
+            || (left > 0 && leftStyle is not (BorderSideStyle.Solid or BorderSideStyle.None)))
+        {
+            var borderBox = new Rect(x, y, box.Frame.Width, box.Frame.Height);
+            Emit(list, new DrawBorderSides(
+                borderBox, radii,
+                topStyle == BorderSideStyle.None ? 0 : top,
+                rightStyle == BorderSideStyle.None ? 0 : right,
+                bottomStyle == BorderSideStyle.None ? 0 : bottom,
+                leftStyle == BorderSideStyle.None ? 0 : left,
+                topColor, rightColor, bottomColor, leftColor,
+                topStyle, rightStyle, bottomStyle, leftStyle), borderBox, current, cull);
+            return;
+        }
+
         // Rounded uniform border: when every side shares the same width and
         // color (the overwhelmingly common authoring case) and the box has
         // rounded corners, paint the border as a single rounded ring — fill the
@@ -1218,6 +1249,136 @@ public sealed class DisplayListBuilder
             var b = new Rect(x, y, left, box.Frame.Height);
             Emit(list, new FillRect(b, leftColor, FillRectPixelAlignment.Preserve), b, current, cull);
         }
+    }
+
+    // ---- css-backgrounds-3 §4.2 border styles + CSS UI 4 §3 outline ---------
+
+    /// <summary>
+    /// Maps a <c>border-*-style</c> keyword to the painted
+    /// <see cref="BorderSideStyle"/> subset. <c>none</c>/<c>hidden</c> suppress
+    /// the side; <c>groove</c>/<c>ridge</c>/<c>inset</c>/<c>outset</c> paint as
+    /// solid at this fidelity (documented simplification).
+    /// </summary>
+    private static BorderSideStyle ReadBorderSideStyle(ComputedStyle style, PropertyId id)
+        => style.Get(id) is CssKeyword k
+            ? k.Name switch
+            {
+                "none" or "hidden" => BorderSideStyle.None,
+                "dashed" => BorderSideStyle.Dashed,
+                "dotted" => BorderSideStyle.Dotted,
+                "double" => BorderSideStyle.Double,
+                _ => BorderSideStyle.Solid,
+            }
+            : BorderSideStyle.Solid;
+
+    /// <summary>
+    /// Emits the CSS UI 4 §3 outline ring: <c>outline-width</c> thick, in
+    /// <c>outline-color</c>, drawn OUTSIDE the border edge expanded by
+    /// <c>outline-offset</c>. A negative offset pulls the ring inside the
+    /// border box; the offset is clamped at minus half the smaller box
+    /// dimension so the ring rectangle never inverts. Outlines take no layout
+    /// space and are emitted before the element's own overflow PushClip
+    /// bracket opens, so they are never cropped by the element's own clip.
+    /// <c>auto</c> draws as a solid focus ring; dashed / dotted / double reuse
+    /// the per-side border machinery on the expanded ring box. The ring
+    /// follows the element's border-radius expanded by the offset (a square
+    /// corner stays square).
+    /// </summary>
+    private static void EmitOutline(Box box, double x, double y, DisplayList list, Matrix2D current, Rect? cull, ComputedStyle style, CornerRadii radii)
+    {
+        if (style.Get(PropertyId.OutlineStyle) is not CssKeyword styleKeyword) return;
+        BorderSideStyle ringStyle;
+        switch (styleKeyword.Name)
+        {
+            case "none" or "hidden": return;
+            case "dashed": ringStyle = BorderSideStyle.Dashed; break;
+            case "dotted": ringStyle = BorderSideStyle.Dotted; break;
+            case "double": ringStyle = BorderSideStyle.Double; break;
+            // `auto` is the UA focus ring — drawn as a solid ring here.
+            // groove / ridge / inset / outset also paint solid at this fidelity.
+            default: ringStyle = BorderSideStyle.Solid; break;
+        }
+
+        var width = ResolveOutlineWidth(style.Get(PropertyId.OutlineWidth));
+        if (width <= 0) return;
+
+        // `outline-color: auto` (the initial value) and `currentcolor` both
+        // resolve to the element's text color here (the UA accent color is not
+        // modelled). A concrete color is used verbatim.
+        var color = style.Get(PropertyId.OutlineColor) is CssColor c
+            ? c
+            : style.GetColor(PropertyId.Color);
+        if (color.A == 0) return;
+
+        var w = box.Frame.Width;
+        var h = box.Frame.Height;
+        var offset = style.Get(PropertyId.OutlineOffset) is CssLength len
+            ? Starling.Layout.Block.BlockLayout.ToPx(len)
+            : 0d;
+
+        // CSS UI 4 §3.5 — clamp a large negative offset so the ring's inner
+        // edge rectangle never inverts.
+        var minHalf = Math.Min(w, h) / 2d;
+        if (offset < -minHalf) offset = -minHalf;
+
+        // Ring inner edge = border box expanded by `offset` on every side; the
+        // ring is `width` thick OUTSIDE that edge.
+        var grow = offset + width;
+        var outer = new Rect(x - grow, y - grow, w + 2 * grow, h + 2 * grow);
+
+        if (ringStyle == BorderSideStyle.Solid)
+        {
+            // Centre-line stroke: a pen of `width` straddles the centre rect
+            // symmetrically, landing exactly between the inner and outer edges.
+            var centre = new Rect(
+                x - offset - width / 2d,
+                y - offset - width / 2d,
+                w + 2 * offset + width,
+                h + 2 * offset + width);
+            var centreRadii = ExpandRadii(radii, offset + width / 2d);
+            Emit(list, new StrokeRoundedRect(centre, centreRadii, color, width), outer, current, cull);
+            return;
+        }
+
+        // Non-solid ring: ride the per-side border machinery on the expanded
+        // outer box, all four sides sharing the outline width / color / style.
+        var outerRadii = ExpandRadii(radii, grow);
+        Emit(list, new DrawBorderSides(
+            outer, outerRadii,
+            width, width, width, width,
+            color, color, color, color,
+            ringStyle, ringStyle, ringStyle, ringStyle), outer, current, cull);
+    }
+
+    /// <summary>
+    /// Resolves <c>outline-width</c> to CSS px. The line-width keywords use
+    /// the UA conventions (thin 1px, medium 3px, thick 5px).
+    /// </summary>
+    private static double ResolveOutlineWidth(CssValue? value)
+        => value switch
+        {
+            CssLength len => Math.Max(0, Starling.Layout.Block.BlockLayout.ToPx(len)),
+            CssNumber n => Math.Max(0, n.Value),
+            CssKeyword { Name: "thin" } => 1,
+            CssKeyword { Name: "medium" } => 3,
+            CssKeyword { Name: "thick" } => 5,
+            _ => 0,
+        };
+
+    /// <summary>
+    /// Grows every non-zero corner radius by <paramref name="by"/> (clamped at
+    /// zero) so an outline ring keeps following the border curvature at its
+    /// offset distance. Square corners stay square, matching CSS UI 4 §3.
+    /// </summary>
+    private static CornerRadii ExpandRadii(CornerRadii r, double by)
+    {
+        if (r.IsZero) return CornerRadii.None;
+        static double G(double v, double by) => v <= 0 ? 0 : Math.Max(0, v + by);
+        return new CornerRadii(
+            G(r.TopLeftX, by), G(r.TopLeftY, by),
+            G(r.TopRightX, by), G(r.TopRightY, by),
+            G(r.BottomRightX, by), G(r.BottomRightY, by),
+            G(r.BottomLeftX, by), G(r.BottomLeftY, by));
     }
 
     private static void EmitTextFragments(TextBox text, double x, double y, DisplayList list, Matrix2D current, Rect? cull, Func<Box, ComputedStyle?>? styleOverride)
