@@ -680,6 +680,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 IsAnimatingLayerRoot = IsElementAnimatingLayerRoot,
                 DrawingOverlays = drawingOverlays,
                 ScrollOffsets = scrollLookup,
+                StickyShifts = _currentPage.StickyShiftLookup,
                 PageVersion = PageRenderVersion(),
                 AnimationTick = _animationTickPresent,
             }, _surfaceTarget))
@@ -912,7 +913,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         if (_currentPage is null) return default;
         return BoxHitTester.HitTest(
-            _currentPage.Root, x, y, _scroll.Offset.X, _scroll.Offset.Y, _currentPage.ScrollOffsetLookup);
+            _currentPage.Root, x, y, _scroll.Offset.X, _scroll.Offset.Y,
+            _currentPage.ScrollOffsetLookup, _currentPage.StickyShiftLookup);
     }
 
     // Wheel handler: routes the delta through the shared ScrollController,

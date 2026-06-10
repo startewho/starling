@@ -63,6 +63,11 @@ public sealed class PageFrameRequest
     public Func<Box, bool>? IsAnimatingLayerRoot { get; init; }
     public IReadOnlyList<SurfaceOverlayLayer>? DrawingOverlays { get; init; }
     public Func<Element, (double X, double Y)>? ScrollOffsets { get; init; }
+
+    /// <summary>Per-element <c>position: sticky</c> paint shift
+    /// (<c>ScrollStateStore.GetStickyShift</c> shape) — the same store the
+    /// scroll offsets come from. Null for pages with no scroll model.</summary>
+    public Func<Element, (double X, double Y)>? StickyShifts { get; init; }
     public bool UseLayerTree { get; init; }
 
     /// <summary>
@@ -99,6 +104,10 @@ public sealed class CompositedFrameRequest
     /// the page layer tree only — chrome and overlays do not scroll
     /// per-element.</summary>
     public Func<Element, (double X, double Y)>? PageScrollOffsets { get; init; }
+
+    /// <summary>Sticky paint shifts for the page document — see
+    /// <see cref="PageFrameRequest.StickyShifts"/>.</summary>
+    public Func<Element, (double X, double Y)>? PageStickyShifts { get; init; }
 
     /// <summary>
     /// Optional bottom chrome (status bar) — a strip below the page, to the right
@@ -314,7 +323,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.BottomChromeRightRoot,
             request.BottomChromeLeftWidthCss,
             request.BottomChromeHeightCss,
-            request.PageScrollOffsets);
+            request.PageScrollOffsets,
+            request.PageStickyShifts);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface compositor did not present the frame.");
@@ -349,7 +359,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.DrawingOverlays,
             request.ScrollOffsets,
             request.PageVersion,
-            request.AnimationTick);
+            request.AnimationTick,
+            request.StickyShifts);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface renderer did not present the frame.");

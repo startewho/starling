@@ -773,7 +773,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                         (pos.Y - ChromeHeightCss) + scrollY,
                         viewportX: 0,
                         viewportY: scrollY,
-                        page.ScrollOffsetLookup);
+                        page.ScrollOffsetLookup,
+                        page.StickyShiftLookup);
                     // Silk wheel deltas are lines, positive = up; negate into
                     // content-space. No precision flag on this input path, so
                     // every tick takes the lines x40 conversion.
@@ -825,7 +826,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                     pageY,
                     viewportX: 0,
                     viewportY: scrollY,
-                    page.ScrollOffsetLookup);
+                    page.ScrollOffsetLookup,
+                    page.StickyShiftLookup);
                 var cursor = BoxHitTester.ResolveCursor(hit);
                 SetCursor(m.Cursor, cursor, _log);
 
@@ -948,7 +950,8 @@ internal sealed class NativeBrowserWindow : IDisposable
                     pageX, pageY,
                     viewportX: 0,
                     viewportY: scrollY,
-                    page.ScrollOffsetLookup);
+                    page.ScrollOffsetLookup,
+                    page.StickyShiftLookup);
 
                 // Focus / text input
                 if (hit.Box?.Element is { } hitEl
@@ -1457,6 +1460,7 @@ internal sealed class NativeBrowserWindow : IDisposable
                     ScrollX = 0,
                     ScrollY = scrollY,
                     PageScrollOffsets = page.ScrollOffsetLookup,
+                    PageStickyShifts = page.StickyShiftLookup,
                     PageAnimating = box => IsAnimatingLayerRoot(page, box),
                     StyleOverride = StyleOverride,
                     Images = page.ImageResolver,
@@ -1970,7 +1974,7 @@ internal sealed class NativeBrowserWindow : IDisposable
             {
                 var hit = BoxHitTester.HitTest(
                     page.Root, x - SidebarWidthCss, (y - ChromeHeightCss) + scrollY,
-                    viewportX: 0, viewportY: scrollY, page.ScrollOffsetLookup);
+                    viewportX: 0, viewportY: scrollY, page.ScrollOffsetLookup, page.StickyShiftLookup);
                 if (hit.LinkAnchor is { } a)
                 {
                     var href = a.GetAttribute("href");

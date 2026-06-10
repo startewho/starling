@@ -1124,7 +1124,8 @@ public sealed class StarlingEngine
             styleOverride,
             page.ImageResolver,
             box => IsElementAnimatingLayerRoot(page, box),
-            scrollOffsets: page.ScrollOffsetLookup);
+            scrollOffsets: page.ScrollOffsetLookup,
+            stickyShifts: page.StickyShiftLookup);
     }
 
     private static bool IsElementAnimatingLayerRoot(LaidOutPage page, LayoutBox box)

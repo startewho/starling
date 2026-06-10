@@ -63,6 +63,7 @@ public sealed class LaidOutPage : IDisposable
     {
         ScrollState = scrollState ?? new Starling.Layout.Scroll.ScrollStateStore();
         ScrollOffsetLookup = ScrollState.GetOffset;
+        StickyShiftLookup = ScrollState.GetStickyShift;
         Root = root;
         Document = document;
         Style = style;
@@ -101,6 +102,14 @@ public sealed class LaidOutPage : IDisposable
     /// allocate a fresh delegate per present.
     /// </summary>
     public Func<Element, (double X, double Y)> ScrollOffsetLookup { get; }
+
+    /// <summary>
+    /// <see cref="ScrollState"/>'s per-element <c>position: sticky</c> paint
+    /// shift (<c>GetStickyShift</c>), pre-bound like
+    /// <see cref="ScrollOffsetLookup"/> so per-frame renders and hit tests do
+    /// not allocate a delegate per present (scroll-model.md WP5).
+    /// </summary>
+    public Func<Element, (double X, double Y)> StickyShiftLookup { get; }
 
     /// <summary>
     /// The live JS context for this page, or null for pages without scripts (or
