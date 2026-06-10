@@ -149,6 +149,37 @@ public sealed class ScrollMeasureScopeTests
         StateOf(store, doc, "s").MaxOffsetX.Should().Be(500);
     }
 
+    [TestMethod]
+    public void Consecutive_scoped_passes_stay_coherent()
+    {
+        // The steady-state animation-tick pattern: full layout once, then
+        // scoped relayouts every frame. The caches a scoped pass revalidates
+        // must serve the next scoped pass.
+        var (doc, session, store) = StartSession("""
+            <body style="margin:0">
+              <div id=a style="overflow:auto;width:200px;height:100px">
+                <div id=ia style="height:300px"></div>
+              </div>
+              <div id=b style="overflow:auto;width:200px;height:100px">
+                <div style="height:400px"></div>
+              </div>
+            </body>
+            """);
+
+        var records = store.GeometryRecords;
+        for (var height = 500; height <= 700; height += 100)
+        {
+            doc.GetElementById("ia")!.SetAttribute("style", $"height:{height}px");
+            Relayout(session, doc);
+
+            StateOf(store, doc, "a").OverflowHeight.Should().Be(height);
+            store.GeometryRecords.Should().Be(records + 1,
+                "each tick re-measures exactly the relaid scroller");
+            records = store.GeometryRecords;
+        }
+        StateOf(store, doc, "b").OverflowHeight.Should().Be(400);
+    }
+
     // ---- Review minor (a): block-end padding ----------------------------------
 
     [TestMethod]
