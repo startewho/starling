@@ -10,14 +10,15 @@ namespace Starling.Layout.Flex;
 /// <c>flex-direction</c>, <c>flex-wrap</c> (multi-line, row containers),
 /// <c>order</c>, <c>justify-content</c>, <c>align-items</c>, the <c>flex</c>
 /// shorthand + individual <c>flex-grow</c>/<c>shrink</c>/<c>basis</c>,
-/// <c>min-width</c>/<c>min-height</c> (and the automatic content minimum), and
+/// <c>min-width</c>/<c>min-height</c> (and the automatic content minimum),
+/// <c>max-width</c>/<c>max-height</c> clamping with violation freezing +
+/// free-space redistribution (CSS Flexbox §9.7), and
 /// <c>gap</c>/<c>row-gap</c>/<c>column-gap</c>.
 /// Out of scope (deferred):
 /// <list type="bullet">
 ///   <item><c>flex-wrap</c> for column containers — falls back to a single line.</item>
 ///   <item><c>align-content</c> (lines stack flex-start) and <c>align-self</c>.</item>
 ///   <item>True baseline alignment (currently falls back to <c>flex-start</c>).</item>
-///   <item><c>max-width</c>/<c>max-height</c> clamping of the flex base size.</item>
 /// </list>
 /// </summary>
 /// <remarks>
@@ -113,17 +114,24 @@ internal sealed class FlexLayout
             var itemProps = FlexParser.ParseItem(child.Style);
             var basis = ResolveBasis(child, itemProps.Basis, props, containerWidth, explicitHeight);
             var minMain = ResolveMinMainSize(child, props, containerWidth, explicitHeight, basis);
+            var maxMain = ResolveMaxMainSize(child, props, containerWidth, explicitHeight);
             items[i] = new Item
             {
                 Box = child,
                 Props = itemProps,
                 Basis = basis,
-                // Hypothetical main size = flex base size clamped up to the
-                // minimum (CSS Flexbox §9.7.3). Free-space distribution below
-                // works from this, so an item with `min-width` larger than its
-                // content doesn't get over-grown neighbours and overflow the row.
-                MainSize = Math.Max(basis, minMain),
+                // Hypothetical main size = flex base size clamped by the used
+                // min/max main sizes (CSS Flexbox §9.7 step 1; min wins over
+                // max, CSS 2.1 §10.4). Line breaking and free-space
+                // distribution work from this, so an item with `min-width`
+                // larger than its content doesn't get over-grown neighbours,
+                // and a `max-width` item (x.com's 600px-max primary column in
+                // a 920px slot) hands its slack to siblings instead of
+                // overflowing the row.
+                MainSize = Math.Max(minMain, Math.Min(basis, maxMain)),
                 MinMain = minMain,
+                MaxMain = maxMain,
+                MaxCross = ResolveMaxCrossSize(child, props, containerWidth, explicitHeight),
                 MainPad = props.IsRow
                     ? child.Padding.Horizontal + child.Border.Horizontal
                     : child.Padding.Vertical + child.Border.Vertical,
@@ -238,37 +246,18 @@ internal sealed class FlexLayout
             : Math.Max(contentMain, minMainFloor ?? 0);
         var free = justifyMain - outerSum - gapTotal;
 
-        if (free > 0)
-        {
-            var totalGrow = 0d;
-            for (var i = start; i < end; i++) totalGrow += items[i].Props.Grow;
-            if (totalGrow > 0)
-                for (var i = start; i < end; i++)
-                    items[i].MainSize += free * (items[i].Props.Grow / totalGrow);
-        }
-        else if (free < 0)
-        {
-            // Simplified shrink: weighted by flex-shrink only (the spec
-            // multiplies by basis to make larger items absorb more
-            // overflow — that's a TODO for the full algorithm).
-            var totalShrink = 0d;
-            for (var i = start; i < end; i++) totalShrink += items[i].Props.Shrink;
-            if (totalShrink > 0)
-                for (var i = start; i < end; i++)
-                    items[i].MainSize = items[i].MainSize + free * (items[i].Props.Shrink / totalShrink);
-        }
-
-        // CSS Flexbox §4.5 — clamp each item's used main size to its minimum so
-        // it never shrinks below its content/min-width (else nowrap text in a
-        // too-narrow container overlaps — Google's footer link groups).
-        for (var i = start; i < end; i++)
-            items[i].MainSize = Math.Max(0, Math.Max(items[i].MainSize, items[i].MinMain));
+        ResolveFlexibleLengths(items, start, end, justifyMain, gapTotal);
 
         // Cross size of each item, then the line's cross extent.
         var maxCrossOuter = 0d;
         for (var i = start; i < end; i++)
         {
             var crossSelf = MeasureCrossSize(items[i].Box, props, items[i].MainSize, containerWidth, crossSize);
+            // CSS Flexbox §4.5: the used cross size is clamped by the item's
+            // cross min/max (max-height for row, max-width for column). Clamp
+            // before the line cross size is taken so a capped item doesn't
+            // inflate the line.
+            if (crossSelf > items[i].MaxCross) crossSelf = items[i].MaxCross;
             items[i].CrossSize = crossSelf;
             maxCrossOuter = Math.Max(maxCrossOuter, crossSelf + items[i].CrossPad);
         }
@@ -284,7 +273,10 @@ internal sealed class FlexLayout
         var crossIndefinite = props.IsRow && double.IsNaN(crossSize);
         for (var i = start; i < end; i++)
             if (props.Align == AlignItems.Stretch && ChildCrossSizeIsAuto(items[i].Box, props, crossIndefinite))
-                items[i].CrossSize = Math.Max(0, lineCrossSize - items[i].CrossPad);
+                // Stretch is clamped by the item's cross max size (CSS Flexbox
+                // §9.4.11): a row item with `max-height` (or a column item with
+                // `max-width`) never stretches past its cap.
+                items[i].CrossSize = Math.Min(items[i].MaxCross, Math.Max(0, lineCrossSize - items[i].CrossPad));
 
         for (var i = start; i < end; i++)
             LayoutItemContents(items[i], props);
@@ -337,6 +329,135 @@ internal sealed class FlexLayout
         }
     }
 
+    /// <summary>
+    /// CSS Flexbox §9.7 — resolve flexible lengths for one line. Items start
+    /// at their flex base size, free space is distributed by flex factor, each
+    /// item is clamped by its used min/max main size, and clamp violators are
+    /// FROZEN at the clamp; the loop then redistributes the remaining free
+    /// space among the unfrozen items until no item violates. A single clamp
+    /// pass without redistribution under-fills the line: x.com's 600px-max
+    /// primary column kept 920px of slot reserved, shoving the sidebar
+    /// off-screen.
+    /// Simplifications kept from the previous pass (both documented spec
+    /// deviations, not regressions): shrink is weighted by flex-shrink alone
+    /// (the spec scales it by the base size), and a flex-factor sum below 1
+    /// still distributes all the free space.
+    /// </summary>
+    private static void ResolveFlexibleLengths(Item[] items, int start, int end, double mainSize, double gapTotal)
+    {
+        // §9.7 step 1 — grow when the hypothetical outer sizes underfill the
+        // line, shrink when they overflow it. MainSize holds the hypothetical
+        // (min/max-clamped base) size on entry.
+        var hypoOuter = gapTotal;
+        for (var i = start; i < end; i++) hypoOuter += items[i].MainSize + items[i].MainPad;
+        var growing = hypoOuter < mainSize;
+
+        // §9.7 step 2 — freeze inflexible items at their hypothetical size:
+        // zero flex factor, or the clamp already moved them against the flex
+        // direction (growing an item whose base exceeds its hypothetical size
+        // would re-violate max immediately; same for shrink vs min).
+        var unfrozen = 0;
+        for (var i = start; i < end; i++)
+        {
+            var factor = growing ? items[i].Props.Grow : items[i].Props.Shrink;
+            items[i].Frozen = factor <= 0
+                || (growing && items[i].Basis > items[i].MainSize)
+                || (!growing && items[i].Basis < items[i].MainSize);
+            if (!items[i].Frozen) unfrozen++;
+        }
+
+        // §9.7 step 4 — distribute, clamp, freeze violators, repeat. Every
+        // round either freezes all items (zero total violation) or at least
+        // one violator, so the loop terminates in <= item count rounds.
+        const double epsilon = 0.0001;
+        while (unfrozen > 0)
+        {
+            // Remaining free space from frozen targets + unfrozen base sizes.
+            var used = gapTotal;
+            var totalFactor = 0d;
+            for (var i = start; i < end; i++)
+            {
+                used += items[i].MainPad + (items[i].Frozen ? items[i].MainSize : items[i].Basis);
+                if (!items[i].Frozen)
+                    totalFactor += growing ? items[i].Props.Grow : items[i].Props.Shrink;
+            }
+            var remaining = mainSize - used;
+            var distribute = totalFactor > 0
+                && ((growing && remaining > 0) || (!growing && remaining < 0));
+
+            var totalViolation = 0d;
+            for (var i = start; i < end; i++)
+            {
+                if (items[i].Frozen) continue;
+                var factor = growing ? items[i].Props.Grow : items[i].Props.Shrink;
+                var target = items[i].Basis;
+                if (distribute) target += remaining * (factor / totalFactor);
+                var clamped = Math.Max(items[i].MinMain, Math.Min(target, items[i].MaxMain));
+                if (clamped < 0) clamped = 0;
+                items[i].MainSize = clamped;
+                items[i].Violation = clamped - target;
+                totalViolation += items[i].Violation;
+            }
+
+            if (totalViolation > epsilon)
+            {
+                // Min violations dominate: freeze the min violators.
+                for (var i = start; i < end; i++)
+                    if (!items[i].Frozen && items[i].Violation > 0)
+                    {
+                        items[i].Frozen = true;
+                        unfrozen--;
+                    }
+            }
+            else if (totalViolation < -epsilon)
+            {
+                // Max violations dominate: freeze the max violators.
+                for (var i = start; i < end; i++)
+                    if (!items[i].Frozen && items[i].Violation < 0)
+                    {
+                        items[i].Frozen = true;
+                        unfrozen--;
+                    }
+            }
+            else
+            {
+                break; // zero total violation — every target is final
+            }
+        }
+    }
+
+    /// <summary>
+    /// The item's used maximum main size (max-width for row, max-height for
+    /// column), or <see cref="double.PositiveInfinity"/> when `none`.
+    /// Percentages resolve against the same basis as the minimum
+    /// (<see cref="ResolveMinMainSize"/>).
+    /// </summary>
+    private double ResolveMaxMainSize(Box.Box child, FlexContainerProps props, double containerWidth, double? containerHeight)
+    {
+        if (child.Kind == BoxKind.AnonymousBlock || child.Style is null) return double.PositiveInfinity;
+        var maxProp = props.IsRow ? PropertyId.MaxWidth : PropertyId.MaxHeight;
+        var basisPx = props.IsRow ? containerWidth : (containerHeight ?? _viewport.Height);
+        var max = BlockLayout.ResolveMaxLength(child.Style, maxProp, basisPx, _viewport);
+        return max is { } m ? Math.Max(0, m) : double.PositiveInfinity;
+    }
+
+    /// <summary>
+    /// The item's used maximum cross size (max-height for row, max-width for
+    /// column), or <see cref="double.PositiveInfinity"/> when `none`. A
+    /// percentage against an indefinite cross basis (row container with auto
+    /// height) behaves as `none` (CSS 2.1 §10.7).
+    /// </summary>
+    private double ResolveMaxCrossSize(Box.Box child, FlexContainerProps props, double containerWidth, double? containerHeight)
+    {
+        if (child.Kind == BoxKind.AnonymousBlock || child.Style is null) return double.PositiveInfinity;
+        var maxProp = props.IsRow ? PropertyId.MaxHeight : PropertyId.MaxWidth;
+        if (props.IsRow && containerHeight is null && child.Style.Get(maxProp) is CssPercentage)
+            return double.PositiveInfinity;
+        var basisPx = props.IsRow ? (containerHeight ?? _viewport.Height) : containerWidth;
+        var max = BlockLayout.ResolveMaxLength(child.Style, maxProp, basisPx, _viewport);
+        return max is { } m ? Math.Max(0, m) : double.PositiveInfinity;
+    }
+
     private struct Item
     {
         public Box.Box Box;
@@ -346,6 +467,21 @@ internal sealed class FlexLayout
         /// <summary>Used minimum main size: explicit min-width/height, else the
         /// automatic content-based minimum. The item never shrinks below this.</summary>
         public double MinMain;
+        /// <summary>Used maximum main size (max-width for row, max-height for
+        /// column); <see cref="double.PositiveInfinity"/> when `none`. The item
+        /// never grows past this.</summary>
+        public double MaxMain;
+        /// <summary>Used maximum cross size (max-height for row, max-width for
+        /// column); <see cref="double.PositiveInfinity"/> when `none`.</summary>
+        public double MaxCross;
+        /// <summary>Scratch state for <see cref="ResolveFlexibleLengths"/>:
+        /// item is fixed at its current <see cref="MainSize"/> and takes no
+        /// further part in free-space distribution.</summary>
+        public bool Frozen;
+        /// <summary>Scratch state for <see cref="ResolveFlexibleLengths"/>:
+        /// clamped target minus unclamped target from the latest round
+        /// (positive = min violation, negative = max violation).</summary>
+        public double Violation;
         public double CrossSize;
         /// <summary>Main-axis padding + border (both edges), in px.</summary>
         public double MainPad;

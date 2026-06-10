@@ -600,7 +600,7 @@ internal sealed class BlockLayout
     // max-* properties accept the keyword `none` (the initial value) to mean
     // "no upper bound". ResolveLength maps `none` to 0, which would collapse
     // the box; intercept it here so callers can skip the clamp.
-    private static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
+    internal static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
     {
         if (style is null) return null;
         var value = style.Get(property);
