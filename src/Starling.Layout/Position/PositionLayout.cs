@@ -218,9 +218,17 @@ internal sealed class PositionLayout
         // against the containing block's *width*, just like normal).
         ResolveBoxModel(box, cbDocRect.Width);
 
-        // Resolve explicit width/height (auto → null).
+        // Resolve explicit width/height (auto → null). ResolveAxis consumes
+        // BORDER-BOX sizes, so a resolved content-box width/height gets the
+        // box's own padding + border added back — without that, a padded
+        // positioned box lost its padding from the frame (and the content
+        // width subtraction below removed it a second time).
         var widthResolved = BlockLayout.ResolveLength(box.Style, PropertyId.Width, cbDocRect.Width, _viewport, allowAuto: true);
         var heightResolved = BlockLayout.ResolveLength(box.Style, PropertyId.Height, cbDocRect.Height, _viewport, allowAuto: true);
+        if (widthResolved is { } wr)
+            widthResolved = wr + box.Padding.Horizontal + box.Border.Horizontal;
+        if (heightResolved is { } hr)
+            heightResolved = hr + box.Padding.Vertical + box.Border.Vertical;
 
         // Resolve insets against the containing block's content-box
         // dimensions.
@@ -370,16 +378,18 @@ internal sealed class PositionLayout
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §8.3/§8.4 — percentage margins/padding resolve against the
+        // containing block's width on all four sides (vertical included).
         box.Margin = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         // Border resolution is left at zero for the positioned scope — the
