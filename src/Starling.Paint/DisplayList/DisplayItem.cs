@@ -538,12 +538,18 @@ public readonly record struct FilterFunction(
     CssColor? Color = null)
 {
     /// <summary>
-    /// σ of the Gaussian the backend runs for a CSS blur radius — radius/2,
-    /// the same σ convention this repo's box-shadow rasterizer uses
-    /// (<c>GaussianBlur(Blur / 2)</c>), so filter and shadow blurs of the same
-    /// radius soften identically.
+    /// σ of the Gaussian for <c>blur(&lt;length&gt;)</c>. Filter Effects 1
+    /// §10.1 defines the parameter AS the standard deviation, so σ = radius —
+    /// unlike shadow blur radii, which are double the σ.
     /// </summary>
-    internal static double Sigma(double radius) => Math.Max(0, radius) / 2d;
+    internal static double BlurSigma(double radius) => Math.Max(0, radius);
+
+    /// <summary>
+    /// σ of the Gaussian for <c>drop-shadow()</c>'s blur radius — interpreted
+    /// "as for box-shadow" per Filter Effects 1, i.e. radius/2, matching this
+    /// repo's box-shadow rasterizer (<c>GaussianBlur(Blur / 2)</c>).
+    /// </summary>
+    internal static double ShadowSigma(double radius) => Math.Max(0, radius) / 2d;
 
     /// <summary>
     /// Padding (CSS px) the offscreen surface needs around the filtered
@@ -560,10 +566,10 @@ public readonly record struct FilterFunction(
             switch (f.Kind)
             {
                 case FilterFunctionKind.Blur:
-                    pad += Math.Ceiling(3 * Sigma(f.Amount)) + 2;
+                    pad += Math.Ceiling(3 * BlurSigma(f.Amount)) + 2;
                     break;
                 case FilterFunctionKind.DropShadow:
-                    pad += Math.Ceiling(3 * Sigma(f.Amount))
+                    pad += Math.Ceiling(3 * ShadowSigma(f.Amount))
                            + Math.Max(Math.Abs(f.OffsetX), Math.Abs(f.OffsetY)) + 2;
                     break;
             }

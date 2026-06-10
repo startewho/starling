@@ -631,6 +631,12 @@ internal sealed class FlexLayout
             if (explicitMin is { } m) return Math.Max(0, m);
         }
 
+        // Flexbox §4.5: the automatic minimum applies only when the item's
+        // main-axis overflow is visible. A clipping item (the classic
+        // nowrap + hidden + text-overflow:ellipsis label) shrinks freely.
+        var overflowProp = props.IsRow ? PropertyId.OverflowX : PropertyId.OverflowY;
+        if (child.Style.Get(overflowProp) is CssKeyword { Name: not "visible" }) return 0;
+
         // min-*: auto → automatic (content-based) minimum, capped at the base
         // size (min-content is always <= max-content/basis, so this is mostly a
         // guard against pathological measurements).
