@@ -9,6 +9,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Starling.Bindings\Starling.Bindings.csproj" />
+    <!-- Animation playback tests drive a fake IAnimationHost over the real
+         AnimationEngine/AnimationInstance with an injected clock. -->
+    <ProjectReference Include="..\..\src\Starling.Css\Starling.Css.csproj" />
     <ProjectReference Include="..\Starling.Spec.Common\Starling.Spec.Common.csproj" />
   </ItemGroup>
 </Project>

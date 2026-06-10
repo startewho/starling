@@ -360,6 +360,19 @@ public sealed class AnimationInstance
     // cascaded play-state); cancel removes the animation from sampling.
     private bool _scriptPaused;
     private bool _canceled;
+    // Web Animations API playbackRate. Local time advances at
+    // (clock - start) * rate, so the whole timeline (delay included) scales.
+    // 0 freezes the playback head (via _pausedAtElapsedMs); negative rates are
+    // clamped to 0 — reverse playback is not implemented and the JS binding
+    // rejects negatives before they reach the engine.
+    private double _playbackRate = 1;
+    // Script-animation observers (Web Animations binding): fired once on the
+    // transition to finished (natural NoteTick completion or ScriptFinish) and
+    // once on the transition to canceled. May be invoked from the engine tick
+    // thread — observers must only hand off (e.g. enqueue a microtask), never
+    // run JS synchronously.
+    private Action? _onScriptFinished;
+    private Action? _onScriptCanceled;
 
     public AnimationInstance(Element element, AnimationDeclaration decl, double nowMs)
     {
@@ -408,11 +421,13 @@ public sealed class AnimationInstance
         if (_canceled || _scriptPaused) return false;
         if (_completed) return false;
         if (_decl.PlayState == AnimationPlayState.Paused) return false;
+        if (_pausedAtElapsedMs >= 0 || _playbackRate <= 0) return false; // frozen head (pause / rate 0)
         if (double.IsInfinity(_decl.IterationCount) || _decl.IterationCount <= 0) return false;
         var total = _decl.DelayMs + _decl.DurationMs * _decl.IterationCount;
-        if (nowMs - _startMs >= total)
+        if ((nowMs - _startMs) * _playbackRate >= total)
         {
             _completed = true;
+            _onScriptFinished?.Invoke();
             return true;
         }
         return false;
@@ -504,23 +519,31 @@ public sealed class AnimationInstance
     /// paused), not completed, not cancelled. An infinite-iteration animation is
     /// always in flight.</summary>
     public bool IsInFlight =>
-        !_completed && !_canceled && !_scriptPaused && _decl.PlayState != AnimationPlayState.Paused;
+        !_completed && !_canceled && !_scriptPaused && _pausedAtElapsedMs < 0
+        && _playbackRate > 0 && _decl.PlayState != AnimationPlayState.Paused;
 
     /// <summary>Total active time (after delay) in ms — finite iterations only;
     /// infinite iteration counts report a single iteration's duration.</summary>
     private double ActiveDurationMs =>
         _decl.DurationMs * (double.IsInfinity(_decl.IterationCount) ? 1 : Math.Max(0, _decl.IterationCount));
 
+    /// <summary>Current active-time (after delay) of the playback head, in ms.
+    /// Reads the frozen head when one is set (pause or playbackRate 0).</summary>
+    private double CurrentActiveElapsedMs()
+        => _pausedAtElapsedMs >= 0
+            ? Math.Max(0, _pausedAtElapsedMs)
+            : Math.Max(0, (_nowSeenMs - _startMs) * _playbackRate - _decl.DelayMs);
+
     /// <summary>Animation.currentTime — elapsed active time in ms.</summary>
-    public double ScriptCurrentTime()
-        => _scriptPaused ? Math.Max(0, _pausedAtElapsedMs) : Math.Max(0, _nowSeenMs - _startMs - _decl.DelayMs);
+    public double ScriptCurrentTime() => CurrentActiveElapsedMs();
 
     /// <summary>Set Animation.currentTime by shifting the start so the playback
     /// head lands at <paramref name="ms"/> active-time.</summary>
     public void ScriptSetCurrentTime(double ms)
     {
-        _startMs = _nowSeenMs - _decl.DelayMs - ms;
-        if (_scriptPaused) _pausedAtElapsedMs = ms;
+        if (_playbackRate > 0)
+            _startMs = _nowSeenMs - (_decl.DelayMs + ms) / _playbackRate;
+        if (_pausedAtElapsedMs >= 0 || _playbackRate <= 0) _pausedAtElapsedMs = ms;
         _completed = false;
         _canceled = false;
     }
@@ -529,7 +552,7 @@ public sealed class AnimationInstance
     public void ScriptPause()
     {
         if (_scriptPaused) return;
-        _pausedAtElapsedMs = Math.Max(0, _nowSeenMs - _startMs - _decl.DelayMs);
+        _pausedAtElapsedMs = CurrentActiveElapsedMs();
         _scriptPaused = true;
     }
 
@@ -537,25 +560,76 @@ public sealed class AnimationInstance
     public void ScriptPlay()
     {
         _canceled = false;
-        if (_scriptPaused)
+        _scriptPaused = false;
+        if (_pausedAtElapsedMs >= 0 && _playbackRate > 0)
         {
-            _startMs = _nowSeenMs - _decl.DelayMs - _pausedAtElapsedMs;
+            // Resume: shift start so (clock - start) * rate lands the active
+            // head back on the frozen offset. Rate 0 stays frozen.
+            _startMs = _nowSeenMs - (_decl.DelayMs + _pausedAtElapsedMs) / _playbackRate;
             _pausedAtElapsedMs = -1;
-            _scriptPaused = false;
         }
         _completed = false;
     }
 
+    /// <summary>Animation.playbackRate (default 1).</summary>
+    public double ScriptPlaybackRate => _playbackRate;
+
+    /// <summary>Set Animation.playbackRate, preserving the playback head across
+    /// the change (the same start-shift trick the pause/resume path uses).
+    /// Rate 0 freezes the head in place. Negative or NaN rates clamp to 0 —
+    /// reverse playback is not implemented; the JS binding throws before
+    /// calling here.</summary>
+    public void ScriptSetPlaybackRate(double rate)
+    {
+        if (double.IsNaN(rate) || rate < 0) rate = 0;
+        if (rate == _playbackRate) return;
+        var elapsed = CurrentActiveElapsedMs();
+        _playbackRate = rate;
+        if (_scriptPaused || rate <= 0)
+        {
+            _pausedAtElapsedMs = elapsed;
+            return;
+        }
+        _startMs = _nowSeenMs - (_decl.DelayMs + elapsed) / rate;
+        _pausedAtElapsedMs = -1;
+    }
+
+    /// <summary>Register script-animation observers, fired once on the
+    /// transition to finished (natural completion or <see cref="ScriptFinish"/>)
+    /// and once on the transition to canceled. Invoked from whatever thread
+    /// drives the tick — observers must only hand off (enqueue a microtask),
+    /// never re-enter JS synchronously.</summary>
+    public void SetScriptObservers(Action? onFinished, Action? onCanceled)
+    {
+        _onScriptFinished = onFinished;
+        _onScriptCanceled = onCanceled;
+    }
+
     /// <summary>Animation.cancel() — remove all effects (Sample returns null).</summary>
-    public void ScriptCancel() => _canceled = true;
+    public void ScriptCancel()
+    {
+        if (_canceled) return;
+        _canceled = true;
+        _onScriptCanceled?.Invoke();
+    }
 
     /// <summary>Animation.finish() — jump the playback head to the end.</summary>
     public void ScriptFinish()
     {
         _scriptPaused = false;
-        _pausedAtElapsedMs = -1;
-        _startMs = _nowSeenMs - _decl.DelayMs - ActiveDurationMs;
+        if (_playbackRate > 0)
+        {
+            _pausedAtElapsedMs = -1;
+            _startMs = _nowSeenMs - (_decl.DelayMs + ActiveDurationMs) / _playbackRate;
+        }
+        else
+        {
+            // Rate 0 can't express "the end" as a start shift — park the head.
+            _pausedAtElapsedMs = ActiveDurationMs;
+        }
+        var wasCompleted = _completed;
         _completed = true;
+        if (!wasCompleted) _onScriptFinished?.Invoke();
     }
 
     /// <summary>
@@ -571,10 +645,21 @@ public sealed class AnimationInstance
         if (_canceled) return null;
 
         // Compute "iteration progress" p ∈ [0, 1] for this clock value,
-        // honouring delay, iteration count, direction, and fill mode.
-        var elapsed = nowMs - _startMs;
-        var beforeActive = elapsed < _decl.DelayMs;
-        elapsed -= _decl.DelayMs;
+        // honouring delay, playback rate, iteration count, direction, and fill
+        // mode. A frozen head (pause or playbackRate 0) holds its active time.
+        bool beforeActive;
+        double elapsed;
+        if (_pausedAtElapsedMs >= 0)
+        {
+            elapsed = _pausedAtElapsedMs;
+            beforeActive = elapsed < 0;
+        }
+        else
+        {
+            var local = (nowMs - _startMs) * _playbackRate;
+            beforeActive = local < _decl.DelayMs;
+            elapsed = local - _decl.DelayMs;
+        }
 
         var duration = _decl.DurationMs;
         if (duration <= 0)
@@ -584,8 +669,6 @@ public sealed class AnimationInstance
             // (or 0, depending on direction) without further interpolation.
             return SampleAtProgress(property, rule, _decl.Direction is AnimationDirection.Reverse or AnimationDirection.AlternateReverse ? 0 : 1);
         }
-
-        if (_pausedAtElapsedMs >= 0) elapsed = _pausedAtElapsedMs;
 
         double progress;
         var iterations = _decl.IterationCount;
