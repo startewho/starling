@@ -198,8 +198,18 @@ internal sealed class BlockLayout
             // cursor doesn't advance — they're placed in a second pass by
             // PositionLayout. The child's Frame is left at default (zero)
             // until that pass writes it.
+            // Record the hypothetical static position (§10.3.7/§10.6.4) the
+            // box would have had in this flow — the current stack cursor at
+            // the parent's left content edge — so the positioning pass can
+            // fall back to it when both insets of an axis are auto, instead
+            // of snapping to the containing block's origin. Margin collapse
+            // with the would-be previous sibling is approximated away.
             if (IsOutOfFlow(child.Style))
+            {
+                child.StaticX = 0;
+                child.StaticY = cursorY;
                 continue;
+            }
 
             var floatSide = GetFloatSide(child.Style);
             if (floatSide is not null)
@@ -544,16 +554,22 @@ internal sealed class BlockLayout
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §8.3/§8.4: percentage margins and padding on ALL FOUR sides
+        // resolve against the containing block's WIDTH — including the
+        // vertical ones. (That's what makes the `padding-bottom: %`
+        // aspect-ratio trick work: x.com's profile banner is
+        // `padding-bottom: 33.33%` of the column width, not of the viewport
+        // height.)
         box.Margin = new Edges(
-            ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         box.Border = new Edges(
@@ -600,7 +616,7 @@ internal sealed class BlockLayout
     // max-* properties accept the keyword `none` (the initial value) to mean
     // "no upper bound". ResolveLength maps `none` to 0, which would collapse
     // the box; intercept it here so callers can skip the clamp.
-    private static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
+    internal static double? ResolveMaxLength(ComputedStyle? style, PropertyId property, double percentageBasis, Size? viewport)
     {
         if (style is null) return null;
         var value = style.Get(property);

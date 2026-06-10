@@ -23,13 +23,12 @@ namespace Starling.Layout.Position;
 /// </list>
 /// Simplifications relative to spec:
 /// <list type="bullet">
-///   <item>Static-position fallback when both <c>left</c> and <c>right</c>
-///   are <c>auto</c>: we use the containing block's left edge (offset 0)
-///   rather than threading the element's would-have-been in-flow position
-///   through the in-flow pass. This matches what most pages get visually
-///   when authors omit insets entirely (the result still snaps to the
-///   start of the containing block, which is the spec's static-position
-///   most of the time).</item>
+///   <item>Static-position fallback when both insets of an axis are
+///   <c>auto</c> uses the hypothetical position the flow pass recorded on
+///   the box (<see cref="Box.Box.StaticX"/>/<c>StaticY</c> — CSS 2.1
+///   §10.3.7/§10.6.4), approximated as the stack cursor at the parent's
+///   left content edge; sibling margin collapse and the flex sole-item
+///   alignment offsets are not replayed.</item>
 ///   <item>Margin auto on positioned elements: not yet centered against the
 ///   containing block; margins resolve to their computed value (zero by
 ///   default).</item>
@@ -172,7 +171,9 @@ internal sealed class PositionLayout
                 cb = ancestorStack.Count > 0 ? ancestorStack.Peek() : _initialContainingBlock;
             }
 
-            PlaceAbsoluteOrFixed(box, props, cb, parentContentOriginX, parentContentOriginY);
+            PlaceAbsoluteOrFixed(box, props, cb, parentContentOriginX, parentContentOriginY,
+                staticDocX: parentContentOriginX + box.StaticX,
+                staticDocY: parentContentOriginY + box.StaticY);
 
             // After placing, the box's frame is in *parent content* coords,
             // and we want to recurse into its children using its NEW
@@ -211,16 +212,26 @@ internal sealed class PositionLayout
         PositionedProps props,
         Rect cbDocRect,
         double parentContentOriginX,
-        double parentContentOriginY)
+        double parentContentOriginY,
+        double staticDocX,
+        double staticDocY)
     {
         // Resolve box-model values against the containing block (CSS spec:
         // percentage margins/padding on absolutely-positioned boxes resolve
         // against the containing block's *width*, just like normal).
         ResolveBoxModel(box, cbDocRect.Width);
 
-        // Resolve explicit width/height (auto → null).
+        // Resolve explicit width/height (auto → null). ResolveAxis consumes
+        // BORDER-BOX sizes, so a resolved content-box width/height gets the
+        // box's own padding + border added back — without that, a padded
+        // positioned box lost its padding from the frame (and the content
+        // width subtraction below removed it a second time).
         var widthResolved = BlockLayout.ResolveLength(box.Style, PropertyId.Width, cbDocRect.Width, _viewport, allowAuto: true);
         var heightResolved = BlockLayout.ResolveLength(box.Style, PropertyId.Height, cbDocRect.Height, _viewport, allowAuto: true);
+        if (widthResolved is { } wr)
+            widthResolved = wr + box.Padding.Horizontal + box.Border.Horizontal;
+        if (heightResolved is { } hr)
+            heightResolved = hr + box.Padding.Vertical + box.Border.Vertical;
 
         // Resolve insets against the containing block's content-box
         // dimensions.
@@ -232,7 +243,8 @@ internal sealed class PositionLayout
             explicitSize: widthResolved,
             startMargin: box.Margin.Left,
             endMargin: box.Margin.Right,
-            outerInsets: box.Padding.Horizontal + box.Border.Horizontal);
+            outerInsets: box.Padding.Horizontal + box.Border.Horizontal,
+            staticStart: staticDocX);
 
         // Default height: lay out children at the resolved width and use
         // their consumed height (block formatting context for descendants).
@@ -275,7 +287,8 @@ internal sealed class PositionLayout
             explicitSize: heightExplicit,
             startMargin: box.Margin.Top,
             endMargin: box.Margin.Bottom,
-            outerInsets: box.Padding.Vertical + box.Border.Vertical);
+            outerInsets: box.Padding.Vertical + box.Border.Vertical,
+            staticStart: staticDocY);
 
         // Document-space top-left of the element's *border box*.
         var docX = left + box.Margin.Left;
@@ -301,6 +314,8 @@ internal sealed class PositionLayout
     /// </list>
     /// Implements CSS 2.1 §10.3.7 (horizontal) / §10.6.4 (vertical),
     /// simplified — auto margins resolve to 0 rather than absorbing slack.
+    /// <paramref name="staticStart"/> is the document-space hypothetical
+    /// static position for this axis, used when BOTH insets are auto.
     /// </summary>
     private static (double Start, double End, double UsedSize) ResolveAxis(
         Inset startInset,
@@ -310,7 +325,8 @@ internal sealed class PositionLayout
         double? explicitSize,
         double startMargin,
         double endMargin,
-        double outerInsets)
+        double outerInsets,
+        double staticStart)
     {
         var s = startInset.Resolve(cbExtent);
         var e = endInset.Resolve(cbExtent);
@@ -320,8 +336,12 @@ internal sealed class PositionLayout
 
         if (s is null && e is null)
         {
-            // Both auto → static position. Simplification: snap to cb start.
-            startCoord = cbStart;
+            // Both auto → the hypothetical static position recorded by the
+            // flow pass (CSS 2.1 §10.3.7 rule 1 / §10.6.4 rule 1): the box
+            // stays where in-flow layout would have put it. x.com's fixed
+            // sidebar card has no insets at all — it must paint inside the
+            // sidebar (x≈837), not at the viewport origin.
+            startCoord = staticStart;
             usedSize = explicitSize ?? 0;
         }
         else if (s is { } sv && e is null)
@@ -370,16 +390,18 @@ internal sealed class PositionLayout
 
     private void ResolveBoxModel(Box.Box box, double containerWidth)
     {
+        // CSS 2.1 §8.3/§8.4 — percentage margins/padding resolve against the
+        // containing block's width on all four sides (vertical included).
         box.Margin = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.MarginBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.MarginLeft, containerWidth, _viewport) ?? 0);
 
         box.Padding = new Edges(
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingTop, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingRight, containerWidth, _viewport) ?? 0,
-            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, _viewport.Height, _viewport) ?? 0,
+            BlockLayout.ResolveLength(box.Style, PropertyId.PaddingBottom, containerWidth, _viewport) ?? 0,
             BlockLayout.ResolveLength(box.Style, PropertyId.PaddingLeft, containerWidth, _viewport) ?? 0);
 
         // Border resolution is left at zero for the positioned scope — the
