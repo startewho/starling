@@ -458,7 +458,14 @@ public sealed class AnimationInstance
             sink.Add(new AnimationEventRecord(Element, AnimationEventKind.AnimationStart, _decl.Name, startElapsed / 1000.0));
         }
 
-        if (duration > 0)
+        // A tick at/past the end of the active interval reports animationend
+        // only: the final iteration boundary IS the end, and animationiteration
+        // never fires when an animationend fires at the same sample (CSS
+        // Animations 2). The gate also stops a late iteration report on the
+        // tick after the end fired.
+        var ended = !double.IsInfinity(iterations) && elapsed >= activeMs;
+
+        if (duration > 0 && !ended)
         {
             // Iteration boundaries crossed so far, excluding the one that ends
             // the animation (that one is animationend, not animationiteration).
@@ -474,7 +481,7 @@ public sealed class AnimationInstance
             }
         }
 
-        if (!_eventEndFired && !double.IsInfinity(iterations) && elapsed >= activeMs)
+        if (!_eventEndFired && ended)
         {
             _eventEndFired = true;
             sink.Add(new AnimationEventRecord(Element, AnimationEventKind.AnimationEnd, _decl.Name, activeMs / 1000.0));
