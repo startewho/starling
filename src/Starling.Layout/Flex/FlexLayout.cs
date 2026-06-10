@@ -695,7 +695,7 @@ internal sealed class FlexLayout
     /// main gaps (row), or max of items' cross-content sizes (column).
     /// Recursive so it survives arbitrary nesting.
     /// </summary>
-    private double NaturalWidth(Box.Box box, double containerWidth)
+    internal double NaturalWidth(Box.Box box, double containerWidth)
     {
         if (box.Kind == BoxKind.AnonymousBlock || !BlockLayout.IsFlexContainer(box.Style))
         {
