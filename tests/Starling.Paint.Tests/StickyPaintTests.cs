@@ -90,6 +90,35 @@ public sealed class StickyPaintTests
     }
 
     [TestMethod]
+    public void Stuck_header_composes_with_a_transformed_ancestor()
+    {
+        // Doc point 5: a transformed ancestor needs no special case — the
+        // shift offsets the paint origin inside the ancestor's transform
+        // bracket, so the pinned band lands at the translated position.
+        const string page = """
+            <body style='margin:0'>
+              <div style='transform:translate(20px, 10px);width:200px'>
+                <div id=sc style='overflow:auto;width:200px;height:100px'>
+                  <div id=wrap>
+                    <div style='height:40px;background:#0000ff'></div>
+                    <div id=st style='position:sticky;top:0;height:20px;background:#ff0000'></div>
+                    <div style='height:340px;background:#008000'></div>
+                  </div>
+                </div>
+              </div>
+            </body>
+            """;
+        var store = new ScrollStateStore();
+        using var bmp = Render(page, scrollY: 100, store);
+
+        PixelAt(bmp, 100, 15).Should().Be(((byte)255, (byte)0, (byte)0),
+            "the pinned band sits at the scroller's translated top (page rows 10-29)");
+        PixelAt(bmp, 100, 5).Should().NotBe(((byte)255, (byte)0, (byte)0),
+            "nothing paints above the translated scroller");
+        PixelAt(bmp, 100, 40).Should().Be(((byte)0, (byte)128, (byte)0));
+    }
+
+    [TestMethod]
     public void Partially_stuck_header_shifts_by_the_deficit_only()
     {
         var store = new ScrollStateStore();
