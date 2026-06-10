@@ -675,7 +675,7 @@ internal sealed class BlockLayout
     /// <see cref="ToPx(CssLength, Size?)"/>: font-relative units use a 16px base
     /// and viewport units use <paramref name="viewport"/> (100px when unknown).
     /// </summary>
-    private static double? ResolveCalcPx(CssCalc calc, double? percentageBasis, Size? viewport)
+    internal static double? ResolveCalcPx(CssCalc calc, double? percentageBasis, Size? viewport)
     {
         var vw = viewport?.Width ?? 100d;
         var vh = viewport?.Height ?? 100d;
