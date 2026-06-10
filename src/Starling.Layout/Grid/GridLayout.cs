@@ -291,37 +291,37 @@ internal sealed class GridLayout
                 number = (int)num.Value;
                 return;
             case CssValueList list:
-            {
-                var sawSpan = false;
-                var spanCount = 0;
-                foreach (var v in list.Values)
                 {
-                    if (v is CssKeyword { Name: "span" }) sawSpan = true;
-                    else if (v is CssNumber m) spanCount = (int)m.Value;
+                    var sawSpan = false;
+                    var spanCount = 0;
+                    foreach (var v in list.Values)
+                    {
+                        if (v is CssKeyword { Name: "span" }) sawSpan = true;
+                        else if (v is CssNumber m) spanCount = (int)m.Value;
+                    }
+                    if (sawSpan && spanCount > 0)
+                    {
+                        kind = LineKind.Span;
+                        number = spanCount;
+                    }
+                    // `span <custom-ident>` and other shapes degrade to auto.
+                    return;
                 }
-                if (sawSpan && spanCount > 0)
-                {
-                    kind = LineKind.Span;
-                    number = spanCount;
-                }
-                // `span <custom-ident>` and other shapes degrade to auto.
-                return;
-            }
             case CssKeyword { Name: "auto" }:
                 return;
             case CssKeyword k:
-            {
-                // An area name places against the area's implicit
-                // name-start/name-end lines. Unknown idents degrade to auto.
-                if (areas is not null && areas.Areas.TryGetValue(k.Name, out var rect))
                 {
-                    kind = LineKind.Line;
-                    number = isRow
-                        ? (isStart ? rect.R0 + 1 : rect.R1 + 2)
-                        : (isStart ? rect.C0 + 1 : rect.C1 + 2);
+                    // An area name places against the area's implicit
+                    // name-start/name-end lines. Unknown idents degrade to auto.
+                    if (areas is not null && areas.Areas.TryGetValue(k.Name, out var rect))
+                    {
+                        kind = LineKind.Line;
+                        number = isRow
+                            ? (isStart ? rect.R0 + 1 : rect.R1 + 2)
+                            : (isStart ? rect.C0 + 1 : rect.C1 + 2);
+                    }
+                    return;
                 }
-                return;
-            }
         }
     }
 
@@ -613,22 +613,22 @@ internal sealed class GridLayout
         switch (value)
         {
             case CssFunctionValue { Name: "minmax" } f when f.Arguments.Count == 2:
-            {
-                var (minK, minV) = ParseSizePart(f.Arguments[0], basis, isMin: true);
-                var (maxK, maxV) = ParseSizePart(f.Arguments[1], basis, isMin: false);
-                // §7.2.5: if max < min, max is treated as min.
-                if (minK == SizeKind.Px && maxK == SizeKind.Px && maxV < minV) maxV = minV;
-                def = new TrackDef { MinKind = minK, Min = minV, MaxKind = maxK, Max = maxV };
-                return true;
-            }
+                {
+                    var (minK, minV) = ParseSizePart(f.Arguments[0], basis, isMin: true);
+                    var (maxK, maxV) = ParseSizePart(f.Arguments[1], basis, isMin: false);
+                    // §7.2.5: if max < min, max is treated as min.
+                    if (minK == SizeKind.Px && maxK == SizeKind.Px && maxV < minV) maxV = minV;
+                    def = new TrackDef { MinKind = minK, Min = minV, MaxKind = maxK, Max = maxV };
+                    return true;
+                }
             case CssFunctionValue { Name: "fit-content" } f when f.Arguments.Count == 1:
-            {
-                var limit = ResolvePx(f.Arguments[0], basis);
-                def = limit is { } px
-                    ? new TrackDef { MinKind = SizeKind.Auto, MaxKind = SizeKind.FitContent, Max = px }
-                    : AutoDef();
-                return true;
-            }
+                {
+                    var limit = ResolvePx(f.Arguments[0], basis);
+                    def = limit is { } px
+                        ? new TrackDef { MinKind = SizeKind.Auto, MaxKind = SizeKind.FitContent, Max = px }
+                        : AutoDef();
+                    return true;
+                }
             case CssDimension { Unit: "fr" } d:
                 def = new TrackDef { MinKind = SizeKind.Auto, MaxKind = SizeKind.Fr, Max = Math.Max(0, d.Value) };
                 return true;
@@ -642,26 +642,26 @@ internal sealed class GridLayout
                 def = new TrackDef { MinKind = SizeKind.MaxContent, MaxKind = SizeKind.MaxContent };
                 return true;
             default:
-            {
-                // Lengths, percentages, numbers, symbolic calc(). Anything else
-                // (line-name blocks, unknown keywords) contributes no track.
-                var px = ResolvePx(value, basis);
-                if (px is { } v)
                 {
-                    def = new TrackDef { MinKind = SizeKind.Px, Min = v, MaxKind = SizeKind.Px, Max = v };
-                    return true;
+                    // Lengths, percentages, numbers, symbolic calc(). Anything else
+                    // (line-name blocks, unknown keywords) contributes no track.
+                    var px = ResolvePx(value, basis);
+                    if (px is { } v)
+                    {
+                        def = new TrackDef { MinKind = SizeKind.Px, Min = v, MaxKind = SizeKind.Px, Max = v };
+                        return true;
+                    }
+                    // A percentage (or calc with %) against an indefinite size
+                    // behaves as auto (css-grid-1 §7.2.1) — the track must still
+                    // occupy its slot, or later tracks shift and negative line
+                    // numbers resolve against the wrong count.
+                    if (value is CssPercentage or CssCalc)
+                    {
+                        def = AutoDef();
+                        return true;
+                    }
+                    return false;
                 }
-                // A percentage (or calc with %) against an indefinite size
-                // behaves as auto (css-grid-1 §7.2.1) — the track must still
-                // occupy its slot, or later tracks shift and negative line
-                // numbers resolve against the wrong count.
-                if (value is CssPercentage or CssCalc)
-                {
-                    def = AutoDef();
-                    return true;
-                }
-                return false;
-            }
         }
     }
 

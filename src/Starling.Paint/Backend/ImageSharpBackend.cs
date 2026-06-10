@@ -2665,52 +2665,52 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         switch (style)
         {
             case BorderSideStyle.Dashed:
-            {
-                // run = n·dash + (n−1)·gap with dash = 2·gap, n picked so the
-                // gap stays close to one border width.
-                var n = Math.Max(1, (int)Math.Round((run / thickness + 1d) / 3d));
-                var gap = run / (3f * n - 1f);
-                var dash = 2f * gap;
-                for (var i = 0; i < n; i++)
                 {
-                    var s = a0 + i * (dash + gap);
-                    AddBandRect(pb, horizontal, s, s + dash, near, thickness);
-                }
-                break;
-            }
-            case BorderSideStyle.Dotted:
-            {
-                var r = thickness / 2f;
-                var cross = edge + inward * r;
-                var c0 = a0 + r;
-                var c1 = a1 - r;
-                var span = c1 - c0;
-                if (span <= 0)
-                {
-                    var mid = (a0 + a1) / 2f;
-                    AddDotFigure(pb, horizontal ? mid : cross, horizontal ? cross : mid, r);
-                }
-                else
-                {
-                    var intervals = Math.Max(1, (int)Math.Round(span / (2f * thickness)));
-                    var step = span / intervals;
-                    for (var i = 0; i <= intervals; i++)
+                    // run = n·dash + (n−1)·gap with dash = 2·gap, n picked so the
+                    // gap stays close to one border width.
+                    var n = Math.Max(1, (int)Math.Round((run / thickness + 1d) / 3d));
+                    var gap = run / (3f * n - 1f);
+                    var dash = 2f * gap;
+                    for (var i = 0; i < n; i++)
                     {
-                        var c = c0 + i * step;
-                        AddDotFigure(pb, horizontal ? c : cross, horizontal ? cross : c, r);
+                        var s = a0 + i * (dash + gap);
+                        AddBandRect(pb, horizontal, s, s + dash, near, thickness);
                     }
+                    break;
                 }
-                break;
-            }
+            case BorderSideStyle.Dotted:
+                {
+                    var r = thickness / 2f;
+                    var cross = edge + inward * r;
+                    var c0 = a0 + r;
+                    var c1 = a1 - r;
+                    var span = c1 - c0;
+                    if (span <= 0)
+                    {
+                        var mid = (a0 + a1) / 2f;
+                        AddDotFigure(pb, horizontal ? mid : cross, horizontal ? cross : mid, r);
+                    }
+                    else
+                    {
+                        var intervals = Math.Max(1, (int)Math.Round(span / (2f * thickness)));
+                        var step = span / intervals;
+                        for (var i = 0; i <= intervals; i++)
+                        {
+                            var c = c0 + i * step;
+                            AddDotFigure(pb, horizontal ? c : cross, horizontal ? cross : c, r);
+                        }
+                    }
+                    break;
+                }
             case BorderSideStyle.Double:
-            {
-                var third = thickness / 3f;
-                var nearOuter = inward > 0 ? edge : edge - third;
-                var nearInner = inward > 0 ? edge + 2f * third : edge - thickness;
-                AddBandRect(pb, horizontal, a0, a1, nearOuter, third);
-                AddBandRect(pb, horizontal, a0, a1, nearInner, third);
-                break;
-            }
+                {
+                    var third = thickness / 3f;
+                    var nearOuter = inward > 0 ? edge : edge - third;
+                    var nearInner = inward > 0 ? edge + 2f * third : edge - thickness;
+                    AddBandRect(pb, horizontal, a0, a1, nearOuter, third);
+                    AddBandRect(pb, horizontal, a0, a1, nearInner, third);
+                    break;
+                }
             default:
                 AddBandRect(pb, horizontal, a0, a1, near, thickness);
                 break;
@@ -2921,87 +2921,87 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             switch (f.Kind)
             {
                 case FilterFunctionKind.Blur:
-                {
-                    var sigma = (float)(FilterFunction.BlurSigma(f.Amount) * scale);
-                    if (sigma > 0)
-                        layer.Mutate(ctx => ctx.GaussianBlur(sigma));
-                    break;
-                }
-                case FilterFunctionKind.Brightness:
-                {
-                    var amount = (float)Math.Max(0, f.Amount);
-                    layer.Mutate(ctx => ctx.Brightness(amount));
-                    break;
-                }
-                case FilterFunctionKind.Contrast:
-                {
-                    var amount = (float)Math.Max(0, f.Amount);
-                    layer.Mutate(ctx => ctx.Contrast(amount));
-                    break;
-                }
-                case FilterFunctionKind.Saturate:
-                {
-                    var amount = (float)Math.Max(0, f.Amount);
-                    layer.Mutate(ctx => ctx.Saturate(amount));
-                    break;
-                }
-                case FilterFunctionKind.Grayscale:
-                {
-                    var amount = (float)Math.Clamp(f.Amount, 0, 1);
-                    if (amount > 0)
-                        layer.Mutate(ctx => ctx.Grayscale(amount));
-                    break;
-                }
-                case FilterFunctionKind.Sepia:
-                {
-                    var amount = (float)Math.Clamp(f.Amount, 0, 1);
-                    if (amount > 0)
-                        layer.Mutate(ctx => ctx.Sepia(amount));
-                    break;
-                }
-                case FilterFunctionKind.HueRotate:
-                {
-                    var degrees = (float)f.Amount;
-                    if (degrees != 0)
-                        layer.Mutate(ctx => ctx.Hue(degrees));
-                    break;
-                }
-                case FilterFunctionKind.Invert:
-                {
-                    // §10.1: c' = a·(1−c) + (1−a)·c = (1−2a)·c + a — an affine
-                    // color matrix (full channel flip at a = 1).
-                    var a = (float)Math.Clamp(f.Amount, 0, 1);
-                    if (a > 0)
                     {
-                        var m = new ColorMatrix
-                        {
-                            M11 = 1 - 2 * a,
-                            M22 = 1 - 2 * a,
-                            M33 = 1 - 2 * a,
-                            M44 = 1,
-                            M51 = a,
-                            M52 = a,
-                            M53 = a,
-                        };
-                        layer.Mutate(ctx => ctx.Filter(m));
+                        var sigma = (float)(FilterFunction.BlurSigma(f.Amount) * scale);
+                        if (sigma > 0)
+                            layer.Mutate(ctx => ctx.GaussianBlur(sigma));
+                        break;
                     }
-                    break;
-                }
+                case FilterFunctionKind.Brightness:
+                    {
+                        var amount = (float)Math.Max(0, f.Amount);
+                        layer.Mutate(ctx => ctx.Brightness(amount));
+                        break;
+                    }
+                case FilterFunctionKind.Contrast:
+                    {
+                        var amount = (float)Math.Max(0, f.Amount);
+                        layer.Mutate(ctx => ctx.Contrast(amount));
+                        break;
+                    }
+                case FilterFunctionKind.Saturate:
+                    {
+                        var amount = (float)Math.Max(0, f.Amount);
+                        layer.Mutate(ctx => ctx.Saturate(amount));
+                        break;
+                    }
+                case FilterFunctionKind.Grayscale:
+                    {
+                        var amount = (float)Math.Clamp(f.Amount, 0, 1);
+                        if (amount > 0)
+                            layer.Mutate(ctx => ctx.Grayscale(amount));
+                        break;
+                    }
+                case FilterFunctionKind.Sepia:
+                    {
+                        var amount = (float)Math.Clamp(f.Amount, 0, 1);
+                        if (amount > 0)
+                            layer.Mutate(ctx => ctx.Sepia(amount));
+                        break;
+                    }
+                case FilterFunctionKind.HueRotate:
+                    {
+                        var degrees = (float)f.Amount;
+                        if (degrees != 0)
+                            layer.Mutate(ctx => ctx.Hue(degrees));
+                        break;
+                    }
+                case FilterFunctionKind.Invert:
+                    {
+                        // §10.1: c' = a·(1−c) + (1−a)·c = (1−2a)·c + a — an affine
+                        // color matrix (full channel flip at a = 1).
+                        var a = (float)Math.Clamp(f.Amount, 0, 1);
+                        if (a > 0)
+                        {
+                            var m = new ColorMatrix
+                            {
+                                M11 = 1 - 2 * a,
+                                M22 = 1 - 2 * a,
+                                M33 = 1 - 2 * a,
+                                M44 = 1,
+                                M51 = a,
+                                M52 = a,
+                                M53 = a,
+                            };
+                            layer.Mutate(ctx => ctx.Filter(m));
+                        }
+                        break;
+                    }
                 case FilterFunctionKind.Opacity:
-                {
-                    var a = (float)Math.Clamp(f.Amount, 0, 1);
-                    if (a < 1)
-                        layer.Mutate(ctx => ctx.Opacity(a));
-                    break;
-                }
+                    {
+                        var a = (float)Math.Clamp(f.Amount, 0, 1);
+                        if (a < 1)
+                            layer.Mutate(ctx => ctx.Opacity(a));
+                        break;
+                    }
                 case FilterFunctionKind.DropShadow:
-                {
-                    var next = ApplyDropShadowFilter(layer, f, scale);
-                    if (!ReferenceEquals(layer, original))
-                        layer.Dispose(); // intermediate from a previous drop-shadow
-                    layer = next;
-                    break;
-                }
+                    {
+                        var next = ApplyDropShadowFilter(layer, f, scale);
+                        if (!ReferenceEquals(layer, original))
+                            layer.Dispose(); // intermediate from a previous drop-shadow
+                        layer = next;
+                        break;
+                    }
             }
         }
         return layer;

@@ -1170,32 +1170,32 @@ public sealed class DisplayListBuilder
         switch (fitName)
         {
             case "contain" when hasRatio:
-            {
-                var scale = Math.Min(contentW / naturalW, contentH / naturalH);
-                fitW = naturalW * scale;
-                fitH = naturalH * scale;
-                break;
-            }
+                {
+                    var scale = Math.Min(contentW / naturalW, contentH / naturalH);
+                    fitW = naturalW * scale;
+                    fitH = naturalH * scale;
+                    break;
+                }
             case "cover" when hasRatio:
-            {
-                var scale = Math.Max(contentW / naturalW, contentH / naturalH);
-                fitW = naturalW * scale;
-                fitH = naturalH * scale;
-                break;
-            }
+                {
+                    var scale = Math.Max(contentW / naturalW, contentH / naturalH);
+                    fitW = naturalW * scale;
+                    fitH = naturalH * scale;
+                    break;
+                }
             case "none" when hasNatural:
                 fitW = naturalW;
                 fitH = naturalH;
                 break;
             case "scale-down" when hasRatio:
-            {
-                // §4.5 — the smaller of `none` and `contain`.
-                var scale = Math.Min(contentW / naturalW, contentH / naturalH);
-                if (hasNatural && scale > 1d) scale = 1d;
-                fitW = naturalW * scale;
-                fitH = naturalH * scale;
-                break;
-            }
+                {
+                    // §4.5 — the smaller of `none` and `contain`.
+                    var scale = Math.Min(contentW / naturalW, contentH / naturalH);
+                    if (hasNatural && scale > 1d) scale = 1d;
+                    fitW = naturalW * scale;
+                    fitH = naturalH * scale;
+                    break;
+                }
         }
 
         var (offsetX, offsetY) = ResolveObjectPosition(
@@ -2278,16 +2278,16 @@ public sealed class DisplayListBuilder
             case CssFunctionValue fn:
                 return ResolveFilterFunction(fn, currentColor) is { } single ? new[] { single } : null;
             case CssValueList { Values.Count: > 0 } chain:
-            {
-                var resolved = new FilterFunction[chain.Values.Count];
-                for (var i = 0; i < chain.Values.Count; i++)
                 {
-                    if (chain.Values[i] is not CssFunctionValue fn) return null;
-                    if (ResolveFilterFunction(fn, currentColor) is not { } one) return null;
-                    resolved[i] = one;
+                    var resolved = new FilterFunction[chain.Values.Count];
+                    for (var i = 0; i < chain.Values.Count; i++)
+                    {
+                        if (chain.Values[i] is not CssFunctionValue fn) return null;
+                        if (ResolveFilterFunction(fn, currentColor) is not { } one) return null;
+                        resolved[i] = one;
+                    }
+                    return resolved;
                 }
-                return resolved;
-            }
             default:
                 return null; // none / unset / url(#id)
         }

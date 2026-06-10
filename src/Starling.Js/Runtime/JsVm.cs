@@ -1934,1188 +1934,1188 @@ public sealed class JsVm
         var constants = frame.Constants;
         switch (op)
         {
-        // wp:M3-72 — direct-eval caller-scope read. Resolve a free
-        // identifier (matching a caller binding name) against the live
-        // caller frame, falling back to a checked global load on a miss.
-        case Opcode.LoadEvalScope:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                _lastLoadName = name;
-                if (frame.EvalScope is not null && frame.EvalScope.TryGet(name, out var entry))
+            // wp:M3-72 — direct-eval caller-scope read. Resolve a free
+            // identifier (matching a caller binding name) against the live
+            // caller frame, falling back to a checked global load on a miss.
+            case Opcode.LoadEvalScope:
                 {
-                    var v = entry.Read();
-                    // §13.3.1.1 — reading a caller lexical binding still in
-                    // its TDZ throws ReferenceError.
-                    if (v.IsObject && ReferenceEquals(v.AsObject, _runtime.Realm.TdzSentinel))
-                        throw new JsThrow(_runtime.Realm.NewReferenceError(
-                            "Cannot access '" + name + "' before initialization"));
-                    Push(frame, ref stack, ref sp, ref maxSp, v);
-                    break;
-                }
-                var realm = _runtime.Realm;
-                var globalObj = realm.GlobalObject;
-                if (!globalObj.Has(name))
-                {
-                    if (realm.ThrowOnUnresolvedGlobalRead && !realm.LenientGlobalNames.Contains(name))
-                        throw new JsThrow(realm.NewReferenceError(name + " is not defined"));
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
-                    break;
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, globalObj, name, JsValue.Object(globalObj)));
-                break;
-            }
-        // wp:M3-72 — direct-eval caller-scope write. Write through the
-        // live caller binding, else fall back to a global store.
-        case Opcode.StoreEvalScope:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var value = Pop(stack, ref sp);
-                if (frame.EvalScope is not null && frame.EvalScope.TryGet(name, out var entry))
-                {
-                    if (entry.IsConst)
-                        throw new JsThrow(_runtime.Realm.NewTypeError(
-                            "Assignment to constant variable '" + name + "'"));
-                    entry.Write(value);
-                    break;
-                }
-                var globalObj = _runtime.Realm.GlobalObject;
-                if (frame.FrameStrict && !globalObj.Has(name))
-                    throw new JsThrow(_runtime.Realm.NewReferenceError(name + " is not defined"));
-                var ok2 = AbstractOperations.Set(this, globalObj, name, value, JsValue.Object(globalObj));
-                if (!ok2 && frame.FrameStrict)
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot assign to read-only property '" + name + "'"));
-                break;
-            }
-        // gap:script-top-var-not-global — idempotent CreateGlobalVarBinding
-        // (§16.1.7 / §9.1.1.4.16). Skip if the global already has an own
-        // property of this name (function-decl hoist may have installed
-        // it first, or this is the second `var x` of a redeclaration);
-        // otherwise install an own data property seeded with undefined.
-        case Opcode.DeclareGlobalVar:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var globalObj = _runtime.Realm.GlobalObject;
-                if (!globalObj.HasOwn(name))
-                {
-                    globalObj.DefineOwnProperty(name,
-                        PropertyDescriptor.Data(JsValue.Undefined,
-                            writable: true, enumerable: true, configurable: false));
-                }
-                break;
-            }
-        // wp:M3-73 — §19.2.1.3 EvalDeclarationInstantiation (non-global
-        // branch). Idempotent pre-declaration of an eval-body top-level
-        // var/function name into the CALLER frame's eval-introduced var
-        // store (frameVarStore is the caller's store while running eval'd
-        // code). Re-declaring an existing binding has no effect.
-        case Opcode.DeclareEvalVar:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                frame.FrameVarStore?.Declare(name);
-                break;
-            }
-        // wp:M3-73 — set an eval-introduced binding (created by
-        // DeclareEvalVar): a var initializer's value or a hoisted
-        // function declaration's function object.
-        case Opcode.StoreEvalVar:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var value = Pop(stack, ref sp);
-                frame.FrameVarStore?.Set(name, value);
-                break;
-            }
-        // wp:M3-73 — `delete name` where the name may be an
-        // eval-introduced binding. Such bindings are configurable
-        // (§19.2.1.3), so remove it from the store and push true; if the
-        // name isn't there this is the ordinary sloppy identifier-delete
-        // no-op (still true). Deletes only at the store's OWN level — an
-        // enclosing function's binding (parent store) is not in scope to
-        // delete from here.
-        case Opcode.DeleteEvalVar:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                frame.FrameVarStore?.Delete(name);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(true));
-                break;
-            }
-        // wp:M3-26 — object-literal accessor (getter/setter) shorthand.
-        // Reuse the class-member accessor installer so paired get/set on
-        // the same key share one descriptor. Object-literal accessors are
-        // enumerable (§13.2.5), unlike class accessors.
-        case Opcode.DefineGetter:
-        case Opcode.DefineSetter:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var fnVal = Pop(stack, ref sp);
-                var obj = Pop(stack, ref sp);
-                InstallObjectAccessor(obj.AsObject, JsPropertyKey.String(name),
-                    isGetter: op == Opcode.DefineGetter, (JsFunction)fnVal.AsObject);
-                Push(frame, ref stack, ref sp, ref maxSp, obj);
-                break;
-            }
-        case Opcode.DefineGetterComputed:
-        case Opcode.DefineSetterComputed:
-            {
-                var fnVal = Pop(stack, ref sp);
-                var key = Pop(stack, ref sp);
-                var obj = Pop(stack, ref sp);
-                InstallObjectAccessor(obj.AsObject, AbstractOperations.ToPropertyKey(this, key),
-                    isGetter: op == Opcode.DefineGetterComputed, (JsFunction)fnVal.AsObject);
-                Push(frame, ref stack, ref sp, ref maxSp, obj);
-                break;
-            }
-        // wp:M3-26 — CreateDataPropertyOrThrow (§7.3.5): define an own
-        // enumerable/writable/configurable data property, replacing any
-        // existing accessor or data descriptor on the key.
-        case Opcode.DefineDataProperty:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var value = Pop(stack, ref sp);
-                var obj = Pop(stack, ref sp);
-                obj.AsObject.DefineOwnProperty(name,
-                    PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
-                Push(frame, ref stack, ref sp, ref maxSp, obj);
-                break;
-            }
-        case Opcode.DefineDataComputed:
-            {
-                var value = Pop(stack, ref sp);
-                var key = Pop(stack, ref sp);
-                var obj = Pop(stack, ref sp);
-                obj.AsObject.DefineOwnProperty(AbstractOperations.ToPropertyKey(this, key),
-                    PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
-                Push(frame, ref stack, ref sp, ref maxSp, obj);
-                break;
-            }
-        case Opcode.SetObjectPrototype:
-            {
-                var value = Pop(stack, ref sp);
-                var obj = Pop(stack, ref sp);
-                if (value.IsObject)
-                    obj.AsObject.SetPrototypeOf(value.AsObject);
-                else if (value.IsNull)
-                    obj.AsObject.SetPrototypeOf(null);
-                Push(frame, ref stack, ref sp, ref maxSp, obj);
-                break;
-            }
-        // wp:M3-64 — §13.2.5 MakeMethod. Stack: [obj, fn]. Stamp the
-        // method's [[HomeObject]] = the object literal being built so
-        // `super.x` inside it resolves against the object's prototype.
-        // Peek (do not pop) so the stack stays [obj, fn] for the Define
-        // opcode that follows.
-        case Opcode.SetHomeObject:
-            {
-                var fnVal = stack[sp - 1];
-                var objVal = stack[sp - 2];
-                if (fnVal.IsObject && fnVal.AsObject is JsFunction methodFn
-                    && objVal.IsObject)
-                {
-                    methodFn.HomeObject = objVal.AsObject;
-                }
-                break;
-            }
-        // wp:M3-64 — computed-key variant: stack is [obj, key, fn].
-        case Opcode.SetHomeObjectComputed:
-            {
-                var fnVal = stack[sp - 1];
-                var objVal = stack[sp - 3];
-                if (fnVal.IsObject && fnVal.AsObject is JsFunction methodFn
-                    && objVal.IsObject)
-                {
-                    methodFn.HomeObject = objVal.AsObject;
-                }
-                break;
-            }
-        case Opcode.DirectEval:
-            {
-                // wp:M3-71/72 — §19.2.1.1 PerformEval (direct path). The
-                // compiler emitted this for a bare-`eval` call resolving to
-                // the global slot, with a u16 EvalScopeDescriptor index of the
-                // calling function's variable environment followed by the u8
-                // argc. Confirm the callee is STILL the realm intrinsic; if it
-                // was reassigned (or is otherwise not the intrinsic), fall back
-                // to an ordinary indirect call with this=undefined.
-                var descIdx = ReadU16(code, ref ip);
-                var argc = code[ip++];
-                var callArgs = new JsValue[argc];
-                for (var i = argc - 1; i >= 0; i--) callArgs[i] = Pop(stack, ref sp);
-                var callee = Pop(stack, ref sp);
-                var intrinsic = _runtime.Realm.EvalFunction;
-                if (intrinsic is not null && callee.IsObject
-                    && ReferenceEquals(callee.AsObject, intrinsic))
-                {
-                    // wp:M3-72 — pair the compile-time descriptor with the live
-                    // frame storage so the eval'd code reads/writes the
-                    // caller's actual bindings.
-                    var descriptor = (Bytecode.EvalScopeDescriptor)constants[descIdx]!;
-                    var callerScope = BuildEvalScope(descriptor, locals, frame.Upvalues);
-                    // The eval scope references this frame's locals ARRAY by
-                    // (array, slot). Today the scope dies when the eval barrier
-                    // pops (nothing captures it), but keep this frame's locals
-                    // out of the pool so any future holder of the scope can
-                    // never read another frame's recycled slots.
-                    frame.LocalsEscaped = true;
-                    // wp:M3-73 — a non-strict direct eval whose caller is a
-                    // function injects its own top-level var/function bindings
-                    // into the caller frame's eval-introduced var store. Pass
-                    // it by ref so PerformDirectEval can create it lazily and
-                    // the rest of THIS frame then resolves those names too.
-                    Push(frame, ref stack, ref sp, ref maxSp, PerformDirectEval(callArgs, callerScope, frame.CurrentFunction, frame.ThisV,
-                        frame.NewTarget, frame.FrameStrict, inInitializer: frame.InitDepth > 0,
-                        ref frame.FrameVarStore));
-                    break;
-                }
-                if (!IsCallableValue(callee))
-                    throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: 'eval')")));
-                Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs));
-                break;
-            }
-        case Opcode.LoadRegExp:
-            {
-                var srcIdx = ReadU16(code, ref ip);
-                var flagsIdx = ReadU16(code, ref ip);
-                var regexCacheId = ReadU16(code, ref ip);
-                // Per-site cache: a regex literal compiles once and the matcher
-                // is reused across re-evaluations (e.g. in a loop), avoiding even
-                // the (source, flags) dictionary lookup on the hot path. A fresh
-                // JsRegExp wrapper is still created each time so each evaluation
-                // gets an independent `lastIndex` slot, as the spec requires.
-                var compiled = chunk.RegexLiterals[regexCacheId];
-                if (compiled is null)
-                {
-                    var source = (string)constants[srcIdx]!;
-                    var flagsStr = (string)constants[flagsIdx]!;
-                    if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
-                        throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
-                    try
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    _lastLoadName = name;
+                    if (frame.EvalScope is not null && frame.EvalScope.TryGet(name, out var entry))
                     {
-                        compiled = Starling.Js.Runtime.Regex.RegexBackendSelector.CompileCached(source, flags);
-                    }
-                    catch (RegexSyntaxException ex)
-                    {
-                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
-                            $"Invalid regular expression: /{source}/: {ex.Message}"));
-                    }
-                    chunk.RegexLiterals[regexCacheId] = compiled;
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(new JsRegExp(_runtime.Realm, compiled)));
-                break;
-            }
-        case Opcode.TemplateObject:
-            {
-                var tmpl = (TemplateObjectTemplate)constants[ReadU16(code, ref ip)]!;
-                var cache = _runtime.Realm.TemplateObjectCache;
-                if (!cache.TryGetValue(tmpl, out var strings))
-                {
-                    strings = BuildTemplateObject(tmpl);
-                    cache[tmpl] = strings;
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(strings));
-                break;
-            }
-        case Opcode.ThrowConstAssignment:
-            {
-                // §16.2.1.6.2 — an assignment to an immutable binding (a
-                // module's imported binding) is a runtime TypeError. Discard
-                // the would-be assigned value, then throw.
-                var nameIdx = ReadU16(code, ref ip);
-                var name = (string)constants[nameIdx]!;
-                Pop(stack, ref sp);
-                throw new JsThrow(_runtime.Realm.NewTypeError(
-                    $"Assignment to constant variable '{name}'."));
-            }
-        case Opcode.DeleteProperty:
-            {
-                var key = Pop(stack, ref sp);
-                var receiver = Pop(stack, ref sp);
-                if (!receiver.IsObject)
-                {
-                    // §13.5.1: ToObject for primitives so we can delete keys
-                    // on a wrapper — wrappers report success since no own
-                    // properties exist matching the key. For null/undefined
-                    // the spec throws TypeError.
-                    if (receiver.IsNullish)
-                        throw new JsThrow(_runtime.Realm.NewTypeError(
-                            "Cannot convert undefined or null to object"));
-                    var boxed = AbstractOperations.ToObject(_runtime.Realm, receiver);
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(boxed.Delete(AbstractOperations.ToPropertyKey(this, key))));
-                    break;
-                }
-                var delKey = AbstractOperations.ToPropertyKey(this, key);
-                var deleted = receiver.AsObject.Delete(delKey);
-                // §13.5.1.2 — in strict code, `delete` of a non-configurable
-                // own property is a TypeError (sloppy returns false instead).
-                if (!deleted && frame.FrameStrict)
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot delete property '" + delKey + "'"));
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(deleted));
-                break;
-            }
-        case Opcode.SetFunctionName:
-            {
-                // §named-evaluation — stamp an inferred name onto an anonymous
-                // function/class produced as the value of a binding/assignment
-                // initializer. The compiler only emits this when the RHS is a
-                // syntactically anonymous function definition, so we just guard
-                // on the current `name` still being "" (so a named expression
-                // or a non-function value is never clobbered).
-                var nameIdx = ReadU16(code, ref ip);
-                StampInferredFunctionName(stack[sp - 1], (string)constants[nameIdx]!);
-                break;
-            }
-        case Opcode.SetFunctionNameComputed:
-            {
-                var target = stack[sp - 1];
-                var keyValue = stack[sp - 2];
-                var key = keyValue.IsSymbol
-                    ? JsPropertyKey.Symbol(keyValue.AsSymbol)
-                    : JsPropertyKey.String(JsValue.ToStringValue(keyValue));
-                StampInferredFunctionName(target, FunctionNameFromPropertyKey(key));
-                break;
-            }
-        case Opcode.SpreadInto:
-            {
-                var src = Pop(stack, ref sp);
-                var dst = Pop(stack, ref sp);
-                if (src.IsObject && dst.IsObject)
-                {
-                    var srcObj = src.AsObject;
-                    var dstObj = dst.AsObject;
-                    // CopyDataProperties (§7.3.27) invokes getters on the source,
-                    // not the data-only fast path. Mirror that here so accessor
-                    // properties are spread by their getter's return value.
-                    foreach (var key in srcObj.EnumerableKeys())
-                        AbstractOperations.Set(this, dstObj, key,
-                            AbstractOperations.Get(this, srcObj, key));
-                    foreach (var key in srcObj.EnumerableSymbolKeys())
-                        AbstractOperations.Set(this, dstObj, JsPropertyKey.Symbol(key),
-                            AbstractOperations.Get(this, srcObj, JsPropertyKey.Symbol(key)));
-                }
-                break;
-            }
-        case Opcode.RestArray:
-            {
-                var start = ReadU16(code, ref ip);
-                var src = Pop(stack, ref sp);
-                // B2-4: rest-array binding now produces a real JsArray.
-                var result = new JsArray(_runtime.Realm);
-                var srcObj = src.IsObject ? src.AsObject : (!src.IsNullish ? AbstractOperations.ToObject(_runtime.Realm, src) : null);
-                var len = 0;
-                if (srcObj is not null)
-                    len = Math.Max(0, (int)Math.Truncate(JsValue.ToNumber(
-                        AbstractOperations.Get(this, srcObj, "length"))));
-                if (srcObj is not null)
-                {
-                    for (var i = start; i < len; i++)
-                        result.Push(AbstractOperations.Get(this, srcObj,
-                            i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(result));
-                break;
-            }
-        case Opcode.IteratorClose:
-            {
-                var handleV = Pop(stack, ref sp);
-                if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h)
-                {
-                    if (!h.Record.Done)
-                        AbstractOperations.IteratorClose(this, h.Record, isThrowing: false);
-                }
-                break;
-            }
-        case Opcode.IteratorRest:
-            {
-                // §8.5.3 BindingRestElement — collect every remaining value
-                // into a fresh dense array, driving the iterator to Done.
-                var top = stack[sp - 1];
-                if (!top.IsObject || top.AsObject is not Starling.Js.Intrinsics.JsIteratorRecordHandle handle)
-                    throw new InvalidOperationException("IteratorRest expects an iterator-record handle on the stack");
-                var rest = new JsArray(_runtime.Realm);
-                var n = 0;
-                while (!handle.Record.Done)
-                {
-                    var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref handle.Record);
-                    if (step is null) break;
-                    rest.Set(n.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        AbstractOperations.IteratorValue(this, step.Value));
-                    n++;
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(rest));
-                break;
-            }
-        case Opcode.IteratorCloseForThrow:
-            {
-                // §7.4.10 IteratorClose in a throwing completion: invoke
-                // return() but swallow any error it raises so the original
-                // (in-flight) throw is the one that propagates.
-                var handleV = Pop(stack, ref sp);
-                if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h
-                    && !h.Record.Done)
-                {
-                    AbstractOperations.IteratorClose(this, h.Record, isThrowing: true);
-                }
-                break;
-            }
-        case Opcode.IteratorCloseFinally:
-            {
-                // §7.4.8 / §14.7.5.6 — the for-of synthetic finalizer. The
-                // for-of frame is on top of the try-stack with its pending
-                // completion set (LeaveTry/Divert pushed it back before
-                // jumping here). Close iff that completion is abrupt; on a
-                // Normal pending completion (ordinary body finish OR a
-                // `continue` to this loop) leave the iterator open so the
-                // next iteration re-steps it. Swallow return()-errors only
-                // for a pending Throw so the in-flight throw still wins.
-                var handleV = Pop(stack, ref sp);
-                var pending = frame.TryStack is { Count: > 0 } ts ? ts.Peek().Pending : PendingCompletion.Normal;
-                if (pending != PendingCompletion.Normal
-                    && handleV.IsObject
-                    && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle hf
-                    && !hf.Record.Done)
-                {
-                    AbstractOperations.IteratorClose(
-                        this, hf.Record, isThrowing: pending == PendingCompletion.Throw);
-                }
-                break;
-            }
-        case Opcode.GetAsyncIterator:
-            {
-                // §7.4.2 GetIterator(obj, async). Resolve
-                // obj[@@asyncIterator]; if absent, fall back to the sync
-                // iterator wrapped as async (CreateAsyncFromSyncIterator).
-                var iterable = Pop(stack, ref sp);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(GetAsyncIteratorHandle(iterable)));
-                break;
-            }
-        case Opcode.AsyncIteratorNext:
-            {
-                // Peek the record handle (loop keeps it across iterations).
-                var top = stack[sp - 1];
-                if (!top.IsObject || top.AsObject is not Starling.Js.Intrinsics.JsIteratorRecordHandle handle)
-                    throw new InvalidOperationException("AsyncIteratorNext expects an async-iterator-record handle");
-                var resultV = AbstractOperations.Call(this, handle.Record.NextMethod,
-                    handle.Record.Iterator, Array.Empty<JsValue>());
-                if (handle.SyncWrapped)
-                {
-                    // §27.1.4.2.1 CreateAsyncFromSyncIterator: await the
-                    // sync result's `value` (it may itself be a thenable),
-                    // then rebuild {value: awaited, done} so the loop's
-                    // following await observes a fully-settled element.
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(WrapSyncIteratorResult(resultV)));
-                }
-                else
-                {
-                    // Async iterator: next() already returns a promise.
-                    Push(frame, ref stack, ref sp, ref maxSp, resultV);
-                }
-                break;
-            }
-        case Opcode.AsyncIteratorClose:
-            {
-                var handleV = Pop(stack, ref sp);
-                if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h
-                    && !h.Record.Done)
-                {
-                    var ret = AbstractOperations.GetMethod(this, h.Record.Iterator, "return");
-                    if (!ret.IsUndefined && !ret.IsNull)
-                    {
-                        var rv = AbstractOperations.Call(this, ret, h.Record.Iterator,
-                            Array.Empty<JsValue>());
-                        // AsyncIteratorClose awaits the return result; the
-                        // following Suspend(kind=1) does the await. For a
-                        // sync-wrapped iterator the return value isn't a
-                        // promise — resolve it so the await is uniform.
-                        if (h.SyncWrapped)
-                        {
-                            var p = new JsPromise(_runtime.Realm.PromisePrototype);
-                            PromiseCtor.Resolve(_runtime.Realm, p, rv);
-                            Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(p));
-                        }
-                        else
-                        {
-                            Push(frame, ref stack, ref sp, ref maxSp, rv);
-                        }
+                        var v = entry.Read();
+                        // §13.3.1.1 — reading a caller lexical binding still in
+                        // its TDZ throws ReferenceError.
+                        if (v.IsObject && ReferenceEquals(v.AsObject, _runtime.Realm.TdzSentinel))
+                            throw new JsThrow(_runtime.Realm.NewReferenceError(
+                                "Cannot access '" + name + "' before initialization"));
+                        Push(frame, ref stack, ref sp, ref maxSp, v);
                         break;
                     }
-                }
-                // No return method (or already done) — push undefined so
-                // the unconditional await downstream is a no-op.
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
-                break;
-            }
-        case Opcode.EnumerateKeys:
-            {
-                // §14.7.5.10 ForIn/OfHeadEvaluation step 6: for-in
-                // snapshots own + inherited enumerable string keys at
-                // loop entry. Null/undefined silently skip the body
-                // (spec: return an empty iterator).
-                var src = Pop(stack, ref sp);
-                var snapshot = new JsArray(_runtime.Realm);
-                if (!src.IsNullish)
-                {
-                    var obj = AbstractOperations.ToObject(_runtime.Realm, src);
-                    var emitted = new HashSet<string>(StringComparer.Ordinal);
-                    var shadowed = new HashSet<string>(StringComparer.Ordinal);
-                    // §10.1.11.1 OrdinaryOwnPropertyKeys ordering: integer
-                    // ("array index") keys first, in ascending numeric order,
-                    // then the remaining string keys in insertion order.
-                    // Integer keys are collected across the whole prototype
-                    // chain (deduped) and sorted; string keys keep their
-                    // per-level insertion order (own object first, then up
-                    // the chain).
-                    var intKeys = new SortedDictionary<uint, string>();
-                    var strKeys = new List<string>();
-                    var current = obj;
-                    while (current is not null)
+                    var realm = _runtime.Realm;
+                    var globalObj = realm.GlobalObject;
+                    if (!globalObj.Has(name))
                     {
-                        foreach (var k in current.EnumerableKeys())
-                        {
-                            if (shadowed.Contains(k)) continue;
-                            if (!emitted.Add(k)) continue;
-                            if (JsArray.IsArrayIndex(k, out var idx)) intKeys[idx] = k;
-                            else strKeys.Add(k);
-                        }
-                        // Any own key (enumerable or not) on this level
-                        // shadows same-named keys further up the proto
-                        // chain — per OrdinaryOwnPropertyKeys, all own
-                        // names appear regardless of enumerability.
-                        foreach (var k in current.Keys) shadowed.Add(k);
-                        current = current.Prototype;
+                        if (realm.ThrowOnUnresolvedGlobalRead && !realm.LenientGlobalNames.Contains(name))
+                            throw new JsThrow(realm.NewReferenceError(name + " is not defined"));
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
+                        break;
                     }
-                    foreach (var pair in intKeys) snapshot.Push(JsValue.String(pair.Value));
-                    foreach (var k in strKeys) snapshot.Push(JsValue.String(k));
+                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, globalObj, name, JsValue.Object(globalObj)));
+                    break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(snapshot));
-                break;
-            }
-        case Opcode.SpreadIterable:
-            {
-                // Stack: [target, iterable] -> [target] with target's
-                // dense backing extended by iterable's values.
-                var iterable = Pop(stack, ref sp);
-                var targetV = stack[sp - 1];
-                if (!targetV.IsObject || targetV.AsObject is not JsArray targetArr)
-                    throw new InvalidOperationException("SpreadIterable target must be a JsArray");
-                var record = AbstractOperations.GetIterator(_runtime.Realm, this, iterable);
-                while (true)
+            // wp:M3-72 — direct-eval caller-scope write. Write through the
+            // live caller binding, else fall back to a global store.
+            case Opcode.StoreEvalScope:
                 {
-                    var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref record);
-                    if (step is null) break;
-                    targetArr.Push(AbstractOperations.IteratorValue(this, step.Value));
-                }
-                break;
-            }
-        case Opcode.RestObject:
-            {
-                var excludedCount = ReadU16(code, ref ip);
-                var excluded = new HashSet<string>(StringComparer.Ordinal);
-                for (var i = 0; i < excludedCount; i++)
-                {
-                    var key = AbstractOperations.ToPropertyKey(this, Pop(stack, ref sp));
-                    if (!key.IsSymbol) excluded.Add(key.AsString);
-                }
-                var src = Pop(stack, ref sp);
-                var result = _runtime.Realm.NewOrdinaryObject();
-                // CopyDataProperties (§7.3.27) — accessor getters on the
-                // source must be invoked, not bypassed by the data-only
-                // fast path. Route through AbstractOperations.Get.
-                if (src.IsObject)
-                {
-                    var srcObj = src.AsObject;
-                    foreach (var key in srcObj.EnumerableKeys())
-                        if (!excluded.Contains(key))
-                            AbstractOperations.Set(this, result, key,
-                                AbstractOperations.Get(this, srcObj, key));
-                }
-                else if (!src.IsNullish)
-                {
-                    var srcObj = AbstractOperations.ToObject(_runtime.Realm, src);
-                    foreach (var key in srcObj.EnumerableKeys())
-                        if (!excluded.Contains(key))
-                            AbstractOperations.Set(this, result, key,
-                                AbstractOperations.Get(this, srcObj, key));
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(result));
-                break;
-            }
-        case Opcode.LoadHomeObject:
-            {
-                if (frame.CurrentFunction?.HomeObject is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError(
-                        "'super' keyword unexpected here"));
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(frame.CurrentFunction.HomeObject));
-                break;
-            }
-        case Opcode.DynamicImport:
-            {
-                // wp:M3-03c — §13.3.10 import(specifier). Hand the specifier
-                // value + this chunk's referrer URL to the active loader and
-                // push the resulting Promise. Every load/eval failure is a
-                // rejection inside ImportDynamic — the only synchronous throw
-                // is when no loader is wired into the realm.
-                // wp:M3-63 — the referrer is the ACTIVE script/module's source
-                // path (SourcePath), which is identical across all nested
-                // functions, NOT the running function's own chunk Name (which
-                // for a nested async/arrow/generator is its function name, not
-                // the script path — so a relative specifier would otherwise
-                // resolve against the cwd). Fall back to Name for the
-                // top-level chunk whose Name already is the path.
-                var spec = Pop(stack, ref sp);
-                var loader = _runtime.Realm.ModuleLoader
-                    ?? throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "dynamic import() is not supported in this context (no module loader)"));
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(loader.ImportDynamic(spec, chunk.SourcePath ?? chunk.Name)));
-                break;
-            }
-        case Opcode.LoadImportMeta:
-            {
-                // wp:M3-03c — §13.3.12 import.meta. The active module's
-                // resolved URL is its SourcePath (identical across nested
-                // functions); ask the loader for that module's lazily-built
-                // meta object. wp:M3-63 — use SourcePath so import.meta.url
-                // stays consistent inside nested functions; fall back to Name.
-                var loader = _runtime.Realm.ModuleLoader;
-                var meta = loader?.ResolveMetaForUrl(chunk.SourcePath ?? chunk.Name);
-                if (meta is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError(
-                        "import.meta is only valid inside a module"));
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(meta));
-                break;
-            }
-        case Opcode.RestParam:
-            {
-                // §10.2.11 — collect the rest parameter's arguments
-                // (args[start..argc)) into a real dense array. Works in
-                // arrows too: reads the frame's `args` directly rather than
-                // the (arrow-absent) `arguments` object.
-                var start = ReadU16(code, ref ip);
-                var rest = new JsArray(_runtime.Realm);
-                for (var i = start; i < frame.Args.Length; i++)
-                    rest.Push(frame.Args[i]);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(rest));
-                break;
-            }
-        case Opcode.MakeArguments:
-            {
-                // §10.4.4 — materialize the callee's `arguments` object from
-                // this frame's received args and bind it into `slot`. If the
-                // slot was pre-initialized to a Cell (because a nested arrow
-                // captures `arguments`), write through the cell so the
-                // closure observes the same object; otherwise store directly.
-                var slot = ReadU16(code, ref ip);
-                var argObj = JsValue.Object(_runtime.Realm.CreateArgumentsObject(frame.Args, frame.FrameStrict));
-                if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
-                    cell.Value = argObj;
-                else
-                    locals[slot] = argObj;
-                break;
-            }
-        case Opcode.MakeMappedArguments:
-            {
-                // §10.4.4.6 — build the mapped arguments object, live-linking
-                // each parameter index to its local slot in THIS frame so
-                // arguments[i] ⇄ parameter i. Must run after parameter binding
-                // (including PromoteParamCell) so a captured parameter's slot
-                // already holds its Cell and the map shares it.
-                var slot = ReadU16(code, ref ip);
-                var paramCount = ReadU16(code, ref ip);
-                var slotForIndex = new int[paramCount];
-                for (var i = 0; i < paramCount; i++)
-                {
-                    var ps = ReadU16(code, ref ip);
-                    // §10.4.4.6 — index i is mapped only when its parameter is
-                    // the last with that name (compiler marks shadowed dupes
-                    // 0xFFFF) AND an argument was actually passed at i.
-                    slotForIndex[i] = (ps == 0xFFFF || i >= frame.Args.Length) ? -1 : ps;
-                }
-                // The mapped arguments object holds the locals ARRAY by
-                // reference and the live link survives the frame's return —
-                // this frame's pooled locals must never go back to the pool.
-                frame.LocalsEscaped = true;
-                var argObj = JsValue.Object(_runtime.Realm.CreateMappedArgumentsObject(
-                    frame.Args, locals, slotForIndex, frame.CurrentFunction));
-                if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
-                    cell.Value = argObj;
-                else
-                    locals[slot] = argObj;
-                break;
-            }
-        case Opcode.BindCallee:
-            {
-                // wp:M3-21 — §15.2.5. Bind a named function expression's own
-                // name to the executing function instance, so the body can
-                // refer to itself. `currentFunction` IS the callee. If the
-                // slot was pre-initialized to a Cell (a nested closure
-                // captures the name) write through the cell so the closure
-                // observes the same binding; otherwise store directly.
-                var slot = ReadU16(code, ref ip);
-                var calleeVal = frame.CurrentFunction is null
-                    ? JsValue.Undefined
-                    : JsValue.Object(frame.CurrentFunction);
-                if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
-                    cell.Value = calleeVal;
-                else
-                    locals[slot] = calleeVal;
-                break;
-            }
-        // ----- with statement (§14.11 / §9.1.1.2) -----
-        case Opcode.PushWith:
-            {
-                // §14.11.2 — ToObject the head value and install it as an
-                // object Environment Record for the body.
-                var v = Pop(stack, ref sp);
-                var envObj = AbstractOperations.ToObject(_runtime.Realm, v);
-                (frame.WithStack ??= new List<JsObject>()).Add(envObj);
-                break;
-            }
-        case Opcode.PopWith:
-            {
-                if (frame.WithStack is { Count: > 0 }) frame.WithStack.RemoveAt(frame.WithStack.Count - 1);
-                break;
-            }
-        case Opcode.WithLoadOrMiss:
-            {
-                var name = (string)constants[ReadU16(code, ref ip)]!;
-                var miss = ReadI32(code, ref ip);
-                var obj = FindWithBinding(frame.WithStack, name);
-                if (obj is not null)
-                {
-                    _lastLoadName = name;
-                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj, name, JsValue.Object(obj)));
-                    ip += miss;
-                }
-                // miss: fall through to the static fallback the compiler emitted.
-                break;
-            }
-        case Opcode.WithLoadMethodOrMiss:
-            {
-                var name = (string)constants[ReadU16(code, ref ip)]!;
-                var miss = ReadI32(code, ref ip);
-                var obj = FindWithBinding(frame.WithStack, name);
-                if (obj is not null)
-                {
-                    // §9.1.1.2 WithBaseObject: the call's `this` is the
-                    // binding object — push [withObj, fn] for CallMethod.
-                    _lastLoadName = name;
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(obj));
-                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj, name, JsValue.Object(obj)));
-                    ip += miss;
-                }
-                break;
-            }
-        case Opcode.WithStoreOrMiss:
-            {
-                var name = (string)constants[ReadU16(code, ref ip)]!;
-                var miss = ReadI32(code, ref ip);
-                var obj = FindWithBinding(frame.WithStack, name);
-                if (obj is not null)
-                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
                     var value = Pop(stack, ref sp);
-                    var ok = AbstractOperations.Set(this, obj, name, value, JsValue.Object(obj));
-                    if (!ok && frame.FrameStrict)
+                    if (frame.EvalScope is not null && frame.EvalScope.TryGet(name, out var entry))
+                    {
+                        if (entry.IsConst)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Assignment to constant variable '" + name + "'"));
+                        entry.Write(value);
+                        break;
+                    }
+                    var globalObj = _runtime.Realm.GlobalObject;
+                    if (frame.FrameStrict && !globalObj.Has(name))
+                        throw new JsThrow(_runtime.Realm.NewReferenceError(name + " is not defined"));
+                    var ok2 = AbstractOperations.Set(this, globalObj, name, value, JsValue.Object(globalObj));
+                    if (!ok2 && frame.FrameStrict)
                         throw new JsThrow(_runtime.Realm.NewTypeError(
                             "Cannot assign to read-only property '" + name + "'"));
-                    ip += miss;
+                    break;
                 }
-                // miss: leave the value on the stack for the static store.
-                break;
-            }
-        case Opcode.WithDeleteOrMiss:
-            {
-                var name = (string)constants[ReadU16(code, ref ip)]!;
-                var miss = ReadI32(code, ref ip);
-                var obj = FindWithBinding(frame.WithStack, name);
-                if (obj is not null)
+            // gap:script-top-var-not-global — idempotent CreateGlobalVarBinding
+            // (§16.1.7 / §9.1.1.4.16). Skip if the global already has an own
+            // property of this name (function-decl hoist may have installed
+            // it first, or this is the second `var x` of a redeclaration);
+            // otherwise install an own data property seeded with undefined.
+            case Opcode.DeclareGlobalVar:
                 {
-                    var ok = obj.Delete(name);
-                    if (!ok && frame.FrameStrict)
-                        throw new JsThrow(_runtime.Realm.NewTypeError(
-                            "Cannot delete property '" + name + "'"));
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(ok));
-                    ip += miss;
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var globalObj = _runtime.Realm.GlobalObject;
+                    if (!globalObj.HasOwn(name))
+                    {
+                        globalObj.DefineOwnProperty(name,
+                            PropertyDescriptor.Data(JsValue.Undefined,
+                                writable: true, enumerable: true, configurable: false));
+                    }
+                    break;
                 }
-                break;
-            }
-        case Opcode.WithCompoundLoad:
-            {
-                // §13.15.2 — resolve the compound-assignment LHS Reference base
-                // ONCE. On a with-binding hit, stash the base object so the
-                // paired WithCompoundStore writes to the SAME object even if
-                // the getter deletes the binding mid-evaluation.
-                var name = (string)constants[ReadU16(code, ref ip)]!;
-                var baseSlot = ReadU16(code, ref ip);
-                var miss = ReadI32(code, ref ip);
-                var obj = FindWithBinding(frame.WithStack, name);
-                if (obj is not null)
+            // wp:M3-73 — §19.2.1.3 EvalDeclarationInstantiation (non-global
+            // branch). Idempotent pre-declaration of an eval-body top-level
+            // var/function name into the CALLER frame's eval-introduced var
+            // store (frameVarStore is the caller's store while running eval'd
+            // code). Re-declaring an existing binding has no effect.
+            case Opcode.DeclareEvalVar:
                 {
-                    locals[baseSlot] = JsValue.Object(obj);
-                    _lastLoadName = name;
-                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj, name, JsValue.Object(obj)));
-                    ip += miss;
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    frame.FrameVarStore?.Declare(name);
+                    break;
                 }
-                else
+            // wp:M3-73 — set an eval-introduced binding (created by
+            // DeclareEvalVar): a var initializer's value or a hoisted
+            // function declaration's function object.
+            case Opcode.StoreEvalVar:
                 {
-                    // No with-base: mark the slot and fall through to the
-                    // statically-compiled fallback load.
-                    locals[baseSlot] = JsValue.Undefined;
-                }
-                break;
-            }
-        case Opcode.WithCompoundStore:
-            {
-                var name = (string)constants[ReadU16(code, ref ip)]!;
-                var baseSlot = ReadU16(code, ref ip);
-                var miss = ReadI32(code, ref ip);
-                var captured = locals[baseSlot];
-                if (captured.Kind == JsValueKind.Object)
-                {
-                    // Write through the once-resolved Reference base. The
-                    // result copy (Dup'd by the compiler) stays beneath.
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
                     var value = Pop(stack, ref sp);
-                    var baseObj = captured.AsObject;
-                    var ok = AbstractOperations.Set(this, baseObj, name, value, captured);
-                    if (!ok && frame.FrameStrict)
-                        throw new JsThrow(_runtime.Realm.NewTypeError(
-                            "Cannot assign to read-only property '" + name + "'"));
-                    ip += miss;
+                    frame.FrameVarStore?.Set(name, value);
+                    break;
                 }
-                // miss (captured is undefined): leave the value on the stack
-                // for the static store fallback.
-                break;
-            }
-        case Opcode.CallSuperCtor:
-            {
-                var argsArr = Pop(stack, ref sp);
-                var ctorArgs = ExtractApplyArgs(argsArr);
-                // The "super" is the [[Prototype]] of the home object's
-                // [[Prototype]]? Actually for a derived constructor,
-                // home object is the constructor's prototype object.
-                // The super-ctor is the [[Prototype]] of the *constructor*
-                // itself — and currentFunction IS the constructor here.
-                if (frame.CurrentFunction is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError(
-                        "'super(...)' may only be used inside a derived class constructor"));
-                var superCtor = frame.CurrentFunction.Prototype; // [[Prototype]] of the function
-                if (superCtor is null || !AbstractOperations.IsConstructor(JsValue.Object(superCtor)))
+            // wp:M3-73 — `delete name` where the name may be an
+            // eval-introduced binding. Such bindings are configurable
+            // (§19.2.1.3), so remove it from the store and push true; if the
+            // name isn't there this is the ordinary sloppy identifier-delete
+            // no-op (still true). Deletes only at the store's OWN level — an
+            // enclosing function's binding (parent store) is not in scope to
+            // delete from here.
+            case Opcode.DeleteEvalVar:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    frame.FrameVarStore?.Delete(name);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(true));
+                    break;
+                }
+            // wp:M3-26 — object-literal accessor (getter/setter) shorthand.
+            // Reuse the class-member accessor installer so paired get/set on
+            // the same key share one descriptor. Object-literal accessors are
+            // enumerable (§13.2.5), unlike class accessors.
+            case Opcode.DefineGetter:
+            case Opcode.DefineSetter:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var fnVal = Pop(stack, ref sp);
+                    var obj = Pop(stack, ref sp);
+                    InstallObjectAccessor(obj.AsObject, JsPropertyKey.String(name),
+                        isGetter: op == Opcode.DefineGetter, (JsFunction)fnVal.AsObject);
+                    Push(frame, ref stack, ref sp, ref maxSp, obj);
+                    break;
+                }
+            case Opcode.DefineGetterComputed:
+            case Opcode.DefineSetterComputed:
+                {
+                    var fnVal = Pop(stack, ref sp);
+                    var key = Pop(stack, ref sp);
+                    var obj = Pop(stack, ref sp);
+                    InstallObjectAccessor(obj.AsObject, AbstractOperations.ToPropertyKey(this, key),
+                        isGetter: op == Opcode.DefineGetterComputed, (JsFunction)fnVal.AsObject);
+                    Push(frame, ref stack, ref sp, ref maxSp, obj);
+                    break;
+                }
+            // wp:M3-26 — CreateDataPropertyOrThrow (§7.3.5): define an own
+            // enumerable/writable/configurable data property, replacing any
+            // existing accessor or data descriptor on the key.
+            case Opcode.DefineDataProperty:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var value = Pop(stack, ref sp);
+                    var obj = Pop(stack, ref sp);
+                    obj.AsObject.DefineOwnProperty(name,
+                        PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+                    Push(frame, ref stack, ref sp, ref maxSp, obj);
+                    break;
+                }
+            case Opcode.DefineDataComputed:
+                {
+                    var value = Pop(stack, ref sp);
+                    var key = Pop(stack, ref sp);
+                    var obj = Pop(stack, ref sp);
+                    obj.AsObject.DefineOwnProperty(AbstractOperations.ToPropertyKey(this, key),
+                        PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+                    Push(frame, ref stack, ref sp, ref maxSp, obj);
+                    break;
+                }
+            case Opcode.SetObjectPrototype:
+                {
+                    var value = Pop(stack, ref sp);
+                    var obj = Pop(stack, ref sp);
+                    if (value.IsObject)
+                        obj.AsObject.SetPrototypeOf(value.AsObject);
+                    else if (value.IsNull)
+                        obj.AsObject.SetPrototypeOf(null);
+                    Push(frame, ref stack, ref sp, ref maxSp, obj);
+                    break;
+                }
+            // wp:M3-64 — §13.2.5 MakeMethod. Stack: [obj, fn]. Stamp the
+            // method's [[HomeObject]] = the object literal being built so
+            // `super.x` inside it resolves against the object's prototype.
+            // Peek (do not pop) so the stack stays [obj, fn] for the Define
+            // opcode that follows.
+            case Opcode.SetHomeObject:
+                {
+                    var fnVal = stack[sp - 1];
+                    var objVal = stack[sp - 2];
+                    if (fnVal.IsObject && fnVal.AsObject is JsFunction methodFn
+                        && objVal.IsObject)
+                    {
+                        methodFn.HomeObject = objVal.AsObject;
+                    }
+                    break;
+                }
+            // wp:M3-64 — computed-key variant: stack is [obj, key, fn].
+            case Opcode.SetHomeObjectComputed:
+                {
+                    var fnVal = stack[sp - 1];
+                    var objVal = stack[sp - 3];
+                    if (fnVal.IsObject && fnVal.AsObject is JsFunction methodFn
+                        && objVal.IsObject)
+                    {
+                        methodFn.HomeObject = objVal.AsObject;
+                    }
+                    break;
+                }
+            case Opcode.DirectEval:
+                {
+                    // wp:M3-71/72 — §19.2.1.1 PerformEval (direct path). The
+                    // compiler emitted this for a bare-`eval` call resolving to
+                    // the global slot, with a u16 EvalScopeDescriptor index of the
+                    // calling function's variable environment followed by the u8
+                    // argc. Confirm the callee is STILL the realm intrinsic; if it
+                    // was reassigned (or is otherwise not the intrinsic), fall back
+                    // to an ordinary indirect call with this=undefined.
+                    var descIdx = ReadU16(code, ref ip);
+                    var argc = code[ip++];
+                    var callArgs = new JsValue[argc];
+                    for (var i = argc - 1; i >= 0; i--) callArgs[i] = Pop(stack, ref sp);
+                    var callee = Pop(stack, ref sp);
+                    var intrinsic = _runtime.Realm.EvalFunction;
+                    if (intrinsic is not null && callee.IsObject
+                        && ReferenceEquals(callee.AsObject, intrinsic))
+                    {
+                        // wp:M3-72 — pair the compile-time descriptor with the live
+                        // frame storage so the eval'd code reads/writes the
+                        // caller's actual bindings.
+                        var descriptor = (Bytecode.EvalScopeDescriptor)constants[descIdx]!;
+                        var callerScope = BuildEvalScope(descriptor, locals, frame.Upvalues);
+                        // The eval scope references this frame's locals ARRAY by
+                        // (array, slot). Today the scope dies when the eval barrier
+                        // pops (nothing captures it), but keep this frame's locals
+                        // out of the pool so any future holder of the scope can
+                        // never read another frame's recycled slots.
+                        frame.LocalsEscaped = true;
+                        // wp:M3-73 — a non-strict direct eval whose caller is a
+                        // function injects its own top-level var/function bindings
+                        // into the caller frame's eval-introduced var store. Pass
+                        // it by ref so PerformDirectEval can create it lazily and
+                        // the rest of THIS frame then resolves those names too.
+                        Push(frame, ref stack, ref sp, ref maxSp, PerformDirectEval(callArgs, callerScope, frame.CurrentFunction, frame.ThisV,
+                            frame.NewTarget, frame.FrameStrict, inInitializer: frame.InitDepth > 0,
+                            ref frame.FrameVarStore));
+                        break;
+                    }
+                    if (!IsCallableValue(callee))
+                        throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: 'eval')")));
+                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs));
+                    break;
+                }
+            case Opcode.LoadRegExp:
+                {
+                    var srcIdx = ReadU16(code, ref ip);
+                    var flagsIdx = ReadU16(code, ref ip);
+                    var regexCacheId = ReadU16(code, ref ip);
+                    // Per-site cache: a regex literal compiles once and the matcher
+                    // is reused across re-evaluations (e.g. in a loop), avoiding even
+                    // the (source, flags) dictionary lookup on the hot path. A fresh
+                    // JsRegExp wrapper is still created each time so each evaluation
+                    // gets an independent `lastIndex` slot, as the spec requires.
+                    var compiled = chunk.RegexLiterals[regexCacheId];
+                    if (compiled is null)
+                    {
+                        var source = (string)constants[srcIdx]!;
+                        var flagsStr = (string)constants[flagsIdx]!;
+                        if (!RegexFlagParser.TryParse(flagsStr, out var flags, out var flagErr))
+                            throw new JsThrow(_runtime.Realm.NewSyntaxError(flagErr!));
+                        try
+                        {
+                            compiled = Starling.Js.Runtime.Regex.RegexBackendSelector.CompileCached(source, flags);
+                        }
+                        catch (RegexSyntaxException ex)
+                        {
+                            throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                                $"Invalid regular expression: /{source}/: {ex.Message}"));
+                        }
+                        chunk.RegexLiterals[regexCacheId] = compiled;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(new JsRegExp(_runtime.Realm, compiled)));
+                    break;
+                }
+            case Opcode.TemplateObject:
+                {
+                    var tmpl = (TemplateObjectTemplate)constants[ReadU16(code, ref ip)]!;
+                    var cache = _runtime.Realm.TemplateObjectCache;
+                    if (!cache.TryGetValue(tmpl, out var strings))
+                    {
+                        strings = BuildTemplateObject(tmpl);
+                        cache[tmpl] = strings;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(strings));
+                    break;
+                }
+            case Opcode.ThrowConstAssignment:
+                {
+                    // §16.2.1.6.2 — an assignment to an immutable binding (a
+                    // module's imported binding) is a runtime TypeError. Discard
+                    // the would-be assigned value, then throw.
+                    var nameIdx = ReadU16(code, ref ip);
+                    var name = (string)constants[nameIdx]!;
+                    Pop(stack, ref sp);
                     throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Super constructor is not a constructor"));
-                var nt = frame.NewTarget ?? frame.CurrentFunction;
-                // wp:M3-84 Stage B — a plain same-realm parent constructor is
-                // trampolined like New. The dispatch loop detects the frame
-                // switch after DispatchCold returns (t_current changed) and
-                // reloads its hot cache; the refs must not be touched after
-                // the push, so return immediately.
-                if (TryPushConstruct(JsValue.Object(superCtor), ctorArgs, nt, frame,
-                        ip, sp, maxSp, FrameDisposition.SuperCtor, out _))
-                    return true;
-                var constructed = AbstractOperations.Construct(this,
-                    JsValue.Object(superCtor), ctorArgs, nt);
-                Push(frame, ref stack, ref sp, ref maxSp, constructed);
-                break;
-            }
-        case Opcode.LoadSuperProperty:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                if (frame.CurrentFunction?.HomeObject is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
-                var superProto = frame.CurrentFunction.HomeObject.Prototype;
-                if (superProto is null)
+                        $"Assignment to constant variable '{name}'."));
+                }
+            case Opcode.DeleteProperty:
                 {
+                    var key = Pop(stack, ref sp);
+                    var receiver = Pop(stack, ref sp);
+                    if (!receiver.IsObject)
+                    {
+                        // §13.5.1: ToObject for primitives so we can delete keys
+                        // on a wrapper — wrappers report success since no own
+                        // properties exist matching the key. For null/undefined
+                        // the spec throws TypeError.
+                        if (receiver.IsNullish)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot convert undefined or null to object"));
+                        var boxed = AbstractOperations.ToObject(_runtime.Realm, receiver);
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(boxed.Delete(AbstractOperations.ToPropertyKey(this, key))));
+                        break;
+                    }
+                    var delKey = AbstractOperations.ToPropertyKey(this, key);
+                    var deleted = receiver.AsObject.Delete(delKey);
+                    // §13.5.1.2 — in strict code, `delete` of a non-configurable
+                    // own property is a TypeError (sloppy returns false instead).
+                    if (!deleted && frame.FrameStrict)
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot delete property '" + delKey + "'"));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(deleted));
+                    break;
+                }
+            case Opcode.SetFunctionName:
+                {
+                    // §named-evaluation — stamp an inferred name onto an anonymous
+                    // function/class produced as the value of a binding/assignment
+                    // initializer. The compiler only emits this when the RHS is a
+                    // syntactically anonymous function definition, so we just guard
+                    // on the current `name` still being "" (so a named expression
+                    // or a non-function value is never clobbered).
+                    var nameIdx = ReadU16(code, ref ip);
+                    StampInferredFunctionName(stack[sp - 1], (string)constants[nameIdx]!);
+                    break;
+                }
+            case Opcode.SetFunctionNameComputed:
+                {
+                    var target = stack[sp - 1];
+                    var keyValue = stack[sp - 2];
+                    var key = keyValue.IsSymbol
+                        ? JsPropertyKey.Symbol(keyValue.AsSymbol)
+                        : JsPropertyKey.String(JsValue.ToStringValue(keyValue));
+                    StampInferredFunctionName(target, FunctionNameFromPropertyKey(key));
+                    break;
+                }
+            case Opcode.SpreadInto:
+                {
+                    var src = Pop(stack, ref sp);
+                    var dst = Pop(stack, ref sp);
+                    if (src.IsObject && dst.IsObject)
+                    {
+                        var srcObj = src.AsObject;
+                        var dstObj = dst.AsObject;
+                        // CopyDataProperties (§7.3.27) invokes getters on the source,
+                        // not the data-only fast path. Mirror that here so accessor
+                        // properties are spread by their getter's return value.
+                        foreach (var key in srcObj.EnumerableKeys())
+                            AbstractOperations.Set(this, dstObj, key,
+                                AbstractOperations.Get(this, srcObj, key));
+                        foreach (var key in srcObj.EnumerableSymbolKeys())
+                            AbstractOperations.Set(this, dstObj, JsPropertyKey.Symbol(key),
+                                AbstractOperations.Get(this, srcObj, JsPropertyKey.Symbol(key)));
+                    }
+                    break;
+                }
+            case Opcode.RestArray:
+                {
+                    var start = ReadU16(code, ref ip);
+                    var src = Pop(stack, ref sp);
+                    // B2-4: rest-array binding now produces a real JsArray.
+                    var result = new JsArray(_runtime.Realm);
+                    var srcObj = src.IsObject ? src.AsObject : (!src.IsNullish ? AbstractOperations.ToObject(_runtime.Realm, src) : null);
+                    var len = 0;
+                    if (srcObj is not null)
+                        len = Math.Max(0, (int)Math.Truncate(JsValue.ToNumber(
+                            AbstractOperations.Get(this, srcObj, "length"))));
+                    if (srcObj is not null)
+                    {
+                        for (var i = start; i < len; i++)
+                            result.Push(AbstractOperations.Get(this, srcObj,
+                                i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(result));
+                    break;
+                }
+            case Opcode.IteratorClose:
+                {
+                    var handleV = Pop(stack, ref sp);
+                    if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h)
+                    {
+                        if (!h.Record.Done)
+                            AbstractOperations.IteratorClose(this, h.Record, isThrowing: false);
+                    }
+                    break;
+                }
+            case Opcode.IteratorRest:
+                {
+                    // §8.5.3 BindingRestElement — collect every remaining value
+                    // into a fresh dense array, driving the iterator to Done.
+                    var top = stack[sp - 1];
+                    if (!top.IsObject || top.AsObject is not Starling.Js.Intrinsics.JsIteratorRecordHandle handle)
+                        throw new InvalidOperationException("IteratorRest expects an iterator-record handle on the stack");
+                    var rest = new JsArray(_runtime.Realm);
+                    var n = 0;
+                    while (!handle.Record.Done)
+                    {
+                        var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref handle.Record);
+                        if (step is null) break;
+                        rest.Set(n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            AbstractOperations.IteratorValue(this, step.Value));
+                        n++;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(rest));
+                    break;
+                }
+            case Opcode.IteratorCloseForThrow:
+                {
+                    // §7.4.10 IteratorClose in a throwing completion: invoke
+                    // return() but swallow any error it raises so the original
+                    // (in-flight) throw is the one that propagates.
+                    var handleV = Pop(stack, ref sp);
+                    if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h
+                        && !h.Record.Done)
+                    {
+                        AbstractOperations.IteratorClose(this, h.Record, isThrowing: true);
+                    }
+                    break;
+                }
+            case Opcode.IteratorCloseFinally:
+                {
+                    // §7.4.8 / §14.7.5.6 — the for-of synthetic finalizer. The
+                    // for-of frame is on top of the try-stack with its pending
+                    // completion set (LeaveTry/Divert pushed it back before
+                    // jumping here). Close iff that completion is abrupt; on a
+                    // Normal pending completion (ordinary body finish OR a
+                    // `continue` to this loop) leave the iterator open so the
+                    // next iteration re-steps it. Swallow return()-errors only
+                    // for a pending Throw so the in-flight throw still wins.
+                    var handleV = Pop(stack, ref sp);
+                    var pending = frame.TryStack is { Count: > 0 } ts ? ts.Peek().Pending : PendingCompletion.Normal;
+                    if (pending != PendingCompletion.Normal
+                        && handleV.IsObject
+                        && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle hf
+                        && !hf.Record.Done)
+                    {
+                        AbstractOperations.IteratorClose(
+                            this, hf.Record, isThrowing: pending == PendingCompletion.Throw);
+                    }
+                    break;
+                }
+            case Opcode.GetAsyncIterator:
+                {
+                    // §7.4.2 GetIterator(obj, async). Resolve
+                    // obj[@@asyncIterator]; if absent, fall back to the sync
+                    // iterator wrapped as async (CreateAsyncFromSyncIterator).
+                    var iterable = Pop(stack, ref sp);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(GetAsyncIteratorHandle(iterable)));
+                    break;
+                }
+            case Opcode.AsyncIteratorNext:
+                {
+                    // Peek the record handle (loop keeps it across iterations).
+                    var top = stack[sp - 1];
+                    if (!top.IsObject || top.AsObject is not Starling.Js.Intrinsics.JsIteratorRecordHandle handle)
+                        throw new InvalidOperationException("AsyncIteratorNext expects an async-iterator-record handle");
+                    var resultV = AbstractOperations.Call(this, handle.Record.NextMethod,
+                        handle.Record.Iterator, Array.Empty<JsValue>());
+                    if (handle.SyncWrapped)
+                    {
+                        // §27.1.4.2.1 CreateAsyncFromSyncIterator: await the
+                        // sync result's `value` (it may itself be a thenable),
+                        // then rebuild {value: awaited, done} so the loop's
+                        // following await observes a fully-settled element.
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(WrapSyncIteratorResult(resultV)));
+                    }
+                    else
+                    {
+                        // Async iterator: next() already returns a promise.
+                        Push(frame, ref stack, ref sp, ref maxSp, resultV);
+                    }
+                    break;
+                }
+            case Opcode.AsyncIteratorClose:
+                {
+                    var handleV = Pop(stack, ref sp);
+                    if (handleV.IsObject && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle h
+                        && !h.Record.Done)
+                    {
+                        var ret = AbstractOperations.GetMethod(this, h.Record.Iterator, "return");
+                        if (!ret.IsUndefined && !ret.IsNull)
+                        {
+                            var rv = AbstractOperations.Call(this, ret, h.Record.Iterator,
+                                Array.Empty<JsValue>());
+                            // AsyncIteratorClose awaits the return result; the
+                            // following Suspend(kind=1) does the await. For a
+                            // sync-wrapped iterator the return value isn't a
+                            // promise — resolve it so the await is uniform.
+                            if (h.SyncWrapped)
+                            {
+                                var p = new JsPromise(_runtime.Realm.PromisePrototype);
+                                PromiseCtor.Resolve(_runtime.Realm, p, rv);
+                                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(p));
+                            }
+                            else
+                            {
+                                Push(frame, ref stack, ref sp, ref maxSp, rv);
+                            }
+                            break;
+                        }
+                    }
+                    // No return method (or already done) — push undefined so
+                    // the unconditional await downstream is a no-op.
                     Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, superProto, name, frame.ThisV));
-                break;
-            }
-        case Opcode.StoreSuperProperty:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var value = Pop(stack, ref sp);
-                if (frame.CurrentFunction?.HomeObject is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
-                // §13.3.4 / §9.1.1.4 PutValue with a Super Reference: the
-                // [[Set]] runs against the super base (GetPrototypeOf([[HomeObject]]))
-                // with the receiver = `this`. So a setter found on the super
-                // base runs with this=receiver; otherwise OrdinarySet creates
-                // the own data property on the receiver, not the prototype.
-                var superBase = frame.CurrentFunction.HomeObject.Prototype;
-                if (superBase is not null)
-                    AbstractOperations.Set(this, superBase, name, value, frame.ThisV);
-                Push(frame, ref stack, ref sp, ref maxSp, value);
-                break;
-            }
-        case Opcode.LoadSuperComputed:
-            {
-                // wp:M3-04h — super[expr] read. Like LoadSuperProperty but the
-                // key is taken from the stack and coerced via ToPropertyKey
-                // (§13.3.7.2 GetSuperBase + §13.3.4 MakeSuperPropertyReference).
-                var key = Pop(stack, ref sp);
-                if (frame.CurrentFunction?.HomeObject is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
-                var propertyKey = AbstractOperations.ToPropertyKey(this, key);
-                var superProto = frame.CurrentFunction.HomeObject.Prototype;
-                if (superProto is null)
+            case Opcode.EnumerateKeys:
                 {
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
+                    // §14.7.5.10 ForIn/OfHeadEvaluation step 6: for-in
+                    // snapshots own + inherited enumerable string keys at
+                    // loop entry. Null/undefined silently skip the body
+                    // (spec: return an empty iterator).
+                    var src = Pop(stack, ref sp);
+                    var snapshot = new JsArray(_runtime.Realm);
+                    if (!src.IsNullish)
+                    {
+                        var obj = AbstractOperations.ToObject(_runtime.Realm, src);
+                        var emitted = new HashSet<string>(StringComparer.Ordinal);
+                        var shadowed = new HashSet<string>(StringComparer.Ordinal);
+                        // §10.1.11.1 OrdinaryOwnPropertyKeys ordering: integer
+                        // ("array index") keys first, in ascending numeric order,
+                        // then the remaining string keys in insertion order.
+                        // Integer keys are collected across the whole prototype
+                        // chain (deduped) and sorted; string keys keep their
+                        // per-level insertion order (own object first, then up
+                        // the chain).
+                        var intKeys = new SortedDictionary<uint, string>();
+                        var strKeys = new List<string>();
+                        var current = obj;
+                        while (current is not null)
+                        {
+                            foreach (var k in current.EnumerableKeys())
+                            {
+                                if (shadowed.Contains(k)) continue;
+                                if (!emitted.Add(k)) continue;
+                                if (JsArray.IsArrayIndex(k, out var idx)) intKeys[idx] = k;
+                                else strKeys.Add(k);
+                            }
+                            // Any own key (enumerable or not) on this level
+                            // shadows same-named keys further up the proto
+                            // chain — per OrdinaryOwnPropertyKeys, all own
+                            // names appear regardless of enumerability.
+                            foreach (var k in current.Keys) shadowed.Add(k);
+                            current = current.Prototype;
+                        }
+                        foreach (var pair in intKeys) snapshot.Push(JsValue.String(pair.Value));
+                        foreach (var k in strKeys) snapshot.Push(JsValue.String(k));
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(snapshot));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, superProto, propertyKey, frame.ThisV));
-                break;
-            }
-        case Opcode.StoreSuperComputed:
-            {
-                // wp:M3-04h — super[expr] = v. Mirrors StoreSuperProperty:
-                // §13.3.4 PutValue with a Super Reference runs [[Set]] against
-                // the super base with the receiver = `this`. Key is coerced
-                // via ToPropertyKey.
-                var value = Pop(stack, ref sp);
-                var key = Pop(stack, ref sp);
-                if (frame.CurrentFunction?.HomeObject is null)
-                    throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
-                var propertyKey = AbstractOperations.ToPropertyKey(this, key);
-                var superBase = frame.CurrentFunction.HomeObject.Prototype;
-                if (superBase is not null)
-                    AbstractOperations.Set(this, superBase, propertyKey, value, frame.ThisV);
-                Push(frame, ref stack, ref sp, ref maxSp, value);
-                break;
-            }
-        case Opcode.PrivateGet:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var receiver = Pop(stack, ref sp);
-                // §13.3.4.2 PrivateGet → §7.3.x PrivateElementFind: a TypeError
-                // unless the receiver ITSELF carries the brand. The brand is a
-                // per-object set (never prototype-walked), so a wrong receiver —
-                // a subclass constructor for a static private member, a Proxy
-                // wrapping an instance, or any object before its brand is
-                // installed (derived class, pre-super()) — throws here.
-                if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(name))
+            case Opcode.SpreadIterable:
                 {
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot read private member from an object whose class did not declare it"));
-                }
-                // §13.3.4.2 PrivateGet — a private accessor's getter must be
-                // invoked with `this` = receiver; a private method or field
-                // yields its value directly. Routing through the AO walks the
-                // chain (private methods/accessors live on the prototype) and
-                // invokes any getter; a §13.3.4 get on a set-only accessor is
-                // a TypeError.
-                var obj = receiver.AsObject;
-                var (getDesc, _) = FindPrivateDescriptor(obj, name);
-                if (getDesc is { IsAccessor: true } ga)
-                {
-                    if (ga.Getter is null)
-                        throw new JsThrow(_runtime.Realm.NewTypeError(
-                            $"'{name}' was defined without a getter"));
-                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Call(this, JsValue.Object(ga.Getter), receiver, Array.Empty<JsValue>()));
-                }
-                else
-                {
-                    Push(frame, ref stack, ref sp, ref maxSp, getDesc?.Value ?? obj.Get(name));
-                }
-                break;
-            }
-        case Opcode.PrivateSet:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var value = Pop(stack, ref sp);
-                var receiver = Pop(stack, ref sp);
-                // §13.3.4.3 PrivateSet → PrivateElementFind: a TypeError unless
-                // the receiver ITSELF carries the brand (per-object set, never
-                // prototype-walked) — see PrivateGet above.
-                if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(name))
-                {
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot write private member from an object whose class did not declare it"));
-                }
-                // §13.3.4.3 PrivateSet — invoke a private accessor's setter
-                // with `this` = receiver; writing a get-only accessor or a
-                // private method is a TypeError. A private field writes its
-                // own slot directly.
-                var sobj = receiver.AsObject;
-                var (setDesc, ownsField) = FindPrivateDescriptor(sobj, name);
-                if (setDesc is { IsAccessor: true } sa)
-                {
-                    if (sa.Setter is null)
-                        throw new JsThrow(_runtime.Realm.NewTypeError(
-                            $"'{name}' was defined without a setter"));
-                    AbstractOperations.Call(this, JsValue.Object(sa.Setter), receiver, new[] { value });
-                }
-                else if (setDesc is { IsAccessor: false } && !ownsField)
-                {
-                    // A private *method* (data descriptor on the prototype) is
-                    // not writable (§13.3.4.3 step "if entry.[[Kind]] is method").
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        $"private method '{name}' is not writable"));
-                }
-                else
-                {
-                    sobj.Set(name, value);
-                }
-                Push(frame, ref stack, ref sp, ref maxSp, value);
-                break;
-            }
-        case Opcode.DefinePrivateField:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var value = Pop(stack, ref sp);
-                var receiver = Pop(stack, ref sp);
-                if (!receiver.IsObject)
-                    throw new JsThrow(_runtime.Realm.NewTypeError("Cannot define private field on non-object"));
-                if (receiver.AsObject.HasOwn(name))
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot initialize the same private member twice on the same object"));
-                receiver.AsObject.DefineOwnProperty(name,
-                    PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: false));
-                // §7.3.28 PrivateFieldAdd installs the private element onto
-                // the receiver's [[PrivateElements]] — i.e. the brand. The
-                // brand check (PrivateGet/PrivateSet/PrivateIn/call) consults
-                // this per-object set, not the prototype chain.
-                receiver.AsObject.AddPrivateBrand(name);
-                break;
-            }
-        case Opcode.PrivateIn:
-            {
-                var idx = ReadU16(code, ref ip);
-                var name = (string)constants[idx]!;
-                var operand = Pop(stack, ref sp);
-                // §13.10.1 step 4 — a non-object right operand is a TypeError
-                // (not `false`).
-                if (!operand.IsObject)
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot use 'in' operator to search for a private name in a non-object"));
-                // §13.10.1 / §7.3.x — `#x in obj` is true iff obj ITSELF carries
-                // the brand for #x (per-object set, never prototype-walked). A
-                // subclass constructor or a Proxy wrapping an instance does not
-                // carry the brand, so this yields false rather than true.
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(operand.AsObject.HasPrivateBrand(name)));
-                break;
-            }
-        case Opcode.LoadCallerArgs:
-            {
-                var arr = new JsArray(_runtime.Realm);
-                foreach (var a in frame.Args) arr.Push(a);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(arr));
-                break;
-            }
-        case Opcode.RunFieldInits:
-            {
-                // §10.2.1.3 InitializeInstanceElements — for a derived class
-                // this runs only after super() returns, so the instance's
-                // private brands appear at exactly the spec-correct moment;
-                // private access before this point throws a TypeError.
-                // Install instance private method/accessor brands first: their
-                // bodies live on the shared prototype, but each instance must
-                // carry the brand in its own [[PrivateElements]] set.
-                if (frame.CurrentFunction?.InstancePrivateBrands is { } brands && frame.ThisV.IsObject)
-                {
-                    var brandObj = frame.ThisV.AsObject;
-                    foreach (var b in brands) brandObj.AddPrivateBrand(b);
-                }
-                var inits = frame.CurrentFunction?.InstanceFieldInitializers;
-                if (inits is not null)
-                {
-                    foreach (var init in inits)
+                    // Stack: [target, iterable] -> [target] with target's
+                    // dense backing extended by iterable's values.
+                    var iterable = Pop(stack, ref sp);
+                    var targetV = stack[sp - 1];
+                    if (!targetV.IsObject || targetV.AsObject is not JsArray targetArr)
+                        throw new InvalidOperationException("SpreadIterable target must be a JsArray");
+                    var record = AbstractOperations.GetIterator(_runtime.Realm, this, iterable);
+                    while (true)
                     {
-                        var value = AbstractOperations.Call(
-                            this, JsValue.Object(init.Thunk), frame.ThisV, Array.Empty<JsValue>());
-                        // wp:M3-04f — computed-key instance fields: the thunk
-                        // returns the initializer value; define the own data
-                        // property under the key resolved at class-definition
-                        // time (CreateDataPropertyOrThrow per §10.2.4.1 /
-                        // §15.7.10). Non-computed thunks self-store and return
-                        // undefined — nothing to do here.
-                        if (init.ComputedKey is { } ck && frame.ThisV.IsObject)
+                        var step = AbstractOperations.IteratorStep(_runtime.Realm, this, ref record);
+                        if (step is null) break;
+                        targetArr.Push(AbstractOperations.IteratorValue(this, step.Value));
+                    }
+                    break;
+                }
+            case Opcode.RestObject:
+                {
+                    var excludedCount = ReadU16(code, ref ip);
+                    var excluded = new HashSet<string>(StringComparer.Ordinal);
+                    for (var i = 0; i < excludedCount; i++)
+                    {
+                        var key = AbstractOperations.ToPropertyKey(this, Pop(stack, ref sp));
+                        if (!key.IsSymbol) excluded.Add(key.AsString);
+                    }
+                    var src = Pop(stack, ref sp);
+                    var result = _runtime.Realm.NewOrdinaryObject();
+                    // CopyDataProperties (§7.3.27) — accessor getters on the
+                    // source must be invoked, not bypassed by the data-only
+                    // fast path. Route through AbstractOperations.Get.
+                    if (src.IsObject)
+                    {
+                        var srcObj = src.AsObject;
+                        foreach (var key in srcObj.EnumerableKeys())
+                            if (!excluded.Contains(key))
+                                AbstractOperations.Set(this, result, key,
+                                    AbstractOperations.Get(this, srcObj, key));
+                    }
+                    else if (!src.IsNullish)
+                    {
+                        var srcObj = AbstractOperations.ToObject(_runtime.Realm, src);
+                        foreach (var key in srcObj.EnumerableKeys())
+                            if (!excluded.Contains(key))
+                                AbstractOperations.Set(this, result, key,
+                                    AbstractOperations.Get(this, srcObj, key));
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(result));
+                    break;
+                }
+            case Opcode.LoadHomeObject:
+                {
+                    if (frame.CurrentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                            "'super' keyword unexpected here"));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(frame.CurrentFunction.HomeObject));
+                    break;
+                }
+            case Opcode.DynamicImport:
+                {
+                    // wp:M3-03c — §13.3.10 import(specifier). Hand the specifier
+                    // value + this chunk's referrer URL to the active loader and
+                    // push the resulting Promise. Every load/eval failure is a
+                    // rejection inside ImportDynamic — the only synchronous throw
+                    // is when no loader is wired into the realm.
+                    // wp:M3-63 — the referrer is the ACTIVE script/module's source
+                    // path (SourcePath), which is identical across all nested
+                    // functions, NOT the running function's own chunk Name (which
+                    // for a nested async/arrow/generator is its function name, not
+                    // the script path — so a relative specifier would otherwise
+                    // resolve against the cwd). Fall back to Name for the
+                    // top-level chunk whose Name already is the path.
+                    var spec = Pop(stack, ref sp);
+                    var loader = _runtime.Realm.ModuleLoader
+                        ?? throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "dynamic import() is not supported in this context (no module loader)"));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(loader.ImportDynamic(spec, chunk.SourcePath ?? chunk.Name)));
+                    break;
+                }
+            case Opcode.LoadImportMeta:
+                {
+                    // wp:M3-03c — §13.3.12 import.meta. The active module's
+                    // resolved URL is its SourcePath (identical across nested
+                    // functions); ask the loader for that module's lazily-built
+                    // meta object. wp:M3-63 — use SourcePath so import.meta.url
+                    // stays consistent inside nested functions; fall back to Name.
+                    var loader = _runtime.Realm.ModuleLoader;
+                    var meta = loader?.ResolveMetaForUrl(chunk.SourcePath ?? chunk.Name);
+                    if (meta is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                            "import.meta is only valid inside a module"));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(meta));
+                    break;
+                }
+            case Opcode.RestParam:
+                {
+                    // §10.2.11 — collect the rest parameter's arguments
+                    // (args[start..argc)) into a real dense array. Works in
+                    // arrows too: reads the frame's `args` directly rather than
+                    // the (arrow-absent) `arguments` object.
+                    var start = ReadU16(code, ref ip);
+                    var rest = new JsArray(_runtime.Realm);
+                    for (var i = start; i < frame.Args.Length; i++)
+                        rest.Push(frame.Args[i]);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(rest));
+                    break;
+                }
+            case Opcode.MakeArguments:
+                {
+                    // §10.4.4 — materialize the callee's `arguments` object from
+                    // this frame's received args and bind it into `slot`. If the
+                    // slot was pre-initialized to a Cell (because a nested arrow
+                    // captures `arguments`), write through the cell so the
+                    // closure observes the same object; otherwise store directly.
+                    var slot = ReadU16(code, ref ip);
+                    var argObj = JsValue.Object(_runtime.Realm.CreateArgumentsObject(frame.Args, frame.FrameStrict));
+                    if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
+                        cell.Value = argObj;
+                    else
+                        locals[slot] = argObj;
+                    break;
+                }
+            case Opcode.MakeMappedArguments:
+                {
+                    // §10.4.4.6 — build the mapped arguments object, live-linking
+                    // each parameter index to its local slot in THIS frame so
+                    // arguments[i] ⇄ parameter i. Must run after parameter binding
+                    // (including PromoteParamCell) so a captured parameter's slot
+                    // already holds its Cell and the map shares it.
+                    var slot = ReadU16(code, ref ip);
+                    var paramCount = ReadU16(code, ref ip);
+                    var slotForIndex = new int[paramCount];
+                    for (var i = 0; i < paramCount; i++)
+                    {
+                        var ps = ReadU16(code, ref ip);
+                        // §10.4.4.6 — index i is mapped only when its parameter is
+                        // the last with that name (compiler marks shadowed dupes
+                        // 0xFFFF) AND an argument was actually passed at i.
+                        slotForIndex[i] = (ps == 0xFFFF || i >= frame.Args.Length) ? -1 : ps;
+                    }
+                    // The mapped arguments object holds the locals ARRAY by
+                    // reference and the live link survives the frame's return —
+                    // this frame's pooled locals must never go back to the pool.
+                    frame.LocalsEscaped = true;
+                    var argObj = JsValue.Object(_runtime.Realm.CreateMappedArgumentsObject(
+                        frame.Args, locals, slotForIndex, frame.CurrentFunction));
+                    if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
+                        cell.Value = argObj;
+                    else
+                        locals[slot] = argObj;
+                    break;
+                }
+            case Opcode.BindCallee:
+                {
+                    // wp:M3-21 — §15.2.5. Bind a named function expression's own
+                    // name to the executing function instance, so the body can
+                    // refer to itself. `currentFunction` IS the callee. If the
+                    // slot was pre-initialized to a Cell (a nested closure
+                    // captures the name) write through the cell so the closure
+                    // observes the same binding; otherwise store directly.
+                    var slot = ReadU16(code, ref ip);
+                    var calleeVal = frame.CurrentFunction is null
+                        ? JsValue.Undefined
+                        : JsValue.Object(frame.CurrentFunction);
+                    if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
+                        cell.Value = calleeVal;
+                    else
+                        locals[slot] = calleeVal;
+                    break;
+                }
+            // ----- with statement (§14.11 / §9.1.1.2) -----
+            case Opcode.PushWith:
+                {
+                    // §14.11.2 — ToObject the head value and install it as an
+                    // object Environment Record for the body.
+                    var v = Pop(stack, ref sp);
+                    var envObj = AbstractOperations.ToObject(_runtime.Realm, v);
+                    (frame.WithStack ??= new List<JsObject>()).Add(envObj);
+                    break;
+                }
+            case Opcode.PopWith:
+                {
+                    if (frame.WithStack is { Count: > 0 }) frame.WithStack.RemoveAt(frame.WithStack.Count - 1);
+                    break;
+                }
+            case Opcode.WithLoadOrMiss:
+                {
+                    var name = (string)constants[ReadU16(code, ref ip)]!;
+                    var miss = ReadI32(code, ref ip);
+                    var obj = FindWithBinding(frame.WithStack, name);
+                    if (obj is not null)
+                    {
+                        _lastLoadName = name;
+                        Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj, name, JsValue.Object(obj)));
+                        ip += miss;
+                    }
+                    // miss: fall through to the static fallback the compiler emitted.
+                    break;
+                }
+            case Opcode.WithLoadMethodOrMiss:
+                {
+                    var name = (string)constants[ReadU16(code, ref ip)]!;
+                    var miss = ReadI32(code, ref ip);
+                    var obj = FindWithBinding(frame.WithStack, name);
+                    if (obj is not null)
+                    {
+                        // §9.1.1.2 WithBaseObject: the call's `this` is the
+                        // binding object — push [withObj, fn] for CallMethod.
+                        _lastLoadName = name;
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(obj));
+                        Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj, name, JsValue.Object(obj)));
+                        ip += miss;
+                    }
+                    break;
+                }
+            case Opcode.WithStoreOrMiss:
+                {
+                    var name = (string)constants[ReadU16(code, ref ip)]!;
+                    var miss = ReadI32(code, ref ip);
+                    var obj = FindWithBinding(frame.WithStack, name);
+                    if (obj is not null)
+                    {
+                        var value = Pop(stack, ref sp);
+                        var ok = AbstractOperations.Set(this, obj, name, value, JsValue.Object(obj));
+                        if (!ok && frame.FrameStrict)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot assign to read-only property '" + name + "'"));
+                        ip += miss;
+                    }
+                    // miss: leave the value on the stack for the static store.
+                    break;
+                }
+            case Opcode.WithDeleteOrMiss:
+                {
+                    var name = (string)constants[ReadU16(code, ref ip)]!;
+                    var miss = ReadI32(code, ref ip);
+                    var obj = FindWithBinding(frame.WithStack, name);
+                    if (obj is not null)
+                    {
+                        var ok = obj.Delete(name);
+                        if (!ok && frame.FrameStrict)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot delete property '" + name + "'"));
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(ok));
+                        ip += miss;
+                    }
+                    break;
+                }
+            case Opcode.WithCompoundLoad:
+                {
+                    // §13.15.2 — resolve the compound-assignment LHS Reference base
+                    // ONCE. On a with-binding hit, stash the base object so the
+                    // paired WithCompoundStore writes to the SAME object even if
+                    // the getter deletes the binding mid-evaluation.
+                    var name = (string)constants[ReadU16(code, ref ip)]!;
+                    var baseSlot = ReadU16(code, ref ip);
+                    var miss = ReadI32(code, ref ip);
+                    var obj = FindWithBinding(frame.WithStack, name);
+                    if (obj is not null)
+                    {
+                        locals[baseSlot] = JsValue.Object(obj);
+                        _lastLoadName = name;
+                        Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj, name, JsValue.Object(obj)));
+                        ip += miss;
+                    }
+                    else
+                    {
+                        // No with-base: mark the slot and fall through to the
+                        // statically-compiled fallback load.
+                        locals[baseSlot] = JsValue.Undefined;
+                    }
+                    break;
+                }
+            case Opcode.WithCompoundStore:
+                {
+                    var name = (string)constants[ReadU16(code, ref ip)]!;
+                    var baseSlot = ReadU16(code, ref ip);
+                    var miss = ReadI32(code, ref ip);
+                    var captured = locals[baseSlot];
+                    if (captured.Kind == JsValueKind.Object)
+                    {
+                        // Write through the once-resolved Reference base. The
+                        // result copy (Dup'd by the compiler) stays beneath.
+                        var value = Pop(stack, ref sp);
+                        var baseObj = captured.AsObject;
+                        var ok = AbstractOperations.Set(this, baseObj, name, value, captured);
+                        if (!ok && frame.FrameStrict)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot assign to read-only property '" + name + "'"));
+                        ip += miss;
+                    }
+                    // miss (captured is undefined): leave the value on the stack
+                    // for the static store fallback.
+                    break;
+                }
+            case Opcode.CallSuperCtor:
+                {
+                    var argsArr = Pop(stack, ref sp);
+                    var ctorArgs = ExtractApplyArgs(argsArr);
+                    // The "super" is the [[Prototype]] of the home object's
+                    // [[Prototype]]? Actually for a derived constructor,
+                    // home object is the constructor's prototype object.
+                    // The super-ctor is the [[Prototype]] of the *constructor*
+                    // itself — and currentFunction IS the constructor here.
+                    if (frame.CurrentFunction is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                            "'super(...)' may only be used inside a derived class constructor"));
+                    var superCtor = frame.CurrentFunction.Prototype; // [[Prototype]] of the function
+                    if (superCtor is null || !AbstractOperations.IsConstructor(JsValue.Object(superCtor)))
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Super constructor is not a constructor"));
+                    var nt = frame.NewTarget ?? frame.CurrentFunction;
+                    // wp:M3-84 Stage B — a plain same-realm parent constructor is
+                    // trampolined like New. The dispatch loop detects the frame
+                    // switch after DispatchCold returns (t_current changed) and
+                    // reloads its hot cache; the refs must not be touched after
+                    // the push, so return immediately.
+                    if (TryPushConstruct(JsValue.Object(superCtor), ctorArgs, nt, frame,
+                            ip, sp, maxSp, FrameDisposition.SuperCtor, out _))
+                        return true;
+                    var constructed = AbstractOperations.Construct(this,
+                        JsValue.Object(superCtor), ctorArgs, nt);
+                    Push(frame, ref stack, ref sp, ref maxSp, constructed);
+                    break;
+                }
+            case Opcode.LoadSuperProperty:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    if (frame.CurrentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
+                    var superProto = frame.CurrentFunction.HomeObject.Prototype;
+                    if (superProto is null)
+                    {
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, superProto, name, frame.ThisV));
+                    break;
+                }
+            case Opcode.StoreSuperProperty:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var value = Pop(stack, ref sp);
+                    if (frame.CurrentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
+                    // §13.3.4 / §9.1.1.4 PutValue with a Super Reference: the
+                    // [[Set]] runs against the super base (GetPrototypeOf([[HomeObject]]))
+                    // with the receiver = `this`. So a setter found on the super
+                    // base runs with this=receiver; otherwise OrdinarySet creates
+                    // the own data property on the receiver, not the prototype.
+                    var superBase = frame.CurrentFunction.HomeObject.Prototype;
+                    if (superBase is not null)
+                        AbstractOperations.Set(this, superBase, name, value, frame.ThisV);
+                    Push(frame, ref stack, ref sp, ref maxSp, value);
+                    break;
+                }
+            case Opcode.LoadSuperComputed:
+                {
+                    // wp:M3-04h — super[expr] read. Like LoadSuperProperty but the
+                    // key is taken from the stack and coerced via ToPropertyKey
+                    // (§13.3.7.2 GetSuperBase + §13.3.4 MakeSuperPropertyReference).
+                    var key = Pop(stack, ref sp);
+                    if (frame.CurrentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
+                    var propertyKey = AbstractOperations.ToPropertyKey(this, key);
+                    var superProto = frame.CurrentFunction.HomeObject.Prototype;
+                    if (superProto is null)
+                    {
+                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, superProto, propertyKey, frame.ThisV));
+                    break;
+                }
+            case Opcode.StoreSuperComputed:
+                {
+                    // wp:M3-04h — super[expr] = v. Mirrors StoreSuperProperty:
+                    // §13.3.4 PutValue with a Super Reference runs [[Set]] against
+                    // the super base with the receiver = `this`. Key is coerced
+                    // via ToPropertyKey.
+                    var value = Pop(stack, ref sp);
+                    var key = Pop(stack, ref sp);
+                    if (frame.CurrentFunction?.HomeObject is null)
+                        throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
+                    var propertyKey = AbstractOperations.ToPropertyKey(this, key);
+                    var superBase = frame.CurrentFunction.HomeObject.Prototype;
+                    if (superBase is not null)
+                        AbstractOperations.Set(this, superBase, propertyKey, value, frame.ThisV);
+                    Push(frame, ref stack, ref sp, ref maxSp, value);
+                    break;
+                }
+            case Opcode.PrivateGet:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var receiver = Pop(stack, ref sp);
+                    // §13.3.4.2 PrivateGet → §7.3.x PrivateElementFind: a TypeError
+                    // unless the receiver ITSELF carries the brand. The brand is a
+                    // per-object set (never prototype-walked), so a wrong receiver —
+                    // a subclass constructor for a static private member, a Proxy
+                    // wrapping an instance, or any object before its brand is
+                    // installed (derived class, pre-super()) — throws here.
+                    if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(name))
+                    {
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot read private member from an object whose class did not declare it"));
+                    }
+                    // §13.3.4.2 PrivateGet — a private accessor's getter must be
+                    // invoked with `this` = receiver; a private method or field
+                    // yields its value directly. Routing through the AO walks the
+                    // chain (private methods/accessors live on the prototype) and
+                    // invokes any getter; a §13.3.4 get on a set-only accessor is
+                    // a TypeError.
+                    var obj = receiver.AsObject;
+                    var (getDesc, _) = FindPrivateDescriptor(obj, name);
+                    if (getDesc is { IsAccessor: true } ga)
+                    {
+                        if (ga.Getter is null)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                $"'{name}' was defined without a getter"));
+                        Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Call(this, JsValue.Object(ga.Getter), receiver, Array.Empty<JsValue>()));
+                    }
+                    else
+                    {
+                        Push(frame, ref stack, ref sp, ref maxSp, getDesc?.Value ?? obj.Get(name));
+                    }
+                    break;
+                }
+            case Opcode.PrivateSet:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var value = Pop(stack, ref sp);
+                    var receiver = Pop(stack, ref sp);
+                    // §13.3.4.3 PrivateSet → PrivateElementFind: a TypeError unless
+                    // the receiver ITSELF carries the brand (per-object set, never
+                    // prototype-walked) — see PrivateGet above.
+                    if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(name))
+                    {
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot write private member from an object whose class did not declare it"));
+                    }
+                    // §13.3.4.3 PrivateSet — invoke a private accessor's setter
+                    // with `this` = receiver; writing a get-only accessor or a
+                    // private method is a TypeError. A private field writes its
+                    // own slot directly.
+                    var sobj = receiver.AsObject;
+                    var (setDesc, ownsField) = FindPrivateDescriptor(sobj, name);
+                    if (setDesc is { IsAccessor: true } sa)
+                    {
+                        if (sa.Setter is null)
+                            throw new JsThrow(_runtime.Realm.NewTypeError(
+                                $"'{name}' was defined without a setter"));
+                        AbstractOperations.Call(this, JsValue.Object(sa.Setter), receiver, new[] { value });
+                    }
+                    else if (setDesc is { IsAccessor: false } && !ownsField)
+                    {
+                        // A private *method* (data descriptor on the prototype) is
+                        // not writable (§13.3.4.3 step "if entry.[[Kind]] is method").
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            $"private method '{name}' is not writable"));
+                    }
+                    else
+                    {
+                        sobj.Set(name, value);
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, value);
+                    break;
+                }
+            case Opcode.DefinePrivateField:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var value = Pop(stack, ref sp);
+                    var receiver = Pop(stack, ref sp);
+                    if (!receiver.IsObject)
+                        throw new JsThrow(_runtime.Realm.NewTypeError("Cannot define private field on non-object"));
+                    if (receiver.AsObject.HasOwn(name))
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot initialize the same private member twice on the same object"));
+                    receiver.AsObject.DefineOwnProperty(name,
+                        PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: false));
+                    // §7.3.28 PrivateFieldAdd installs the private element onto
+                    // the receiver's [[PrivateElements]] — i.e. the brand. The
+                    // brand check (PrivateGet/PrivateSet/PrivateIn/call) consults
+                    // this per-object set, not the prototype chain.
+                    receiver.AsObject.AddPrivateBrand(name);
+                    break;
+                }
+            case Opcode.PrivateIn:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var operand = Pop(stack, ref sp);
+                    // §13.10.1 step 4 — a non-object right operand is a TypeError
+                    // (not `false`).
+                    if (!operand.IsObject)
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot use 'in' operator to search for a private name in a non-object"));
+                    // §13.10.1 / §7.3.x — `#x in obj` is true iff obj ITSELF carries
+                    // the brand for #x (per-object set, never prototype-walked). A
+                    // subclass constructor or a Proxy wrapping an instance does not
+                    // carry the brand, so this yields false rather than true.
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(operand.AsObject.HasPrivateBrand(name)));
+                    break;
+                }
+            case Opcode.LoadCallerArgs:
+                {
+                    var arr = new JsArray(_runtime.Realm);
+                    foreach (var a in frame.Args) arr.Push(a);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Object(arr));
+                    break;
+                }
+            case Opcode.RunFieldInits:
+                {
+                    // §10.2.1.3 InitializeInstanceElements — for a derived class
+                    // this runs only after super() returns, so the instance's
+                    // private brands appear at exactly the spec-correct moment;
+                    // private access before this point throws a TypeError.
+                    // Install instance private method/accessor brands first: their
+                    // bodies live on the shared prototype, but each instance must
+                    // carry the brand in its own [[PrivateElements]] set.
+                    if (frame.CurrentFunction?.InstancePrivateBrands is { } brands && frame.ThisV.IsObject)
+                    {
+                        var brandObj = frame.ThisV.AsObject;
+                        foreach (var b in brands) brandObj.AddPrivateBrand(b);
+                    }
+                    var inits = frame.CurrentFunction?.InstanceFieldInitializers;
+                    if (inits is not null)
+                    {
+                        foreach (var init in inits)
                         {
-                            frame.ThisV.AsObject.DefineOwnProperty(ck,
-                                PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+                            var value = AbstractOperations.Call(
+                                this, JsValue.Object(init.Thunk), frame.ThisV, Array.Empty<JsValue>());
+                            // wp:M3-04f — computed-key instance fields: the thunk
+                            // returns the initializer value; define the own data
+                            // property under the key resolved at class-definition
+                            // time (CreateDataPropertyOrThrow per §10.2.4.1 /
+                            // §15.7.10). Non-computed thunks self-store and return
+                            // undefined — nothing to do here.
+                            if (init.ComputedKey is { } ck && frame.ThisV.IsObject)
+                            {
+                                frame.ThisV.AsObject.DefineOwnProperty(ck,
+                                    PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+                            }
                         }
                     }
+                    break;
                 }
-                break;
-            }
-        case Opcode.BuildClass:
-            {
-                var idx = ReadU16(code, ref ip);
-                var template = (Starling.Js.Bytecode.ClassTemplate)constants[idx]!;
-
-                // Stack layout (top → bottom):
-                //   [baseClass?]
-                //   [ctor-upvalue0, ctor-upvalue1, …]
-                //   [method0-upvalue0, …, methodK-upvalueN]
-                //   [field0-upvalue0, …, fieldK-upvalueN]
-                //   [staticBlock0-upvalue0, …, staticBlockK-upvalueN]
-                // We pop in reverse declaration order so each consumer
-                // sees its upvalues in the order it pushed them.
-                var staticBlocks = template.StaticBlocks;
-                var staticBlockUpvalues = new JsValue[staticBlocks.Count][];
-                for (var i = staticBlocks.Count - 1; i >= 0; i--)
+            case Opcode.BuildClass:
                 {
-                    var n = staticBlocks[i].UpvalueCount;
-                    var ups = new JsValue[n];
-                    for (var k = n - 1; k >= 0; k--) ups[k] = Pop(stack, ref sp);
-                    staticBlockUpvalues[i] = ups;
-                }
-                // wp:M3-04f — computed keys were pushed (already ToPropertyKey-
-                // coerced) below each member's upvalues, so pop upvalues first
-                // then the key. Keys default to undefined for non-computed
-                // members and are ignored there.
-                var fieldUpvalues = new JsValue[template.Fields.Count][];
-                var fieldComputedKeys = new JsValue[template.Fields.Count];
-                for (var i = template.Fields.Count - 1; i >= 0; i--)
-                {
-                    var n = template.Fields[i].UpvalueCount;
-                    var ups = new JsValue[n];
-                    for (var k = n - 1; k >= 0; k--) ups[k] = Pop(stack, ref sp);
-                    fieldUpvalues[i] = ups;
-                    fieldComputedKeys[i] = template.Fields[i].IsComputed ? Pop(stack, ref sp) : JsValue.Undefined;
-                }
-                var methodUpvalues = new JsValue[template.Methods.Count][];
-                var methodComputedKeys = new JsValue[template.Methods.Count];
-                for (var i = template.Methods.Count - 1; i >= 0; i--)
-                {
-                    var n = template.Methods[i].UpvalueCount;
-                    var ups = new JsValue[n];
-                    for (var k = n - 1; k >= 0; k--) ups[k] = Pop(stack, ref sp);
-                    methodUpvalues[i] = ups;
-                    methodComputedKeys[i] = template.Methods[i].IsComputed ? Pop(stack, ref sp) : JsValue.Undefined;
-                }
-                var ctorUps = new JsValue[template.ConstructorUpvalueCount];
-                for (var k = template.ConstructorUpvalueCount - 1; k >= 0; k--) ctorUps[k] = Pop(stack, ref sp);
-                JsValue baseClassValue = JsValue.Undefined;
-                if (template.HasExtends) baseClassValue = Pop(stack, ref sp);
+                    var idx = ReadU16(code, ref ip);
+                    var template = (Starling.Js.Bytecode.ClassTemplate)constants[idx]!;
 
-                // §15.7.14 — the inner class-name binding (a named
-                // class expression's `Inner` cell) must hold the
-                // constructor BEFORE static field initializers run, so
-                // `static x = new Inner()` resolves the class by name.
-                // The cell lives in this frame's captured locals; pass
-                // it through so BuildClassRuntime can set it at the
-                // right moment.
-                Cell? selfNameCell = null;
-                if (template.SelfNameSlot >= 0)
-                    selfNameCell = (Cell)locals[template.SelfNameSlot].AsObject;
+                    // Stack layout (top → bottom):
+                    //   [baseClass?]
+                    //   [ctor-upvalue0, ctor-upvalue1, …]
+                    //   [method0-upvalue0, …, methodK-upvalueN]
+                    //   [field0-upvalue0, …, fieldK-upvalueN]
+                    //   [staticBlock0-upvalue0, …, staticBlockK-upvalueN]
+                    // We pop in reverse declaration order so each consumer
+                    // sees its upvalues in the order it pushed them.
+                    var staticBlocks = template.StaticBlocks;
+                    var staticBlockUpvalues = new JsValue[staticBlocks.Count][];
+                    for (var i = staticBlocks.Count - 1; i >= 0; i--)
+                    {
+                        var n = staticBlocks[i].UpvalueCount;
+                        var ups = new JsValue[n];
+                        for (var k = n - 1; k >= 0; k--) ups[k] = Pop(stack, ref sp);
+                        staticBlockUpvalues[i] = ups;
+                    }
+                    // wp:M3-04f — computed keys were pushed (already ToPropertyKey-
+                    // coerced) below each member's upvalues, so pop upvalues first
+                    // then the key. Keys default to undefined for non-computed
+                    // members and are ignored there.
+                    var fieldUpvalues = new JsValue[template.Fields.Count][];
+                    var fieldComputedKeys = new JsValue[template.Fields.Count];
+                    for (var i = template.Fields.Count - 1; i >= 0; i--)
+                    {
+                        var n = template.Fields[i].UpvalueCount;
+                        var ups = new JsValue[n];
+                        for (var k = n - 1; k >= 0; k--) ups[k] = Pop(stack, ref sp);
+                        fieldUpvalues[i] = ups;
+                        fieldComputedKeys[i] = template.Fields[i].IsComputed ? Pop(stack, ref sp) : JsValue.Undefined;
+                    }
+                    var methodUpvalues = new JsValue[template.Methods.Count][];
+                    var methodComputedKeys = new JsValue[template.Methods.Count];
+                    for (var i = template.Methods.Count - 1; i >= 0; i--)
+                    {
+                        var n = template.Methods[i].UpvalueCount;
+                        var ups = new JsValue[n];
+                        for (var k = n - 1; k >= 0; k--) ups[k] = Pop(stack, ref sp);
+                        methodUpvalues[i] = ups;
+                        methodComputedKeys[i] = template.Methods[i].IsComputed ? Pop(stack, ref sp) : JsValue.Undefined;
+                    }
+                    var ctorUps = new JsValue[template.ConstructorUpvalueCount];
+                    for (var k = template.ConstructorUpvalueCount - 1; k >= 0; k--) ctorUps[k] = Pop(stack, ref sp);
+                    JsValue baseClassValue = JsValue.Undefined;
+                    if (template.HasExtends) baseClassValue = Pop(stack, ref sp);
 
-                var classCtor = BuildClassRuntime(template, baseClassValue,
-                    ctorUps, methodUpvalues, fieldUpvalues, staticBlockUpvalues,
-                    methodComputedKeys, fieldComputedKeys, selfNameCell);
-                Push(frame, ref stack, ref sp, ref maxSp, classCtor);
-                break;
-            }
+                    // §15.7.14 — the inner class-name binding (a named
+                    // class expression's `Inner` cell) must hold the
+                    // constructor BEFORE static field initializers run, so
+                    // `static x = new Inner()` resolves the class by name.
+                    // The cell lives in this frame's captured locals; pass
+                    // it through so BuildClassRuntime can set it at the
+                    // right moment.
+                    Cell? selfNameCell = null;
+                    if (template.SelfNameSlot >= 0)
+                        selfNameCell = (Cell)locals[template.SelfNameSlot].AsObject;
+
+                    var classCtor = BuildClassRuntime(template, baseClassValue,
+                        ctorUps, methodUpvalues, fieldUpvalues, staticBlockUpvalues,
+                        methodComputedKeys, fieldComputedKeys, selfNameCell);
+                    Push(frame, ref stack, ref sp, ref maxSp, classCtor);
+                    break;
+                }
             default:
                 return false;
         }
@@ -3133,158 +3133,158 @@ public sealed class JsVm
     {
         switch (op)
         {
-        case Opcode.Sub:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.Sub:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "-");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Subtract(a.AsBigInt, b.AsBigInt));
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "-");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Subtract(a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(a) - JsValue.ToNumber(b)));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(a) - JsValue.ToNumber(b)));
-                break;
-            }
-        case Opcode.Mul:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.Mul:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "*");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Multiply(a.AsBigInt, b.AsBigInt));
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "*");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Multiply(a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(a) * JsValue.ToNumber(b)));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(a) * JsValue.ToNumber(b)));
-                break;
-            }
-        case Opcode.Div:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.Div:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "/");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Divide(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "/");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Divide(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(a) / JsValue.ToNumber(b)));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(a) / JsValue.ToNumber(b)));
-                break;
-            }
-        case Opcode.Mod:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.Mod:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "%");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Remainder(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "%");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Remainder(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    var ad = JsValue.ToNumber(a); var bd = JsValue.ToNumber(b);
+                    // §Number::remainder — truncated remainder (result carries the
+                    // sign of the dividend), matching C `fmod`. The C# `%` operator
+                    // on doubles implements exactly these IEEE semantics, including
+                    // the NaN/Infinity/zero edge cases (`x % 0` → NaN, `x % ∞` → x,
+                    // `∞ % y` → NaN), unlike the floored `a - floor(a/b)*b` form.
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ad % bd));
                     break;
                 }
-                var ad = JsValue.ToNumber(a); var bd = JsValue.ToNumber(b);
-                // §Number::remainder — truncated remainder (result carries the
-                // sign of the dividend), matching C `fmod`. The C# `%` operator
-                // on doubles implements exactly these IEEE semantics, including
-                // the NaN/Infinity/zero edge cases (`x % 0` → NaN, `x % ∞` → x,
-                // `∞ % y` → NaN), unlike the floored `a - floor(a/b)*b` form.
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ad % bd));
-                break;
-            }
-        case Opcode.Pow:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.Pow:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "**");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Pow(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "**");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Pow(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(Math.Pow(JsValue.ToNumber(a), JsValue.ToNumber(b))));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(Math.Pow(JsValue.ToNumber(a), JsValue.ToNumber(b))));
-                break;
-            }
-        case Opcode.Neg:
-            {
-                var v = ToNumericOperand(Pop(stack, ref sp));
-                if (v.IsBigInt) { Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Negate(v.AsBigInt)); break; }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(-JsValue.ToNumber(v)));
-                break;
-            }
-        case Opcode.UnaryPlus:
-            {
-                var v = ToNumericOperand(Pop(stack, ref sp));
-                // §13.5.4: unary + on a BigInt throws TypeError.
-                if (v.IsBigInt)
-                    throw new JsThrow(_runtime.Realm.NewTypeError("Cannot convert a BigInt value to a number"));
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(v)));
-                break;
-            }
-        // ----- Bitwise (Number → Int32, or BigInt-only) -----
-        case Opcode.BitOr:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.Neg:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "|");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseOr(a.AsBigInt, b.AsBigInt));
+                    var v = ToNumericOperand(Pop(stack, ref sp));
+                    if (v.IsBigInt) { Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.Negate(v.AsBigInt)); break; }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(-JsValue.ToNumber(v)));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) | ToInt32(b))); break;
-            }
-        case Opcode.BitAnd:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.UnaryPlus:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "&");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseAnd(a.AsBigInt, b.AsBigInt));
+                    var v = ToNumericOperand(Pop(stack, ref sp));
+                    // §13.5.4: unary + on a BigInt throws TypeError.
+                    if (v.IsBigInt)
+                        throw new JsThrow(_runtime.Realm.NewTypeError("Cannot convert a BigInt value to a number"));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(JsValue.ToNumber(v)));
                     break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) & ToInt32(b))); break;
-            }
-        case Opcode.BitXor:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            // ----- Bitwise (Number → Int32, or BigInt-only) -----
+            case Opcode.BitOr:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "^");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseXor(a.AsBigInt, b.AsBigInt));
-                    break;
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "|");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseOr(a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) | ToInt32(b))); break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) ^ ToInt32(b))); break;
-            }
-        case Opcode.BitNot:
-            {
-                var v = ToNumericOperand(Pop(stack, ref sp));
-                if (v.IsBigInt) { Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseNot(v.AsBigInt)); break; }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(~ToInt32(v))); break;
-            }
-        case Opcode.Shl:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.BitAnd:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "<<");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.ShiftLeft(_runtime.Realm, a.AsBigInt, b.AsBigInt));
-                    break;
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "&");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseAnd(a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) & ToInt32(b))); break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) << (ToInt32(b) & 31))); break;
-            }
-        case Opcode.Shr:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                if (a.IsBigInt || b.IsBigInt)
+            case Opcode.BitXor:
                 {
-                    if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, ">>");
-                    Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.ShiftRight(_runtime.Realm, a.AsBigInt, b.AsBigInt));
-                    break;
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "^");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseXor(a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) ^ ToInt32(b))); break;
                 }
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) >> (ToInt32(b) & 31))); break;
-            }
-        case Opcode.Ushr:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
-                // §13.10.4 — BigInts have no unsigned right shift; throw TypeError.
-                if (a.IsBigInt || b.IsBigInt)
-                    throw new JsThrow(_runtime.Realm.NewTypeError("BigInts have no unsigned right shift, use >> instead"));
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number((uint)ToInt32(a) >> (ToInt32(b) & 31))); break;
-            }
+            case Opcode.BitNot:
+                {
+                    var v = ToNumericOperand(Pop(stack, ref sp));
+                    if (v.IsBigInt) { Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.BitwiseNot(v.AsBigInt)); break; }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(~ToInt32(v))); break;
+                }
+            case Opcode.Shl:
+                {
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, "<<");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.ShiftLeft(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) << (ToInt32(b) & 31))); break;
+                }
+            case Opcode.Shr:
+                {
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    if (a.IsBigInt || b.IsBigInt)
+                    {
+                        if (!(a.IsBigInt && b.IsBigInt)) throw BigIntOps.MixedTypeError(_runtime.Realm, ">>");
+                        Push(frame, ref stack, ref sp, ref maxSp, BigIntOps.ShiftRight(_runtime.Realm, a.AsBigInt, b.AsBigInt));
+                        break;
+                    }
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number(ToInt32(a) >> (ToInt32(b) & 31))); break;
+                }
+            case Opcode.Ushr:
+                {
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); a = ToNumericOperand(a); b = ToNumericOperand(b);
+                    // §13.10.4 — BigInts have no unsigned right shift; throw TypeError.
+                    if (a.IsBigInt || b.IsBigInt)
+                        throw new JsThrow(_runtime.Realm.NewTypeError("BigInts have no unsigned right shift, use >> instead"));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Number((uint)ToInt32(a) >> (ToInt32(b) & 31))); break;
+                }
             default:
                 throw new InvalidOperationException($"opcode {op} is not an arithmetic opcode");
         }
@@ -3297,65 +3297,65 @@ public sealed class JsVm
     {
         switch (op)
         {
-        // ----- Comparison -----
-        case Opcode.Eq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(AbstractEquals(a, b))); break; }
-        case Opcode.NEq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(!AbstractEquals(a, b))); break; }
-        case Opcode.StrictEq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(JsValue.StrictEquals(a, b))); break; }
-        case Opcode.StrictNEq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(!JsValue.StrictEquals(a, b))); break; }
-        case Opcode.Lt: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(RelationalLessThan(a, b, leftFirst: true) == true)); break; }
-        case Opcode.LtEq:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp);
-                var r = RelationalLessThan(b, a, leftFirst: false);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(r == false));
-                break;
-            }
-        case Opcode.Gt: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(RelationalLessThan(b, a, leftFirst: false) == true)); break; }
-        case Opcode.GtEq:
-            {
-                var b = Pop(stack, ref sp); var a = Pop(stack, ref sp);
-                var r = RelationalLessThan(a, b, leftFirst: true);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(r == false));
-                break;
-            }
-        case Opcode.TypeOf:
-            {
-                var v = Pop(stack, ref sp);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.String(v.Kind switch
+            // ----- Comparison -----
+            case Opcode.Eq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(AbstractEquals(a, b))); break; }
+            case Opcode.NEq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(!AbstractEquals(a, b))); break; }
+            case Opcode.StrictEq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(JsValue.StrictEquals(a, b))); break; }
+            case Opcode.StrictNEq: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(!JsValue.StrictEquals(a, b))); break; }
+            case Opcode.Lt: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(RelationalLessThan(a, b, leftFirst: true) == true)); break; }
+            case Opcode.LtEq:
                 {
-                    JsValueKind.Undefined => "undefined",
-                    JsValueKind.Null => "object",
-                    JsValueKind.Boolean => "boolean",
-                    JsValueKind.Number => "number",
-                    JsValueKind.String => "string",
-                    JsValueKind.Object => AbstractOperations.IsCallable(v) ? "function" : "object",
-                    JsValueKind.BigInt => "bigint",
-                    JsValueKind.Symbol => "symbol",
-                    _ => "undefined",
-                }));
-                break;
-            }
-        // ----- Operator bundle (gap:instanceof / gap:in / gap:delete) -----
-        case Opcode.Instanceof:
-            {
-                var target = Pop(stack, ref sp);
-                var value = Pop(stack, ref sp);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(InstanceofOperator(value, target)));
-                break;
-            }
-        case Opcode.In:
-            {
-                var rhs = Pop(stack, ref sp);
-                var key = Pop(stack, ref sp);
-                if (!rhs.IsObject)
-                    throw new JsThrow(_runtime.Realm.NewTypeError(
-                        "Cannot use 'in' operator to search for '"
-                        + JsValue.ToStringValue(key) + "' in "
-                        + JsValue.ToStringValue(rhs)));
-                var pk = AbstractOperations.ToPropertyKey(this, key);
-                Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(AbstractOperations.HasProperty(rhs.AsObject, pk)));
-                break;
-            }
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp);
+                    var r = RelationalLessThan(b, a, leftFirst: false);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(r == false));
+                    break;
+                }
+            case Opcode.Gt: { var b = Pop(stack, ref sp); var a = Pop(stack, ref sp); Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(RelationalLessThan(b, a, leftFirst: false) == true)); break; }
+            case Opcode.GtEq:
+                {
+                    var b = Pop(stack, ref sp); var a = Pop(stack, ref sp);
+                    var r = RelationalLessThan(a, b, leftFirst: true);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(r == false));
+                    break;
+                }
+            case Opcode.TypeOf:
+                {
+                    var v = Pop(stack, ref sp);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.String(v.Kind switch
+                    {
+                        JsValueKind.Undefined => "undefined",
+                        JsValueKind.Null => "object",
+                        JsValueKind.Boolean => "boolean",
+                        JsValueKind.Number => "number",
+                        JsValueKind.String => "string",
+                        JsValueKind.Object => AbstractOperations.IsCallable(v) ? "function" : "object",
+                        JsValueKind.BigInt => "bigint",
+                        JsValueKind.Symbol => "symbol",
+                        _ => "undefined",
+                    }));
+                    break;
+                }
+            // ----- Operator bundle (gap:instanceof / gap:in / gap:delete) -----
+            case Opcode.Instanceof:
+                {
+                    var target = Pop(stack, ref sp);
+                    var value = Pop(stack, ref sp);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(InstanceofOperator(value, target)));
+                    break;
+                }
+            case Opcode.In:
+                {
+                    var rhs = Pop(stack, ref sp);
+                    var key = Pop(stack, ref sp);
+                    if (!rhs.IsObject)
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot use 'in' operator to search for '"
+                            + JsValue.ToStringValue(key) + "' in "
+                            + JsValue.ToStringValue(rhs)));
+                    var pk = AbstractOperations.ToPropertyKey(this, key);
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(AbstractOperations.HasProperty(rhs.AsObject, pk)));
+                    break;
+                }
             default:
                 throw new InvalidOperationException($"opcode {op} is not a comparison opcode");
         }
