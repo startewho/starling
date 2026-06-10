@@ -2922,7 +2922,7 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             {
                 case FilterFunctionKind.Blur:
                 {
-                    var sigma = (float)(FilterFunction.Sigma(f.Amount) * scale);
+                    var sigma = (float)(FilterFunction.BlurSigma(f.Amount) * scale);
                     if (sigma > 0)
                         layer.Mutate(ctx => ctx.GaussianBlur(sigma));
                     break;
@@ -3035,7 +3035,7 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             }
         });
 
-        var sigma = (float)(FilterFunction.Sigma(f.Amount) * scale);
+        var sigma = (float)(FilterFunction.ShadowSigma(f.Amount) * scale);
         if (sigma > 0)
             shadow.Mutate(ctx => ctx.GaussianBlur(sigma));
 

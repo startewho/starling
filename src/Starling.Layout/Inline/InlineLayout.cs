@@ -113,7 +113,7 @@ internal sealed class InlineLayout
         {
             contentHeight = ApplyEllipsisAndClamp(
                 blockStyle, availableWidth, contentHeight,
-                fragments, placedImages, placedAtomics);
+                fragments, placedImages, placedAtomics, measure);
         }
 
         if (!measure)
@@ -1176,7 +1176,8 @@ internal sealed class InlineLayout
         double contentHeight,
         List<(TextBox Owner, int Index)> fragments,
         List<ImageBox> placedImages,
-        List<InlineBox> placedAtomics)
+        List<InlineBox> placedAtomics,
+        bool measure)
     {
         var clampLines = ResolveLineClamp(blockStyle);
         var ellipsisActive = clampLines == 0 && ResolveEllipsisActive(blockStyle);
@@ -1222,6 +1223,13 @@ internal sealed class InlineLayout
             }
             contentHeight = clampCut;
         }
+
+        // Ellipsizing must never affect intrinsic sizing (CSS UI 4 §7.1.1):
+        // a min-content probe at width 0 would otherwise drop every fragment
+        // and report the ellipsis advance as the text's minimum width. The
+        // clamp's height capping above IS real content height, so measure
+        // passes keep it; only the fragment surgery is paint-affecting.
+        if (measure) return contentHeight;
 
         const double overflowTolerance = 0.05;
         for (var i = 0; i < lineTops.Count; i++)

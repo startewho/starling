@@ -104,44 +104,64 @@ internal static class IntrinsicSizes
             return itemMax;
         }
 
-        double max = 0;
-        Walk(box);
-        return max;
+        return WalkContent(box);
 
-        void Walk(Box.Box node)
+        // Extent of the content INSIDE node, in node's content-box space.
+        // Text fragments carry coordinates rooted at their inline formatting
+        // context (the nearest block container), so descending into a block
+        // child must add that child's content origin (frame X + left border +
+        // left padding) and, on the way out, its right edges — otherwise a
+        // padded descendant under-reports (Chromium counts the padding in
+        // max-content). Auto-width block FRAMES stay excluded: they are sized
+        // to the probe width and would report the probe width back.
+        static double WalkContent(Box.Box node)
         {
-            switch (node)
+            double max = 0;
+            foreach (var child in node.Children)
             {
-                case TextBox tb:
-                    foreach (var frag in tb.Fragments)
-                    {
-                        // A collapsible space that trails a line hangs in this
-                        // engine instead of being removed (CSS Text 3 §4.1.1
-                        // line-end trimming); it is not content, so it must not
-                        // widen the measured extent (a zero-width min-content
-                        // probe would otherwise report longest-word + space).
-                        if (string.IsNullOrWhiteSpace(frag.Text)) continue;
-                        max = Math.Max(max, frag.X + frag.Width);
-                    }
-                    return;
-                case ImageBox img:
-                    max = Math.Max(max, img.Frame.X + img.Frame.Width);
-                    return;
-                case InlineBox ib when ib != box
-                    && ib.Style?.Get(PropertyId.Display) is CssKeyword { Name: "inline-block" }:
-                    max = Math.Max(max, ib.Frame.X + ib.Frame.Width);
-                    return;
-                case BlockBox bb when bb != box && bb.Style?.Get(PropertyId.Width) is CssLength:
-                    // A block child with a fixed (length) width keeps that
-                    // width under any probe, so its frame is real content
-                    // extent — unlike auto- or percentage-width block frames,
-                    // which stretch with the probe width and must stay
-                    // invisible to the walk.
-                    max = Math.Max(max, node.Frame.X + node.Frame.Width);
-                    return;
+                switch (child)
+                {
+                    case TextBox tb:
+                        foreach (var frag in tb.Fragments)
+                        {
+                            // A collapsible space that trails a line hangs in
+                            // this engine instead of being removed (CSS Text 3
+                            // §4.1.1 line-end trimming); it is not content, so
+                            // it must not widen the measured extent (a
+                            // zero-width min-content probe would otherwise
+                            // report longest-word + space).
+                            if (string.IsNullOrWhiteSpace(frag.Text)) continue;
+                            max = Math.Max(max, frag.X + frag.Width);
+                        }
+                        break;
+                    case ImageBox img:
+                        max = Math.Max(max, img.Frame.X + img.Frame.Width);
+                        break;
+                    case InlineBox ib when
+                        ib.Style?.Get(PropertyId.Display) is CssKeyword { Name: "inline-block" }:
+                        max = Math.Max(max, ib.Frame.X + ib.Frame.Width);
+                        break;
+                    case BlockBox bb when bb.Style?.Get(PropertyId.Width) is CssLength:
+                        // A block child with a fixed (length) width keeps that
+                        // width under any probe, so its border-box frame is
+                        // real content extent.
+                        max = Math.Max(max, bb.Frame.X + bb.Frame.Width);
+                        break;
+                    case BlockBox bb:
+                        max = Math.Max(
+                            max,
+                            bb.Frame.X + bb.Border.Left + bb.Padding.Left
+                                + WalkContent(bb)
+                                + bb.Padding.Right + bb.Border.Right);
+                        break;
+                    default:
+                        // Non-atomic inline boxes: their text fragments are
+                        // already rooted at this formatting context's origin.
+                        max = Math.Max(max, WalkContent(child));
+                        break;
+                }
             }
-
-            foreach (var child in node.Children) Walk(child);
+            return max;
         }
     }
 }

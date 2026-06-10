@@ -49,9 +49,10 @@ public sealed class FilterPaintTests
     [Spec("css-filter-effects-1", "https://www.w3.org/TR/filter-effects-1/#funcdef-filter-blur", section: "10.1")]
     public void Blur_spreads_a_hard_edge_in_both_directions()
     {
-        // Red box (60,60)-(140,140), blur(8px) → σ = 4 (the repo's radius/2
-        // convention). The former hard edge at x=140 must now ramp: red bleeds
-        // out past it, white bleeds in before it.
+        // Red box (60,60)-(140,140), blur(8px) → σ = 8 (Filter Effects 1
+        // defines the parameter as the standard deviation). The former hard
+        // edge at x=140 must now ramp: red bleeds out past it, white bleeds
+        // in before it.
         var list = FilteredRect(new LayoutRect(60, 60, 80, 80), Red,
             new FilterFunction(FilterFunctionKind.Blur, 8));
 

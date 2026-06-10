@@ -315,7 +315,10 @@ public sealed class Painter
 
             PaintList displayList;
             using (StarlingTelemetry.Span("paint", "display_list"))
-                displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images);
+            {
+                var canvasRect = clipViewport ?? new LayoutRect(0, 0, viewport.Width, viewport.Height);
+                displayList = new DisplayListBuilder().Build(root, clipViewport, styleOverride: null, images: images, scrollOffsets: null, canvasRect);
+            }
 
             using (StarlingTelemetry.Span("paint", $"raster:{PaintBackendSelector.Selected.ToString().ToLowerInvariant()}"))
             {
