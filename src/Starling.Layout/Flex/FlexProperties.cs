@@ -3,9 +3,6 @@ namespace Starling.Layout.Flex;
 /// <summary>
 /// Strongly-typed flex container properties resolved from a
 /// <see cref="Starling.Css.Cascade.ComputedStyle"/> in <see cref="FlexParser"/>.
-/// Single-line (no <c>flex-wrap: wrap</c>) is all this scope covers — the wrap
-/// keyword is parsed but treated as <c>nowrap</c>; multi-line layout is
-/// deferred to B6-3.
 /// </summary>
 internal enum FlexDirection : byte
 {
@@ -18,8 +15,8 @@ internal enum FlexDirection : byte
 internal enum FlexWrap : byte
 {
     NoWrap,
-    // Parsed but not honoured yet — single-line is all this milestone covers.
     Wrap,
+    // Honoured as `wrap` — reversing the cross-axis line order is deferred.
     WrapReverse,
 }
 
@@ -39,11 +36,28 @@ internal enum AlignItems : byte
     FlexStart,
     FlexEnd,
     Center,
-    // Baseline currently falls back to FlexStart — true baseline alignment
-    // requires per-item baseline metrics from the inline formatting context
-    // that the flex layout doesn't have hands on yet. Wire it up alongside
-    // mixed inline/flex content.
+    // First-baseline alignment. Row containers align items on their first
+    // text baseline (synthesizing one from the margin-box bottom edge when an
+    // item has no text); column containers fall back to flex-start —
+    // cross-axis (horizontal) baselines need a writing-mode model this engine
+    // doesn't have.
     Baseline,
+}
+
+/// <summary>
+/// <c>align-content</c> — distribution of flex lines along the cross axis in
+/// a multi-line container (CSS Flexbox §8.4). The initial <c>normal</c>
+/// behaves as <see cref="Stretch"/> in flex containers.
+/// </summary>
+internal enum AlignContent : byte
+{
+    Stretch,
+    FlexStart,
+    FlexEnd,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
 }
 
 internal readonly record struct FlexContainerProps(
@@ -51,6 +65,7 @@ internal readonly record struct FlexContainerProps(
     FlexWrap Wrap,
     JustifyContent Justify,
     AlignItems Align,
+    AlignContent ContentAlign,
     double RowGap,
     double ColumnGap)
 {
@@ -70,10 +85,13 @@ internal readonly record struct FlexContainerProps(
 /// flex-basis: a non-negative length in px, or <c>null</c> when it resolves
 /// to <c>auto</c>. The layout resolves <c>auto</c> against the child's width/
 /// height property and falls back to its content size when those are also
-/// <c>auto</c>.
+/// <c>auto</c>. <see cref="AlignSelf"/> is <c>null</c> for <c>auto</c> (take
+/// the container's <c>align-items</c>), else the per-item override
+/// (CSS Flexbox §8.3).
 /// </summary>
 internal readonly record struct FlexItemProps(
     double Grow,
     double Shrink,
     double? Basis,
-    int Order);
+    int Order,
+    AlignItems? AlignSelf);
