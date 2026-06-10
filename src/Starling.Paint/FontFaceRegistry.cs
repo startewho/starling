@@ -18,7 +18,10 @@ namespace Starling.Paint;
 /// </summary>
 /// <remarks>
 /// Lookup is case-insensitive on the family name to match CSS family matching
-/// (family names compare ASCII case-insensitively per CSS Fonts 3 §5.1).
+/// (family names compare ASCII case-insensitively per CSS Fonts 3 §5.1), and
+/// quote/whitespace-insensitive via <see cref="FontFamilyKey.Normalize"/> so a
+/// face registered as <c>'TwitterChirp'</c> is found by <c>TwitterChirp</c>
+/// and vice versa.
 /// </remarks>
 public sealed class FontFaceRegistry : IDisposable
 {
@@ -42,6 +45,10 @@ public sealed class FontFaceRegistry : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrEmpty(family);
+        // Key on the canonical family name: surrounding quotes/whitespace are
+        // CSS syntax, not part of the name, and must not split the key space.
+        family = FontFamilyKey.Normalize(family);
+        if (family.Length == 0) return false;
         if (fontBytes.Length == 0) return false;
 
         var bytes = fontBytes.ToArray();
@@ -144,7 +151,7 @@ public sealed class FontFaceRegistry : IDisposable
     /// </summary>
     internal bool TryGet(string family, bool bold, bool italic, int? probeCodepoint, out byte[] fontBytes)
     {
-        if (_disposed || !_byFamily.TryGetValue(family, out var faces) || faces.Count == 0)
+        if (_disposed || !_byFamily.TryGetValue(FontFamilyKey.Normalize(family), out var faces) || faces.Count == 0)
         {
             fontBytes = [];
             return false;
