@@ -957,6 +957,20 @@ internal sealed class InlineLayout
         var ih = image.IntrinsicHeight > 0 ? image.IntrinsicHeight : 1;
         var ratio = iw / ih;
 
+        // css-sizing-4 §5.1 — the aspect-ratio property can override the
+        // natural ratio: a bare <ratio> always wins; `auto && <ratio>` defers
+        // to the natural ratio when the replaced element has one.
+        var cssRatioOverrides = false;
+        if (Block.IntrinsicSizes.TryGetAspectRatio(style, out var cssRatio, out var ratioHasAuto))
+        {
+            var hasNaturalRatio = image.IntrinsicWidth > 0 && image.IntrinsicHeight > 0;
+            if (!ratioHasAuto || !hasNaturalRatio)
+            {
+                ratio = cssRatio;
+                cssRatioOverrides = true;
+            }
+        }
+
         var specW = Block.BlockLayout.ResolveLength(style, PropertyId.Width, availableWidth, _viewport, allowAuto: true);
         // Height percentages need a known containing-block height; in inline
         // context we don't have one, so leave height as auto when authored
@@ -994,8 +1008,10 @@ internal sealed class InlineLayout
         }
         else
         {
+            // Both axes auto: natural width, and the height follows the
+            // (possibly css-overridden) preferred ratio.
             w = iw;
-            h = ih;
+            h = cssRatioOverrides ? w / ratio : ih;
         }
 
         // §10.4 min/max constraints. When the constrained axis was derived
