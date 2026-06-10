@@ -52,6 +52,7 @@ internal sealed class StarlingScriptSession : IScriptSession
     // the loop's monotonic clock without rewinding the load-time advance.
     private long _liveBaselineMs;
     private bool _liveStarted;
+    private long _livePrevElapsedMs;
 
     private Action<ConsoleLevel, string> _consoleSink = static (_, _) => { };
 
@@ -395,17 +396,28 @@ internal sealed class StarlingScriptSession : IScriptSession
         {
             _liveBaselineMs = _loop.NowMilliseconds;
             _liveStarted = true;
+            _livePrevElapsedMs = Math.Max(0, elapsedMs);
         }
 
         var before = _document.MutationVersion;
-        var target = _liveBaselineMs + Math.Max(0, elapsedMs);
+        // Clamp the per-tick clock advance. When the UI thread stalls (a heavy
+        // relayout on a script-busy page), the next tick would otherwise
+        // teleport the simulated clock by the whole stall — long watchdog
+        // timers (webpack arms a 120s timeout per injected chunk script) then
+        // fire before the async script drain ever runs, and every chunk load
+        // "times out". Browsers clamp/throttle timers across stalls the same
+        // way. Pending work catches up at up to 1s of simulated time per tick.
+        const long MaxTickAdvanceMs = 1_000;
+        var nowElapsed = Math.Max(0, elapsedMs);
+        var advance = Math.Clamp(nowElapsed - _livePrevElapsedMs, 0, MaxTickAdvanceMs);
+        _livePrevElapsedMs = nowElapsed;
+        var target = _loop.NowMilliseconds + advance;
         _runtime.WithActiveVm(() =>
         {
-            // RunFrame requires a non-decreasing clock; only advance when real
-            // time has moved past the loop's current now. WithActiveVm drains the
-            // realm microtask queue (promise + fetch resolve jobs) on exit
-            // regardless, so a no-advance tick still services completions.
-            if (target > _loop.NowMilliseconds)
+            // RunFrame requires a non-decreasing clock; a zero-advance tick
+            // still drains the realm microtask queue on WithActiveVm exit, so
+            // promise/fetch completions are serviced regardless.
+            if (advance > 0)
                 _loop.RunFrame(target);
         });
 
