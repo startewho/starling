@@ -41,15 +41,25 @@ public sealed class PageScripting : IDisposable
     private readonly StarlingHttpClient _http;
     private readonly ScriptFetcher _fetcher;
     private readonly Document _document;
+    // The page's shared scroll store (browser-plan/scroll-model.md). Offset
+    // writes only flag it; this host drains the flagged set once per
+    // PumpFrame and dispatches the coalesced scroll events. Null for callers
+    // that predate the store (bare unit hosts).
+    private readonly Starling.Layout.Scroll.ScrollStateStore? _scrollState;
+    // Reused per frame so the steady-state no-scroll tick allocates nothing.
+    private readonly List<Element> _scrollEventTargets = [];
+    private bool _inScrollSteps;
     private bool _disposed;
 
     internal PageScripting(
-        IScriptSession session, StarlingHttpClient http, ScriptFetcher fetcher, Document document)
+        IScriptSession session, StarlingHttpClient http, ScriptFetcher fetcher, Document document,
+        Starling.Layout.Scroll.ScrollStateStore? scrollState = null)
     {
         _session = session;
         _http = http;
         _fetcher = fetcher;
         _document = document;
+        _scrollState = scrollState;
     }
 
     /// <summary>The document whose realm this drives — equals the owning page's.</summary>
@@ -80,7 +90,41 @@ public sealed class PageScripting : IDisposable
     public bool PumpFrame(long elapsedMs)
     {
         if (_disposed) return false;
-        return _session.PumpFrame(elapsedMs);
+        // HTML event loop ordering: the scroll steps run before this frame's
+        // requestAnimationFrame callbacks (which fire inside the session's
+        // pump below). A rAF scheduled by a scroll listener still lands in
+        // this same frame's rAF phase, matching the spec.
+        var mutated = RunScrollSteps();
+        mutated |= _session.PumpFrame(elapsedMs);
+        return mutated;
+    }
+
+    /// <summary>
+    /// "Run the scroll steps" (browser-plan/scroll-model.md WP4): drain every
+    /// scroll target the store flagged since the last frame and dispatch their
+    /// coalesced <c>scroll</c> events through the session. Runs from the frame
+    /// pump only — never from the wheel handler, never inside a paint. The
+    /// flags are cleared before any listener runs, so a listener that writes
+    /// an offset re-flags its target for the NEXT frame's drain instead of
+    /// recursing this one (the latch guards hosts that re-enter the pump from
+    /// a listener).
+    /// </summary>
+    private bool RunScrollSteps()
+    {
+        var store = _scrollState;
+        if (store is null || _inScrollSteps || !store.HasPendingEvents) return false;
+        _inScrollSteps = true;
+        try
+        {
+            store.DrainPendingEventTargets(_scrollEventTargets, out var documentScrolled);
+            var mutated = _session.DispatchScrollEvents(_scrollEventTargets, documentScrolled);
+            _scrollEventTargets.Clear();
+            return mutated;
+        }
+        finally
+        {
+            _inScrollSteps = false;
+        }
     }
 
     /// <summary>

@@ -178,6 +178,19 @@ public interface IScriptSession : IDisposable
     /// reveal-on-scroll content appears as it enters the viewport. Returns
     /// <c>true</c> when a callback mutated the DOM (the shell should re-render).</summary>
     bool UpdateIntersectionObservations(double viewportX, double viewportY, double viewportWidth, double viewportHeight);
+
+    /// <summary>HTML event loop "run the scroll steps": dispatch this frame's
+    /// coalesced <c>scroll</c> events, drained from the engine session's scroll
+    /// store (browser-plan/scroll-model.md WP4). The engine's frame pump calls
+    /// this once per frame, before the rAF callbacks of the same frame fire.
+    /// <paramref name="scrolledElements"/> are the element scrollers whose
+    /// offset moved since the last drain (each fires a non-bubbling
+    /// <c>scroll</c>); <paramref name="documentScrolled"/> reports the document
+    /// scroller (fires on the document and reaches window listeners). Returns
+    /// <c>true</c> when a listener mutated the DOM (the shell should
+    /// re-render). Default: no-op — backends without scroll dispatch keep
+    /// compiling and simply never fire scroll events.</summary>
+    bool DispatchScrollEvents(IReadOnlyList<Element> scrolledElements, bool documentScrolled) => false;
 }
 
 /// <summary>

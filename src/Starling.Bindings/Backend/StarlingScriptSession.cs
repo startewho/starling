@@ -389,6 +389,23 @@ internal sealed class StarlingScriptSession : IScriptSession
         return _document.MutationVersion != before;
     }
 
+    public bool DispatchScrollEvents(IReadOnlyList<Element> scrolledElements, bool documentScrolled)
+    {
+        ArgumentNullException.ThrowIfNull(scrolledElements);
+        if (_disposed) return false;
+        if (scrolledElements.Count == 0 && !documentScrolled) return false;
+
+        // Same shape as DispatchEvent: run with the VM active so the bridged
+        // JS listeners execute, drain the microtasks they queue on exit, and
+        // report whether any listener mutated the DOM. The dispatcher never
+        // re-reads the scroll store, so a listener that writes an offset
+        // re-flags it for the NEXT frame's drain — no same-frame recursion.
+        var before = _document.MutationVersion;
+        _runtime.WithActiveVm(() =>
+            ScrollEventDispatcher.Dispatch(_runtime.Realm, _document, scrolledElements, documentScrolled));
+        return _document.MutationVersion != before;
+    }
+
     public bool PumpFrame(long elapsedMs)
     {
         if (_disposed) return false;
