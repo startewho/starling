@@ -159,6 +159,12 @@ public sealed class TextBox : Box
     /// edit); the inline pass re-shapes from the new value.</summary>
     public string Text { get; internal set; }
 
+    /// <summary>True when this run is a form control's synthesized
+    /// <c>placeholder</c> text (an empty text input/textarea showing its
+    /// <c>placeholder</c> attribute). The painter renders it in the UA's
+    /// muted placeholder gray instead of the element's <c>color</c>.</summary>
+    public bool IsPlaceholder { get; init; }
+
     /// <summary>
     /// Populated by the inline formatting context: one entry per line fragment
     /// drawn from this text run. Painter consumes this list.

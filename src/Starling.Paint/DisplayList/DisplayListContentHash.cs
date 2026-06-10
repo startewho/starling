@@ -301,6 +301,17 @@ internal static class DisplayListContentHash
                 HashBool(ref h, s.Bold);
                 HashBool(ref h, s.Italic);
                 break;
+            case StrokeSegments seg:
+                Tag(ref h, 16);
+                HashDouble(ref h, seg.X0);
+                HashDouble(ref h, seg.Y0);
+                HashDouble(ref h, seg.X1);
+                HashDouble(ref h, seg.Y1);
+                HashDouble(ref h, seg.X2);
+                HashDouble(ref h, seg.Y2);
+                HashColor(ref h, seg.Color);
+                HashDouble(ref h, seg.Width);
+                break;
             default:
                 // Unknown item kind: fold a distinct discriminator so its mere
                 // presence changes the hash. Worst case is a needless re-raster.

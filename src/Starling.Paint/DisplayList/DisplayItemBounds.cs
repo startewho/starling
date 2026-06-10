@@ -51,6 +51,14 @@ internal static class DisplayItemBounds
                 // Decoration lines span the full glyph box.
                 bounds = new Rect(d.X, d.BaselineY - d.FontSize, d.Width, d.FontSize * 1.3);
                 return true;
+            case StrokeSegments seg:
+                // Polyline AABB, inflated by half the pen width (round caps).
+                var sminX = Math.Min(seg.X0, Math.Min(seg.X1, seg.X2));
+                var sminY = Math.Min(seg.Y0, Math.Min(seg.Y1, seg.Y2));
+                var smaxX = Math.Max(seg.X0, Math.Max(seg.X1, seg.X2));
+                var smaxY = Math.Max(seg.Y0, Math.Max(seg.Y1, seg.Y2));
+                bounds = InflateByPen(new Rect(sminX, sminY, smaxX - sminX, smaxY - sminY), seg.Width);
+                return true;
             case DrawTextShadow s:
                 // Offset + blurred copy of the glyph run.
                 bounds = new Rect(
