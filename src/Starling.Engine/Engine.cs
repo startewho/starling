@@ -941,7 +941,8 @@ public sealed class StarlingEngine
             new LayoutSize(page.Viewport.Width, page.Viewport.Height),
             page.Images,
             page.WebFonts,
-            nowMs: (double)nowMs);
+            nowMs: (double)nowMs,
+            scrollState: page.ScrollState);
     }
 
     public CompositedPageRenderer CreateCompositedRenderer(LaidOutPage page)
@@ -1065,8 +1066,13 @@ public sealed class StarlingEngine
 
         PrepareAnimationFrame(page, nowMs);
 
+        // The store rides along only when the capture viewport matches the
+        // page layout viewport: a full-page capture lays out at the document
+        // height, and letting that pass re-record root geometry would clamp
+        // the live root offset against the wrong scrollport.
         using var bitmap = _painter.RenderWithStyle(
-            page.Document, page.Style, viewport, page.Images, page.WebFonts, nowMs: (double)nowMs);
+            page.Document, page.Style, viewport, page.Images, page.WebFonts, nowMs: (double)nowMs,
+            scrollState: fullPage ? null : page.ScrollState);
 
         EnsureOutputDirectory(outputPath);
         using var image = Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(
@@ -1117,7 +1123,8 @@ public sealed class StarlingEngine
             scale: 1.0f,
             styleOverride,
             page.ImageResolver,
-            box => IsElementAnimatingLayerRoot(page, box));
+            box => IsElementAnimatingLayerRoot(page, box),
+            scrollOffsets: page.ScrollOffsetLookup);
     }
 
     private static bool IsElementAnimatingLayerRoot(LaidOutPage page, LayoutBox box)
