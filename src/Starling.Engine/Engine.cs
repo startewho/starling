@@ -239,6 +239,10 @@ public sealed class StarlingEngine
         // nulled when a late resource invalidates the tree, and reuse is
         // additionally gated on HasLayout + an unchanged mutation version below.
         BoxLayoutHost? jsLayoutHost = null;
+        // Scroll store for this render's layout passes — lets script reads of
+        // scrollWidth/scrollHeight (WP3) see real scrollable overflow even on
+        // the headless path. No shell ever writes offsets here.
+        var scrollState = new Starling.Layout.Scroll.ScrollStateStore();
         {
             // The script downloads were kicked off above and have been running
             // concurrently with the stylesheet/font fetch; await their
@@ -283,7 +287,7 @@ public sealed class StarlingEngine
                         var sw = System.Diagnostics.Stopwatch.StartNew();
                         var result = _painter.LayoutDocumentWithStyle(
                             doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                            colorScheme: options.PreferredColorScheme, ct: ct);
+                            colorScheme: options.PreferredColorScheme, ct: ct, scrollState: scrollState);
                         sw.Stop();
                         // Surface wall time alongside the trigger so the
                         // structured-logs view shows where forced-reflow time
@@ -300,7 +304,7 @@ public sealed class StarlingEngine
                     => _painter.BuildStyleEngine(
                         doc, viewport, options.FontSize, stylesheets.Resolve,
                         options.PreferredColorScheme);
-                jsLayoutHost = new BoxLayoutHost(doc, Relayout, BuildCascadeOnly);
+                jsLayoutHost = new BoxLayoutHost(doc, Relayout, BuildCascadeOnly, scrollState);
 
                 using (StarlingTelemetry.Span("engine", "run_scripts"))
                 {
@@ -566,6 +570,11 @@ public sealed class StarlingEngine
             var images = new ImageFetcher(_loggerFactory, http);
             var stylesheets = new StylesheetFetcher(_loggerFactory, http);
             var webFonts = new FontFaceRegistry();
+            // The page's shared scroll store (browser-plan/scroll-model.md):
+            // every layout pass for this document measures scrollports +
+            // scrollable overflow into it, and the LaidOutPage hands it to
+            // the shells / bindings as the single source of scroll truth.
+            var scrollState = new Starling.Layout.Scroll.ScrollStateStore();
             var resourcesHandedToPage = false;
 
             // The ScriptFetcher must outlive the critical phase in progressive
@@ -651,7 +660,7 @@ public sealed class StarlingEngine
                             var sw = System.Diagnostics.Stopwatch.StartNew();
                             var result = _painter.LayoutDocumentWithStyle(
                                 doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                                colorScheme: options.PreferredColorScheme, ct: ct);
+                                colorScheme: options.PreferredColorScheme, ct: ct, scrollState: scrollState);
                             sw.Stop();
                             // Surface wall time alongside the trigger so the
                             // structured-logs view shows where forced-reflow time
@@ -701,11 +710,12 @@ public sealed class StarlingEngine
                         {
                             (root, style) = _painter.LayoutDocumentWithStyle(
                                 doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                                colorScheme: options.PreferredColorScheme, ct: ct);
+                                colorScheme: options.PreferredColorScheme, ct: ct, scrollState: scrollState);
                         }
                         return new LaidOutPage(
                             root, doc, style, viewport, url, ExtractTitle(doc), images, stylesheets, webFonts,
-                            options.FontSize, security, ownsHttp ? http : null);
+                            options.FontSize, security, ownsHttp ? http : null,
+                            scrollState: scrollState);
                     }
 
                     // ---- Progressive path: run only render-blocking scripts, paint,
@@ -713,7 +723,7 @@ public sealed class StarlingEngine
                     // changed the DOM. Used by the interactive shell. ----
                     if (onFirstPaint is not null && hasScripts)
                     {
-                        var progressiveHost = new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly);
+                        var progressiveHost = new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly, scrollState);
                         var session = BeginScripts(doc, u, scripts, progressiveHost, viewport, ct);
                         var sessionEnded = false;
                         void EndSessionOnce() { if (!sessionEnded) { sessionEnded = true; EndScripts(session); } }
@@ -804,7 +814,7 @@ public sealed class StarlingEngine
                             await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
                             var (root2, style2) = _painter.LayoutDocumentWithStyle(
                                 doc, viewport, options.FontSize, images, stylesheets.Resolve, webFonts,
-                                colorScheme: options.PreferredColorScheme, ct: ct);
+                                colorScheme: options.PreferredColorScheme, ct: ct, scrollState: scrollState);
                             return Result<LaidOutPage, RenderError>.Ok(HandOff(page1.Relayout(root2, style2, viewport)));
                         }
                         catch
@@ -822,7 +832,7 @@ public sealed class StarlingEngine
                     // single returned page (snapshot semantics / no callback). ----
                     if (hasScripts)
                     {
-                        await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly), viewport, ct).ConfigureAwait(false);
+                        await RunScriptsAsync(doc, u, scripts, new BoxLayoutHost(doc, Prelayout, BuildCascadeOnly, scrollState), viewport, ct).ConfigureAwait(false);
                         DisposeScripts();
                         await FetchInjectedAndBackgroundsAsync().ConfigureAwait(false);
                     }
