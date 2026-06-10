@@ -325,4 +325,70 @@ public class DomTreeTests
         root.OwnerDocument.Should().BeSameAs(doc2);
         cursor.OwnerDocument.Should().BeSameAs(doc2);
     }
+
+    [TestMethod]
+    public void ClassList_stays_coherent_across_adds_and_removes()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("div");
+
+        el.ClassList.Add("a");
+        el.ClassList.Add("b");
+        el.GetAttribute("class").Should().Be("a b");
+        el.ClassList.Contains("a").Should().BeTrue();
+        el.ClassList.Contains("b").Should().BeTrue();
+        el.ClassList.Count.Should().Be(2);
+
+        el.ClassList.Remove("a").Should().BeTrue();
+        el.GetAttribute("class").Should().Be("b");
+        el.ClassList.Contains("a").Should().BeFalse();
+        el.ClassList.Contains("b").Should().BeTrue();
+        el.ClassList.Count.Should().Be(1);
+
+        el.ClassList.Replace("b", "c").Should().BeTrue();
+        el.GetAttribute("class").Should().Be("c");
+        el.ClassList.Contains("b").Should().BeFalse();
+        el.ClassList.Contains("c").Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void ClassList_tracks_direct_class_attribute_writes()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("div");
+        el.SetAttribute("class", "one two");
+
+        el.ClassList.Contains("one").Should().BeTrue();
+        el.ClassList.Contains("two").Should().BeTrue();
+
+        // Rewrite the attribute behind the token list's back; the list must
+        // reflect the new value, not a stale parse of the old one.
+        el.SetAttribute("class", "three");
+        el.ClassList.Contains("one").Should().BeFalse();
+        el.ClassList.Contains("three").Should().BeTrue();
+        el.ClassList.Count.Should().Be(1);
+        el.ClassList[0].Should().Be("three");
+
+        el.RemoveAttribute("class");
+        el.ClassList.Count.Should().Be(0);
+        el.ClassList.Contains("three").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ClassList_deduplicates_but_keeps_raw_attribute()
+    {
+        var doc = new Document();
+        var el = doc.CreateElement("div");
+        el.SetAttribute("class", "  a  a\tb ");
+
+        el.ClassList.Count.Should().Be(2);
+        el.ClassList[0].Should().Be("a");
+        el.ClassList[1].Should().Be("b");
+        el.ClassList.Contains("a").Should().BeTrue();
+        // Reading through the token list must not normalize the attribute.
+        el.GetAttribute("class").Should().Be("  a  a\tb ");
+
+        el.ClassList.Add("c");
+        el.GetAttribute("class").Should().Be("a b c");
+    }
 }

@@ -305,20 +305,29 @@ public sealed class JsVm
     /// <see cref="StartAsyncBody"/>.</summary>
     public JsValue CallFunction(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
-        // wp:M3-83 — §9.3.1 cross-realm execution. If this function was created
-        // in a DIFFERENT realm than the one this VM runs (the $262.createRealm
-        // case: a foreign realm's function invoked from the host realm's VM),
-        // dispatch through that realm's own VM with its realm published as the
-        // running execution context. PrepareForOrdinaryCall pushes the callee's
-        // [[Realm]] as the current realm; doing so makes the body resolve
-        // globals, allocate intrinsics, and throw errors in the function's realm.
+        // wp:M3-83 — §9.3.1 cross-realm execution (see CallFunctionForeignRealm).
         if (fn.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)
             && fnRealm.OwnerRuntime is { } owner)
-            return owner.WithActiveVm(foreignVm =>
-                ReferenceEquals(foreignVm, this) ? CallFunctionLocal(fn, thisValue, args)
-                                                 : foreignVm.CallFunction(fn, thisValue, args));
+            return CallFunctionForeignRealm(owner, fn, thisValue, args);
         return CallFunctionLocal(fn, thisValue, args);
     }
+
+    /// <summary>wp:M3-83 — §9.3.1 cross-realm execution. The function was
+    /// created in a DIFFERENT realm than the one this VM runs (the
+    /// $262.createRealm case: a foreign realm's function invoked from the host
+    /// realm's VM), so dispatch through that realm's own VM with its realm
+    /// published as the running execution context. PrepareForOrdinaryCall
+    /// pushes the callee's [[Realm]] as the current realm; doing so makes the
+    /// body resolve globals, allocate intrinsics, and throw errors in the
+    /// function's realm. Kept out of <see cref="CallFunction"/> so the
+    /// lambda's closure is allocated only on this cold path — inlined, the
+    /// capture forces a display-class allocation on every call (37 MB of
+    /// churn on an x.com load).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private JsValue CallFunctionForeignRealm(JsRuntime owner, JsFunction fn, JsValue thisValue, JsValue[] args)
+        => owner.WithActiveVm(foreignVm =>
+            ReferenceEquals(foreignVm, this) ? CallFunctionLocal(fn, thisValue, args)
+                                             : foreignVm.CallFunction(fn, thisValue, args));
 
     private JsValue CallFunctionLocal(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
@@ -353,17 +362,25 @@ public sealed class JsVm
     /// bound to it, and return whichever object the body produced.</summary>
     public JsValue ConstructFunction(JsFunction fn, JsValue[] args, JsObject newTarget)
     {
-        // wp:M3-83 — §9.3.2 cross-realm construct. Mirror CallFunction: a foreign
-        // realm's constructor (a class produced by another realm's eval) must run
-        // with its realm active so its `this` instance, prototype, and any brand
-        // / error it throws come from the constructor's realm, not the caller's.
+        // wp:M3-83 — §9.3.2 cross-realm construct (see ConstructFunctionForeignRealm).
         if (fn.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)
             && fnRealm.OwnerRuntime is { } owner)
-            return owner.WithActiveVm(foreignVm =>
-                ReferenceEquals(foreignVm, this) ? ConstructFunctionLocal(fn, args, newTarget)
-                                                 : foreignVm.ConstructFunction(fn, args, newTarget));
+            return ConstructFunctionForeignRealm(owner, fn, args, newTarget);
         return ConstructFunctionLocal(fn, args, newTarget);
     }
+
+    /// <summary>wp:M3-83 — §9.3.2 cross-realm construct. Mirror
+    /// <see cref="CallFunctionForeignRealm"/>: a foreign realm's constructor
+    /// (a class produced by another realm's eval) must run with its realm
+    /// active so its <c>this</c> instance, prototype, and any brand / error it
+    /// throws come from the constructor's realm, not the caller's. Kept out of
+    /// <see cref="ConstructFunction"/> so the lambda's closure is allocated
+    /// only on this cold path.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private JsValue ConstructFunctionForeignRealm(JsRuntime owner, JsFunction fn, JsValue[] args, JsObject newTarget)
+        => owner.WithActiveVm(foreignVm =>
+            ReferenceEquals(foreignVm, this) ? ConstructFunctionLocal(fn, args, newTarget)
+                                             : foreignVm.ConstructFunction(fn, args, newTarget));
 
     private JsValue ConstructFunctionLocal(JsFunction fn, JsValue[] args, JsObject newTarget)
     {
@@ -568,7 +585,16 @@ public sealed class JsVm
             Stack = restored?.Stack ?? ArrayPool<JsValue>.Shared.Rent(InitialStackSlots),
             Sp = restored?.Sp ?? 0,
             MaxSp = restored?.MaxSp ?? 0,
-            Locals = restored?.Locals ?? new JsValue[Math.Max(chunk.LocalCount, 1)],
+            // Locals rented from the same shared pool as the operand stack
+            // (measured ~358 MB/page-load of JsValue[] churn on x.com). The
+            // rented array is OVERSIZED: every consumer must bound itself by
+            // chunk.LocalCount, never Locals.Length. Returned by ReleaseFrame /
+            // the Halt arm (cleared up to LocalCount so the pool never pins JS
+            // objects); a suspended frame keeps it until the body completes,
+            // and a frame whose locals array escaped (mapped `arguments`,
+            // direct-eval scope) skips the return — see LocalsEscaped.
+            Locals = restored?.Locals ?? RentLocals(chunk.LocalCount),
+            LocalsEscaped = restored?.LocalsEscaped ?? false,
             Upvalues = upvalues,
             Args = args,
             Ip = restored?.Ip ?? 0,
@@ -584,7 +610,10 @@ public sealed class JsVm
             Suspension = suspension,
             // §14.15 try-frame stack — owns the catch/finally targets that the
             // in-loop catch(JsThrow) and the Return opcode handler consult.
-            TryStack = restored?.TryStack ?? new Stack<TryFrame>(),
+            // Lazily created by EnterTry: most functions contain no try/catch,
+            // and the unconditional Stack<TryFrame> was ~78 MB of churn on an
+            // x.com page load. Every reader treats null as empty.
+            TryStack = restored?.TryStack,
             // §14.11 / §9.1.1.2 — object Environment Records installed by the
             // running `with` statements (innermost last). The with-aware opcodes
             // consult it for unqualified name resolution; lazily created so the
@@ -608,7 +637,9 @@ public sealed class JsVm
         };
         if (restored is null)
         {
-            for (var k = 0; k < args.Length && k < frame.Locals.Length; k++)
+            // Bound by LocalCount, not Locals.Length: the rented array is
+            // oversized, and slots past LocalCount are never read or cleared.
+            for (var k = 0; k < args.Length && k < chunk.LocalCount; k++)
                 frame.Locals[k] = args[k];
 
             // wp:M3-73 — a non-strict function whose body/params contain a
@@ -706,7 +737,13 @@ public sealed class JsVm
                 switch (op)
                 {
                     case Opcode.Halt:
-                        return Finish(stack, maxSp, sp > 0 ? stack[sp - 1] : JsValue.Undefined);
+                        {
+                            // Read the completion value BEFORE the releases clear
+                            // the pooled arrays.
+                            var hv = sp > 0 ? stack[sp - 1] : JsValue.Undefined;
+                            ReleaseLocals(frame);
+                            return Finish(stack, maxSp, hv);
+                        }
                     case Opcode.Nop: break;
 
                     // ----- Constants -----
@@ -1470,7 +1507,9 @@ public sealed class JsVm
                         {
                             var catchOff = ReadI32(code, ref ip);
                             var finOff = ReadI32(code, ref ip);
-                            frame.TryStack.Push(new TryFrame
+                            // First try-frame of this activation allocates the
+                            // stack — most functions never get here.
+                            (frame.TryStack ??= new Stack<TryFrame>()).Push(new TryFrame
                             {
                                 CatchPc = catchOff == -1 ? -1 : ip + catchOff,
                                 FinallyPc = finOff == -1 ? -1 : ip + finOff,
@@ -1483,28 +1522,28 @@ public sealed class JsVm
                         }
                     case Opcode.LeaveTry:
                         {
-                            if (frame.TryStack.Count == 0)
+                            if (frame.TryStack is not { Count: > 0 } tryStack)
                                 throw new InvalidOperationException("LeaveTry with empty try-frame stack");
-                            var tf = frame.TryStack.Peek();
+                            var tf = tryStack.Peek();
                             if (tf.FinallyPc != -1 && tf.Phase != TryPhase.RunningFinally)
                             {
                                 tf.Phase = TryPhase.RunningFinally;
                                 tf.Pending = PendingCompletion.Normal;
                                 tf.PendingValue = JsValue.Undefined;
-                                frame.TryStack.Pop(); frame.TryStack.Push(tf);
+                                tryStack.Pop(); tryStack.Push(tf);
                                 ip = tf.FinallyPc;
                             }
                             else
                             {
-                                frame.TryStack.Pop();
+                                tryStack.Pop();
                             }
                             break;
                         }
                     case Opcode.EndFinally:
                         {
-                            if (frame.TryStack.Count == 0)
+                            if (frame.TryStack is not { Count: > 0 } tryStack)
                                 throw new InvalidOperationException("EndFinally with empty try-frame stack");
-                            var tf = frame.TryStack.Pop();
+                            var tf = tryStack.Pop();
                             switch (tf.Pending)
                             {
                                 case PendingCompletion.Normal:
@@ -1810,9 +1849,11 @@ public sealed class JsVm
                     CaptureJsStack(ex, chunk, ip, frame.CurrentFunction);
                     JsValue thrown = ex.Value;
                     bool handled = false;
-                    while (frame.TryStack.Count > 0)
+                    // Null TryStack = no try ever entered in this frame.
+                    var tryStack = frame.TryStack;
+                    while (tryStack is not null && tryStack.Count > 0)
                     {
-                        var tf = frame.TryStack.Peek();
+                        var tf = tryStack.Peek();
                         if (tf.Phase == TryPhase.TryBody && tf.CatchPc != -1)
                         {
                             // Route through Push: StackBase can equal the
@@ -1822,7 +1863,7 @@ public sealed class JsVm
                             Push(frame, ref stack, ref sp, ref maxSp, thrown);
                             ip = tf.CatchPc;
                             tf.Phase = TryPhase.CatchBody;
-                            frame.TryStack.Pop(); frame.TryStack.Push(tf);
+                            tryStack.Pop(); tryStack.Push(tf);
                             handled = true;
                             break;
                         }
@@ -1832,12 +1873,12 @@ public sealed class JsVm
                             tf.Phase = TryPhase.RunningFinally;
                             tf.Pending = PendingCompletion.Throw;
                             tf.PendingValue = thrown;
-                            frame.TryStack.Pop(); frame.TryStack.Push(tf);
+                            tryStack.Pop(); tryStack.Push(tf);
                             ip = tf.FinallyPc;
                             handled = true;
                             break;
                         }
-                        frame.TryStack.Pop();
+                        tryStack.Pop();
                     }
                     if (handled) break;
                     // Unhandled in this frame — release it. A barrier frame
@@ -2117,6 +2158,12 @@ public sealed class JsVm
                     // caller's actual bindings.
                     var descriptor = (Bytecode.EvalScopeDescriptor)constants[descIdx]!;
                     var callerScope = BuildEvalScope(descriptor, locals, frame.Upvalues);
+                    // The eval scope references this frame's locals ARRAY by
+                    // (array, slot). Today the scope dies when the eval barrier
+                    // pops (nothing captures it), but keep this frame's locals
+                    // out of the pool so any future holder of the scope can
+                    // never read another frame's recycled slots.
+                    frame.LocalsEscaped = true;
                     // wp:M3-73 — a non-strict direct eval whose caller is a
                     // function injects its own top-level var/function bindings
                     // into the caller frame's eval-introduced var store. Pass
@@ -2329,7 +2376,7 @@ public sealed class JsVm
                 // next iteration re-steps it. Swallow return()-errors only
                 // for a pending Throw so the in-flight throw still wins.
                 var handleV = Pop(stack, ref sp);
-                var pending = frame.TryStack.Count > 0 ? frame.TryStack.Peek().Pending : PendingCompletion.Normal;
+                var pending = frame.TryStack is { Count: > 0 } ts ? ts.Peek().Pending : PendingCompletion.Normal;
                 if (pending != PendingCompletion.Normal
                     && handleV.IsObject
                     && handleV.AsObject is Starling.Js.Intrinsics.JsIteratorRecordHandle hf
@@ -2590,6 +2637,10 @@ public sealed class JsVm
                     // 0xFFFF) AND an argument was actually passed at i.
                     slotForIndex[i] = (ps == 0xFFFF || i >= frame.Args.Length) ? -1 : ps;
                 }
+                // The mapped arguments object holds the locals ARRAY by
+                // reference and the live link survives the frame's return —
+                // this frame's pooled locals must never go back to the pool.
+                frame.LocalsEscaped = true;
                 var argObj = JsValue.Object(_runtime.Realm.CreateMappedArgumentsObject(
                     frame.Args, locals, slotForIndex, frame.CurrentFunction));
                 if (locals[slot].IsObject && locals[slot].AsObject is Cell cell)
@@ -3430,6 +3481,33 @@ public sealed class JsVm
         return result;
     }
 
+    /// <summary>Rent a frame's locals array from the shared pool (sized ≥
+    /// <paramref name="localCount"/>, so OVERSIZED — consumers bound by
+    /// <see cref="Chunk.LocalCount"/>, never by Length). No clear on rent:
+    /// every pool return path (<see cref="Finish"/>, <see cref="ReleaseLocals"/>)
+    /// clears the region it dirtied, and pool-fresh arrays are CLR-zeroed, so a
+    /// rented array always reads as all-Undefined (default(JsValue)) exactly
+    /// like the <c>new JsValue[]</c> it replaces.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static JsValue[] RentLocals(int localCount)
+        => ArrayPool<JsValue>.Shared.Rent(Math.Max(localCount, 1));
+
+    /// <summary>Return a popping frame's pooled locals array, clearing the
+    /// addressed region (slots 0..LocalCount) so the pool never pins JS
+    /// objects. Skipped when the array escaped the frame
+    /// (<see cref="CallFrame.LocalsEscaped"/>: a mapped <c>arguments</c> object
+    /// or a direct-eval <see cref="EvalScope"/> holds the array itself and
+    /// reads it after the frame pops). Never called on the suspend path — a
+    /// suspended frame's snapshot keeps its locals until the body completes.</summary>
+    private static void ReleaseLocals(CallFrame frame)
+    {
+        if (frame.LocalsEscaped) return;
+        var locals = frame.Locals;
+        var n = frame.Chunk.LocalCount;
+        if (n > 0) System.Array.Clear(locals, 0, n);
+        ArrayPool<JsValue>.Shared.Return(locals);
+    }
+
     // ---- wp:M3-84 Stage B — trampoline push/pop helpers ---------------------
 
     /// <summary>Reload the dispatch loop's hot-field cache from
@@ -3532,14 +3610,16 @@ public sealed class JsVm
     }
 
     /// <summary>Release a popping frame's pooled resources — exactly the old
-    /// exit path: return the operand stack to the array pool (clearing the
-    /// touched region) and, for a trampolined frame, return its rented args
-    /// array. Never called on the suspend path (the suspension snapshot keeps
-    /// the pooled arrays until the body completes).</summary>
+    /// exit path: return the operand stack and the locals array to the array
+    /// pool (clearing the touched regions) and, for a trampolined frame,
+    /// return its rented args array. Never called on the suspend path (the
+    /// suspension snapshot keeps the pooled arrays until the body
+    /// completes).</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ReleaseFrame(CallFrame frame, JsValue[] stack, int maxSp)
     {
         Finish(stack, maxSp, JsValue.Undefined);
+        ReleaseLocals(frame);
         if (frame.ReleaseArgsOnPop) ReturnArgs(frame.Args);
         t_frameDepth--;
     }
@@ -3627,6 +3707,7 @@ public sealed class JsVm
         Chunk = frame.Chunk,
         Stack = frame.Stack,
         Locals = frame.Locals,
+        LocalsEscaped = frame.LocalsEscaped,
         Upvalues = frame.Upvalues,
         TryStack = frame.TryStack,
         CurrentFunction = frame.CurrentFunction,
@@ -3941,9 +4022,12 @@ public sealed class JsVm
         else sb.Append(name).Append(": ").Append(message);
     }
 
-    /// <summary>§14.15 — divert a return through any enclosing finalizer.</summary>
-    private static bool DivertReturnThroughFinally(Stack<TryFrame> tryStack, JsValue value, ref int ip)
+    /// <summary>§14.15 — divert a return through any enclosing finalizer.
+    /// A null <paramref name="tryStack"/> is an empty one (lazily created by
+    /// EnterTry): nothing to divert through.</summary>
+    private static bool DivertReturnThroughFinally(Stack<TryFrame>? tryStack, JsValue value, ref int ip)
     {
+        if (tryStack is null) return false;
         while (tryStack.Count > 0)
         {
             var frame = tryStack.Peek();
@@ -3979,9 +4063,9 @@ public sealed class JsVm
     /// own break/continue/return/throw opcodes re-drive the try-stack and never
     /// reach the <c>EndFinally</c> that would resume this one.</para></summary>
     private static void DivertBranchThroughFinally(
-        Stack<TryFrame> tryStack, int targetPc, int unwindCount, ref int ip)
+        Stack<TryFrame>? tryStack, int targetPc, int unwindCount, ref int ip)
     {
-        while (unwindCount > 0 && tryStack.Count > 0)
+        while (unwindCount > 0 && tryStack is { Count: > 0 })
         {
             var frame = tryStack.Pop();
             unwindCount--;
@@ -5173,10 +5257,25 @@ internal sealed class CallFrame
     /// <summary>Pooled operand stack. Returned to the pool at every normal
     /// exit; a suspended frame keeps it until the body completes.</summary>
     public required JsValue[] Stack;
+    /// <summary>Pooled local-slot storage, rented OVERSIZED (≥
+    /// <see cref="Bytecode.Chunk.LocalCount"/>) — never derive logic from its
+    /// Length. Returned by <see cref="JsVm.ReleaseLocals"/> at frame pop
+    /// unless <see cref="LocalsEscaped"/>; a suspended frame keeps it until
+    /// the body completes.</summary>
     public required JsValue[] Locals;
     public required IReadOnlyList<JsValue> Upvalues;
     public required JsValue[] Args;
-    public required Stack<TryFrame> TryStack;
+    /// <summary>§14.15 try-frame stack. Null until the first EnterTry of this
+    /// activation (most functions have no try/catch); every reader treats
+    /// null as empty.</summary>
+    public required Stack<TryFrame>? TryStack;
+    /// <summary>True when this frame's <see cref="Locals"/> ARRAY itself was
+    /// handed out (a §10.4.4.6 mapped <c>arguments</c> object live-links it; a
+    /// direct-eval <see cref="EvalScope"/> references it by (array, slot)) —
+    /// the array may be read after the frame pops, so it must NOT go back to
+    /// the pool. Survives suspension via
+    /// <see cref="ContinuationFrameState.LocalsEscaped"/>.</summary>
+    public bool LocalsEscaped;
     public JsFunction? CurrentFunction;
     public JsObject? NewTarget;
     public EvalScope? EvalScope;
