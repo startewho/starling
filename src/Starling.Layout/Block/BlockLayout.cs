@@ -379,6 +379,7 @@ internal sealed class BlockLayout
             cursorY += mCollapse;
             first = false;
             child.Frame = new Rect(child.Margin.Left, cursorY, child.Frame.Width, child.MeasuredHeight);
+            child.RelShiftValid = false; // fresh natural frame — see NoteRelaid
             cursorY += child.MeasuredHeight + child.Margin.Bottom;
             prevBottomMargin = child.Margin.Bottom;
             return;
@@ -400,6 +401,10 @@ internal sealed class BlockLayout
             cursorY += reuseCollapse;
             first = false;
             child.Frame = new Rect(child.Margin.Left, cursorY, child.Frame.Width, child.Frame.Height);
+            // This is a NATURAL stack position: a relative/sticky child reused
+            // in place must re-derive its shift from it, even when it lands
+            // exactly on the previous pass's shifted frame (see NoteRelaid).
+            child.RelShiftValid = false;
             cursorY += child.Frame.Height + child.Margin.Bottom;
             prevBottomMargin = child.Margin.Bottom;
             return;
@@ -488,6 +493,12 @@ internal sealed class BlockLayout
     /// </summary>
     internal void NoteRelaid(Box.Box box)
     {
+        // A seam that (re)lays a box writes a fresh NATURAL frame, so the
+        // relative/sticky idempotency bookkeeping must die with it: keeping
+        // it would let a fresh natural frame that happens to equal the
+        // previous shifted frame re-base on a stale origin. Unconditional —
+        // the scroll sink gate below only governs measurement bookkeeping.
+        box.RelShiftValid = false;
         var sink = RelaidScrollerSink;
         if (sink is null) return;
         Scroll.ScrollOverflowMeasurer.InvalidateExtentsToRoot(box);

@@ -156,4 +156,28 @@ public sealed class RelativeStickyDriftTests
         FrameOwner(session, doc, "rel").Frame.Y.Should().Be(75,
             "25 natural + 50 shift — the fresh natural frame is the new basis");
     }
+
+    [TestMethod]
+    public void Growth_equal_to_the_shift_amount_does_not_collide_with_the_stale_basis()
+    {
+        // The sentinel-collision case: content above a top:50px relative box
+        // grows by EXACTLY the shift amount, so the fresh natural frame
+        // (y=60) equals the previous pass's shifted frame (10 + 50). The
+        // seam-cleared bookkeeping must treat it as a fresh basis: y must be
+        // 110 (60 natural + 50 shift), not 60 re-based on the stale origin.
+        var (doc, session, _) = StartSession("""
+            <body style="margin:0"><div id=mid>
+              <div id=grow style="height:10px"></div>
+              <div id=rel style="position:relative;top:50px;height:30px"></div>
+            </div></body>
+            """);
+        FrameOwner(session, doc, "rel").Frame.Y.Should().Be(60, "10 natural + 50 shift");
+
+        doc.GetElementById("grow")!.SetAttribute("style", "height:60px");
+        session.Layout(doc, Viewport, DefaultTextMeasurer.Instance, nowMs: null);
+
+        FrameOwner(session, doc, "rel").Frame.Y.Should().Be(110,
+            "60 natural + 50 shift — a natural frame that coincides with the " +
+            "old shifted frame must still be recognized as freshly placed");
+    }
 }
