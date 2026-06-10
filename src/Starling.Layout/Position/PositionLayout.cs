@@ -42,10 +42,20 @@ internal sealed class PositionLayout
     private readonly Size _viewport;
     private readonly Rect _initialContainingBlock;
 
-    public PositionLayout(BlockLayout block, Size viewport)
+    /// <summary>The document's scroll store, when a scroll model is attached
+    /// (browser-plan/scroll-model.md WP5). With a store, every sticky element
+    /// keeps its natural in-flow frame and the pass records
+    /// <see cref="Scroll.StickyConstraints"/> instead — the shift is applied
+    /// at paint/hit-test/rect time from the bound scroller's live offset.
+    /// Without a store (no scroller exists), sticky stays on the
+    /// clamped-relative layout shift, keeping static renders pixel-identical.</summary>
+    private readonly Scroll.ScrollStateStore? _scroll;
+
+    public PositionLayout(BlockLayout block, Size viewport, Scroll.ScrollStateStore? scrollStore = null)
     {
         _block = block;
         _viewport = viewport;
+        _scroll = scrollStore;
         _initialContainingBlock = new Rect(0, 0, viewport.Width, viewport.Height);
     }
 
@@ -104,13 +114,17 @@ internal sealed class PositionLayout
             var natural = NaturalFrameOf(box);
             CommitShift(box, natural, natural.Translate(dx, dy));
         }
-        else if (props.Kind is PositionKind.Sticky)
+        else if (props.Kind is PositionKind.Sticky && _scroll is null)
         {
-            // Sticky degrades to clamped-relative without scroll: the
-            // natural frame only shifts if an inset is violated relative
+            // No scroll model attached: sticky degrades to clamped-relative —
+            // the natural frame only shifts if an inset is violated relative
             // to the containing block's content rect. The CB-local space
             // is `(0, 0, cbWidth, cbHeight)` because `box.Frame` is in
-            // parent-content-box coordinates already.
+            // parent-content-box coordinates already. With a store, the box
+            // keeps its natural frame here and the positioning walk records
+            // StickyConstraints instead; the shift is paint-time arithmetic
+            // (scroll-model.md: layout frames never move, so the incremental
+            // reuse keys stay clean).
             var (cbWidth, cbHeight) = ContainingBlockContentSizeOf(box.Parent);
             var cbLocal = new Rect(0, 0, cbWidth, cbHeight);
             var natural = NaturalFrameOf(box);
@@ -169,10 +183,17 @@ internal sealed class PositionLayout
         // any absolutely-positioned descendant. Walk depth-first and keep a
         // stack of (positioned ancestor → padding-box document rect).
         var ancestorStack = new System.Collections.Generic.Stack<Rect>();
-        Walk(root, parentContentOriginX: 0, parentContentOriginY: 0, ancestorStack);
+        Walk(root, parentContentOriginX: 0, parentContentOriginY: 0, ancestorStack,
+            scroller: null, scrollerPadX: 0, scrollerPadY: 0);
     }
 
-    private void Walk(Box.Box box, double parentContentOriginX, double parentContentOriginY, System.Collections.Generic.Stack<Rect> ancestorStack)
+    // scroller / scrollerPadX / scrollerPadY: the nearest scrolling-ancestor
+    // element for sticky descendants of this subtree (null = the root
+    // document scroller) and the document-space origin of its padding box —
+    // the scrollport origin every sticky constraint is expressed against.
+    // Only meaningful when a scroll store is attached.
+    private void Walk(Box.Box box, double parentContentOriginX, double parentContentOriginY, System.Collections.Generic.Stack<Rect> ancestorStack,
+        Starling.Dom.Element? scroller, double scrollerPadX, double scrollerPadY)
     {
         // box.Frame is the *border-box* rect in parent's content-box coords.
         var borderBoxDocX = parentContentOriginX + box.Frame.X;
@@ -190,6 +211,43 @@ internal sealed class PositionLayout
         var contentOriginY = paddingBoxRect.Y + box.Padding.Top;
 
         var props = PositionParser.Parse(box.Style);
+
+        // Sticky constraints at layout time (scroll-model.md WP5): natural
+        // frame, containing block, resolved insets, and the one scroller this
+        // element binds to — everything scroll-time arithmetic needs, all in
+        // the scroller's padding-box (scrollport-origin) space. Recorded every
+        // pass; the store sweeps entries the pass did not re-record.
+        if (_scroll is { } scrollStore && props.Kind == PositionKind.Sticky && box.Element is { } stickyEl)
+        {
+            var (cbW, cbH) = ContainingBlockContentSizeOf(box.Parent);
+            var cbRight = parentContentOriginX + cbW - scrollerPadX;
+            var cbBottom = parentContentOriginY + cbH - scrollerPadY;
+            // When the containing block IS the bound scroller, the constraint
+            // rectangle is the scroller's scrollable area, not its (fixed)
+            // content box — otherwise the canonical "sticky header as direct
+            // child of the scroller" pins for only contentHeight−natural px
+            // and then stops dead mid-scroll. v1 models that as unbounded end
+            // edges, exact whenever element+inset fit inside the scrollport.
+            if (box.Parent is { } cbBox && ReferenceEquals(cbBox.Element, scroller) && scroller is not null)
+            {
+                cbRight = double.PositiveInfinity;
+                cbBottom = double.PositiveInfinity;
+            }
+            scrollStore.RecordSticky(stickyEl, new Scroll.StickyConstraints(
+                NaturalX: borderBoxDocX - scrollerPadX,
+                NaturalY: borderBoxDocY - scrollerPadY,
+                Width: box.Frame.Width,
+                Height: box.Frame.Height,
+                CbX: parentContentOriginX - scrollerPadX,
+                CbY: parentContentOriginY - scrollerPadY,
+                CbRight: cbRight,
+                CbBottom: cbBottom,
+                Top: props.Top.Resolve(cbH),
+                Right: props.Right.Resolve(cbW),
+                Bottom: props.Bottom.Resolve(cbH),
+                Left: props.Left.Resolve(cbW),
+                Scroller: scroller));
+        }
 
         // If this box is out-of-flow, position it now. The containing block
         // is the top-of-stack ancestor for absolute; or the viewport for
@@ -237,8 +295,22 @@ internal sealed class PositionLayout
         if (pushed)
             ancestorStack.Push(paddingBoxRect);
 
-        foreach (var child in box.Children)
-            Walk(child, contentOriginX, contentOriginY, ancestorStack);
+        // A scroll container rebinds sticky descendants to itself: they stick
+        // against the FIRST scroller up the chain, and outer scrollers move
+        // this whole subtree (constraints included) for free.
+        if (_scroll is not null && box.Element is not null
+            && (Scroll.ScrollOverflowMeasurer.Classify(box) & Scroll.ScrollBoxFlags.ScrollContainer) != 0)
+        {
+            foreach (var child in box.Children)
+                Walk(child, contentOriginX, contentOriginY, ancestorStack,
+                    box.Element, paddingBoxRect.X, paddingBoxRect.Y);
+        }
+        else
+        {
+            foreach (var child in box.Children)
+                Walk(child, contentOriginX, contentOriginY, ancestorStack,
+                    scroller, scrollerPadX, scrollerPadY);
+        }
 
         if (pushed)
             ancestorStack.Pop();

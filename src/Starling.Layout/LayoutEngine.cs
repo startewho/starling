@@ -155,7 +155,7 @@ public sealed class LayoutEngine
         // initial containing block and as the fixed-positioning anchor.
         using (StarlingTelemetry.Span("layout", "position"))
         {
-            var positioning = new Starling.Layout.Position.PositionLayout(block, viewport);
+            var positioning = new Starling.Layout.Position.PositionLayout(block, viewport, ScrollState);
             positioning.LayoutPositioned(root);
         }
 
