@@ -183,11 +183,13 @@ public class JsObject
         if (_shape is null) return;
         var shape = _shape;
         var keys = shape.OrderedKeys();
+        var shapeProps = shape.OrderedProps(); // slot-ordered, single chain walk — no flattened table
         var props = new Dictionary<string, PropertyDescriptor>(keys.Count, StringComparer.Ordinal);
         var order = new List<string>(keys.Count);
-        foreach (var key in keys) // creation (slot) order
+        for (var i = 0; i < keys.Count; i++) // creation (slot) order
         {
-            shape.TryGet(key, out var p);
+            var key = keys[i];
+            var p = shapeProps[i];
             props[key] = PropertyDescriptor.Data(_slots[p.Slot], p.Writable, p.Enumerable, p.Configurable);
             order.Add(key);
         }
