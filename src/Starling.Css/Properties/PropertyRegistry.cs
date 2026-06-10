@@ -389,6 +389,11 @@ public static class PropertyRegistry
             PropertyId.ListStyleImage => new CssKeyword("none"),
             PropertyId.Quotes => new CssKeyword("auto"),
 
+            // CSS Overflow 4 §5 — line-clamp initial `none`; the legacy
+            // -webkit-box-orient companion defaults to `inline-axis`.
+            PropertyId.LineClamp => new CssKeyword("none"),
+            PropertyId.BoxOrient => new CssKeyword("inline-axis"),
+
             _ => new CssKeyword("initial"),
         };
 

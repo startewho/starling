@@ -313,4 +313,10 @@ public enum PropertyId
     ListStylePosition,
     ListStyleImage,
     Quotes,
+
+    // CSS Overflow 4 (line-clamp; the -webkit- prefixed forms alias here via
+    // the registry's WebkitAliases table): -webkit-line-clamp + the legacy
+    // -webkit-box-orient companion that keys the clamp pattern.
+    LineClamp,
+    BoxOrient,
 }
