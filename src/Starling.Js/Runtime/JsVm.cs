@@ -305,20 +305,29 @@ public sealed class JsVm
     /// <see cref="StartAsyncBody"/>.</summary>
     public JsValue CallFunction(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
-        // wp:M3-83 — §9.3.1 cross-realm execution. If this function was created
-        // in a DIFFERENT realm than the one this VM runs (the $262.createRealm
-        // case: a foreign realm's function invoked from the host realm's VM),
-        // dispatch through that realm's own VM with its realm published as the
-        // running execution context. PrepareForOrdinaryCall pushes the callee's
-        // [[Realm]] as the current realm; doing so makes the body resolve
-        // globals, allocate intrinsics, and throw errors in the function's realm.
+        // wp:M3-83 — §9.3.1 cross-realm execution (see CallFunctionForeignRealm).
         if (fn.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)
             && fnRealm.OwnerRuntime is { } owner)
-            return owner.WithActiveVm(foreignVm =>
-                ReferenceEquals(foreignVm, this) ? CallFunctionLocal(fn, thisValue, args)
-                                                 : foreignVm.CallFunction(fn, thisValue, args));
+            return CallFunctionForeignRealm(owner, fn, thisValue, args);
         return CallFunctionLocal(fn, thisValue, args);
     }
+
+    /// <summary>wp:M3-83 — §9.3.1 cross-realm execution. The function was
+    /// created in a DIFFERENT realm than the one this VM runs (the
+    /// $262.createRealm case: a foreign realm's function invoked from the host
+    /// realm's VM), so dispatch through that realm's own VM with its realm
+    /// published as the running execution context. PrepareForOrdinaryCall
+    /// pushes the callee's [[Realm]] as the current realm; doing so makes the
+    /// body resolve globals, allocate intrinsics, and throw errors in the
+    /// function's realm. Kept out of <see cref="CallFunction"/> so the
+    /// lambda's closure is allocated only on this cold path — inlined, the
+    /// capture forces a display-class allocation on every call (37 MB of
+    /// churn on an x.com load).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private JsValue CallFunctionForeignRealm(JsRuntime owner, JsFunction fn, JsValue thisValue, JsValue[] args)
+        => owner.WithActiveVm(foreignVm =>
+            ReferenceEquals(foreignVm, this) ? CallFunctionLocal(fn, thisValue, args)
+                                             : foreignVm.CallFunction(fn, thisValue, args));
 
     private JsValue CallFunctionLocal(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
@@ -353,17 +362,25 @@ public sealed class JsVm
     /// bound to it, and return whichever object the body produced.</summary>
     public JsValue ConstructFunction(JsFunction fn, JsValue[] args, JsObject newTarget)
     {
-        // wp:M3-83 — §9.3.2 cross-realm construct. Mirror CallFunction: a foreign
-        // realm's constructor (a class produced by another realm's eval) must run
-        // with its realm active so its `this` instance, prototype, and any brand
-        // / error it throws come from the constructor's realm, not the caller's.
+        // wp:M3-83 — §9.3.2 cross-realm construct (see ConstructFunctionForeignRealm).
         if (fn.Realm is { } fnRealm && !ReferenceEquals(fnRealm, _runtime.Realm)
             && fnRealm.OwnerRuntime is { } owner)
-            return owner.WithActiveVm(foreignVm =>
-                ReferenceEquals(foreignVm, this) ? ConstructFunctionLocal(fn, args, newTarget)
-                                                 : foreignVm.ConstructFunction(fn, args, newTarget));
+            return ConstructFunctionForeignRealm(owner, fn, args, newTarget);
         return ConstructFunctionLocal(fn, args, newTarget);
     }
+
+    /// <summary>wp:M3-83 — §9.3.2 cross-realm construct. Mirror
+    /// <see cref="CallFunctionForeignRealm"/>: a foreign realm's constructor
+    /// (a class produced by another realm's eval) must run with its realm
+    /// active so its <c>this</c> instance, prototype, and any brand / error it
+    /// throws come from the constructor's realm, not the caller's. Kept out of
+    /// <see cref="ConstructFunction"/> so the lambda's closure is allocated
+    /// only on this cold path.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private JsValue ConstructFunctionForeignRealm(JsRuntime owner, JsFunction fn, JsValue[] args, JsObject newTarget)
+        => owner.WithActiveVm(foreignVm =>
+            ReferenceEquals(foreignVm, this) ? ConstructFunctionLocal(fn, args, newTarget)
+                                             : foreignVm.ConstructFunction(fn, args, newTarget));
 
     private JsValue ConstructFunctionLocal(JsFunction fn, JsValue[] args, JsObject newTarget)
     {
