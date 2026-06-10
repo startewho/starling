@@ -33,6 +33,9 @@ internal static class DisplayItemBounds
                     sh.Bounds.Height + 2 * pad);
                 return true;
             case DrawImage i: bounds = i.Bounds; return true;
+            // Per-side styled borders paint inside the border box (dots are
+            // inset, the corner arc pen stays within the band).
+            case DrawBorderSides bs: bounds = bs.Bounds; return true;
             case DrawText t:
                 // Glyph run sits on the baseline; cover ascent above and a small
                 // descent below so the AABB encloses the rasterized glyphs.
