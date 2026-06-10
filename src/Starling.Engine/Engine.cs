@@ -791,7 +791,7 @@ public sealed class StarlingEngine
                             LaidOutPage HandOff(LaidOutPage page)
                             {
                                 var live = new PageScripting(
-                                    session.Session, session.Http, session.Fetcher, doc);
+                                    session.Session, session.Http, session.Fetcher, doc, scrollState);
                                 sessionEnded = true;  // page.Dispose() tears the session down now
                                 scriptsDisposed = true;
                                 page.AttachScripting(live);
