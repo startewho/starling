@@ -67,7 +67,8 @@ public sealed class ScrollStateStore
     private readonly List<Element> _scratch = [];
     private Entry _root;
     private int _generation;
-    private bool _layoutInProgress;
+    private int _layoutPassDepth;
+    private long _geometryRecords;
 
     // ---- Reads (bindings, paint, hit testing) -------------------------------
 
@@ -162,24 +163,32 @@ public sealed class ScrollStateStore
     // ---- Layout-side surface (internal: the layout engine only) -------------
 
     /// <summary>Marks a layout pass in progress: external offset writes are
-    /// illegal until <see cref="EndLayoutPass"/> (DEBUG throw). Also opens a
-    /// new measurement generation so <see cref="ReconcileAfterLayout"/> can
-    /// drop entries the new layout no longer measures.</summary>
+    /// illegal until the matching <see cref="EndLayoutPass"/> (DEBUG throw).
+    /// Also opens a new measurement generation so <see cref="ReconcileAfterLayout"/>
+    /// can drop entries the new layout no longer measures. The gate is a
+    /// counter, so a layout pass nested inside another (e.g. a flush forced
+    /// mid-pass) cannot reopen the outer pass's gate early.</summary>
     internal void BeginLayoutPass()
     {
-        _layoutInProgress = true;
+        _layoutPassDepth++;
         _generation++;
     }
 
-    /// <summary>Re-opens the store for offset writes. Always runs (finally) so
-    /// an aborted layout cannot wedge the gate shut.</summary>
-    internal void EndLayoutPass() => _layoutInProgress = false;
+    /// <summary>Closes one nesting level of the layout gate; offset writes are
+    /// legal again when the outermost pass ends. Always runs (finally) so an
+    /// aborted layout cannot wedge the gate shut; an unbalanced call is
+    /// clamped rather than letting the gate go negative.</summary>
+    internal void EndLayoutPass()
+    {
+        if (_layoutPassDepth > 0) _layoutPassDepth--;
+    }
 
     /// <summary>Record a scroll container's fresh geometry. Offsets and the
     /// pending flag are preserved; clamping waits for
     /// <see cref="ReconcileAfterLayout"/> so one pass clamps everything once.</summary>
     internal void RecordGeometry(Element element, double scrollportWidth, double scrollportHeight, double overflowWidth, double overflowHeight)
     {
+        _geometryRecords++;
         _entries.TryGetValue(element, out var e);
         e.PortW = scrollportWidth;
         e.PortH = scrollportHeight;
@@ -231,6 +240,51 @@ public sealed class ScrollStateStore
         _scratch.Clear();
     }
 
+    /// <summary>
+    /// Scoped-pass reconcile (incremental relayout): re-clamp every entry and
+    /// the root against their current geometry, with no generation-based
+    /// dropping — a scoped pass deliberately re-measures only relaid scroll
+    /// containers, so an unmeasured entry is fresh, not stale. The layout
+    /// session drops dead entries itself (element detached or no longer a
+    /// scroll container) before calling this.
+    /// </summary>
+    internal void ClampAllEntries()
+    {
+        ClampEntry(ref _root);
+
+        if (_entries.Count == 0) return;
+        _scratch.Clear();
+        foreach (var kv in _entries)
+            _scratch.Add(kv.Key);
+        foreach (var el in _scratch)
+        {
+            var e = _entries[el];
+            if (ClampEntry(ref e))
+                _entries[el] = e;
+        }
+        _scratch.Clear();
+    }
+
+    /// <summary>Copy every entry's element into <paramref name="into"/>
+    /// (cleared first) so the layout session can audit entries against the
+    /// live box tree without iterating the dictionary it mutates.</summary>
+    internal void CollectEntryElements(List<Element> into)
+    {
+        into.Clear();
+        foreach (var kv in _entries)
+            into.Add(kv.Key);
+    }
+
+    /// <summary>Drop one entry — the scoped-pass equivalent of the
+    /// generation-mismatch drop in <see cref="ReconcileAfterLayout"/>.</summary>
+    internal void RemoveEntry(Element element) => _entries.Remove(element);
+
+    /// <summary>Total <see cref="RecordGeometry"/> calls over this store's
+    /// lifetime — the observable that pins re-measurement scoping in tests
+    /// (an untouched scroll container's entry is never re-recorded by an
+    /// incremental relayout of a sibling).</summary>
+    internal long GeometryRecords => _geometryRecords;
+
     // ---- Internals -----------------------------------------------------------
 
     private static ScrollState Snapshot(ref readonly Entry e)
@@ -272,7 +326,7 @@ public sealed class ScrollStateStore
     [Conditional("DEBUG")]
     private void AssertNotInLayoutPass()
     {
-        if (_layoutInProgress)
+        if (_layoutPassDepth > 0)
             throw new InvalidOperationException(
                 "ScrollStateStore offset write during a layout pass. Scroll offsets are paint/hit-test state; layout must never read or write them (browser-plan/scroll-model.md).");
     }
