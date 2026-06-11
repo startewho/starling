@@ -60,6 +60,17 @@ internal interface IPaintBackend : IDisposable
     }
 
     /// <summary>
+    /// Rasterize to a plain bitmap, preferring the cheapest path for SMALL
+    /// surfaces. A GPU-canvas backend overrides this to use its CPU
+    /// rasterizer: the WebGPU canvas flush pays a synchronous scheduling
+    /// readback per texture (a full GPU round-trip) regardless of size, so a
+    /// tiny animating layer slice is far cheaper to raster on the CPU and
+    /// upload. The default just renders normally.
+    /// </summary>
+    RenderedBitmap RenderSmallBitmap(PaintList list, LayoutRect viewport, float scale, bool opaqueBackground)
+        => Render(list, viewport, scale, opaqueBackground);
+
+    /// <summary>
     /// Runs a resolved CSS filter chain over already-rendered pixels (Filter
     /// Effects 1 §10.1, in order). Used by the compositor's CPU blend path to
     /// filter a backdrop snapshot. The default is a no-op pass-through so a
