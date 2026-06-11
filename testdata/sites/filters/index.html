@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Filters · Starling test site</title>
+<style>
+  body { margin: 0; background: #ffffff; font-family: sans-serif; }
+  .row { display: flex; gap: 48px; padding: 48px; }
+  .cell { width: 140px; text-align: center; }
+  .box { width: 96px; height: 96px; margin: 24px auto; background: #cc2222; border-radius: 12px; }
+  .blur-s .box { filter: blur(4px); }
+  .blur-l .box { filter: blur(24px); }
+  .gray .box { filter: grayscale(1); }
+  .bright .box { filter: brightness(1.6); }
+  .hue .box { filter: hue-rotate(120deg); }
+  .chain .box { filter: blur(6px) grayscale(1); }
+  .glow { position: relative; }
+  /* The github "torch" pattern: a big blurred pseudo-element glow. */
+  .glow::before { content: ""; position: absolute; left: 10px; top: 10px;
+    width: 76px; height: 76px; background: #2266ff; border-radius: 38px;
+    filter: blur(28px); }
+  label { font-size: 13px; color: #333; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="cell blur-s"><div class="box"></div><label>blur(4px)</label></div>
+    <div class="cell blur-l"><div class="box"></div><label>blur(24px)</label></div>
+    <div class="cell gray"><div class="box"></div><label>grayscale(1)</label></div>
+    <div class="cell bright"><div class="box"></div><label>brightness(1.6)</label></div>
+    <div class="cell hue"><div class="box"></div><label>hue-rotate(120deg)</label></div>
+    <div class="cell chain"><div class="box"></div><label>blur+grayscale</label></div>
+    <div class="cell glow"><div class="box glow"></div><label>::before glow</label></div>
+  </div>
+</body>
+</html>

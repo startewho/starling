@@ -41,6 +41,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private BindGroupLayout* _bindLayout;
     private PipelineLayout* _pipelineLayout;
     private ShaderModule* _shader;
+    private GpuFilterEngine? _filterEngine;
     private readonly Dictionary<(TextureFormat Format, TextureAlphaMode AlphaMode), nint> _pipelines = new();
 
     // Per-layer GPU textures, keyed by slice content hash. Resident across frames
@@ -415,6 +416,11 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     }
 
     internal GpuPaintDevice GpuDevice => new((nint)Device, (nint)Queue);
+
+    /// <summary>The texture-to-texture CSS filter passes (blur/colour matrix)
+    /// sharing this engine's device and queue. Built on first use — pages
+    /// without filters never pay for the extra pipeline.</summary>
+    internal GpuFilterEngine FilterEngine => _filterEngine ??= new GpuFilterEngine(Api, Device, Queue);
 
     /// <summary>Lazily builds the blend pipeline for a target format and texture alpha mode.</summary>
     private RenderPipeline* PipelineFor(TextureFormat format, TextureAlphaMode alphaMode = TextureAlphaMode.Premultiplied)
@@ -882,6 +888,8 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
 
         _pipelines.Clear();
+        _filterEngine?.Dispose();
+        _filterEngine = null;
         if (_vertexBuffer != null) { Api.BufferRelease(_vertexBuffer); _vertexBuffer = null; }
         if (_shader != null) { Api.ShaderModuleRelease(_shader); _shader = null; }
         if (_sampler != null) { Api.SamplerRelease(_sampler); _sampler = null; }

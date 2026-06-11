@@ -136,6 +136,27 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         }
     }
 
+    public bool SupportsLayerFilters(IReadOnlyList<DisplayList.FilterFunction> filters)
+        => GpuFilterEngine.Supports(filters);
+
+    public GpuPaintTexture? ApplyLayerFilters(GpuPaintTexture source,
+        IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+    {
+        lock (_gate)
+        {
+            try
+            {
+                return _engine.FilterEngine.Apply(source, filters, scale);
+            }
+            catch (InvalidOperationException)
+            {
+                // Apply consumed the source either way; null sends the caller
+                // down the legacy bracket path.
+                return null;
+            }
+        }
+    }
+
     /// <summary>
     /// Blends <paramref name="ops"/> into <paramref name="output"/> on the GPU.
     /// The output buffer is RGBA pixels and should already be filled with opaque
