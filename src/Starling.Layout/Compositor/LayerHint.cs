@@ -45,4 +45,7 @@ public enum LayerHint
 
     /// <summary><c>isolation: isolate</c>.</summary>
     Isolation = 1 << 8,
+
+    /// <summary><c>backdrop-filter</c> is not <c>none</c>.</summary>
+    BackdropFilter = 1 << 9,
 }
