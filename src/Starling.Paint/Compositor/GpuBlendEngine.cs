@@ -43,6 +43,7 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     private ShaderModule* _shader;
     private GpuFilterEngine? _filterEngine;
     private readonly Dictionary<(TextureFormat Format, TextureAlphaMode AlphaMode), nint> _pipelines = new();
+    private readonly Dictionary<TextureFormat, nint> _blitPipelines = new();
 
     // Per-layer GPU textures, keyed by slice content hash. Resident across frames
     // so an unchanged layer never re-uploads.
@@ -522,6 +523,13 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         for (var i = 0; i < ops.Count; i++)
         {
             var op = ops[i];
+            if (op.IsBackdropFilter)
+            {
+                // A backdrop op has no pixels to upload — its texture is the
+                // filtered snapshot, adopted mid-frame between render passes.
+                continue;
+            }
+
             if (_textures.TryGetValue(op.ContentHash, out var cached)
                 && cached.Width == op.Width && cached.Height == op.Height)
             {
@@ -744,14 +752,30 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     /// </summary>
     internal void RecordBlend(RenderPassEncoder* pass, IReadOnlyList<LayerBlend> ops,
         TextureFormat format, uint vertexCount, int targetWidth, int targetHeight)
+        => RecordBlendRange(pass, ops, format, 0, ops.Count, targetWidth, targetHeight);
+
+    /// <summary>
+    /// Records the blend draws for ops [<paramref name="start"/>,
+    /// <paramref name="end"/>). Vertex offsets stay keyed by the GLOBAL op index
+    /// (the whole frame's quads are uploaded once by
+    /// <see cref="BuildAndUploadVertices"/>), so the backdrop segmentation can
+    /// split one frame across several render passes without rebuilding geometry.
+    /// </summary>
+    internal void RecordBlendRange(RenderPassEncoder* pass, IReadOnlyList<LayerBlend> ops,
+        TextureFormat format, int start, int end, int targetWidth, int targetHeight)
     {
-        if (vertexCount > 0)
+        if (start >= end)
+        {
+            return;
+        }
+
+        if (_vertexBuffer != null)
         {
             Api.RenderPassEncoderSetVertexBuffer(pass, 0, _vertexBuffer, 0, _vertexCapacity);
         }
 
         RenderPipeline* boundPipeline = null;
-        for (var i = 0; i < ops.Count; i++)
+        for (var i = start; i < end; i++)
         {
             var op = ops[i];
             if (!_textures.TryGetValue(op.ContentHash, out var tex))
@@ -796,6 +820,281 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
         Api.RenderPassEncoderSetScissorRect(pass, (uint)x, (uint)y, (uint)w, (uint)h);
         return true;
+    }
+
+    /// <summary>True when any op in <paramref name="ops"/> is a backdrop-filter op.</summary>
+    internal static bool HasBackdropOps(IReadOnlyList<LayerBlend> ops)
+    {
+        for (var i = 0; i < ops.Count; i++)
+        {
+            if (ops[i].IsBackdropFilter)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Renders one frame's ops into <paramref name="targetView"/>, splitting the
+    /// render pass at every backdrop-filter op: the pass so far is submitted, the
+    /// op's region of <paramref name="target"/> is snapshotted and run through
+    /// <see cref="FilterEngine"/>, the result is adopted as the op's texture, and
+    /// a new pass (LoadOp.Load) draws it back over the region before the
+    /// remaining ops continue. A frame without backdrop ops records exactly one
+    /// pass, as before. Overlays are recorded in the final pass. The target must
+    /// have <see cref="TextureUsage.CopySrc"/> usage when ops carry backdrops.
+    /// Call <see cref="UploadLayerTextures"/> and
+    /// <see cref="BuildAndUploadVertices"/> first.
+    /// </summary>
+    internal void RenderSegmentedPasses(
+        Texture* target,
+        TextureView* targetView,
+        TextureFormat format,
+        int width,
+        int height,
+        IReadOnlyList<LayerBlend> ops,
+        GpuOverlayRenderer overlays,
+        IReadOnlyList<GpuOverlayLayer>? overlayLayers)
+    {
+        var segStart = 0;
+        // Where to scan for the NEXT backdrop op. Distinct from segStart: a
+        // successfully filtered backdrop op is drawn as the first op of its
+        // segment, so the scan must start past it or the loop never advances.
+        var scanFrom = 0;
+        var loadOp = LoadOp.Clear;
+        while (true)
+        {
+            var next = -1;
+            for (var i = scanFrom; i < ops.Count; i++)
+            {
+                if (ops[i].IsBackdropFilter)
+                {
+                    next = i;
+                    break;
+                }
+            }
+
+            var segEnd = next >= 0 ? next : ops.Count;
+            var isLast = next < 0;
+
+            var encoder = Api.DeviceCreateCommandEncoder(Device, (CommandEncoderDescriptor*)null);
+            if (encoder == null)
+            {
+                throw new InvalidOperationException("WebGPU blend command encoder creation failed.");
+            }
+
+            var colorAttachment = new RenderPassColorAttachment
+            {
+                View = targetView,
+                ResolveTarget = null,
+                LoadOp = loadOp,
+                StoreOp = StoreOp.Store,
+                // Opaque white base — the page background the flat path also clears to.
+                ClearValue = new Color { R = 1, G = 1, B = 1, A = 1 },
+            };
+            var passDesc = new RenderPassDescriptor { ColorAttachmentCount = 1, ColorAttachments = &colorAttachment };
+            var pass = Api.CommandEncoderBeginRenderPass(encoder, in passDesc);
+            RecordBlendRange(pass, ops, format, segStart, segEnd, width, height);
+            if (isLast)
+            {
+                overlays.Record(pass, overlayLayers, width, height, format);
+            }
+
+            Api.RenderPassEncoderEnd(pass);
+
+            // The snapshot copy rides the SAME encoder, after the pass: queue
+            // order guarantees it reads everything composited so far.
+            GpuPaintTexture? snapshot = null;
+            if (!isLast)
+            {
+                snapshot = EncodeBackdropSnapshot(encoder, target, ops[next], width, height);
+            }
+
+            var cmd = Api.CommandEncoderFinish(encoder, (CommandBufferDescriptor*)null);
+            Api.QueueSubmit(Queue, 1, &cmd);
+            Api.CommandBufferRelease(cmd);
+            Api.RenderPassEncoderRelease(pass);
+            Api.CommandEncoderRelease(encoder);
+
+            if (isLast)
+            {
+                return;
+            }
+
+            loadOp = LoadOp.Load;
+            // On success the backdrop op draws first in the next segment; a
+            // chain that can't run keeps today's behavior (no backdrop effect).
+            segStart = snapshot is not null && TryApplyBackdrop(snapshot, ops[next]) ? next : next + 1;
+            scanFrom = next + 1;
+        }
+    }
+
+    /// <summary>
+    /// Encodes a copy of the backdrop op's region of <paramref name="source"/>
+    /// into a fresh sampleable texture. The op's quad was built as an integer
+    /// device translation of a region-sized rect, so the texture is op-sized and
+    /// the draw's 0..1 UVs map one-to-one; any part clipped by the target edge
+    /// stays transparent (wgpu zero-initializes). Returns null when the chain
+    /// can't run on the GPU or the region is empty — the caller skips the op.
+    /// </summary>
+    private GpuPaintTexture? EncodeBackdropSnapshot(
+        CommandEncoder* encoder, Texture* source, in LayerBlend op, int targetWidth, int targetHeight)
+    {
+        if (op.BackdropFilters is not { } filters || !GpuFilterEngine.Supports(filters))
+        {
+            return null;
+        }
+
+        var m = op.LocalToDevice;
+        const double eps = 1e-6;
+        if (Math.Abs(m.A - 1d) > eps || Math.Abs(m.D - 1d) > eps || Math.Abs(m.B) > eps || Math.Abs(m.C) > eps)
+        {
+            return null; // built as a pure translation; anything else is unexpected
+        }
+
+        var dx = (int)Math.Round(m.E);
+        var dy = (int)Math.Round(m.F);
+        var x0 = Math.Max(0, dx);
+        var y0 = Math.Max(0, dy);
+        var x1 = Math.Min(targetWidth, dx + op.Width);
+        var y1 = Math.Min(targetHeight, dy + op.Height);
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return null;
+        }
+
+        ThrowIfTextureOversized("WebGPU backdrop snapshot", op.Width, op.Height);
+        var desc = new TextureDescriptor
+        {
+            Usage = TextureUsage.TextureBinding | TextureUsage.CopyDst,
+            Dimension = TextureDimension.Dimension2D,
+            Size = new Extent3D { Width = (uint)op.Width, Height = (uint)op.Height, DepthOrArrayLayers = 1 },
+            Format = TextureFormat.Rgba8Unorm,
+            MipLevelCount = 1,
+            SampleCount = 1,
+        };
+        var tex = Api.DeviceCreateTexture(Device, in desc);
+        if (tex == null)
+        {
+            throw new InvalidOperationException("WebGPU backdrop snapshot texture creation failed.");
+        }
+
+        var view = Api.TextureCreateView(tex, (TextureViewDescriptor*)null);
+        if (view == null)
+        {
+            Api.TextureRelease(tex);
+            throw new InvalidOperationException("WebGPU backdrop snapshot view creation failed.");
+        }
+
+        var src = new ImageCopyTexture { Texture = source, MipLevel = 0, Origin = new Origin3D { X = (uint)x0, Y = (uint)y0, Z = 0 }, Aspect = TextureAspect.All };
+        var dst = new ImageCopyTexture { Texture = tex, MipLevel = 0, Origin = new Origin3D { X = (uint)(x0 - dx), Y = (uint)(y0 - dy), Z = 0 }, Aspect = TextureAspect.All };
+        var extent = new Extent3D { Width = (uint)(x1 - x0), Height = (uint)(y1 - y0), DepthOrArrayLayers = 1 };
+        Api.CommandEncoderCopyTextureToTexture(encoder, in src, in dst, in extent);
+
+        return new GpuPaintTexture((nint)tex, (nint)view, op.Width, op.Height,
+            PaintTextureFormat.Rgba8Unorm, new OwnedTextureHandles(Api, (nint)tex, (nint)view));
+    }
+
+    /// <summary>
+    /// Runs the backdrop chain over <paramref name="snapshot"/> (consumed either
+    /// way) and adopts the result under the op's content hash so the next
+    /// segment's draw finds it resident. The hash is re-adopted every frame —
+    /// the backdrop content under an element changes without the op knowing.
+    /// </summary>
+    private bool TryApplyBackdrop(GpuPaintTexture snapshot, in LayerBlend op)
+    {
+        GpuPaintTexture filtered;
+        try
+        {
+            filtered = FilterEngine.Apply(snapshot, op.BackdropFilters!, op.FilterScale);
+        }
+        catch (InvalidOperationException)
+        {
+            // Apply consumed the snapshot either way; skip the draw.
+            return false;
+        }
+
+        AdoptTexture(op.ContentHash, filtered);
+        return true;
+    }
+
+    /// <summary>
+    /// Draws <paramref name="source"/> as one full-target triangle into an open
+    /// render pass — the final present blit for a frame that had to render into
+    /// an intermediate scene texture (the swapchain texture cannot be a copy
+    /// source for backdrop snapshots).
+    /// </summary>
+    internal void RecordFullFrameBlit(RenderPassEncoder* pass, TextureView* source, TextureFormat format)
+    {
+        var pipeline = BlitPipelineFor(format);
+        Api.RenderPassEncoderSetPipeline(pass, pipeline);
+        var bindGroup = CreateBindGroup(source);
+        Api.RenderPassEncoderSetBindGroup(pass, 0, (BindGroup*)bindGroup, 0, (uint*)null);
+        Api.RenderPassEncoderDraw(pass, 3, 1, 0, 0);
+        // wgpu keeps the bind group alive until the submitted commands execute.
+        Api.BindGroupRelease((BindGroup*)bindGroup);
+    }
+
+    private RenderPipeline* BlitPipelineFor(TextureFormat format)
+    {
+        if (_blitPipelines.TryGetValue(format, out var cached))
+        {
+            return (RenderPipeline*)cached;
+        }
+
+        var vsEntry = (byte*)SilkMarshal.StringToPtr("vs_blit", NativeStringEncoding.UTF8);
+        var fsEntry = (byte*)SilkMarshal.StringToPtr("fs_blit", NativeStringEncoding.UTF8);
+        try
+        {
+            // Replace, not blend: the scene texture is the whole frame.
+            var colorTarget = new ColorTargetState { Format = format, Blend = null, WriteMask = ColorWriteMask.All };
+            var fragment = new FragmentState { Module = _shader, EntryPoint = fsEntry, TargetCount = 1, Targets = &colorTarget };
+            var pipelineDesc = new RenderPipelineDescriptor
+            {
+                Layout = _pipelineLayout,
+                Vertex = new VertexState { Module = _shader, EntryPoint = vsEntry, BufferCount = 0, Buffers = null },
+                Primitive = new PrimitiveState { Topology = PrimitiveTopology.TriangleList, FrontFace = FrontFace.Ccw, CullMode = CullMode.None },
+                Multisample = new MultisampleState { Count = 1, Mask = ~0u, AlphaToCoverageEnabled = false },
+                Fragment = &fragment,
+            };
+            var pipeline = Api.DeviceCreateRenderPipeline(Device, in pipelineDesc);
+            if (pipeline == null)
+            {
+                throw new InvalidOperationException("WebGPU blit pipeline creation failed.");
+            }
+
+            _blitPipelines[format] = (nint)pipeline;
+            return pipeline;
+        }
+        finally
+        {
+            SilkMarshal.Free((nint)vsEntry);
+            SilkMarshal.Free((nint)fsEntry);
+        }
+    }
+
+    /// <summary>Releases a wgpu texture + view pair owned by a <see cref="GpuPaintTexture"/>.</summary>
+    private sealed class OwnedTextureHandles(WebGPU api, nint texture, nint view) : IDisposable
+    {
+        private nint _texture = texture;
+        private nint _view = view;
+
+        public void Dispose()
+        {
+            if (_view != 0)
+            {
+                api.TextureViewRelease((TextureView*)_view);
+                _view = 0;
+            }
+
+            if (_texture != 0)
+            {
+                api.TextureRelease((Texture*)_texture);
+                _texture = 0;
+            }
+        }
     }
 
     internal void EvictStale()
@@ -888,6 +1187,12 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
         }
 
         _pipelines.Clear();
+        foreach (var p in _blitPipelines.Values)
+        {
+            Api.RenderPipelineRelease((RenderPipeline*)p);
+        }
+
+        _blitPipelines.Clear();
         _filterEngine?.Dispose();
         _filterEngine = null;
         if (_vertexBuffer != null) { Api.BufferRelease(_vertexBuffer); _vertexBuffer = null; }
@@ -934,6 +1239,27 @@ fn fs_premul(in : VsOut) -> @location(0) vec4<f32> {
 fn fs_straight(in : VsOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, smp, in.uv);
     return vec4<f32>(c.rgb * c.a, c.a) * in.opacity;
+}
+
+// Full-target copy used to present an intermediate scene texture (backdrop
+// frames render offscreen because a swapchain texture cannot be a copy source).
+@vertex
+fn vs_blit(@builtin(vertex_index) vi : u32) -> VsOut {
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, 3.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0));
+    let p = corners[vi];
+    var o : VsOut;
+    o.pos = vec4<f32>(p, 0.0, 1.0);
+    o.uv = vec2<f32>((p.x + 1.0) * 0.5, (1.0 - p.y) * 0.5);
+    o.opacity = 1.0;
+    return o;
+}
+
+@fragment
+fn fs_blit(in : VsOut) -> @location(0) vec4<f32> {
+    return textureSample(tex, smp, in.uv);
 }
 ";
 }

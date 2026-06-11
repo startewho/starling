@@ -37,7 +37,9 @@ internal sealed class CompositorLayer
         double originParentY = 0,
         int zIndex = 0,
         Rect? inheritedClip = null,
-        IReadOnlyList<FilterFunction>? filters = null)
+        IReadOnlyList<FilterFunction>? filters = null,
+        IReadOnlyList<FilterFunction>? backdropFilters = null,
+        Rect backdropBounds = default)
     {
         Items = items;
         Bounds = bounds;
@@ -53,6 +55,8 @@ internal sealed class CompositorLayer
         ZIndex = zIndex;
         InheritedClip = inheritedClip;
         Filters = filters;
+        BackdropFilters = backdropFilters;
+        BackdropBounds = backdropBounds;
     }
 
     /// <summary>
@@ -64,6 +68,22 @@ internal sealed class CompositorLayer
     /// <see cref="ContentHash"/> so a filter change still re-rasters.
     /// </summary>
     public IReadOnlyList<FilterFunction>? Filters { get; }
+
+    /// <summary>
+    /// The layer-root box's resolved <c>backdrop-filter</c> chain (Filter
+    /// Effects 2 §6), or null when it has none. The compositor turns it into a
+    /// backdrop op emitted BEFORE this layer's own content ops: the blend path
+    /// snapshots the pixels already composited under <see cref="BackdropBounds"/>,
+    /// runs the chain over the snapshot, and draws it back clipped to the
+    /// element rect — then the layer's own content paints over it and stays
+    /// sharp.
+    /// </summary>
+    public IReadOnlyList<FilterFunction>? BackdropFilters { get; }
+
+    /// <summary>The layer-root box's border box in page coords — the region
+    /// <see cref="BackdropFilters"/> applies to. Only meaningful when
+    /// <see cref="BackdropFilters"/> is non-null.</summary>
+    public Rect BackdropBounds { get; }
 
     /// <summary>
     /// Accumulated <c>overflow:hidden</c> clip of the non-layer boxes between this
@@ -105,7 +125,8 @@ internal sealed class CompositorLayer
     /// layer's own slice.</summary>
     public CompositorLayer WithChildren(IReadOnlyList<CompositorLayer> children)
         => new(Items, Bounds, Transform, Opacity, Clip, children, ContentHash, LayerId,
-            SourceBox, OriginParentX, OriginParentY, ZIndex, InheritedClip, Filters);
+            SourceBox, OriginParentX, OriginParentY, ZIndex, InheritedClip, Filters,
+            BackdropFilters, BackdropBounds);
 
     /// <summary>Page-coord union of the painted items in this layer's slice.</summary>
     public Rect Bounds { get; }

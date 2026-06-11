@@ -58,4 +58,13 @@ internal interface IPaintBackend : IDisposable
         wrapped.Add(DisplayList.PopFilter.Instance);
         return Render(wrapped, viewport, scale, opaqueBackground: false);
     }
+
+    /// <summary>
+    /// Runs a resolved CSS filter chain over already-rendered pixels (Filter
+    /// Effects 1 §10.1, in order). Used by the compositor's CPU blend path to
+    /// filter a backdrop snapshot. The default is a no-op pass-through so a
+    /// backend without a pixel filter chain stays correct-but-unfiltered.
+    /// </summary>
+    RenderedBitmap FilterBitmap(RenderedBitmap source, IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+        => source;
 }
