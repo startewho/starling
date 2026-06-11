@@ -24,6 +24,7 @@ public class WebviewPanelHoverScopeTests
     [AvaloniaFact]
     public async Task Hover_overrides_only_the_hover_styled_element_not_its_subtree()
     {
+        GpuTests.SkipUnlessAvailable();
         // <section> changes background on :hover; the nested <div> has no
         // :hover-dependent style. Hovering the div makes <section> match
         // `section:hover` as an ancestor, but the div itself must not be pulled

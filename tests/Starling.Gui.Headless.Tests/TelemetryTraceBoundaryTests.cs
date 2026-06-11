@@ -23,6 +23,7 @@ public class TelemetryTraceBoundaryTests
     [AvaloniaFact]
     public async Task Live_tick_does_not_parent_under_a_leaked_navigation_activity()
     {
+        GpuTests.SkipUnlessAvailable();
         var url = WritePage("""
             <body><div id="box">hello</div><script>window.__ready = 1;</script></body>
             """);

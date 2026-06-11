@@ -91,6 +91,7 @@ public class WebviewPanelSelectionTests
 
     private static (Window, WebviewPanel) ShowPanel(StarlingEngine engine, LaidOutPage page)
     {
+        GpuTests.SkipUnlessAvailable();
         var panel = new WebviewPanel(
             new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)));
