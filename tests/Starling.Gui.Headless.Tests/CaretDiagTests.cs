@@ -23,6 +23,7 @@ public class CaretDiagTests
     [AvaloniaFact]
     public async Task Caret_x_per_keystroke()
     {
+        GpuTests.SkipUnlessAvailable();
         var url = TodoUrl();
         var engine = new StarlingEngine();
         var result = await engine.LayoutPageAsync(url,

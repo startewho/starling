@@ -40,6 +40,28 @@ internal static class DisplayListContentHash
         return unchecked((long)h);
     }
 
+    /// <summary>
+    /// Hash of a filter chain alone. Folded into a layer's content hash when the
+    /// chain is carried on the <c>CompositorLayer</c> instead of a slice
+    /// PushFilter bracket, so a filter change (an animating blur radius, a hover
+    /// brightness) still re-rasters the layer.
+    /// </summary>
+    public static long ComputeFilters(IReadOnlyList<FilterFunction> filters)
+    {
+        var h = FnvOffset;
+        HashFilters(ref h, filters);
+        return unchecked((long)h);
+    }
+
+    /// <summary>FNV-1a fold of <paramref name="b"/> into <paramref name="a"/> —
+    /// order-sensitive combination of two content hashes.</summary>
+    public static long Combine(long a, long b)
+    {
+        var h = unchecked((ulong)a);
+        HashLong(ref h, b);
+        return unchecked((long)h);
+    }
+
     // Antialiasing/edge bleed safety (page px): a glyph or fill whose AABB ends
     // exactly on a tile seam can still touch the adjacent tile's pixels, so the
     // per-tile membership test grows each item's bounds by this much. Over-

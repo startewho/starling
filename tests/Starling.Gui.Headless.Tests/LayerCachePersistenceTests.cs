@@ -36,6 +36,7 @@ public sealed class LayerCachePersistenceTests
     [Fact]
     public void Layer_caches_survive_relayout_and_clear_on_navigation()
     {
+        GpuTests.SkipUnlessAvailable();
         using var metrics = new MetricRecorder();
         using var host = new PageRendererHost();
         var root = Layout();

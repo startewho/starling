@@ -75,7 +75,16 @@ internal sealed class Compositor
             if (DisableGpuBlend)
             {
                 foreach (var op in ops)
-                    BlendOp(op, output, width, height, fastBlit: !DisableFastBlit);
+                {
+                    if (op.IsBackdropFilter)
+                    {
+                        ApplyBackdropCpu(op, output, width, height);
+                    }
+                    else
+                    {
+                        BlendOp(op, output, width, height, fastBlit: !DisableFastBlit);
+                    }
+                }
             }
             else
             {
@@ -271,6 +280,17 @@ internal sealed class Compositor
         // they were intersected, so combine by plain rect intersection.
         var effectiveClip = IntersectClip(ancestorClip, layer.Clip);
 
+        // Filter Effects 2 §6 — backdrop-filter. The op goes into the stream
+        // BEFORE everything in this stacking context (including negative-z
+        // child layers — they paint above the filtered backdrop), so the blend
+        // path snapshots everything composited under the element, filters it,
+        // and the element's content then paints over it and stays sharp.
+        if (layer.BackdropFilters is { Count: > 0 } backdropFilters && effectiveOpacity > 0f)
+        {
+            EmitBackdropFilterOp(layer, backdropFilters, ops, viewport, scale,
+                effectiveTransform, effectiveClip, textureCache);
+        }
+
         // Children are already in paint order (sorted by z-index, then tree order,
         // at build time), so negative-z layers are the prefix. CSS-Position-3 §9:
         // they paint BEHIND this layer's own slice; non-negative layers paint over
@@ -285,8 +305,19 @@ internal sealed class Compositor
 
         if (layer.Bounds.Width > 0 && layer.Bounds.Height > 0 && effectiveOpacity > 0f)
         {
-            EmitLayerTiles(layer, ops, viewport, scale,
-                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            // A layer-root `filter` chain rides the layer (LTF; see
+            // CompositorLayer.Filters) and is applied ONCE to the whole rastered
+            // layer here — not re-run inside every tile raster it overlaps.
+            if (layer.Filters is { Count: > 0 } filters)
+            {
+                EmitFilteredLayer(layer, filters, ops, viewport, scale,
+                    effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            }
+            else
+            {
+                EmitLayerTiles(layer, ops, viewport, scale,
+                    effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            }
         }
 
         for (; childIndex < layer.Children.Count; childIndex++)
@@ -359,6 +390,9 @@ internal sealed class Compositor
         // visible tile still serves from cache.
         var prepared = _tileGrid.GetOrPrepare(layer.ContentHash, layer.Items);
 
+        // See the smallCpuRaster branch below. Decided per LAYER, never per tile.
+        var smallCpuRaster = (long)layerDevW * layerDevH <= SmallLayerCpuRasterArea;
+
         for (var row = row0; row <= row1; row++)
         {
             var th = Math.Min(TH, layerDevH - row * TH);
@@ -394,6 +428,32 @@ internal sealed class Compositor
 
                 if (textureCache is not null)
                 {
+                    // Small layers skip the GPU canvas: its flush pays a
+                    // synchronous scheduling readback per texture (~ms, a full
+                    // GPU round-trip) regardless of pixel count, so a tiny
+                    // animating slice — exactly what re-rasters every frame —
+                    // is far cheaper rastered on the CPU and uploaded. The
+                    // whole-layer rule (smallCpuRaster is per LAYER) keeps one
+                    // layer's tiles on one rasterizer, so abutting tiles never
+                    // mix antialiasers.
+                    if (smallCpuRaster)
+                    {
+                        if (_tileGrid.TryGetTile(key, tileHash, out var cpuTile))
+                        {
+                            _frameTileHits++;
+                        }
+                        else
+                        {
+                            _frameTileMisses++;
+                            cpuTile = _backend.RenderSmallBitmap(layer.Items, tileRectPage, scale, opaqueBackground: false);
+                            _tileGrid.PutTile(key, tileHash, cpuTile);
+                        }
+
+                        ops.Add(LayerBlend.Bitmap(cpuTile, opHash,
+                            tileLocalToDevice, effectiveOpacity, clipDev));
+                        continue;
+                    }
+
                     EmitGpuTextureTile(ops, layer.Items, tileRectPage, scale, key, tileHash, opHash,
                         tileLocalToDevice, effectiveOpacity, clipDev, textureCache);
                     continue;
@@ -479,6 +539,275 @@ internal sealed class Compositor
         }
     }
 
+    /// <summary>
+    /// Emits a layer whose root carries a CSS <c>filter</c> chain
+    /// (<see cref="CompositorLayer.Filters"/>). The slice is rastered ONCE into a
+    /// halo-padded whole-layer surface, the chain runs once over it (on the GPU
+    /// when the texture cache supports it, else through the backend's CPU chain),
+    /// and the result is cached and blended as a single quad — instead of
+    /// re-running the chain inside every tile raster the group overlaps.
+    /// Oversized surfaces and chains the GPU path can't run fall back to the
+    /// legacy per-tile path by re-wrapping the slice in its PushFilter bracket.
+    /// </summary>
+    private void EmitFilteredLayer(
+        CompositorLayer layer, IReadOnlyList<DisplayList.FilterFunction> filters, List<LayerBlend> ops,
+        LayoutRect viewport, float scale, Matrix2D effectiveTransform,
+        float effectiveOpacity, Rect? effectiveClip, IGpuLayerTextureCache? textureCache)
+    {
+        var s = (double)scale;
+        var pad = DisplayList.FilterFunction.HaloPadding(filters);
+        var bounds = layer.Bounds;
+        var padded = new LayoutRect(bounds.X - pad, bounds.Y - pad, bounds.Width + 2 * pad, bounds.Height + 2 * pad);
+        var devW = Math.Max(1, (int)Math.Ceiling(padded.Width * s));
+        var devH = Math.Max(1, (int)Math.Ceiling(padded.Height * s));
+
+        // Same surface guard as the legacy offscreen group path, plus the wgpu
+        // texture-dimension cap; an unsupported chain on the GPU path also falls
+        // back (checked BEFORE rastering so nothing is wasted).
+        var oversized = (long)devW * devH > 64L * 1024 * 1024 || devW > MaxFilterSurfaceDimension || devH > MaxFilterSurfaceDimension;
+        if (oversized || (textureCache is not null && !textureCache.SupportsLayerFilters(filters)))
+        {
+            EmitLayerTiles(WrapInFilterBracket(layer, filters, padded), ops, viewport, scale,
+                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            return;
+        }
+
+        // Viewport cull on the padded, transformed extent — the single-surface
+        // equivalent of the per-tile cull. The halo is part of the extent, so a
+        // layer whose blur bleeds into view still paints.
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        var pageTransform = pageToDevice.Multiply(effectiveTransform);
+        var devAabb = TransformedAabb(new Rect(padded.X, padded.Y, padded.Width, padded.Height), pageTransform);
+        var outW = (int)Math.Ceiling(viewport.Width * s);
+        var outH = (int)Math.Ceiling(viewport.Height * s);
+        if (devAabb.Right < 0 || devAabb.Bottom < 0 || devAabb.X > outW || devAabb.Y > outH)
+            return;
+
+        Rect? clipDev = effectiveClip is { } cp
+            ? TransformedAabb(new Rect(cp.X, cp.Y, cp.Width, cp.Height), pageToDevice)
+            : null;
+
+        // Whole-surface cache key: column/row -1 mark the filtered single-surface
+        // entry so it can never collide with a real (col, row) tile of this layer.
+        // A layer without an element id (a filtered ::before glow) keys by its
+        // content hash instead, so two such layers never thrash one slot —
+        // identical content+chain sharing a surface is correct, not a collision.
+        // ContentHash already folds the filter chain; the surface size folds in so
+        // a zoom that changes the padded extent re-keys the cached result.
+        var key = new TileKey(layer.LayerId != 0 ? layer.LayerId : layer.ContentHash, -1, -1, scale);
+        var opHash = FilteredOpHash(layer.ContentHash, devW, devH);
+
+        if (textureCache is not null)
+        {
+            if (_tileGrid.TryGetResidentTile(key, opHash, out var resident)
+                && textureCache.HasResidentTexture(opHash, resident.Width, resident.Height))
+            {
+                _frameTileHits++;
+                ops.Add(LayerBlend.ResidentTexture(resident.Width, resident.Height, opHash,
+                    FilteredLocalToDevice(pageTransform, padded, resident.Width, resident.Height),
+                    effectiveOpacity, clipDev));
+                return;
+            }
+
+            _frameTileMisses++;
+            if (_backend is not IGpuTexturePaintBackend gpuBackend)
+            {
+                throw new InvalidOperationException("GPU surface rendering requires a GPU texture paint backend.");
+            }
+
+            var source = gpuBackend.RenderTexture(layer.Items, padded, scale, opaqueBackground: false, textureCache.GpuDevice);
+            // ApplyLayerFilters consumes the source either way; a null result means
+            // the chain unexpectedly failed at run time — re-raster the legacy way
+            // rather than present unfiltered content.
+            var filtered = textureCache.ApplyLayerFilters(source, filters, scale);
+            if (filtered is null)
+            {
+                EmitLayerTiles(WrapInFilterBracket(layer, filters, padded), ops, viewport, scale,
+                    effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+                return;
+            }
+
+            textureCache.AdoptTexture(opHash, filtered);
+            _tileGrid.PutResidentTile(key, opHash, filtered.Width, filtered.Height);
+            ops.Add(LayerBlend.ResidentTexture(filtered.Width, filtered.Height, opHash,
+                FilteredLocalToDevice(pageTransform, padded, filtered.Width, filtered.Height),
+                effectiveOpacity, clipDev));
+            return;
+        }
+
+        if (_tileGrid.TryGetTile(key, opHash, out var bmp))
+        {
+            _frameTileHits++;
+        }
+        else
+        {
+            _frameTileMisses++;
+            bmp = _backend.RenderFiltered(layer.Items, padded, scale, filters);
+            _tileGrid.PutTile(key, opHash, bmp);
+        }
+
+        ops.Add(LayerBlend.Bitmap(bmp, opHash,
+            FilteredLocalToDevice(pageTransform, padded, bmp.Width, bmp.Height),
+            effectiveOpacity, clipDev));
+    }
+
+    /// <summary>
+    /// Emits the layer's `backdrop-filter` op (Filter Effects 2 §6) into the
+    /// blend stream: the element's border box under the effective transform,
+    /// padded by the chain's blur halo so the Gaussian has real neighbours at
+    /// the visible edge, clamped to the output — built as a pure integer device
+    /// translation so the blend paths can snapshot exactly that region. The op
+    /// is scissored back to the UNPADDED element rect (rounded corners are a v1
+    /// limitation — the clip is rectangular). The backdrop re-filters every
+    /// frame; nothing is cached, because the op cannot know when the content
+    /// composited under it changed.
+    /// </summary>
+    private static void EmitBackdropFilterOp(
+        CompositorLayer layer, IReadOnlyList<DisplayList.FilterFunction> filters, List<LayerBlend> ops,
+        LayoutRect viewport, float scale, Matrix2D effectiveTransform, Rect? effectiveClip,
+        IGpuLayerTextureCache? textureCache)
+    {
+        // The GPU paths run the chain through the shared filter engine; a chain
+        // it can't run (drop-shadow) keeps today's behavior — no backdrop
+        // effect — rather than a wrong one. The CPU blend path supports every
+        // chain via the backend.
+        if (textureCache is not null && !textureCache.SupportsLayerFilters(filters))
+            return;
+
+        var bounds = layer.BackdropBounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+            return;
+
+        var s = (double)scale;
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        var pageTransform = pageToDevice.Multiply(effectiveTransform);
+        // Device AABB of the element's border box. A rotated element filters
+        // the AABB of its box — a v1 approximation, same as the clip handling.
+        var devRect = TransformedAabb(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height), pageTransform);
+
+        var outW = (int)Math.Ceiling(viewport.Width * s);
+        var outH = (int)Math.Ceiling(viewport.Height * s);
+        var pad = DisplayList.FilterFunction.HaloPadding(filters) * s;
+        var x0 = Math.Max(0, (int)Math.Floor(devRect.X - pad));
+        var y0 = Math.Max(0, (int)Math.Floor(devRect.Y - pad));
+        var x1 = Math.Min(outW, (int)Math.Ceiling(devRect.Right + pad));
+        var y1 = Math.Min(outH, (int)Math.Ceiling(devRect.Bottom + pad));
+        if (x1 <= x0 || y1 <= y0)
+            return;
+
+        // The filtered patch paints back clipped to the element rect (the halo
+        // margin feeds the blur but never paints), intersected with the
+        // inherited clip.
+        Rect? clipDev = devRect;
+        if (effectiveClip is { } cp)
+            clipDev = IntersectDeviceRect(devRect, TransformedAabb(new Rect(cp.X, cp.Y, cp.Width, cp.Height), pageToDevice));
+        if (clipDev is { Width: <= 0 } or { Height: <= 0 })
+            return;
+
+        var layerKey = layer.LayerId != 0 ? layer.LayerId : layer.ContentHash;
+        ops.Add(LayerBlend.BackdropFilter(x1 - x0, y1 - y0,
+            BackdropOpHash(layerKey, x0, y0),
+            Matrix2D.Translate(x0, y0), clipDev, filters, scale));
+    }
+
+    // Op key for a backdrop's filtered-snapshot texture. Mixes the region
+    // origin so two identical-content backdrop layers never alias one texture;
+    // the tag keeps it clear of tile, filtered-surface, and overlay-swatch keys.
+    private static long BackdropOpHash(long layerKey, int x, int y)
+        => unchecked(((layerKey ^ 0x4241434B44524F50L) * 1099511628211L) ^ (((long)x << 21) | (uint)y));
+
+    /// <summary>
+    /// CPU-blend twin of the GPU backdrop segmentation: snapshots the op's
+    /// region of the composited output, runs the chain over it via the backend,
+    /// and alpha-blends the result back clipped to the element rect. Runs only
+    /// on the test-only <see cref="DisableGpuBlend"/> path.
+    /// </summary>
+    private void ApplyBackdropCpu(in LayerBlend op, byte[] output, int outWidth, int outHeight)
+    {
+        if (op.BackdropFilters is not { } filters)
+            return;
+        if (!IsIntegerTranslation(op.LocalToDevice, out var dx, out var dy))
+            return; // built as a pure translation; anything else is unexpected
+
+        var x0 = Math.Max(0, dx);
+        var y0 = Math.Max(0, dy);
+        var x1 = Math.Min(outWidth, dx + op.Width);
+        var y1 = Math.Min(outHeight, dy + op.Height);
+        if (x1 <= x0 || y1 <= y0)
+            return;
+
+        var w = x1 - x0;
+        var h = y1 - y0;
+        var patch = new byte[w * h * 4];
+        for (var row = 0; row < h; row++)
+            Array.Copy(output, (((y0 + row) * outWidth) + x0) * 4, patch, row * w * 4, w * 4);
+
+        var filtered = _backend.FilterBitmap(new RenderedBitmap(w, h, patch), filters, op.FilterScale);
+        try
+        {
+            // The filtered result may be a different size (CPU drop-shadow
+            // rebuilds); map its texel space back onto the region rect and let
+            // the general blend sample it, scissored by the op's clip.
+            var draw = LayerBlend.Bitmap(filtered, op.ContentHash,
+                Matrix2D.Translate(x0, y0).Multiply(
+                    Matrix2D.Scale((double)w / Math.Max(1, filtered.Width), (double)h / Math.Max(1, filtered.Height))),
+                op.Opacity, op.ClipDevice);
+            BlendOp(draw, output, outWidth, outHeight, fastBlit: false);
+        }
+        finally
+        {
+            filtered.Dispose();
+        }
+    }
+
+    // WebGPU's guaranteed minimum maxTextureDimension2D; a filtered surface past
+    // it must tile (the legacy bracket path) instead of failing texture creation.
+    private const int MaxFilterSurfaceDimension = 8192;
+
+    /// <summary>
+    /// Maps a filtered surface's texel space (0..texW, 0..texH) onto output
+    /// device px. Unlike a tile (always 1 texel = 1/scale page px), the filtered
+    /// result may be smaller than its padded page rect (large blurs render at
+    /// reduced resolution), so the scale is derived from the rect/texture ratio
+    /// and the blend quad's linear sampling upscales.
+    /// </summary>
+    private static Matrix2D FilteredLocalToDevice(Matrix2D pageTransform, LayoutRect padded, int texW, int texH)
+        => pageTransform.Multiply(
+            Matrix2D.Translate(padded.X, padded.Y)
+                .Multiply(Matrix2D.Scale(padded.Width / Math.Max(1, texW), padded.Height / Math.Max(1, texH))));
+
+    // Whole-surface op key for a filtered layer. The tag keeps it out of every
+    // TileOpHash (which mixes non-negative col/row) and the overlay-swatch range.
+    private static long FilteredOpHash(long layerContentHash, int devW, int devH)
+        => unchecked(((layerContentHash ^ (long)0x46494C5445520000) * 1099511628211L)
+                     ^ (((long)devW << 21) | (uint)devH));
+
+    /// <summary>
+    /// Legacy fallback: re-wraps a filtered layer's slice in its PushFilter
+    /// bracket — the form the per-tile raster path applies inline — with bounds
+    /// padded for the blur halo so the tiles cover the bleed. Keeps oversized
+    /// surfaces and GPU-unsupported chains rendering exactly as before.
+    /// </summary>
+    private static CompositorLayer WrapInFilterBracket(
+        CompositorLayer layer, IReadOnlyList<DisplayList.FilterFunction> filters, LayoutRect paddedBounds)
+    {
+        var items = new DisplayList.DisplayList();
+        // The bracket seeds the group-bounds union with the element's border box
+        // when the source box is known (what Visit used to emit), else the
+        // painted union — either is a valid seed, the union only grows.
+        var bracketBounds = layer.SourceBox is { } src
+            ? new Rect(layer.OriginParentX + src.Frame.X, layer.OriginParentY + src.Frame.Y, src.Frame.Width, src.Frame.Height)
+            : layer.Bounds;
+        items.Add(new DisplayList.PushFilter(bracketBounds, filters));
+        var slice = layer.Items.Items;
+        for (var i = 0; i < slice.Count; i++)
+            items.Add(slice[i]);
+        items.Add(DisplayList.PopFilter.Instance);
+        return new CompositorLayer(items, paddedBounds, layer.Transform, layer.Opacity, layer.Clip,
+            [], layer.ContentHash, layer.LayerId,
+            layer.SourceBox, layer.OriginParentX, layer.OriginParentY, layer.ZIndex, layer.InheritedClip);
+    }
+
     private readonly struct SurfaceTextureCache(GpuSurfacePresenter presenter) : IGpuLayerTextureCache
     {
         public bool HasResidentTexture(long contentHash, int width, int height)
@@ -488,6 +817,13 @@ internal sealed class Compositor
 
         public void AdoptTexture(long contentHash, GpuPaintTexture texture)
             => presenter.AdoptTexture(contentHash, texture);
+
+        public bool SupportsLayerFilters(IReadOnlyList<DisplayList.FilterFunction> filters)
+            => GpuSurfacePresenter.SupportsLayerFilters(filters);
+
+        public GpuPaintTexture? ApplyLayerFilters(GpuPaintTexture source,
+            IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+            => presenter.ApplyLayerFilters(source, filters, scale);
     }
 
     /// <summary>
@@ -513,6 +849,11 @@ internal sealed class Compositor
     // A layer spanning this many tiles or fewer renders all of them (no viewport cull) —
     // small/transformed layers are cheap and culling them is fragile under rotation.
     private const int MaxUnculledTiles = 4;
+
+    // Layers at or under this device-pixel area rasterize on the CPU and
+    // upload, even on the GPU texture path — the WebGPU canvas's fixed
+    // per-flush cost dwarfs the pixel work at this size.
+    private const long SmallLayerCpuRasterArea = 64 * 1024;
 
     // Per-tile op key for the GPU texture cache: unique per (tile position, content),
     // so each tile uploads one texture and re-uploads when the layer content changes.

@@ -27,6 +27,14 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
     private int _width, _height;
     private bool _configured;
 
+    // Intermediate whole-frame target used only when the frame carries
+    // backdrop-filter ops: a swapchain texture cannot be a copy source for the
+    // backdrop snapshot, so those frames render here (RenderAttachment |
+    // TextureBinding | CopySrc) and the swapchain gets one full-frame blit.
+    private Texture* _sceneTex;
+    private TextureView* _sceneView;
+    private int _sceneW, _sceneH;
+
     private GpuSurfacePresenter(GpuBlendEngine engine, Surface* surface, TextureFormat format)
     {
         _engine = engine;
@@ -103,6 +111,27 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         lock (_gate)
         {
             _engine.AdoptTexture(contentHash, texture);
+        }
+    }
+
+    internal static bool SupportsLayerFilters(IReadOnlyList<DisplayList.FilterFunction> filters)
+        => GpuFilterEngine.Supports(filters);
+
+    internal GpuPaintTexture? ApplyLayerFilters(GpuPaintTexture source,
+        IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+    {
+        lock (_gate)
+        {
+            try
+            {
+                return _engine.FilterEngine.Apply(source, filters, scale);
+            }
+            catch (InvalidOperationException)
+            {
+                // Apply consumed the source either way; null sends the caller
+                // down the legacy bracket path.
+                return null;
+            }
         }
     }
 
@@ -202,6 +231,17 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                         throw new InvalidOperationException("GPU surface texture view creation failed.");
                     }
 
+                    var hasBackdrops = GpuBlendEngine.HasBackdropOps(ops);
+                    if (hasBackdrops)
+                    {
+                        // Backdrop frame: render every segment into the scene
+                        // texture (Rgba8Unorm, snapshot-copyable), then blit it
+                        // to the swapchain as the only on-surface draw.
+                        EnsureSceneTarget(width, height);
+                        _engine.RenderSegmentedPasses(_sceneTex, _sceneView, TextureFormat.Rgba8Unorm,
+                            width, height, ops, _overlays, overlayLayers);
+                    }
+
                     encoder = api.DeviceCreateCommandEncoder(_engine.Device, (CommandEncoderDescriptor*)null);
                     if (encoder == null)
                     {
@@ -223,10 +263,24 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                         throw new InvalidOperationException("GPU surface render pass creation failed.");
                     }
 
-                    _engine.RecordBlend(pass, ops, _format, vertexCount, width, height);
-                    _overlays.Record(pass, overlayLayers, width, height, _format);
+                    nint blitBindGroup = 0;
+                    if (hasBackdrops)
+                    {
+                        blitBindGroup = _engine.RecordFullFrameBlit(pass, _sceneView, _format);
+                    }
+                    else
+                    {
+                        _engine.RecordBlend(pass, ops, _format, vertexCount, width, height);
+                        _overlays.Record(pass, overlayLayers, width, height, _format);
+                    }
 
                     api.RenderPassEncoderEnd(pass);
+                    // Only after End: the open pass holds the recorded bind-group
+                    // id, and an early release faults wgpu inside End.
+                    if (blitBindGroup != 0)
+                    {
+                        api.BindGroupRelease((Silk.NET.WebGPU.BindGroup*)blitBindGroup);
+                    }
 
                     cmd = api.CommandEncoderFinish(encoder, (CommandBufferDescriptor*)null);
                     if (cmd == null)
@@ -270,10 +324,66 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         }
     }
 
+    private void EnsureSceneTarget(int width, int height)
+    {
+        if (_sceneTex != null && _sceneW == width && _sceneH == height)
+        {
+            return;
+        }
+
+        var api = _engine.Api;
+        ReleaseSceneTarget(api);
+
+        var desc = new TextureDescriptor
+        {
+            Usage = TextureUsage.RenderAttachment | TextureUsage.TextureBinding | TextureUsage.CopySrc,
+            Dimension = TextureDimension.Dimension2D,
+            Size = new Extent3D { Width = (uint)width, Height = (uint)height, DepthOrArrayLayers = 1 },
+            Format = TextureFormat.Rgba8Unorm,
+            MipLevelCount = 1,
+            SampleCount = 1,
+        };
+        _sceneTex = api.DeviceCreateTexture(_engine.Device, in desc);
+        if (_sceneTex == null)
+        {
+            throw new InvalidOperationException("GPU scene texture creation failed.");
+        }
+
+        _sceneView = api.TextureCreateView(_sceneTex, (TextureViewDescriptor*)null);
+        if (_sceneView == null)
+        {
+            api.TextureRelease(_sceneTex);
+            _sceneTex = null;
+            throw new InvalidOperationException("GPU scene texture view creation failed.");
+        }
+
+        _sceneW = width;
+        _sceneH = height;
+    }
+
+    private void ReleaseSceneTarget(WebGPU api)
+    {
+        if (_sceneView != null)
+        {
+            api.TextureViewRelease(_sceneView);
+            _sceneView = null;
+        }
+
+        if (_sceneTex != null)
+        {
+            api.TextureRelease(_sceneTex);
+            _sceneTex = null;
+        }
+
+        _sceneW = 0;
+        _sceneH = 0;
+    }
+
     public void Dispose()
     {
         lock (_gate)
         {
+            ReleaseSceneTarget(_engine.Api);
             _engine.Api.SurfaceRelease(_surface);
             _overlays.Dispose();
             _engine.Dispose();

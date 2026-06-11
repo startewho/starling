@@ -37,4 +37,45 @@ internal interface IPaintBackend : IDisposable
     /// </summary>
     RenderedBitmap Render(PaintList list, LayoutSize viewport, float scale = 1.0f)
         => Render(list, new LayoutRect(0, 0, viewport.Width, viewport.Height), scale);
+
+    /// <summary>
+    /// Render <paramref name="list"/> over a transparent canvas like the rect
+    /// overload, then run the resolved CSS <paramref name="filters"/> chain over
+    /// the result (Filter Effects 1 §10.1, in order). Used by the compositor to
+    /// filter a promoted layer ONCE at layer granularity instead of re-running
+    /// the chain inside every tile raster. The default replays through the
+    /// inline PushFilter bracket every backend already understands, so a
+    /// delegating wrapper that doesn't forward this member stays correct.
+    /// </summary>
+    RenderedBitmap RenderFiltered(PaintList list, LayoutRect viewport, float scale,
+        IReadOnlyList<DisplayList.FilterFunction> filters)
+    {
+        var wrapped = new PaintList();
+        wrapped.Add(new DisplayList.PushFilter(viewport, filters));
+        var items = list.Items;
+        for (var i = 0; i < items.Count; i++)
+            wrapped.Add(items[i]);
+        wrapped.Add(DisplayList.PopFilter.Instance);
+        return Render(wrapped, viewport, scale, opaqueBackground: false);
+    }
+
+    /// <summary>
+    /// Rasterize to a plain bitmap, preferring the cheapest path for SMALL
+    /// surfaces. A GPU-canvas backend overrides this to use its CPU
+    /// rasterizer: the WebGPU canvas flush pays a synchronous scheduling
+    /// readback per texture (a full GPU round-trip) regardless of size, so a
+    /// tiny animating layer slice is far cheaper to raster on the CPU and
+    /// upload. The default just renders normally.
+    /// </summary>
+    RenderedBitmap RenderSmallBitmap(PaintList list, LayoutRect viewport, float scale, bool opaqueBackground)
+        => Render(list, viewport, scale, opaqueBackground);
+
+    /// <summary>
+    /// Runs a resolved CSS filter chain over already-rendered pixels (Filter
+    /// Effects 1 §10.1, in order). Used by the compositor's CPU blend path to
+    /// filter a backdrop snapshot. The default is a no-op pass-through so a
+    /// backend without a pixel filter chain stays correct-but-unfiltered.
+    /// </summary>
+    RenderedBitmap FilterBitmap(RenderedBitmap source, IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+        => source;
 }

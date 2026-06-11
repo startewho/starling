@@ -356,9 +356,9 @@ public sealed class Painter
     /// <see cref="Starling.Layout.Incremental.LayoutSession"/>, reusing the
     /// session's retained box tree where the per-frame mutation batch allows and
     /// rebuilding only the changed subtrees. The session owns the tree across
-    /// frames; this just supplies a freshly created text measurer (and disposes
-    /// it). Returns the laid-out root. Used by the engine's incremental relayout
-    /// path; falls back internally to a full rebuild when reuse isn't safe.
+    /// frames. Returns the laid-out root. Used by the engine's incremental
+    /// relayout path; falls back internally to a full rebuild when reuse isn't
+    /// safe.
     /// </summary>
     public Starling.Layout.Box.BlockBox LayoutDocumentIncremental(
         Starling.Layout.Incremental.LayoutSession session,
@@ -371,15 +371,38 @@ public sealed class Painter
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(document);
 
-        var measurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
-        try
+        var measurer = GetOrCreateIncrementalMeasurer(webFonts);
+        using (StarlingTelemetry.Span("paint", "layout.incremental"))
+            return session.Layout(document, viewport, measurer, nowMs, ct);
+    }
+
+    // Measurer cache for the incremental relayout path. Building an
+    // ImageSharp measurer parses the whole font collection (bundled + system
+    // + web fonts) — about 4 ms, which the live loop paid on EVERY animation
+    // tick when each relayout created a fresh measurer. The fonts only change
+    // when the page registers a new @font-face, so the cache keys on the
+    // registry and its version.
+    private Starling.Layout.Text.ITextMeasurer? _incrementalMeasurer;
+    private FontFaceRegistry? _incrementalMeasurerFonts;
+    private int _incrementalMeasurerVersion;
+    private readonly object _measurerGate = new();
+
+    private Starling.Layout.Text.ITextMeasurer GetOrCreateIncrementalMeasurer(FontFaceRegistry? webFonts)
+    {
+        var version = webFonts?.Version ?? 0;
+        lock (_measurerGate)
         {
-            using (StarlingTelemetry.Span("paint", "layout.incremental"))
-                return session.Layout(document, viewport, measurer, nowMs, ct);
-        }
-        finally
-        {
-            (measurer as IDisposable)?.Dispose();
+            if (_incrementalMeasurer is null
+                || !ReferenceEquals(_incrementalMeasurerFonts, webFonts)
+                || _incrementalMeasurerVersion != version)
+            {
+                (_incrementalMeasurer as IDisposable)?.Dispose();
+                _incrementalMeasurer = PaintBackendSelector.CreateMeasurer(_fonts, webFonts);
+                _incrementalMeasurerFonts = webFonts;
+                _incrementalMeasurerVersion = version;
+            }
+
+            return _incrementalMeasurer;
         }
     }
 
