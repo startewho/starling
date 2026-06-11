@@ -19,7 +19,8 @@ internal readonly struct LayerBlend
     {
     }
 
-    private LayerBlend(RenderedBitmap? local, int width, int height, long contentHash, Matrix2D localToDevice, float opacity, Rect? clipDevice)
+    private LayerBlend(RenderedBitmap? local, int width, int height, long contentHash, Matrix2D localToDevice, float opacity, Rect? clipDevice,
+        IReadOnlyList<DisplayList.FilterFunction>? backdropFilters = null, float filterScale = 1f)
     {
         if (width <= 0)
         {
@@ -38,6 +39,8 @@ internal readonly struct LayerBlend
         LocalToDevice = localToDevice;
         Opacity = opacity;
         ClipDevice = clipDevice;
+        BackdropFilters = backdropFilters;
+        FilterScale = filterScale;
     }
 
     private RenderedBitmap? Local { get; }
@@ -54,6 +57,21 @@ internal readonly struct LayerBlend
 
     public Rect? ClipDevice { get; }
 
+    /// <summary>
+    /// Non-null marks a `backdrop-filter` op (Filter Effects 2 §6): the blend
+    /// path snapshots the render target under the op's quad (the element rect
+    /// padded by the chain's blur halo, an integer device translation), runs
+    /// this chain over the snapshot, and draws the result back as this op's
+    /// quad — scissored by <see cref="ClipDevice"/> to the element rect.
+    /// Carries no pixels and no resident texture of its own.
+    /// </summary>
+    public IReadOnlyList<DisplayList.FilterFunction>? BackdropFilters { get; }
+
+    /// <summary>Device scale for <see cref="BackdropFilters"/> (CSS px → device px blur sigma).</summary>
+    public float FilterScale { get; }
+
+    public bool IsBackdropFilter => BackdropFilters is not null;
+
     public bool HasLocalPixels => Local is not null;
 
     public static LayerBlend Bitmap(
@@ -69,8 +87,18 @@ internal readonly struct LayerBlend
         Rect? clipDevice)
         => new(null, width, height, contentHash, localToDevice, opacity, clipDevice);
 
+    public static LayerBlend BackdropFilter(
+        int width,
+        int height,
+        long contentHash,
+        Matrix2D localToDevice,
+        Rect? clipDevice,
+        IReadOnlyList<DisplayList.FilterFunction> filters,
+        float filterScale)
+        => new(null, width, height, contentHash, localToDevice, opacity: 1f, clipDevice, filters, filterScale);
+
     public LayerBlend WithGeometry(Matrix2D localToDevice, Rect? clipDevice)
-        => new(Local, Width, Height, ContentHash, localToDevice, Opacity, clipDevice);
+        => new(Local, Width, Height, ContentHash, localToDevice, Opacity, clipDevice, BackdropFilters, FilterScale);
 
     public RenderedBitmap RequireLocalPixels()
         => Local ?? throw new InvalidOperationException("CPU blend requires local bitmap pixels.");
@@ -181,8 +209,13 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
             _engine.BeginFrame();
             EnsureTarget(width, height);
             _engine.UploadLayerTextures(ops);
-            var vertexCount = _engine.BuildAndUploadVertices(ops, width, height);
-            RenderPass(width, height, ops, vertexCount, overlayLayers);
+            _engine.BuildAndUploadVertices(ops, width, height);
+            // Splits the frame into passes at backdrop-filter ops (one pass when
+            // there are none); the offscreen target already has CopySrc usage,
+            // so backdrop snapshots copy from it directly.
+            _engine.RenderSegmentedPasses(_outTex, _outView, TextureFormat.Rgba8Unorm,
+                width, height, ops, _overlays, overlayLayers);
+            EncodeReadbackCopy(width, height);
             Readback(output, width, height);
             _engine.EvictStale();
         }
@@ -217,34 +250,14 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         _readback = api.DeviceCreateBuffer(_engine.Device, in bufDesc);
     }
 
-    private void RenderPass(
-        int width,
-        int height,
-        IReadOnlyList<LayerBlend> ops,
-        uint vertexCount,
-        IReadOnlyList<GpuOverlayLayer>? overlayLayers)
+    // Copies the output texture into the readback buffer (256-byte row pitch).
+    // Runs on its own encoder after the blend passes; queue order guarantees it
+    // reads the finished frame.
+    private void EncodeReadbackCopy(int width, int height)
     {
         var api = _engine.Api;
         var encoder = api.DeviceCreateCommandEncoder(_engine.Device, (CommandEncoderDescriptor*)null);
 
-        var colorAttachment = new RenderPassColorAttachment
-        {
-            View = _outView,
-            ResolveTarget = null,
-            LoadOp = LoadOp.Clear,
-            StoreOp = StoreOp.Store,
-            // Opaque white base — the page background the flat path also clears to.
-            ClearValue = new Color { R = 1, G = 1, B = 1, A = 1 },
-        };
-        var passDesc = new RenderPassDescriptor { ColorAttachmentCount = 1, ColorAttachments = &colorAttachment };
-        var pass = api.CommandEncoderBeginRenderPass(encoder, in passDesc);
-
-        _engine.RecordBlend(pass, ops, TextureFormat.Rgba8Unorm, vertexCount, width, height);
-        _overlays.Record(pass, overlayLayers, width, height, TextureFormat.Rgba8Unorm);
-
-        api.RenderPassEncoderEnd(pass);
-
-        // Copy the output texture into the readback buffer (256-byte row pitch).
         var padded = GpuBlendEngine.Align256((uint)(width * 4));
         var src = new ImageCopyTexture { Texture = _outTex, MipLevel = 0, Origin = new Origin3D { X = 0, Y = 0, Z = 0 }, Aspect = TextureAspect.All };
         var dst = new ImageCopyBuffer { Buffer = _readback, Layout = new TextureDataLayout { Offset = 0, BytesPerRow = padded, RowsPerImage = (uint)height } };
@@ -255,7 +268,6 @@ internal sealed unsafe class GpuLayerCompositor : IGpuLayerTextureCache, IDispos
         api.QueueSubmit(_engine.Queue, 1, &cmd);
         api.CommandBufferRelease(cmd);
         api.CommandEncoderRelease(encoder);
-        api.RenderPassEncoderRelease(pass);
     }
 
     private void Readback(byte[] output, int width, int height)

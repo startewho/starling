@@ -20,6 +20,18 @@
     width: 76px; height: 76px; background: #2266ff; border-radius: 38px;
     filter: blur(28px); }
   label { font-size: 13px; color: #333; }
+
+  /* backdrop-filter: frosted-glass panels over a colorful backdrop. */
+  .backdrop-stage { position: relative; width: 720px; height: 220px; margin: 0 48px 48px;
+    background: linear-gradient(90deg, #e63946 0%, #f4a261 25%, #2a9d8f 50%, #264653 75%, #7209b7 100%); }
+  .backdrop-stage .stripe { position: absolute; left: 0; top: 96px; width: 720px; height: 28px;
+    background: #111111; }
+  .frost { position: absolute; top: 30px; width: 180px; height: 160px;
+    background: rgba(255, 255, 255, 0.18); border: 1px solid rgba(255, 255, 255, 0.6); }
+  .frost-8 { left: 24px; backdrop-filter: blur(8px); }
+  .frost-24 { left: 270px; backdrop-filter: blur(24px); }
+  .frost-sat { left: 516px; backdrop-filter: saturate(0.15); }
+  .frost label { display: block; padding-top: 64px; text-align: center; color: #ffffff; }
 </style>
 </head>
 <body>
@@ -31,6 +43,12 @@
     <div class="cell hue"><div class="box"></div><label>hue-rotate(120deg)</label></div>
     <div class="cell chain"><div class="box"></div><label>blur+grayscale</label></div>
     <div class="cell glow"><div class="box glow"></div><label>::before glow</label></div>
+  </div>
+  <div class="backdrop-stage">
+    <div class="stripe"></div>
+    <div class="frost frost-8"><label>backdrop blur(8px)</label></div>
+    <div class="frost frost-24"><label>backdrop blur(24px)</label></div>
+    <div class="frost frost-sat"><label>backdrop saturate(.15)</label></div>
   </div>
 </body>
 </html>
