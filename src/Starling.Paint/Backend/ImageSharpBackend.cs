@@ -149,6 +149,26 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
         }
     }
 
+    public RenderedBitmap FilterBitmap(RenderedBitmap source, IReadOnlyList<FilterFunction> filters, float scale)
+    {
+        if (filters.Count == 0) return source;
+
+        // Same shape as RenderFiltered's tail: wrap the straight-RGBA pixels
+        // (no copy), run the chain at device resolution, read the result out.
+        using var layer = SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(source.Rgba, source.Width, source.Height);
+        var filtered = ApplyFilterChain(layer, filters, scale);
+        try
+        {
+            var rgba = new byte[filtered.Width * filtered.Height * 4];
+            filtered.CopyPixelDataTo(rgba);
+            return new RenderedBitmap(filtered.Width, filtered.Height, rgba);
+        }
+        finally
+        {
+            if (!ReferenceEquals(filtered, layer)) filtered.Dispose();
+        }
+    }
+
     public GpuPaintTexture RenderTexture(
         PaintList list,
         LayoutRect viewport,
@@ -695,9 +715,12 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
                 break;
             // backdrop-filter needs the pixels already painted UNDER the item,
             // which a recording DrawingCanvas cannot read back mid-replay. The
-            // CPU path handles it via the segmented replay in
+            // flat CPU path handles it via the segmented replay in
             // ReplayListCpuSegmented; here (offscreen groups and the WebGPU
-            // canvas path) it is skipped — a documented v1 gap.
+            // canvas path) it is skipped — on the compositor paths the effect
+            // rides the layer instead (CompositorLayer.BackdropFilters): the
+            // blend stage snapshots the composited backdrop and filters it, so
+            // a tile raster correctly paints nothing for this item.
             case DrawBackdropFilter:
                 break;
         }

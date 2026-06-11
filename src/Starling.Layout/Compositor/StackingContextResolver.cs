@@ -90,6 +90,13 @@ public static class StackingContextResolver
         if (IsIsolated(style))
             hints |= LayerHint.Isolation;
 
+        // Filter Effects 2 §6: "A computed value of other than none results in
+        // the creation of a stacking context". The compositor also needs the
+        // box on its own layer so the backdrop snapshot can be taken before
+        // the element's own content paints.
+        if (HasBackdropFilter(style))
+            hints |= LayerHint.BackdropFilter;
+
         return hints;
     }
 
@@ -130,6 +137,15 @@ public static class StackingContextResolver
             null => false,
             CssKeyword k => !k.Name.Equals("none", StringComparison.OrdinalIgnoreCase),
             // A filter function (blur(), drop-shadow(), …) or a list of them.
+            _ => true,
+        };
+
+    private static bool HasBackdropFilter(ComputedStyle style)
+        => style.Get(PropertyId.BackdropFilter) switch
+        {
+            null => false,
+            CssKeyword k => !k.Name.Equals("none", StringComparison.OrdinalIgnoreCase),
+            // A filter function (blur(), saturate(), …) or a list of them.
             _ => true,
         };
 

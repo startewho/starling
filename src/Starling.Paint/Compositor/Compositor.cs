@@ -75,7 +75,16 @@ internal sealed class Compositor
             if (DisableGpuBlend)
             {
                 foreach (var op in ops)
-                    BlendOp(op, output, width, height, fastBlit: !DisableFastBlit);
+                {
+                    if (op.IsBackdropFilter)
+                    {
+                        ApplyBackdropCpu(op, output, width, height);
+                    }
+                    else
+                    {
+                        BlendOp(op, output, width, height, fastBlit: !DisableFastBlit);
+                    }
+                }
             }
             else
             {
@@ -270,6 +279,17 @@ internal sealed class Compositor
         // page coords; ancestor clips were transformed into the same space as
         // they were intersected, so combine by plain rect intersection.
         var effectiveClip = IntersectClip(ancestorClip, layer.Clip);
+
+        // Filter Effects 2 §6 — backdrop-filter. The op goes into the stream
+        // BEFORE everything in this stacking context (including negative-z
+        // child layers — they paint above the filtered backdrop), so the blend
+        // path snapshots everything composited under the element, filters it,
+        // and the element's content then paints over it and stays sharp.
+        if (layer.BackdropFilters is { Count: > 0 } backdropFilters && effectiveOpacity > 0f)
+        {
+            EmitBackdropFilterOp(layer, backdropFilters, ops, viewport, scale,
+                effectiveTransform, effectiveClip, textureCache);
+        }
 
         // Children are already in paint order (sorted by z-index, then tree order,
         // at build time), so negative-z layers are the prefix. CSS-Position-3 §9:
@@ -600,6 +620,115 @@ internal sealed class Compositor
         ops.Add(LayerBlend.Bitmap(bmp, opHash,
             FilteredLocalToDevice(pageTransform, padded, bmp.Width, bmp.Height),
             effectiveOpacity, clipDev));
+    }
+
+    /// <summary>
+    /// Emits the layer's `backdrop-filter` op (Filter Effects 2 §6) into the
+    /// blend stream: the element's border box under the effective transform,
+    /// padded by the chain's blur halo so the Gaussian has real neighbours at
+    /// the visible edge, clamped to the output — built as a pure integer device
+    /// translation so the blend paths can snapshot exactly that region. The op
+    /// is scissored back to the UNPADDED element rect (rounded corners are a v1
+    /// limitation — the clip is rectangular). The backdrop re-filters every
+    /// frame; nothing is cached, because the op cannot know when the content
+    /// composited under it changed.
+    /// </summary>
+    private static void EmitBackdropFilterOp(
+        CompositorLayer layer, IReadOnlyList<DisplayList.FilterFunction> filters, List<LayerBlend> ops,
+        LayoutRect viewport, float scale, Matrix2D effectiveTransform, Rect? effectiveClip,
+        IGpuLayerTextureCache? textureCache)
+    {
+        // The GPU paths run the chain through the shared filter engine; a chain
+        // it can't run (drop-shadow) keeps today's behavior — no backdrop
+        // effect — rather than a wrong one. The CPU blend path supports every
+        // chain via the backend.
+        if (textureCache is not null && !textureCache.SupportsLayerFilters(filters))
+            return;
+
+        var bounds = layer.BackdropBounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+            return;
+
+        var s = (double)scale;
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        var pageTransform = pageToDevice.Multiply(effectiveTransform);
+        // Device AABB of the element's border box. A rotated element filters
+        // the AABB of its box — a v1 approximation, same as the clip handling.
+        var devRect = TransformedAabb(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height), pageTransform);
+
+        var outW = (int)Math.Ceiling(viewport.Width * s);
+        var outH = (int)Math.Ceiling(viewport.Height * s);
+        var pad = DisplayList.FilterFunction.HaloPadding(filters) * s;
+        var x0 = Math.Max(0, (int)Math.Floor(devRect.X - pad));
+        var y0 = Math.Max(0, (int)Math.Floor(devRect.Y - pad));
+        var x1 = Math.Min(outW, (int)Math.Ceiling(devRect.Right + pad));
+        var y1 = Math.Min(outH, (int)Math.Ceiling(devRect.Bottom + pad));
+        if (x1 <= x0 || y1 <= y0)
+            return;
+
+        // The filtered patch paints back clipped to the element rect (the halo
+        // margin feeds the blur but never paints), intersected with the
+        // inherited clip.
+        Rect? clipDev = devRect;
+        if (effectiveClip is { } cp)
+            clipDev = IntersectDeviceRect(devRect, TransformedAabb(new Rect(cp.X, cp.Y, cp.Width, cp.Height), pageToDevice));
+        if (clipDev is { Width: <= 0 } or { Height: <= 0 })
+            return;
+
+        var layerKey = layer.LayerId != 0 ? layer.LayerId : layer.ContentHash;
+        ops.Add(LayerBlend.BackdropFilter(x1 - x0, y1 - y0,
+            BackdropOpHash(layerKey, x0, y0),
+            Matrix2D.Translate(x0, y0), clipDev, filters, scale));
+    }
+
+    // Op key for a backdrop's filtered-snapshot texture. Mixes the region
+    // origin so two identical-content backdrop layers never alias one texture;
+    // the tag keeps it clear of tile, filtered-surface, and overlay-swatch keys.
+    private static long BackdropOpHash(long layerKey, int x, int y)
+        => unchecked(((layerKey ^ 0x4241434B44524F50L) * 1099511628211L) ^ (((long)x << 21) | (uint)y));
+
+    /// <summary>
+    /// CPU-blend twin of the GPU backdrop segmentation: snapshots the op's
+    /// region of the composited output, runs the chain over it via the backend,
+    /// and alpha-blends the result back clipped to the element rect. Runs only
+    /// on the test-only <see cref="DisableGpuBlend"/> path.
+    /// </summary>
+    private void ApplyBackdropCpu(in LayerBlend op, byte[] output, int outWidth, int outHeight)
+    {
+        if (op.BackdropFilters is not { } filters)
+            return;
+        if (!IsIntegerTranslation(op.LocalToDevice, out var dx, out var dy))
+            return; // built as a pure translation; anything else is unexpected
+
+        var x0 = Math.Max(0, dx);
+        var y0 = Math.Max(0, dy);
+        var x1 = Math.Min(outWidth, dx + op.Width);
+        var y1 = Math.Min(outHeight, dy + op.Height);
+        if (x1 <= x0 || y1 <= y0)
+            return;
+
+        var w = x1 - x0;
+        var h = y1 - y0;
+        var patch = new byte[w * h * 4];
+        for (var row = 0; row < h; row++)
+            Array.Copy(output, (((y0 + row) * outWidth) + x0) * 4, patch, row * w * 4, w * 4);
+
+        var filtered = _backend.FilterBitmap(new RenderedBitmap(w, h, patch), filters, op.FilterScale);
+        try
+        {
+            // The filtered result may be a different size (CPU drop-shadow
+            // rebuilds); map its texel space back onto the region rect and let
+            // the general blend sample it, scissored by the op's clip.
+            var draw = LayerBlend.Bitmap(filtered, op.ContentHash,
+                Matrix2D.Translate(x0, y0).Multiply(
+                    Matrix2D.Scale((double)w / Math.Max(1, filtered.Width), (double)h / Math.Max(1, filtered.Height))),
+                op.Opacity, op.ClipDevice);
+            BlendOp(draw, output, outWidth, outHeight, fastBlit: false);
+        }
+        finally
+        {
+            filtered.Dispose();
+        }
     }
 
     // WebGPU's guaranteed minimum maxTextureDimension2D; a filtered surface past
