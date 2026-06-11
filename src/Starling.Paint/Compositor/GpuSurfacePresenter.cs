@@ -263,9 +263,10 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                         throw new InvalidOperationException("GPU surface render pass creation failed.");
                     }
 
+                    nint blitBindGroup = 0;
                     if (hasBackdrops)
                     {
-                        _engine.RecordFullFrameBlit(pass, _sceneView, _format);
+                        blitBindGroup = _engine.RecordFullFrameBlit(pass, _sceneView, _format);
                     }
                     else
                     {
@@ -274,6 +275,12 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
                     }
 
                     api.RenderPassEncoderEnd(pass);
+                    // Only after End: the open pass holds the recorded bind-group
+                    // id, and an early release faults wgpu inside End.
+                    if (blitBindGroup != 0)
+                    {
+                        api.BindGroupRelease((Silk.NET.WebGPU.BindGroup*)blitBindGroup);
+                    }
 
                     cmd = api.CommandEncoderFinish(encoder, (CommandBufferDescriptor*)null);
                     if (cmd == null)

@@ -1024,17 +1024,19 @@ internal sealed unsafe class GpuBlendEngine : IDisposable
     /// Draws <paramref name="source"/> as one full-target triangle into an open
     /// render pass — the final present blit for a frame that had to render into
     /// an intermediate scene texture (the swapchain texture cannot be a copy
-    /// source for backdrop snapshots).
+    /// source for backdrop snapshots). Returns the bind group handle; the
+    /// CALLER must release it AFTER ending the pass — the open pass holds the
+    /// recorded id, and releasing early faults wgpu at RenderPassEncoderEnd
+    /// (the abort the first live backdrop frames hit).
     /// </summary>
-    internal void RecordFullFrameBlit(RenderPassEncoder* pass, TextureView* source, TextureFormat format)
+    internal nint RecordFullFrameBlit(RenderPassEncoder* pass, TextureView* source, TextureFormat format)
     {
         var pipeline = BlitPipelineFor(format);
         Api.RenderPassEncoderSetPipeline(pass, pipeline);
         var bindGroup = CreateBindGroup(source);
         Api.RenderPassEncoderSetBindGroup(pass, 0, (BindGroup*)bindGroup, 0, (uint*)null);
         Api.RenderPassEncoderDraw(pass, 3, 1, 0, 0);
-        // wgpu keeps the bind group alive until the submitted commands execute.
-        Api.BindGroupRelease((BindGroup*)bindGroup);
+        return bindGroup;
     }
 
     private RenderPipeline* BlitPipelineFor(TextureFormat format)
