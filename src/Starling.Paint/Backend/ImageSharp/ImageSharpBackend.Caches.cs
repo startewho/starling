@@ -29,9 +29,10 @@ internal sealed partial class ImageSharpBackend
         byte A,
         bool Inset = false,
         double OffsetX = 0,
-        double OffsetY = 0)
+        double OffsetY = 0,
+        double RasterScale = 1)
     {
-        public static BoxShadowCacheKey From(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
+        public static BoxShadowCacheKey From(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry, double rasterScale = 1)
             => new(
                 geometry.ImageWidth,
                 geometry.ImageHeight,
@@ -44,7 +45,8 @@ internal sealed partial class ImageSharpBackend
                 shadow.Color.R,
                 shadow.Color.G,
                 shadow.Color.B,
-                shadow.Color.A);
+                shadow.Color.A,
+                RasterScale: rasterScale);
 
         /// <summary>
         /// Key for an inset layer raster. Unlike outer shadows (where the
@@ -52,7 +54,7 @@ internal sealed partial class ImageSharpBackend
         /// rasterized ring itself, so it joins the key. The silhouette fields
         /// carry the padding-box dimensions.
         /// </summary>
-        public static BoxShadowCacheKey FromInset(DrawBoxShadow shadow, int imageWidth, int imageHeight, int margin)
+        public static BoxShadowCacheKey FromInset(DrawBoxShadow shadow, int imageWidth, int imageHeight, int margin, double rasterScale = 1)
             => new(
                 imageWidth,
                 imageHeight,
@@ -68,7 +70,8 @@ internal sealed partial class ImageSharpBackend
                 shadow.Color.A,
                 Inset: true,
                 shadow.OffsetX,
-                shadow.OffsetY);
+                shadow.OffsetY,
+                RasterScale: rasterScale);
     }
 
     private sealed class DisposableBag : IDisposable
