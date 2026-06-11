@@ -47,10 +47,9 @@ internal sealed class StarlingScriptSession : IScriptSession
     private readonly ModuleLoader _moduleLoader;
     private bool _disposed;
 
-    // Live-phase (post-load) wall-clock baseline: the simulated-clock value at
-    // the first PumpFrame, so the shell's "ms since it began driving" maps onto
-    // the loop's monotonic clock without rewinding the load-time advance.
-    private long _liveBaselineMs;
+    // Live-phase (post-load) clock tracking. The shell drives PumpFrame with a
+    // cumulative "ms since it began driving" stopwatch; we advance the loop's
+    // monotonic clock by the per-tick delta so timers scheduled past load fire.
     private bool _liveStarted;
     private long _livePrevElapsedMs;
 
@@ -411,9 +410,12 @@ internal sealed class StarlingScriptSession : IScriptSession
         if (_disposed) return false;
         if (!_liveStarted)
         {
-            _liveBaselineMs = _loop.NowMilliseconds;
             _liveStarted = true;
-            _livePrevElapsedMs = Math.Max(0, elapsedMs);
+            // Anchor the cumulative stopwatch at zero so the FIRST tick advances
+            // by its full elapsed (still clamped below), rather than swallowing
+            // the first interval. The shell's first pump arrives at ~0ms anyway;
+            // a pump that arrives late after a load stall is caught by the clamp.
+            _livePrevElapsedMs = 0;
         }
 
         var before = _document.MutationVersion;
