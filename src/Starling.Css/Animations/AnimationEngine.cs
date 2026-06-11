@@ -86,6 +86,19 @@ public sealed class AnimationEngine
     /// style off the animation clock, with no DOM mutation to record.</summary>
     public IEnumerable<Element> ActiveElements => _active.Keys;
 
+    /// <summary>Adds every element with at least one registered animation —
+    /// cascade-driven AND script-driven (Web Animations API) — to
+    /// <paramref name="into"/>. The live compositor snapshots this once per
+    /// frame so its per-box probes are set lookups instead of enumerator
+    /// probes. Unlike <see cref="ActiveElements"/> (which feeds incremental
+    /// layout and intentionally excludes script animations), this covers both
+    /// tables, matching what <see cref="ActiveProperties"/> reports.</summary>
+    public void CollectActiveElements(ISet<Element> into)
+    {
+        foreach (var el in _active.Keys) into.Add(el);
+        foreach (var el in _scriptActive.Keys) into.Add(el);
+    }
+
     /// <summary>
     /// Register (or replace) a parsed <c>@keyframes</c> rule by name. The
     /// most recent registration wins per spec — later <c>@keyframes</c> in
