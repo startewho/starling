@@ -78,6 +78,17 @@ public sealed class PageFrameRequest
     /// the reuse against any DOM/layout change that slipped through.
     /// </summary>
     public bool AnimationTick { get; init; }
+
+    /// <summary>
+    /// True when this present follows a relayout whose mutations were all
+    /// confined to subtrees already promoted to their own compositor layers,
+    /// and the caller verified those layer-root boxes survived the relayout in
+    /// place with identical page-space geometry. The renderer then refreshes
+    /// only the promoted layers and reuses every static layer from the cached
+    /// tree even though <see cref="PageVersion"/> moved. The caller owns the
+    /// confinement proof — when in doubt it must leave this false.
+    /// </summary>
+    public bool ScopedRefresh { get; init; }
 }
 
 public sealed class CompositedFrameRequest
@@ -360,7 +371,8 @@ internal sealed class DefaultRenderSession : IRenderSession
             request.ScrollOffsets,
             request.PageVersion,
             request.AnimationTick,
-            request.StickyShifts);
+            request.StickyShifts,
+            request.ScopedRefresh);
         if (!ok)
         {
             throw new InvalidOperationException("GPU surface renderer did not present the frame.");

@@ -28,6 +28,7 @@ public class LiveLayoutSignalTests
     [AvaloniaFact]
     public async Task Live_loop_relayouts_on_layout_relevant_changes_only()
     {
+        GpuTests.SkipUnlessAvailable();
         // A page with a one-shot script so a live scripting context exists (the
         // live tick early-returns without one), but no rAF/timer activity, so the
         // pump is inert between our controlled mutations.

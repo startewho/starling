@@ -126,7 +126,29 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // rAF burst that writes nothing but data-* / aria-* / js* attributes no
     // longer forces a full reflow every frame. See LiveTick.
     private int _lastLayoutInvalidationVersion;
+
+    // Placed text fragments for selection / caret / find, derived from the
+    // shown page's box tree. Rebuilt LAZILY through the Fragments property: a
+    // live page relayouts every animation tick, and walking the whole tree per
+    // tick costs milliseconds nobody uses unless they are mid-selection or
+    // mid-find. ShowPage only marks them dirty.
     private List<BoxHitTester.PlacedFragment> _fragments = [];
+    private bool _fragmentsDirty;
+    private bool _findIndexDirty;
+
+    private List<BoxHitTester.PlacedFragment> Fragments
+    {
+        get
+        {
+            if (_fragmentsDirty && _currentPage is { } page)
+            {
+                _fragments = BoxHitTester.CollectFragments(page.Root);
+                _fragmentsDirty = false;
+            }
+
+            return _fragments;
+        }
+    }
 
     private double _currentScale = 1.0;
 
@@ -196,6 +218,48 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // input/DOM change this frame). Lets the renderer reuse the cached layer tree
     // and refresh just the animating layers — the rest of the page is unchanged.
     private bool _animationTickPresent;
+
+    // Per-present snapshot of the elements with at least one sampleable
+    // animation or transition property. AnimatedStyle and
+    // IsElementAnimatingLayerRoot run for EVERY box during a layer-tree build;
+    // probing the engines' ActiveProperties enumerators per box was 5.1 s of an
+    // 8.5 s idle trace on the animations demo. BuildRenderInputs refreshes the
+    // snapshot once per present, so the per-box probes are O(1) set lookups.
+    private readonly HashSet<DomElement> _frameAnimatedElements = new();
+    private readonly HashSet<DomElement> _frameTransitionElements = new();
+    private readonly HashSet<DomElement> _frameAnimatedScratch = new();
+
+    // Promotion hysteresis (issue #82): elements that sampled an animation or
+    // transition within the last few rendered frames, with a per-frame countdown
+    // mirroring Document.DecayRecentMutations. Keeping an element promoted
+    // briefly after its last sample stops the transition END from forcing an
+    // immediate re-key of the base layer's slice — the demotion instead folds
+    // into whatever full rebuild happens next.
+    private readonly FrameCountdownSet<DomElement> _recentlyAnimated = new(RecentAnimationFrames);
+
+    // Hover-affected elements stay promoted for ~3 seconds after the last
+    // hover event (vs the 3-frame animation hysteresis): repeated enter/leave
+    // toggles then flip styles within an EXISTING layer instead of re-keying
+    // the base slice (and re-rastering its tiles) on every promotion flip.
+    private const int RecentHoverFrames = 180;
+    private readonly FrameCountdownSet<DomElement> _recentlyHovered = new(RecentHoverFrames);
+    private const int RecentAnimationFrames = 3;
+
+    // Scoped-relayout reuse (issue #82 item 1). _promotedBaseline snapshots, at
+    // every present that rebuilt the layer tree in full, the elements the
+    // build's promotion predicate could see — i.e. the elements that own their
+    // own layer in the renderer's cached tree. A later frame whose layout
+    // mutations are all confined to baseline elements (and whose layer-root
+    // boxes survive the relayout in place, unmoved and unresized) presents with
+    // ScopedRefresh: the renderer rebuilds just those layers and reuses every
+    // static slice. _baselineScrollVersion guards the scroll/sticky offsets the
+    // cached slices baked in. See TrySnapshotScopedMutationRoots for the full
+    // invariant.
+    private readonly HashSet<DomElement> _promotedBaseline = new();
+    private int _baselineScrollVersion;
+    private bool _scopedRefreshPresent;
+    private readonly List<(DomElement El, LayoutBox Box, double AbsX, double AbsY, double W, double H)> _scopedRootSnapshots = new();
+    private const int MaxScopedMutationRoots = 8;
 
     public WebviewPanel(
         ThemeManager tm,
@@ -282,9 +346,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // bubble normally.
         _pageCanvas.PointerWheelChanged += OnPageWheel;
 
-        // ~60 Hz live-page pump (started only while a page has a JS context).
-        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-        _liveTimer.Tick += (_, _) => LiveTick();
+        // Live-page pump. The cadence comes from the compositor's frame
+        // callbacks (TryScheduleVsyncTick): each tick re-requests the next
+        // vsync, so the loop runs at the display refresh instead of
+        // timer-interval PLUS tick-work (a 16 ms DispatcherTimer reschedules
+        // after the handler returns, which capped the loop at ~39 fps under
+        // load). The timer survives as a ~30 fps WATCHDOG: it only fires a
+        // tick when no vsync tick has run recently — the headless test
+        // platform delivers no frame callbacks, and it keeps the loop alive
+        // if a frame request is ever dropped.
+        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(32) };
+        _liveTimer.Tick += (_, _) =>
+        {
+            if (Environment.TickCount64 - _lastLiveTickAtMs >= 30) LiveTick();
+        };
 
         // Caret blink — toggles the overlay's visibility on a fixed cadence
         // while a field is focused; stopped (and the overlay removed) on blur.
@@ -452,6 +527,12 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             // Fresh page load = fresh scroll store with its root at (0,0);
             // re-baseline the two-way root sync against it.
             _rootScrollSynced = default;
+            // Promotion bookkeeping names elements of the outgoing document.
+            _recentlyAnimated.Clear();
+            _recentlyHovered.Clear();
+            _frameAnimatedElements.Clear();
+            _frameTransitionElements.Clear();
+            _promotedBaseline.Clear();
         }
 
 
@@ -502,8 +583,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 _scroll.Offset = new Vector(0, 0);
             }
 
-            _fragments = BoxHitTester.CollectFragments(page.Root);
-            RebuildFindIndex();
+            _fragmentsDirty = true;
+            _findIndexDirty = true;
 
             // Re-establish (or drop) the text caret against the new box tree. The
             // caret overlay belongs to the prior layout's positions, so it is always
@@ -661,6 +742,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         var (styleOverride, scrollLookup) = BuildRenderInputs();
 
+        // The frame's animated-element sets are fresh now (BuildRenderInputs);
+        // a scoped refresh must drop back to a full rebuild if anything started
+        // animating since the cached tree was built, or any scroll offset moved.
+        var scopedRefresh = _scopedRefreshPresent && ScopedPresentStillValid(_currentPage);
+
         var drawingOverlays = CollectSurfaceOverlayLayers();
         bool ok;
         try
@@ -683,6 +769,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 StickyShifts = _currentPage.StickyShiftLookup,
                 PageVersion = PageRenderVersion(),
                 AnimationTick = _animationTickPresent,
+                ScopedRefresh = scopedRefresh,
             }, _surfaceTarget))
             {
                 ok = frame.Presented;
@@ -698,6 +785,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             throw new InvalidOperationException("GPU surface did not present the frame.");
         }
+
+        // A present with both reuse flags off rebuilt the layer tree in full;
+        // that build's promotion set is the new reuse baseline.
+        if (!_animationTickPresent && !scopedRefresh)
+            RebuildPromotedBaseline(_currentPage);
     }
 
     /// <summary>
@@ -796,6 +888,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private (Func<LayoutBox, ComputedStyle?>? StyleOverride, Func<DomElement, (double X, double Y)>? ScrollLookup)
         BuildRenderInputs()
     {
+        RefreshFrameAnimatedSets();
         var overrides = _hoverOverrides;
         // While animating, overlay each animated element's sampled style; hover
         // overrides still win for the hovered element.
@@ -1586,10 +1679,35 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         if (scripting is null && !_liveStopwatch.IsRunning) _liveStopwatch.Restart();
         if (!_liveTimer.IsEnabled) _liveTimer.Start();
+        TryScheduleVsyncTick();
+    }
+
+    // Vsync scheduling state. _lastLiveTickAtMs gates the watchdog timer;
+    // _vsyncTickScheduled keeps at most one frame callback in flight.
+    private long _lastLiveTickAtMs;
+    private bool _vsyncTickScheduled;
+
+    /// <summary>Requests the next compositor frame to drive <see cref="LiveTick"/>.
+    /// Re-armed at the end of every vsync tick while the loop runs; a no-op when
+    /// a request is already in flight or the panel has no TopLevel yet (the
+    /// watchdog timer covers those frames).</summary>
+    private void TryScheduleVsyncTick()
+    {
+        if (_vsyncTickScheduled || !_liveTimer.IsEnabled) return;
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
+        _vsyncTickScheduled = true;
+        top.RequestAnimationFrame(_ =>
+        {
+            _vsyncTickScheduled = false;
+            if (!_liveTimer.IsEnabled) return;
+            LiveTick();
+            TryScheduleVsyncTick();
+        });
     }
 
     private void LiveTick()
     {
+        _lastLiveTickAtMs = Environment.TickCount64;
         var page = _currentPage;
         if (page is null)
         {
@@ -1601,8 +1719,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         // Age the recently-mutated promotion window by one frame before this tick
         // records new mutations, so a subtree promoted by a past mutation falls
-        // back into the base layer once its hysteresis elapses.
+        // back into the base layer once its hysteresis elapses. The
+        // recently-animated window decays in step.
         page.Document.DecayRecentMutations();
+        _recentlyAnimated.Decay();
+        _recentlyHovered.Decay();
 
         using var detachedActivity = GuiActivityScope.Detached();
 
@@ -1635,8 +1756,16 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // keyed on data-* / aria-* still advances LayoutInvalidationVersion.
         var layoutVersion = page.Document.LayoutInvalidationVersion;
         var needsRelayout = layoutVersion != _lastLayoutInvalidationVersion;
+        var scopedRelayout = false;
         if (needsRelayout)
         {
+            // Decide BEFORE the relayout drains the mutation batch whether this
+            // frame's changes are confined to already-promoted subtrees (the
+            // rAF status-text write is the canonical case), then confirm after
+            // the relayout that the promoted boxes did not move. When both
+            // hold, the present below reuses the cached layer tree and rebuilds
+            // only the mutated layers instead of paying a full tree build.
+            scopedRelayout = TrySnapshotScopedMutationRoots(page);
             _lastLayoutInvalidationVersion = layoutVersion;
             CaretLog("LiveTick: layout-relevant mutation -> RefreshLiveLayout");
             RefreshLiveLayout(deferRender: true);
@@ -1648,6 +1777,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 _animating = false;
                 return;
             }
+
+            if (scopedRelayout) scopedRelayout = VerifyScopedMutationRoots(page);
         }
 
         // Apply a store-driven root write (window.scrollTo / scrollTop on the
@@ -1689,8 +1820,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         {
             // A present driven purely by the animation clock (no relayout this
             // frame) can reuse the cached layer tree and refresh only the animating
-            // layers. A relayout frame must rebuild from the new boxes.
+            // layers. A relayout frame must rebuild from the new boxes — unless the
+            // relayout proved scope-confined above, in which case the present
+            // refreshes just the mutated (already-promoted) layers.
             _animationTickPresent = animating && !needsRelayout;
+            _scopedRefreshPresent = scopedRelayout;
             try
             {
                 RenderViewportRegion();
@@ -1698,11 +1832,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             finally
             {
                 _animationTickPresent = false;
+                _scopedRefreshPresent = false;
             }
         }
 
-        // Stop the timer once neither scripting nor animation needs it.
-        if (scripting is null && !animating)
+        // Stop the timer once neither scripting nor animation needs it — and the
+        // promotion-hysteresis window has fully decayed, so a transiently
+        // animated element does not stay promoted (its own layer) forever.
+        if (scripting is null && !animating && _recentlyAnimated.Count == 0 && _recentlyHovered.Count == 0)
         {
             _liveTimer.Stop();
             _boundScripting = null;
@@ -2777,6 +2914,21 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var newOverrides = BuildHoverOverrides(_hoverElement, nowMs);
         var newScope = newOverrides is null ? null : new HashSet<DomElement>(newOverrides.Keys);
 
+        // Keep every hover-affected element promoted across the hover session
+        // (RecentHoverFrames) — the OLD set too, so the leave side reverts
+        // inside its existing layer instead of re-keying the base slice.
+        if (_hoverOverrides is not null)
+        {
+            foreach (var el in _hoverOverrides.Keys)
+                _recentlyHovered.Note(el);
+        }
+
+        if (newOverrides is not null)
+        {
+            foreach (var el in newOverrides.Keys)
+                _recentlyHovered.Note(el);
+        }
+
         // Elements leaving the scope revert: re-cascade each once with the new
         // hover context so the compositor sees the hover->base change and starts
         // the reverse transition. They then animate out via the live loop's
@@ -2786,10 +2938,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             var newCtx = _hoverElement is null
                 ? null
                 : new SelectorMatchContext { HoveredElement = _hoverElement };
+            var revertCache = new CascadeCache();
             foreach (var el in _hoverScope)
             {
                 if (newScope is not null && newScope.Contains(el)) continue;
-                style.ComputeWithAnimations(el, nowMs, newCtx);
+                var revertStatic = newCtx is null
+                    ? style.Compute(el, context: null, revertCache)
+                    : style.ComputeForContext(el, newCtx, revertCache);
+                style.Compositor.Compose(el, revertStatic, nowMs);
             }
         }
 
@@ -2814,6 +2970,17 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             return;
         }
 
+        // Scoped hover present (issue #82 item 3): a hover change never
+        // relayouts, so when every element whose override changed (the old and
+        // new override sets) already owns a layer in the cached tree AND is
+        // still promoted this frame (an in-flight transition, a recent
+        // mutation, or the promotion hysteresis), the present can refresh just
+        // those layers and reuse every static slice — instead of rebuilding
+        // the whole tree and re-rastering the surrounding base tiles. The
+        // first hover of an element always takes the full present (it was not
+        // promoted yet); the toggles after it scope.
+        var scopedHover = TryScopeHoverPresent(_hoverOverrides, newOverrides);
+
         // The override set changes the display list without changing the page
         // version, so the picture cache must be dropped or it would blit stale
         // (non-hover) pixels. Wholesale invalidation keeps the cache simple:
@@ -2830,7 +2997,53 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             BindLiveScripting();
         }
 
-        RenderViewportRegion();
+        _scopedRefreshPresent = scopedHover;
+        try
+        {
+            RenderViewportRegion();
+        }
+        finally
+        {
+            _scopedRefreshPresent = false;
+        }
+    }
+
+    /// <summary>
+    /// True when a hover-driven present may refresh only the override-affected
+    /// layers: every element in the outgoing AND incoming override sets must
+    /// already own a layer in the cached tree (<see cref="_promotedBaseline"/>)
+    /// and still be promoted for the present that follows, so its layer — not a
+    /// reused static slice — carries the new override sample.
+    /// </summary>
+    private bool TryScopeHoverPresent(
+        Dictionary<DomElement, ComputedStyle>? oldOverrides,
+        Dictionary<DomElement, ComputedStyle>? newOverrides)
+    {
+        if (_currentPage is not { } page || _promotedBaseline.Count == 0) return false;
+        return AffectedWithinPromoted(oldOverrides, page) && AffectedWithinPromoted(newOverrides, page);
+    }
+
+    private bool AffectedWithinPromoted(Dictionary<DomElement, ComputedStyle>? overrides, LaidOutPage page)
+    {
+        if (overrides is null) return true;
+        foreach (var el in overrides.Keys)
+        {
+            if (!_promotedBaseline.Contains(el)) return false;
+            if (page.Document.WasRecentlyMutated(el)) continue;
+            if (_recentlyAnimated.Contains(el)) continue;
+            if (_recentlyHovered.Contains(el)) continue;
+            if (HasActiveSample(page, el)) continue;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasActiveSample(LaidOutPage page, DomElement el)
+    {
+        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) return true;
+        foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
+        return false;
     }
 
     /// <summary>Start the live-loop stopwatch if it isn't already running, so a
@@ -2871,9 +3084,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         get
         {
-            if (_fragments.Count == 0) return null;
-            var first = _fragments[0];
-            var last = _fragments[^1];
+            var frags = Fragments;
+            if (frags.Count == 0) return null;
+            var first = frags[0];
+            var last = frags[^1];
             return ((first.X + 0.5, first.Y + (first.Height / 2)),
                     (last.X + last.Width - 0.5, last.Y + (last.Height / 2)));
         }
@@ -2903,6 +3117,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var ctx = new SelectorMatchContext { HoveredElement = hovered };
         var animate = _prepareAnimationFrame is not null;
         var result = new Dictionary<DomElement, ComputedStyle>();
+        // Per-pass cascade caches (one per context — entries must not mix
+        // pseudo-class states). Without them every Compose re-walked the same
+        // ancestor chain, which made a single hover toggle cost ~20 ms.
+        var ctxCache = new CascadeCache();
+        var baseCache = new CascadeCache();
 
         // The hovered element's subtree covers `.x:hover` (self) and
         // `.x:hover .descendant` rules.
@@ -2932,12 +3151,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // animation sample via ComputeWithAnimations.
         ComputedStyle? Compose(DomElement el)
         {
-            var hoverStatic = style.Compute(el, ctx);
+            var hoverStatic = style.ComputeForContext(el, ctx, ctxCache);
             // Compare the element's cascade with vs. without :hover; prune it when
             // nothing the painter emits changed (SamePaintProperties value-compares,
             // so identical cascades from two runs match).
-            if (SamePaintProperties(style.Compute(el), hoverStatic)) return null;
-            return animate ? style.ComputeWithAnimations(el, nowMs, ctx) : hoverStatic;
+            if (SamePaintProperties(style.Compute(el, context: null, baseCache), hoverStatic)) return null;
+            // Full compose (not Sample): the hover cascade change is exactly
+            // where transitions trigger, so the trigger detection must run.
+            return animate ? style.Compositor.Compose(el, hoverStatic, nowMs) : hoverStatic;
         }
 
         void Recurse(DomElement el)
@@ -3049,29 +3270,221 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // serves from cache). Light hysteresis (Document.DecayRecentMutations)
         // keeps it promoted briefly so promotion does not churn frame to frame.
         if (page.Document.WasRecentlyMutated(el)) return true;
-        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el)) return true;
-        foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el)) return true;
-        return false;
+        if (_frameAnimatedElements.Contains(el) || _frameTransitionElements.Contains(el)) return true;
+        // The same hysteresis for animations/transitions: an element stays
+        // promoted for a few frames after its last sample, so a transition end
+        // does not re-key the base slice on its final frame.
+        return _recentlyAnimated.Contains(el) || _recentlyHovered.Contains(el);
     }
 
     private ComputedStyle? AnimatedStyle(LaidOutPage page, LayoutBox box)
     {
         if (box.Element is not { } el) return null;
-        var hasAnim = false;
-        foreach (var _ in page.Style.AnimationEngine.ActiveProperties(el))
-        {
-            hasAnim = true;
-            break;
-        }
+        if (!_frameAnimatedElements.Contains(el) && !_frameTransitionElements.Contains(el))
+            return null;
 
-        if (!hasAnim)
-            foreach (var _ in page.Style.TransitionEngine.ActiveProperties(el))
+        // The box's style IS the cascade output of the last relayout (the box
+        // tree builds via ComputeWithAnimations), and any static-style change
+        // forces a relayout that refreshes it. So a pure animation tick only
+        // needs the sampling overlay — re-running the full ancestor cascade
+        // per animating element per frame was ~85% of the animations demo's
+        // UI thread. Trigger detection (declaration diffs, transition starts)
+        // stays on the relayout path, where the static cascade is fresh.
+        return box.Style is { } baseStyle
+            ? page.Style.Compositor.Sample(el, baseStyle)
+            : page.Style.ComputeWithAnimations(el, _animClockMs);
+    }
+
+    /// <summary>
+    /// Snapshots, once per present, the elements whose styles the animation and
+    /// transition engines can currently sample — exactly the elements for which
+    /// the old per-box <see cref="AnimatedStyle"/> probe returned a style. Also
+    /// stamps the promotion-hysteresis window for everything in the snapshot.
+    /// </summary>
+    private void RefreshFrameAnimatedSets()
+    {
+        _frameAnimatedElements.Clear();
+        _frameTransitionElements.Clear();
+        if (_currentPage is not { } page) return;
+        var style = page.Style;
+
+        // An element in the animation engine's tables only samples when at least
+        // one of its keyframe declarations names a recognised property — the same
+        // any-yield probe AnimatedStyle ran per box, now run once per ACTIVE
+        // element per frame.
+        _frameAnimatedScratch.Clear();
+        style.AnimationEngine.CollectActiveElements(_frameAnimatedScratch);
+        foreach (var el in _frameAnimatedScratch)
+        {
+            foreach (var _ in style.AnimationEngine.ActiveProperties(el))
             {
-                hasAnim = true;
+                _frameAnimatedElements.Add(el);
                 break;
             }
+        }
 
-        return hasAnim ? page.Style.ComputeWithAnimations(el, _animClockMs) : null;
+        // A transition-engine entry is keyed (element, property), so membership
+        // alone implies a sampleable property.
+        style.TransitionEngine.CollectActiveElements(_frameTransitionElements);
+
+        foreach (var el in _frameAnimatedElements)
+            _recentlyAnimated.Note(el);
+        foreach (var el in _frameTransitionElements)
+            _recentlyAnimated.Note(el);
+    }
+
+    // ---- Scoped-relayout reuse (issue #82 item 1) -----------------------
+
+    // INVARIANT the scoped present relies on: layout is a pure function of
+    // (DOM, computed styles, viewport), and this engine contains both line
+    // boxes and floats inside each block container. So when every mutation in
+    // a frame's batch is a text/child change inside a BLOCK-level element that
+    // (a) was promoted to its own layer in the cached tree, (b) kept the SAME
+    // box object through the relayout (text edits and child splices reuse the
+    // element's box; attribute changes do not, and are rejected), and (c) kept
+    // an identical page-space frame — then every box outside those subtrees
+    // has identical geometry and style, every static layer's slice is
+    // byte-identical to the cached one, and refreshing only the promoted
+    // layers is exact. Layout-affecting animations are rejected up front
+    // because incremental layout splices a NEW box for their targets each
+    // frame; scroll-offset moves are rejected at present time because slices
+    // bake the offsets in. When any check fails the frame takes the normal
+    // full-rebuild present, which is always correct.
+
+    /// <summary>
+    /// Inspects the pending layout-mutation batch BEFORE the relayout drains
+    /// it. Returns true — filling <see cref="_scopedRootSnapshots"/> with each
+    /// mutated element's box and page-space frame — when every mutation is
+    /// confined to a block-level element already promoted in the cached layer
+    /// tree. <see cref="VerifyScopedMutationRoots"/> must confirm the
+    /// snapshots after the relayout.
+    /// </summary>
+    private bool TrySnapshotScopedMutationRoots(LaidOutPage page)
+    {
+        _scopedRootSnapshots.Clear();
+        if (_promotedBaseline.Count == 0) return false;
+        var batch = page.Document.PeekLayoutMutations();
+        if (batch.Count == 0) return false;
+
+        // A layout-affecting animation or transition makes incremental layout
+        // rebuild-and-splice its target's box (a new object) and can move
+        // geometry anywhere in the document — never scope-safe.
+        var style = page.Style;
+        _frameAnimatedScratch.Clear();
+        style.AnimationEngine.CollectActiveElements(_frameAnimatedScratch);
+        foreach (var el in _frameAnimatedScratch)
+            if (style.AnimationEngine.HasLayoutAffectingProperty(el))
+                return false;
+        _frameAnimatedScratch.Clear();
+        style.TransitionEngine.CollectActiveElements(_frameAnimatedScratch);
+        foreach (var el in _frameAnimatedScratch)
+            if (style.TransitionEngine.HasLayoutAffectingProperty(el))
+                return false;
+
+        foreach (var m in batch)
+        {
+            // Text edits mutate the text box in place; child insert/remove
+            // splices new child boxes under the SAME parent box. An attribute
+            // change instead replaces the element's own box, which would leave
+            // the cached layer's SourceBox detached — rejected.
+            if (m.Kind is not (LayoutChangeKind.TextChanged
+                or LayoutChangeKind.ChildInserted
+                or LayoutChangeKind.ChildRemoved))
+                return false;
+
+            // The owning element — the same resolution Document.NoteRecentlyMutated
+            // used when it promoted the subtree.
+            var el = m.Target as DomElement ?? NearestElementOf(m.Target);
+            if (el is null || !_promotedBaseline.Contains(el)) return false;
+            if (IsSnapshotted(el)) continue;
+            if (_scopedRootSnapshots.Count >= MaxScopedMutationRoots) return false;
+
+            if (FindBoxAbs(page.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is not { } loc)
+                return false;
+            // Inline content line-breaks with the surrounding inline formatting
+            // context, so a change inside it can move sibling fragments the
+            // frame check cannot see. Blocks contain their line boxes (and this
+            // engine scopes floats per block), so an unchanged frame proves
+            // containment.
+            if (loc.Box.Kind is Starling.Layout.Box.BoxKind.Inline or Starling.Layout.Box.BoxKind.Text)
+                return false;
+            _scopedRootSnapshots.Add((el, loc.Box, loc.X, loc.Y, loc.Box.Frame.Width, loc.Box.Frame.Height));
+        }
+
+        return _scopedRootSnapshots.Count > 0;
+    }
+
+    private bool IsSnapshotted(DomElement el)
+    {
+        foreach (var s in _scopedRootSnapshots)
+            if (ReferenceEquals(s.El, el))
+                return true;
+        return false;
+    }
+
+    private static DomElement? NearestElementOf(DomNode node)
+    {
+        for (var n = node.ParentNode; n is not null; n = n.ParentNode)
+            if (n is DomElement e) return e;
+        return null;
+    }
+
+    /// <summary>
+    /// After the relayout: every snapshotted layer-root box must still be the
+    /// SAME object, at the same page-space position, with the same size.
+    /// Identity catches a rebuilt-and-spliced subtree (the cached layer's
+    /// SourceBox would be stale); position and size catch any geometry change
+    /// that could have leaked outside the promoted subtree.
+    /// </summary>
+    private bool VerifyScopedMutationRoots(LaidOutPage page)
+    {
+        foreach (var (el, box, absX, absY, w, h) in _scopedRootSnapshots)
+        {
+            if (FindBoxAbs(page.Root, 0, 0, b => ReferenceEquals(b.Element, el)) is not { } loc)
+                return false;
+            if (!ReferenceEquals(loc.Box, box)) return false;
+            if (loc.X != absX || loc.Y != absY) return false;
+            if (loc.Box.Frame.Width != w || loc.Box.Frame.Height != h) return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Present-time re-check for a scoped refresh: every element the engines
+    /// can currently sample must already own a layer in the cached tree (an
+    /// animation that started since the last full build lives inside a static
+    /// slice the refresh would wrongly reuse), and no scroll offset may have
+    /// moved since the cached slices baked them in.
+    /// </summary>
+    private bool ScopedPresentStillValid(LaidOutPage page)
+    {
+        if (_promotedBaseline.Count == 0) return false;
+        if (page.ScrollState.OffsetVersion != _baselineScrollVersion) return false;
+        foreach (var el in _frameAnimatedElements)
+            if (!_promotedBaseline.Contains(el))
+                return false;
+        foreach (var el in _frameTransitionElements)
+            if (!_promotedBaseline.Contains(el))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Records, after a present that rebuilt the layer tree in full, the
+    /// elements its promotion predicate could see — the elements that own
+    /// their own layer in the renderer's now-cached tree — plus the scroll
+    /// store version its slices baked in.
+    /// </summary>
+    private void RebuildPromotedBaseline(LaidOutPage page)
+    {
+        _promotedBaseline.Clear();
+        _promotedBaseline.UnionWith(_frameAnimatedElements);
+        _promotedBaseline.UnionWith(_frameTransitionElements);
+        _recentlyAnimated.CopyTo(_promotedBaseline);
+        _recentlyHovered.CopyTo(_promotedBaseline);
+        page.Document.CollectRecentlyMutated(_promotedBaseline);
+        _baselineScrollVersion = page.ScrollState.OffsetVersion;
     }
 
     // ---- Selection -----------------------------------------------------
@@ -3092,10 +3505,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         try
         {
             ClearSelectionOverlays();
-            if (_fragments.Count == 0) return;
+            var frags = Fragments;
+            if (frags.Count == 0) return;
 
-            var anchorCaret = SelectionModel.CaretFromPoint(_fragments, anchor.X, anchor.Y);
-            var cursorCaret = SelectionModel.CaretFromPoint(_fragments, cursor.X, cursor.Y);
+            var anchorCaret = SelectionModel.CaretFromPoint(frags, anchor.X, anchor.Y);
+            var cursorCaret = SelectionModel.CaretFromPoint(frags, cursor.X, cursor.Y);
             var range = SelectionModel.Order(anchorCaret, cursorCaret);
             if (range.IsEmpty)
             {
@@ -3104,14 +3518,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             }
 
             var brush = new SolidColorBrush(AvColor.FromArgb(96, 80, 140, 255));
-            foreach (var r in SelectionModel.RectsFor(_fragments, range))
+            foreach (var r in SelectionModel.RectsFor(frags, range))
             {
                 var overlay = MakeOverlay(brush, r.X, r.Y, r.Width, r.Height);
                 _pageCanvas.Children.Add(overlay);
                 _selectionOverlays.Add(overlay);
             }
 
-            _selectionText = SelectionModel.TextFor(_fragments, range);
+            _selectionText = SelectionModel.TextFor(frags, range);
             _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
         }
         finally
@@ -3183,13 +3597,19 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         _findIndex.Clear();
         _findCursor = 0;
-        foreach (var f in _fragments)
+        foreach (var f in Fragments)
             _findIndex.Add((f.Y, f.Text));
     }
 
     private void FindNext()
     {
         ClearFindHighlight();
+        if (_findIndexDirty)
+        {
+            RebuildFindIndex();
+            _findIndexDirty = false;
+        }
+
         var query = (_findEntry.Text ?? string.Empty).Trim();
         if (query.Length == 0 || _findIndex.Count == 0) return;
 
@@ -3211,7 +3631,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     private void FlashFindMatch(int idx)
     {
-        var f = _fragments[idx];
+        var f = Fragments[idx];
         var brush = new SolidColorBrush(AvColor.FromArgb(140, 255, 220, 70));
         var overlay = MakeOverlay(brush, f.X, f.Y, f.Width, f.Height);
         _pageCanvas.Children.Add(overlay);

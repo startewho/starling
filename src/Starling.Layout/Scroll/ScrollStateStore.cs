@@ -242,7 +242,9 @@ public sealed class ScrollStateStore
         var existed = _entries.TryGetValue(element, out var e); // default entry: zero geometry
         // A box with no measured geometry clamps to (0,0); skip materializing
         // an all-zero entry for it (reconcile would drop it anyway).
-        if (WriteEntry(ref e, x, y) || existed)
+        var moved = WriteEntry(ref e, x, y);
+        if (moved) OffsetVersion++;
+        if (moved || existed)
             _entries[element] = e;
     }
 
@@ -251,8 +253,17 @@ public sealed class ScrollStateStore
     public void WriteRoot(double x, double y)
     {
         AssertNotInLayoutPass();
-        WriteEntry(ref _root, x, y);
+        if (WriteEntry(ref _root, x, y)) OffsetVersion++;
     }
+
+    /// <summary>
+    /// Bumps every time any stored offset actually moves — script/input writes,
+    /// post-layout re-clamps, and entry drops alike. The live compositor's
+    /// scoped-refresh path compares this against the version captured when the
+    /// cached layer tree was last built in full: layer slices bake the offsets
+    /// in, so reusing a slice is only sound while no offset has moved.
+    /// </summary>
+    public int OffsetVersion { get; private set; }
 
     // ---- Layout-side surface (internal: the layout engine only) -------------
 
@@ -340,7 +351,7 @@ public sealed class ScrollStateStore
     internal void ReconcileAfterLayout()
     {
         SweepStickyEntries();
-        ClampEntry(ref _root);
+        if (ClampEntry(ref _root)) OffsetVersion++;
 
         if (_entries.Count == 0) return;
         _scratch.Clear();
@@ -352,10 +363,14 @@ public sealed class ScrollStateStore
             if (e.Generation != _generation)
             {
                 _entries.Remove(el);
+                if (e.X != 0 || e.Y != 0) OffsetVersion++;
                 continue;
             }
             if (ClampEntry(ref e))
+            {
                 _entries[el] = e;
+                OffsetVersion++;
+            }
         }
         _scratch.Clear();
     }
@@ -371,7 +386,7 @@ public sealed class ScrollStateStore
     internal void ClampAllEntries()
     {
         SweepStickyEntries();
-        ClampEntry(ref _root);
+        if (ClampEntry(ref _root)) OffsetVersion++;
 
         if (_entries.Count == 0) return;
         _scratch.Clear();
@@ -381,7 +396,10 @@ public sealed class ScrollStateStore
         {
             var e = _entries[el];
             if (ClampEntry(ref e))
+            {
                 _entries[el] = e;
+                OffsetVersion++;
+            }
         }
         _scratch.Clear();
     }
@@ -398,7 +416,11 @@ public sealed class ScrollStateStore
 
     /// <summary>Drop one entry — the scoped-pass equivalent of the
     /// generation-mismatch drop in <see cref="ReconcileAfterLayout"/>.</summary>
-    internal void RemoveEntry(Element element) => _entries.Remove(element);
+    internal void RemoveEntry(Element element)
+    {
+        if (_entries.Remove(element, out var e) && (e.X != 0 || e.Y != 0))
+            OffsetVersion++; // a dropped entry reads as offset (0,0) from now on
+    }
 
     /// <summary>Total <see cref="RecordGeometry"/> calls over this store's
     /// lifetime — the observable that pins re-measurement scoping in tests

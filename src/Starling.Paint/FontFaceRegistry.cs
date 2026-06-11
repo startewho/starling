@@ -29,6 +29,12 @@ public sealed class FontFaceRegistry : IDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
 
+    /// <summary>Bumps on every successful registration. Lets consumers that
+    /// snapshot the registry (the cached text measurer, the paint backend's
+    /// font collection) detect a new @font-face without re-parsing fonts on
+    /// every use.</summary>
+    public int Version { get; private set; }
+
     /// <summary>
     /// Loads <paramref name="fontBytes"/> as a face and registers it for
     /// <paramref name="family"/>. <paramref name="unicodeRange"/> (optional)
@@ -70,6 +76,7 @@ public sealed class FontFaceRegistry : IDisposable
             _byFamily[family] = faces;
         }
         faces.Add(new RegisteredFace(bold, italic, unicodeRange, bytes));
+        Version++;
         return true;
     }
 

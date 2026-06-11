@@ -175,6 +175,7 @@ public sealed class DisplayListBuilder
         double originY,
         Func<Box, bool> isLayerBoundary,
         bool suppressRootTransform,
+        out IReadOnlyList<FilterFunction>? rootFilters,
         Func<Box, ComputedStyle?>? styleOverride = null,
         IImageResolver? images = null,
         Func<Element, (double X, double Y)>? scrollOffsets = null,
@@ -193,38 +194,39 @@ public sealed class DisplayListBuilder
         // Build call on a reused builder so no slice drops its background.
         _canvasDonor = null;
         var slice = new LayerSlice(sliceRoot, isLayerBoundary);
-        if (suppressRootTransform)
+        // Like the root transform, the slice root's `filter` chain is owned by its
+        // layer (CompositorLayer.Filters) and applied once at composite time, so
+        // the bracket Visit would emit for it is suppressed: the slice holds the
+        // unfiltered content. Nested non-promoted filtered descendants inside the
+        // slice still get their normal brackets.
+        rootFilters = TryGetFilterFunctions(sliceRoot, styleOverride);
+        _suppressFilterBracketRoot = rootFilters is not null ? sliceRoot : null;
+        try
         {
-            // The slice root's transform is owned by its layer, so paint its
-            // own box + children directly (no transform bracket) in local space.
-            // A `filter` on the slice root still applies at raster time, so the
-            // filter bracket (normally emitted by Visit) is re-created here.
-            var frameX = originX + sliceRoot.Frame.X;
-            var frameY = originY + sliceRoot.Frame.Y;
-            var rootFilters = TryGetFilterFunctions(sliceRoot, styleOverride);
-            if (rootFilters is not null)
+            if (suppressRootTransform)
             {
-                var scratch = new DisplayList();
-                PaintBoxAndChildren(sliceRoot, scratch, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
-                if (scratch.Items.Count > 0)
-                {
-                    list.Add(new PushFilter(new Rect(frameX, frameY, sliceRoot.Frame.Width, sliceRoot.Frame.Height), rootFilters));
-                    foreach (var item in scratch.Items)
-                        list.Add(item);
-                    list.Add(PopFilter.Instance);
-                }
+                // The slice root's transform is owned by its layer, so paint its
+                // own box + children directly (no transform bracket) in local space.
+                var frameX = originX + sliceRoot.Frame.X;
+                var frameY = originY + sliceRoot.Frame.Y;
+                PaintBoxAndChildren(sliceRoot, list, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
             }
             else
             {
-                PaintBoxAndChildren(sliceRoot, list, frameX, frameY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+                Visit(sliceRoot, list, originX, originY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
             }
         }
-        else
+        finally
         {
-            Visit(sliceRoot, list, originX, originY, Matrix2D.Identity, cull: null, styleOverride, images, slice);
+            _suppressFilterBracketRoot = null;
         }
         return list;
     }
+
+    // The slice root whose `filter` bracket Visit must NOT emit during the
+    // current BuildLayerSlice call — the chain is carried on the CompositorLayer
+    // instead. Null outside slice builds and for filterless roots.
+    private Box? _suppressFilterBracketRoot;
 
     /// <summary>
     /// Threaded through the recursion during a layer-slice build. Carries the
@@ -354,8 +356,11 @@ public sealed class DisplayListBuilder
         // a PushFilter/PopFilter bracket so the backend can composite it
         // offscreen, run the chain, and blit the result. The filter bracket sits
         // INSIDE the transform bracket: the spec filters the element's local
-        // rendering, then the transform maps the filtered result.
-        var filterFns = TryGetFilterFunctions(box, styleOverride);
+        // rendering, then the transform maps the filtered result. A slice root's
+        // own chain is suppressed — its CompositorLayer carries it instead.
+        var filterFns = ReferenceEquals(box, _suppressFilterBracketRoot)
+            ? null
+            : TryGetFilterFunctions(box, styleOverride);
 
         if (transformed || filterFns is not null)
         {

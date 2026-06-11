@@ -452,6 +452,7 @@ public class ProgrammaticInputTests
 
     private static (Window Window, WebviewPanel Panel) ShowPanel(StarlingEngine engine, LaidOutPage page)
     {
+        GpuTests.SkipUnlessAvailable();
         var panel = new WebviewPanel(
             new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
             (p, vp) => engine.RelayoutPage(p, new RenderOptions(vp, FontSize: 16f)));

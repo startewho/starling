@@ -691,6 +691,11 @@ internal sealed class BoxTreeBuilder
         // computed style. Empty strings still generate a (zero-width) box per
         // spec, but contribute no fragment, so we keep the TextBox.
         var inline = new InlineBox(pseudoStyle, element: null);
+        // Pseudo boxes promote like element boxes (M12-03): a `filter`/
+        // `transform`/z-index ::before (the decorative-glow pattern) must become
+        // its own compositor layer, or its filter re-runs inside every tile of
+        // the parent layer's raster.
+        inline.Hints = StackingContextResolver.Resolve(inline, pseudoStyle);
         inline.AppendChild(new TextBox(text, pseudoStyle));
         box.AppendChild(inline);
     }

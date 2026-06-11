@@ -98,7 +98,8 @@ public sealed class NativeViewportRenderer : IDisposable
         Func<Starling.Dom.Element, (double X, double Y)>? scrollOffsets = null,
         long pageVersion = 0,
         bool animationTick = false,
-        Func<Starling.Dom.Element, (double X, double Y)>? stickyShifts = null)
+        Func<Starling.Dom.Element, (double X, double Y)>? stickyShifts = null,
+        bool scopedRefresh = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(root);
@@ -118,18 +119,22 @@ public sealed class NativeViewportRenderer : IDisposable
                 scrollOffsets: scrollOffsets, stickyShifts: stickyShifts);
 
             // Pure animation tick over an unchanged page: refresh only the animating
-            // layers and reuse every static layer's cached slice/hash. Otherwise
-            // (any DOM/layout/viewport/scale change, or a non-animation present such
-            // as a hover or selection repaint) rebuild the whole tree, which also
-            // re-establishes the cache baseline.
+            // layers and reuse every static layer's cached slice/hash. A SCOPED
+            // refresh does the same on a frame that relayouted (so the page version
+            // moved): the caller asserts every mutation this frame is confined to
+            // subtrees whose layer-root box survived the relayout in place with
+            // identical page-space geometry, which makes every other layer's slice
+            // byte-identical to the cached one. Otherwise (any other DOM/layout/
+            // viewport/scale change, or a non-animation present such as a hover or
+            // selection repaint) rebuild the whole tree, which also re-establishes
+            // the cache baseline.
             CompositorLayer tree;
             if (!ReuseDisabled
-                && animationTick
                 && _cachedTree is not null
                 && ReferenceEquals(root, _cachedRoot)
-                && pageVersion == _cachedPageVersion
                 && scale == _cachedScale
-                && RegionEquals(region, _cachedViewport))
+                && RegionEquals(region, _cachedViewport)
+                && ((animationTick && pageVersion == _cachedPageVersion) || scopedRefresh))
             {
                 tree = builder.RefreshAnimating(_cachedTree);
             }

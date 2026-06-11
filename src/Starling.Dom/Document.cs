@@ -104,6 +104,25 @@ public sealed class Document : Node
         }
     }
 
+    /// <summary>The mutations recorded since the last drain, WITHOUT draining
+    /// them. The live compositor inspects the pending batch before triggering
+    /// the relayout that drains it, to decide whether this frame's changes are
+    /// confined to subtrees already promoted to their own compositor layers.
+    /// Callers must not hold the list across the drain.</summary>
+    public IReadOnlyList<LayoutMutation> PeekLayoutMutations()
+        => _layoutMutations is { Count: > 0 } pending ? pending : Array.Empty<LayoutMutation>();
+
+    /// <summary>Adds every element currently inside the recently-mutated
+    /// promotion window (see <see cref="WasRecentlyMutated"/>) to
+    /// <paramref name="into"/>. The live compositor snapshots this when it
+    /// rebuilds a layer tree in full, as part of the baseline of elements that
+    /// own their own layer in the cached tree.</summary>
+    public void CollectRecentlyMutated(ISet<Element> into)
+    {
+        if (_recentlyMutated is not { Count: > 0 } m) return;
+        foreach (var el in m.Keys) into.Add(el);
+    }
+
     /// <summary>Removes and returns the mutations recorded since the last drain.
     /// Empty when nothing layout-relevant changed (or recording is off).</summary>
     public IReadOnlyList<LayoutMutation> DrainLayoutMutations()

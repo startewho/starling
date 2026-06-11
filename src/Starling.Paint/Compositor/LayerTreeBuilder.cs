@@ -110,6 +110,7 @@ internal sealed class LayerTreeBuilder
             parentOriginY,
             IsLayerRoot,
             suppressRootTransform: hasTransform,
+            out var rootFilters,
             _styleOverride,
             _images,
             _scrollOffsets,
@@ -150,12 +151,36 @@ internal sealed class LayerTreeBuilder
         // layer's own transform/opacity (suppressed above / applied at composite),
         // so a transform/opacity-only frame produces an identical hash and the
         // layer re-blits from cache; only a real content change re-rasters it.
+        // The root's filter chain is excluded from the slice the same way, so it
+        // is folded back into the hash here — an animating blur radius or a
+        // hover brightness must still re-raster the layer.
         var contentHash = DisplayListContentHash.Compute(slice);
+        if (rootFilters is not null)
+            contentHash = DisplayListContentHash.Combine(contentHash, DisplayListContentHash.ComputeFilters(rootFilters));
 
         return new CompositorLayer(slice, bounds, transform ?? Matrix2D.Identity, opacity, clip, ordered,
             contentHash: contentHash, layerId: _layerIdFor?.Invoke(layerBox) ?? 0,
             sourceBox: layerBox, originParentX: parentOriginX, originParentY: parentOriginY,
-            zIndex: ZIndexOf(layerBox) ?? 0, inheritedClip: inheritedClip);
+            zIndex: ZIndexOf(layerBox) ?? 0, inheritedClip: inheritedClip, filters: rootFilters,
+            backdropFilters: TryGetBackdropFilters(layerBox),
+            backdropBounds: new Rect(frameX, frameY, layerBox.Frame.Width, layerBox.Frame.Height));
+    }
+
+    /// <summary>
+    /// Resolves the layer-root box's <c>backdrop-filter</c> chain (Filter
+    /// Effects 2 §6), or null when none applies. Carried on the layer (like
+    /// <see cref="CompositorLayer.Filters"/>) so the compositor can snapshot
+    /// and filter the already-composited backdrop before this layer's content
+    /// paints — the slice's own <c>DrawBackdropFilter</c> item only ever sees
+    /// the layer's transparent local canvas.
+    /// </summary>
+    private IReadOnlyList<FilterFunction>? TryGetBackdropFilters(Box box)
+    {
+        if (box.Frame.Width <= 0 || box.Frame.Height <= 0) return null;
+        var style = _styleOverride?.Invoke(box) ?? box.Style;
+        var raw = style?.Get(PropertyId.BackdropFilter);
+        if (raw is null or CssKeyword) return null; // none — the initial value
+        return DisplayListBuilder.ResolveFilterFunctions(raw, style!.GetColor(PropertyId.Color));
     }
 
     /// <summary>

@@ -110,6 +110,44 @@ public sealed class AnimationCompositor
         return overrides is null ? staticStyle : staticStyle.WithOverrides(overrides);
     }
 
+    /// <summary>
+    /// Sampling-only compose: overlays the current animation + transition
+    /// samples onto <paramref name="baseStyle"/> WITHOUT the declaration
+    /// diffing and transition-trigger detection of
+    /// <see cref="Compose"/>. For pure animation ticks — frames where no
+    /// static style changed (any style-affecting mutation forces a relayout,
+    /// and the relayout's box-tree build runs the full <see cref="Compose"/>
+    /// with a fresh static cascade) — those steps are no-ops by definition,
+    /// and skipping them lets the caller pass the box's last-relayout style
+    /// as the base instead of re-running the whole ancestor cascade per
+    /// element per frame. Feeding a BAKED (already-composed) style through
+    /// the full <see cref="Compose"/> would poison the transition snapshots
+    /// with mid-tween values; this entry point has no such hazard.
+    /// </summary>
+    public ComputedStyle Sample(Element element, ComputedStyle baseStyle)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentNullException.ThrowIfNull(baseStyle);
+
+        Dictionary<PropertyId, CssValue>? overrides = null;
+
+        foreach (var prop in _animations.ActiveProperties(element))
+        {
+            var animVal = _animations.GetEffective(element, prop);
+            if (animVal is null) continue;
+            (overrides ??= new Dictionary<PropertyId, CssValue>())[prop] = animVal;
+        }
+
+        foreach (var prop in _transitions.ActiveProperties(element))
+        {
+            var transVal = _transitions.GetEffective(element, prop);
+            if (transVal is null) continue;
+            (overrides ??= new Dictionary<PropertyId, CssValue>())[prop] = transVal;
+        }
+
+        return overrides is null ? baseStyle : baseStyle.WithOverrides(overrides);
+    }
+
     /// <summary>Forget all per-element compositor state for
     /// <paramref name="element"/>. Call on element detachment alongside
     /// <see cref="AnimationEngine.Forget"/> + <see cref="TransitionEngine.Forget"/>.</summary>

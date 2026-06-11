@@ -26,6 +26,7 @@ public class LiveScriptingInteractionTests
     [AvaloniaFact]
     public async Task Typing_into_a_scripted_input_fires_its_input_listener()
     {
+        GpuTests.SkipUnlessAvailable();
         const string html = """
             <!doctype html><html><body>
               <input id='q' type='text'>
