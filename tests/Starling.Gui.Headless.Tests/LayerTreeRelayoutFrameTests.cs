@@ -31,6 +31,7 @@ public sealed class LayerTreeRelayoutFrameTests
     [Fact]
     public void Spinning_layer_reblits_from_cache_across_relayout_frames()
     {
+        GpuTests.SkipUnlessAvailable();
         using var metrics = new MetricRecorder();
         using var host = new PageRendererHost();
 

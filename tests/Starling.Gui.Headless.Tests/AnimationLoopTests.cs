@@ -28,6 +28,7 @@ public class AnimationLoopTests
     [AvaloniaFact]
     public async Task WebviewPanel_repaints_a_waapi_animation_across_frames()
     {
+        GpuTests.SkipUnlessAvailable();
         const string html = """
             <!doctype html><html><body>
               <div id='t' style='width:200px;height:200px;background:rgb(255,0,0)'></div>
@@ -68,6 +69,7 @@ public class AnimationLoopTests
     [AvaloniaFact]
     public async Task WebviewPanel_repaints_a_declarative_keyframes_animation()
     {
+        GpuTests.SkipUnlessAvailable();
         // No script — a pure @keyframes animation. The engine primes it into the
         // live AnimationEngine from the element's static animation-* cascade, so
         // the GUI loop renders it moving.
@@ -105,6 +107,7 @@ public class AnimationLoopTests
     [AvaloniaFact]
     public async Task Transform_animation_on_a_promoted_layer_reblits_content_from_cache()
     {
+        GpuTests.SkipUnlessAvailable();
         // A `will-change: transform` div promotes its own compositor layer; the
         // WAAPI animation drives only `transform`, a composite-time property. So
         // across frames the layer's CONTENT is unchanged — only the matrix moves.

@@ -114,6 +114,7 @@ public class InputEditingInteractionTests
     private static async Task<(Window Window, WebviewPanel Panel, LaidOutPage Page, Starling.Dom.Element Input)>
         ShowPageWithInputAsync()
     {
+        GpuTests.SkipUnlessAvailable();
         var (engine, page, input) = await BuildPageWithInputAsync();
         var panel = new WebviewPanel(
             new ThemeManager(), NullLoggerFactory.Instance, _ => { }, (_, _) => { },
