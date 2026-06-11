@@ -70,6 +70,31 @@ public static class NodeBindings
         // skip list.
         // Behavioral equivalence is held by the binding + Web Platform Test suites.
         Generated.CoreDomBindingsGenerated.InstallAll(realm);
+
+        // Re-layer behaviors the mechanical generator can't model on top of the
+        // generated members it just installed.
+        ReapplyScriptSrcAwareSetAttribute(realm);
+    }
+
+    /// <summary>The generated <c>setAttribute</c> does the mechanical attribute
+    /// write (with the spec arity/exception marshalling). Real browsers also run
+    /// HTML §4.12.1 "prepare a script" when <c>src</c> is set on a parser-inserted
+    /// empty <c>&lt;script&gt;</c> (the deferred-bundle pattern) or an iframe, so
+    /// re-define it to fire that hook after the write. Runs after the generated
+    /// install so it wins on Element.prototype.</summary>
+    private static void ReapplyScriptSrcAwareSetAttribute(JsRealm realm)
+    {
+        if (realm.ElementPrototype is not { } elProto) return;
+        EventTargetBinding.DefineMethod(realm, elProto, "setAttribute", (thisV, args) =>
+        {
+            var receiver = IdlMarshal.Receiver<Element>(realm, thisV, "Element", "setAttribute");
+            var name = IdlMarshal.RequireString(realm, args, 0, "setAttribute", 2);
+            var value = IdlMarshal.RequireString(realm, args, 1, "setAttribute", 2);
+            try { receiver.SetAttribute(name, value); }
+            catch (Starling.Dom.DomException ex) { throw IdlMarshal.Translate(realm, ex); }
+            MaybeTriggerScriptSrc(realm, receiver, name);
+            return IdlMarshal.Void();
+        }, length: 2);
     }
 
     // =====================================================================
@@ -759,21 +784,10 @@ public static class NodeBindings
             var v = e.GetAttribute(JsValue.ToStringValue(args[0]));
             return v is null ? JsValue.Null : JsValue.String(v);
         }, length: 1);
-        EventTargetBinding.DefineMethod(realm, elProto, "setAttribute", (thisV, args) =>
-        {
-            if (DomWrappers.UnwrapElement(thisV) is { } e && args.Length >= 2)
-            {
-                var name = JsValue.ToStringValue(args[0]);
-                var value = JsValue.ToStringValue(args[1]);
-                e.SetAttribute(name, value);
-                // HTML §4.12.1 "prepare a script": setting `src` on a script
-                // element makes it eligible to load+run. Real browsers treat a
-                // parser-inserted empty <script> that later gets a src as a
-                // newly-fetched external script (the deferred-bundle pattern).
-                MaybeTriggerScriptSrc(realm, e, name);
-            }
-            return JsValue.Undefined;
-        }, length: 2);
+        // NOTE: `setAttribute` is emitted by the Web IDL generator (mechanical
+        // attribute write + arity/exception marshalling). The HTML §4.12.1
+        // "prepare a script" hook it can't know about is re-layered on top after
+        // the generated installs run — see ReapplyScriptSrcAwareSetAttribute.
 
         // `script.src` IDL property — get/set the resolved-ish src attribute.
         // The setter mirrors setAttribute('src', …) and runs "prepare a script"
