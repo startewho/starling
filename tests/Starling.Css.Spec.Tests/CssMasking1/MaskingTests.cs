@@ -25,23 +25,33 @@ public sealed class MaskingTests
 
     // ----- clip-path (§6.1) ---------------------------------------------
 
+    // clip-path parses into the typed CssClipPath the paint pipeline consumes
+    // (a basic shape, a geometry box, a url() reference, or none) — not the
+    // raw keyword/function tokens these tests originally asserted.
+
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
     [SpecFact]
     public void Clip_path_none_parses()
-        => Single("clip-path: none;", PropertyId.ClipPath).Should().Be(new CssKeyword("none"));
+        => Single("clip-path: none;", PropertyId.ClipPath).Should().Be(CssClipPath.None);
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
     [SpecFact]
     public void Clip_path_url_reference_parses()
-        => Single("clip-path: url(#m);", PropertyId.ClipPath).Should().Be(new CssUrl("#m"));
+    {
+        var value = Single("clip-path: url(#m);", PropertyId.ClipPath);
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        clip.IsUrl.Should().BeTrue();
+        clip.UrlFragmentId.Should().Be("m", "the leading # is CSS syntax, not part of the fragment id");
+    }
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
     [SpecFact]
     public void Clip_path_circle_basic_shape_parses_as_function()
     {
         var value = Single("clip-path: circle(50%);", PropertyId.ClipPath);
-        value.Should().BeOfType<CssFunctionValue>();
-        ((CssFunctionValue)value).Name.Should().Be("circle");
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        var circle = clip.Shape.Should().BeOfType<CssCircleShape>().Subject;
+        circle.Radius.Should().Be(CssLengthPercentage.FromPercentage(50));
     }
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
@@ -49,8 +59,10 @@ public sealed class MaskingTests
     public void Clip_path_inset_basic_shape_parses_as_function()
     {
         var value = Single("clip-path: inset(10px 20px 30px 40px);", PropertyId.ClipPath);
-        value.Should().BeOfType<CssFunctionValue>();
-        ((CssFunctionValue)value).Name.Should().Be("inset");
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        var inset = clip.Shape.Should().BeOfType<CssInsetShape>().Subject;
+        inset.Top.Should().Be(CssLengthPercentage.FromLength(new CssLength(10, CssLengthUnit.Px)));
+        inset.Left.Should().Be(CssLengthPercentage.FromLength(new CssLength(40, CssLengthUnit.Px)));
     }
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
@@ -58,19 +70,31 @@ public sealed class MaskingTests
     public void Clip_path_polygon_basic_shape_parses_as_function()
     {
         var value = Single("clip-path: polygon(0% 0%, 100% 0%, 100% 100%);", PropertyId.ClipPath);
-        value.Should().BeOfType<CssFunctionValue>();
-        ((CssFunctionValue)value).Name.Should().Be("polygon");
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        var polygon = clip.Shape.Should().BeOfType<CssPolygonShape>().Subject;
+        polygon.Vertices.Should().HaveCount(3);
+        polygon.FillRule.Should().Be(CssFillRule.Nonzero, "nonzero is the default fill rule");
     }
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
     [SpecFact]
     public void Clip_path_geometry_box_border_box_keyword_parses()
-        => Single("clip-path: border-box;", PropertyId.ClipPath).Should().Be(new CssKeyword("border-box"));
+    {
+        var value = Single("clip-path: border-box;", PropertyId.ClipPath);
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        clip.GeometryBox.Should().Be(CssGeometryBox.BorderBox);
+        clip.Shape.Should().BeNull("a geometry-box keyword alone clips to the box itself");
+    }
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
     [SpecFact]
     public void Clip_path_geometry_box_margin_box_keyword_parses()
-        => Single("clip-path: margin-box;", PropertyId.ClipPath).Should().Be(new CssKeyword("margin-box"));
+    {
+        var value = Single("clip-path: margin-box;", PropertyId.ClipPath);
+        var clip = value.Should().BeOfType<CssClipPath>().Subject;
+        clip.GeometryBox.Should().Be(CssGeometryBox.MarginBox);
+        clip.Shape.Should().BeNull();
+    }
 
     [Spec("css-masking-1", "https://www.w3.org/TR/css-masking-1/#the-clip-path", section: "6.1")]
     [SpecFact]
