@@ -125,6 +125,30 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             : RenderCpu(list, width, height, scale, viewportTransform, opaqueBackground);
     }
 
+    public RenderedBitmap RenderFiltered(PaintList list, LayoutRect viewport, float scale,
+        IReadOnlyList<FilterFunction> filters)
+    {
+        var unfiltered = Render(list, viewport, scale, opaqueBackground: false);
+        if (filters.Count == 0) return unfiltered;
+
+        // Wrap the straight-RGBA pixels (no copy), run the chain at device
+        // resolution, then read the result back out. ApplyFilterChain may return
+        // a rebuilt image (drop-shadow) — the wrapper stays owned by the using,
+        // the rebuilt result is disposed after readback.
+        using var layer = SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(unfiltered.Rgba, unfiltered.Width, unfiltered.Height);
+        var filtered = ApplyFilterChain(layer, filters, scale);
+        try
+        {
+            var rgba = new byte[filtered.Width * filtered.Height * 4];
+            filtered.CopyPixelDataTo(rgba);
+            return new RenderedBitmap(filtered.Width, filtered.Height, rgba);
+        }
+        finally
+        {
+            if (!ReferenceEquals(filtered, layer)) filtered.Dispose();
+        }
+    }
+
     public GpuPaintTexture RenderTexture(
         PaintList list,
         LayoutRect viewport,

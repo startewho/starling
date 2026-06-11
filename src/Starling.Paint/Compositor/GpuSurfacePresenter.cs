@@ -106,6 +106,27 @@ public sealed unsafe class GpuSurfacePresenter : IDisposable
         }
     }
 
+    internal static bool SupportsLayerFilters(IReadOnlyList<DisplayList.FilterFunction> filters)
+        => GpuFilterEngine.Supports(filters);
+
+    internal GpuPaintTexture? ApplyLayerFilters(GpuPaintTexture source,
+        IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+    {
+        lock (_gate)
+        {
+            try
+            {
+                return _engine.FilterEngine.Apply(source, filters, scale);
+            }
+            catch (InvalidOperationException)
+            {
+                // Apply consumed the source either way; null sends the caller
+                // down the legacy bracket path.
+                return null;
+            }
+        }
+    }
+
     /// <summary>
     /// Sets the surface size in device pixels. Call after creation and when the
     /// framebuffer size changes. <see cref="PresentOps"/> also reconfigures when

@@ -285,8 +285,19 @@ internal sealed class Compositor
 
         if (layer.Bounds.Width > 0 && layer.Bounds.Height > 0 && effectiveOpacity > 0f)
         {
-            EmitLayerTiles(layer, ops, viewport, scale,
-                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            // A layer-root `filter` chain rides the layer (LTF; see
+            // CompositorLayer.Filters) and is applied ONCE to the whole rastered
+            // layer here — not re-run inside every tile raster it overlaps.
+            if (layer.Filters is { Count: > 0 } filters)
+            {
+                EmitFilteredLayer(layer, filters, ops, viewport, scale,
+                    effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            }
+            else
+            {
+                EmitLayerTiles(layer, ops, viewport, scale,
+                    effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            }
         }
 
         for (; childIndex < layer.Children.Count; childIndex++)
@@ -479,6 +490,166 @@ internal sealed class Compositor
         }
     }
 
+    /// <summary>
+    /// Emits a layer whose root carries a CSS <c>filter</c> chain
+    /// (<see cref="CompositorLayer.Filters"/>). The slice is rastered ONCE into a
+    /// halo-padded whole-layer surface, the chain runs once over it (on the GPU
+    /// when the texture cache supports it, else through the backend's CPU chain),
+    /// and the result is cached and blended as a single quad — instead of
+    /// re-running the chain inside every tile raster the group overlaps.
+    /// Oversized surfaces and chains the GPU path can't run fall back to the
+    /// legacy per-tile path by re-wrapping the slice in its PushFilter bracket.
+    /// </summary>
+    private void EmitFilteredLayer(
+        CompositorLayer layer, IReadOnlyList<DisplayList.FilterFunction> filters, List<LayerBlend> ops,
+        LayoutRect viewport, float scale, Matrix2D effectiveTransform,
+        float effectiveOpacity, Rect? effectiveClip, IGpuLayerTextureCache? textureCache)
+    {
+        var s = (double)scale;
+        var pad = DisplayList.FilterFunction.HaloPadding(filters);
+        var bounds = layer.Bounds;
+        var padded = new LayoutRect(bounds.X - pad, bounds.Y - pad, bounds.Width + 2 * pad, bounds.Height + 2 * pad);
+        var devW = Math.Max(1, (int)Math.Ceiling(padded.Width * s));
+        var devH = Math.Max(1, (int)Math.Ceiling(padded.Height * s));
+
+        // Same surface guard as the legacy offscreen group path, plus the wgpu
+        // texture-dimension cap; an unsupported chain on the GPU path also falls
+        // back (checked BEFORE rastering so nothing is wasted).
+        var oversized = (long)devW * devH > 64L * 1024 * 1024 || devW > MaxFilterSurfaceDimension || devH > MaxFilterSurfaceDimension;
+        if (oversized || (textureCache is not null && !textureCache.SupportsLayerFilters(filters)))
+        {
+            EmitLayerTiles(WrapInFilterBracket(layer, filters, padded), ops, viewport, scale,
+                effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+            return;
+        }
+
+        // Viewport cull on the padded, transformed extent — the single-surface
+        // equivalent of the per-tile cull. The halo is part of the extent, so a
+        // layer whose blur bleeds into view still paints.
+        var pageToDevice = Matrix2D.Translate(-viewport.X * s, -viewport.Y * s).Multiply(Matrix2D.Scale(s, s));
+        var pageTransform = pageToDevice.Multiply(effectiveTransform);
+        var devAabb = TransformedAabb(new Rect(padded.X, padded.Y, padded.Width, padded.Height), pageTransform);
+        var outW = (int)Math.Ceiling(viewport.Width * s);
+        var outH = (int)Math.Ceiling(viewport.Height * s);
+        if (devAabb.Right < 0 || devAabb.Bottom < 0 || devAabb.X > outW || devAabb.Y > outH)
+            return;
+
+        Rect? clipDev = effectiveClip is { } cp
+            ? TransformedAabb(new Rect(cp.X, cp.Y, cp.Width, cp.Height), pageToDevice)
+            : null;
+
+        // Whole-surface cache key: column/row -1 mark the filtered single-surface
+        // entry so it can never collide with a real (col, row) tile of this layer.
+        // A layer without an element id (a filtered ::before glow) keys by its
+        // content hash instead, so two such layers never thrash one slot —
+        // identical content+chain sharing a surface is correct, not a collision.
+        // ContentHash already folds the filter chain; the surface size folds in so
+        // a zoom that changes the padded extent re-keys the cached result.
+        var key = new TileKey(layer.LayerId != 0 ? layer.LayerId : layer.ContentHash, -1, -1, scale);
+        var opHash = FilteredOpHash(layer.ContentHash, devW, devH);
+
+        if (textureCache is not null)
+        {
+            if (_tileGrid.TryGetResidentTile(key, opHash, out var resident)
+                && textureCache.HasResidentTexture(opHash, resident.Width, resident.Height))
+            {
+                _frameTileHits++;
+                ops.Add(LayerBlend.ResidentTexture(resident.Width, resident.Height, opHash,
+                    FilteredLocalToDevice(pageTransform, padded, resident.Width, resident.Height),
+                    effectiveOpacity, clipDev));
+                return;
+            }
+
+            _frameTileMisses++;
+            if (_backend is not IGpuTexturePaintBackend gpuBackend)
+            {
+                throw new InvalidOperationException("GPU surface rendering requires a GPU texture paint backend.");
+            }
+
+            var source = gpuBackend.RenderTexture(layer.Items, padded, scale, opaqueBackground: false, textureCache.GpuDevice);
+            // ApplyLayerFilters consumes the source either way; a null result means
+            // the chain unexpectedly failed at run time — re-raster the legacy way
+            // rather than present unfiltered content.
+            var filtered = textureCache.ApplyLayerFilters(source, filters, scale);
+            if (filtered is null)
+            {
+                EmitLayerTiles(WrapInFilterBracket(layer, filters, padded), ops, viewport, scale,
+                    effectiveTransform, effectiveOpacity, effectiveClip, textureCache);
+                return;
+            }
+
+            textureCache.AdoptTexture(opHash, filtered);
+            _tileGrid.PutResidentTile(key, opHash, filtered.Width, filtered.Height);
+            ops.Add(LayerBlend.ResidentTexture(filtered.Width, filtered.Height, opHash,
+                FilteredLocalToDevice(pageTransform, padded, filtered.Width, filtered.Height),
+                effectiveOpacity, clipDev));
+            return;
+        }
+
+        if (_tileGrid.TryGetTile(key, opHash, out var bmp))
+        {
+            _frameTileHits++;
+        }
+        else
+        {
+            _frameTileMisses++;
+            bmp = _backend.RenderFiltered(layer.Items, padded, scale, filters);
+            _tileGrid.PutTile(key, opHash, bmp);
+        }
+
+        ops.Add(LayerBlend.Bitmap(bmp, opHash,
+            FilteredLocalToDevice(pageTransform, padded, bmp.Width, bmp.Height),
+            effectiveOpacity, clipDev));
+    }
+
+    // WebGPU's guaranteed minimum maxTextureDimension2D; a filtered surface past
+    // it must tile (the legacy bracket path) instead of failing texture creation.
+    private const int MaxFilterSurfaceDimension = 8192;
+
+    /// <summary>
+    /// Maps a filtered surface's texel space (0..texW, 0..texH) onto output
+    /// device px. Unlike a tile (always 1 texel = 1/scale page px), the filtered
+    /// result may be smaller than its padded page rect (large blurs render at
+    /// reduced resolution), so the scale is derived from the rect/texture ratio
+    /// and the blend quad's linear sampling upscales.
+    /// </summary>
+    private static Matrix2D FilteredLocalToDevice(Matrix2D pageTransform, LayoutRect padded, int texW, int texH)
+        => pageTransform.Multiply(
+            Matrix2D.Translate(padded.X, padded.Y)
+                .Multiply(Matrix2D.Scale(padded.Width / Math.Max(1, texW), padded.Height / Math.Max(1, texH))));
+
+    // Whole-surface op key for a filtered layer. The tag keeps it out of every
+    // TileOpHash (which mixes non-negative col/row) and the overlay-swatch range.
+    private static long FilteredOpHash(long layerContentHash, int devW, int devH)
+        => unchecked(((layerContentHash ^ (long)0x46494C5445520000) * 1099511628211L)
+                     ^ (((long)devW << 21) | (uint)devH));
+
+    /// <summary>
+    /// Legacy fallback: re-wraps a filtered layer's slice in its PushFilter
+    /// bracket — the form the per-tile raster path applies inline — with bounds
+    /// padded for the blur halo so the tiles cover the bleed. Keeps oversized
+    /// surfaces and GPU-unsupported chains rendering exactly as before.
+    /// </summary>
+    private static CompositorLayer WrapInFilterBracket(
+        CompositorLayer layer, IReadOnlyList<DisplayList.FilterFunction> filters, LayoutRect paddedBounds)
+    {
+        var items = new DisplayList.DisplayList();
+        // The bracket seeds the group-bounds union with the element's border box
+        // when the source box is known (what Visit used to emit), else the
+        // painted union — either is a valid seed, the union only grows.
+        var bracketBounds = layer.SourceBox is { } src
+            ? new Rect(layer.OriginParentX + src.Frame.X, layer.OriginParentY + src.Frame.Y, src.Frame.Width, src.Frame.Height)
+            : layer.Bounds;
+        items.Add(new DisplayList.PushFilter(bracketBounds, filters));
+        var slice = layer.Items.Items;
+        for (var i = 0; i < slice.Count; i++)
+            items.Add(slice[i]);
+        items.Add(DisplayList.PopFilter.Instance);
+        return new CompositorLayer(items, paddedBounds, layer.Transform, layer.Opacity, layer.Clip,
+            [], layer.ContentHash, layer.LayerId,
+            layer.SourceBox, layer.OriginParentX, layer.OriginParentY, layer.ZIndex, layer.InheritedClip);
+    }
+
     private readonly struct SurfaceTextureCache(GpuSurfacePresenter presenter) : IGpuLayerTextureCache
     {
         public bool HasResidentTexture(long contentHash, int width, int height)
@@ -488,6 +659,13 @@ internal sealed class Compositor
 
         public void AdoptTexture(long contentHash, GpuPaintTexture texture)
             => presenter.AdoptTexture(contentHash, texture);
+
+        public bool SupportsLayerFilters(IReadOnlyList<DisplayList.FilterFunction> filters)
+            => GpuSurfacePresenter.SupportsLayerFilters(filters);
+
+        public GpuPaintTexture? ApplyLayerFilters(GpuPaintTexture source,
+            IReadOnlyList<DisplayList.FilterFunction> filters, float scale)
+            => presenter.ApplyLayerFilters(source, filters, scale);
     }
 
     /// <summary>
