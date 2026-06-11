@@ -3185,9 +3185,19 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     private ComputedStyle? AnimatedStyle(LaidOutPage page, LayoutBox box)
     {
         if (box.Element is not { } el) return null;
-        return _frameAnimatedElements.Contains(el) || _frameTransitionElements.Contains(el)
-            ? page.Style.ComputeWithAnimations(el, _animClockMs)
-            : null;
+        if (!_frameAnimatedElements.Contains(el) && !_frameTransitionElements.Contains(el))
+            return null;
+
+        // The box's style IS the cascade output of the last relayout (the box
+        // tree builds via ComputeWithAnimations), and any static-style change
+        // forces a relayout that refreshes it. So a pure animation tick only
+        // needs the sampling overlay — re-running the full ancestor cascade
+        // per animating element per frame was ~85% of the animations demo's
+        // UI thread. Trigger detection (declaration diffs, transition starts)
+        // stays on the relayout path, where the static cascade is fresh.
+        return box.Style is { } baseStyle
+            ? page.Style.Compositor.Sample(el, baseStyle)
+            : page.Style.ComputeWithAnimations(el, _animClockMs);
     }
 
     /// <summary>
