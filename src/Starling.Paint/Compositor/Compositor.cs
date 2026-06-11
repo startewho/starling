@@ -390,6 +390,9 @@ internal sealed class Compositor
         // visible tile still serves from cache.
         var prepared = _tileGrid.GetOrPrepare(layer.ContentHash, layer.Items);
 
+        // See the smallCpuRaster branch below. Decided per LAYER, never per tile.
+        var smallCpuRaster = (long)layerDevW * layerDevH <= SmallLayerCpuRasterArea;
+
         for (var row = row0; row <= row1; row++)
         {
             var th = Math.Min(TH, layerDevH - row * TH);
@@ -425,6 +428,32 @@ internal sealed class Compositor
 
                 if (textureCache is not null)
                 {
+                    // Small layers skip the GPU canvas: its flush pays a
+                    // synchronous scheduling readback per texture (~ms, a full
+                    // GPU round-trip) regardless of pixel count, so a tiny
+                    // animating slice — exactly what re-rasters every frame —
+                    // is far cheaper rastered on the CPU and uploaded. The
+                    // whole-layer rule (smallCpuRaster is per LAYER) keeps one
+                    // layer's tiles on one rasterizer, so abutting tiles never
+                    // mix antialiasers.
+                    if (smallCpuRaster)
+                    {
+                        if (_tileGrid.TryGetTile(key, tileHash, out var cpuTile))
+                        {
+                            _frameTileHits++;
+                        }
+                        else
+                        {
+                            _frameTileMisses++;
+                            cpuTile = _backend.RenderSmallBitmap(layer.Items, tileRectPage, scale, opaqueBackground: false);
+                            _tileGrid.PutTile(key, tileHash, cpuTile);
+                        }
+
+                        ops.Add(LayerBlend.Bitmap(cpuTile, opHash,
+                            tileLocalToDevice, effectiveOpacity, clipDev));
+                        continue;
+                    }
+
                     EmitGpuTextureTile(ops, layer.Items, tileRectPage, scale, key, tileHash, opHash,
                         tileLocalToDevice, effectiveOpacity, clipDev, textureCache);
                     continue;
@@ -820,6 +849,11 @@ internal sealed class Compositor
     // A layer spanning this many tiles or fewer renders all of them (no viewport cull) —
     // small/transformed layers are cheap and culling them is fragile under rotation.
     private const int MaxUnculledTiles = 4;
+
+    // Layers at or under this device-pixel area rasterize on the CPU and
+    // upload, even on the GPU texture path — the WebGPU canvas's fixed
+    // per-flush cost dwarfs the pixel work at this size.
+    private const long SmallLayerCpuRasterArea = 64 * 1024;
 
     // Per-tile op key for the GPU texture cache: unique per (tile position, content),
     // so each tile uploads one texture and re-uploads when the layer content changes.

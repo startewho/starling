@@ -126,4 +126,28 @@ public sealed class BoxShadowDeviceScaleCacheTests
         backend.BoxShadowRasterizationsForTest.Should().Be(2,
             "both scales then serve from their own cached raster");
     }
+
+    [TestMethod]
+    [Spec("css-backgrounds-3", "https://www.w3.org/TR/css-backgrounds-3/#box-shadow", section: "6")]
+    public void Large_blur_shadow_downsamples_but_still_lands_at_the_offset_box()
+    {
+        // Blur 40 at scale 2 → device sigma 40, well past the downsample
+        // threshold. The shadow must still be dark at the offset box's centre
+        // and fade past the blur halo — pinning the proportional small-raster
+        // geometry (a rounding bug would displace the whole shadow).
+        var list = new PaintList();
+        list.Add(new DrawBoxShadow(new LayoutRect(60, 60, 80, 60), CornerRadii.None,
+            OffsetX: 10, OffsetY: 10, Blur: 40, Spread: 0, Black, Inset: false));
+
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var bmp = backend.Render(list, new LayoutSize(260, 240), 2f);
+
+        // Centre of the offset box (CSS 110,100 → device 220,200): solidly dark.
+        IsDark(bmp.GetPixel(220, 200)).Should().BeTrue("the shadow core is opaque");
+        // Far corner outside the halo: untouched white.
+        IsWhite(bmp.GetPixel(8, 8)).Should().BeTrue("the halo must not reach the far corner");
+        // Just outside the box edge: penumbra — neither solid nor white.
+        var p = bmp.GetPixel(330, 200);
+        IsWhite(p).Should().BeFalse("the blur bleeds past the box edge");
+    }
 }

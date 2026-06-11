@@ -125,6 +125,18 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
             : RenderCpu(list, width, height, scale, viewportTransform, opaqueBackground);
     }
 
+    public RenderedBitmap RenderSmallBitmap(PaintList list, LayoutRect viewport, float scale, bool opaqueBackground)
+    {
+        ArgumentNullException.ThrowIfNull(list);
+        var width = (int)Math.Ceiling(viewport.Width * scale);
+        var height = (int)Math.Ceiling(viewport.Height * scale);
+        var viewportTransform = Matrix2D.Translate(-viewport.X, -viewport.Y);
+        // Always the CPU rasterizer: for the small surfaces the compositor
+        // routes here, the WebGPU canvas's per-flush scheduling readback
+        // costs more than rastering the pixels.
+        return RenderCpu(list, width, height, scale, viewportTransform, opaqueBackground);
+    }
+
     public RenderedBitmap RenderFiltered(PaintList list, LayoutRect viewport, float scale,
         IReadOnlyList<FilterFunction> filters)
     {
@@ -2485,18 +2497,47 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
     private int _boxShadowRasterizations;
     internal int BoxShadowRasterizationsForTest => _boxShadowRasterizations;
 
+    // Above this sigma the shadow rasters at reduced resolution and upscales
+    // once at the end — the Gaussian's cost is O(pixels x kernel), so both
+    // shrink with the factor. A big card shadow (blur 40 px at a 2x display)
+    // cost ~200 ms at full resolution and single-digit ms downsampled; the
+    // upscale of an inherently low-passed image is visually exact.
+    private const float MaxShadowSigmaPerRaster = 4f;
+
     private Image<Rgba32> RasterizeBoxShadow(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
     {
         // Grow each corner radius by the spread so the silhouette stays a
         // rounded rect that hugs the box. A negative spread shrinks it.
         var grown = GrowRadii(shadow.Radii, shadow.Spread);
+        var sigma = (float)(Math.Max(0, shadow.Blur) / 2d);
+        var down = (int)Math.Clamp(MathF.Floor(sigma / MaxShadowSigmaPerRaster), 1, 8);
+
+        if (down > 1)
+        {
+            // Proportional small raster: every coordinate divides by the
+            // factor exactly (no per-scale rounding constants), so the single
+            // upscale lands the silhouette where the full-resolution raster
+            // would have.
+            var w = Math.Max(1, (geometry.ImageWidth + down - 1) / down);
+            var h = Math.Max(1, (geometry.ImageHeight + down - 1) / down);
+            var silhouetteSmall = new LayoutRect(
+                geometry.Margin / (double)down, geometry.Margin / (double)down,
+                geometry.SilhouetteWidth / (double)down, geometry.SilhouetteHeight / (double)down);
+            var shapeSmall = BuildRoundedRectPath(silhouetteSmall, ScaleRadii(grown, 1f / down));
+            var small = new Image<Rgba32>(w, h, new Rgba32(0, 0, 0, 0));
+            small.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shapeSmall)));
+            small.Mutate(ctx => ctx.GaussianBlur(sigma / down));
+            small.Mutate(ctx => ctx.Resize(geometry.ImageWidth, geometry.ImageHeight));
+            return small;
+        }
+
         var silhouette = new LayoutRect(geometry.Margin, geometry.Margin, geometry.SilhouetteWidth, geometry.SilhouetteHeight);
         var shape = BuildRoundedRectPath(silhouette, grown);
 
         var shadowImage = new Image<Rgba32>(geometry.ImageWidth, geometry.ImageHeight, new Rgba32(0, 0, 0, 0));
         shadowImage.Mutate(ctx => ctx.Paint(c => c.Fill(Brushes.Solid(ToColor(shadow.Color)), shape)));
         if (shadow.Blur > 0)
-            shadowImage.Mutate(ctx => ctx.GaussianBlur((float)(Math.Max(0, shadow.Blur) / 2d)));
+            shadowImage.Mutate(ctx => ctx.GaussianBlur(sigma));
 
         return shadowImage;
     }

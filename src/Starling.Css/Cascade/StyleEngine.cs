@@ -565,6 +565,24 @@ public sealed class StyleEngine
     /// of the selector-match input and would otherwise contaminate entries
     /// computed under a different context.
     /// </remarks>
+    /// <summary>
+    /// Compute under an interactive pseudo-class context WITH a caller-owned
+    /// cache. The general overloads bypass the cache under a context so a
+    /// shared cache cannot mix entries from different pseudo-class states. A
+    /// hover pass re-cascades a subtree plus the ancestor chain under ONE
+    /// fixed context, where a private per-pass cache is safe — and saves the
+    /// repeated ancestor-chain walks that made every hover toggle re-cascade
+    /// the same ancestors once per affected element.
+    /// </summary>
+    public ComputedStyle ComputeForContext(Element element, SelectorMatchContext context, CascadeCache cache)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(cache);
+        var elementsStyled = 0;
+        return ComputeWithAncestors(element, context, cache, ref elementsStyled);
+    }
+
     public ComputedStyle Compute(Element element, SelectorMatchContext? context, CascadeCache? cache)
     {
         ArgumentNullException.ThrowIfNull(element);

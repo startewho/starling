@@ -126,7 +126,29 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // rAF burst that writes nothing but data-* / aria-* / js* attributes no
     // longer forces a full reflow every frame. See LiveTick.
     private int _lastLayoutInvalidationVersion;
+
+    // Placed text fragments for selection / caret / find, derived from the
+    // shown page's box tree. Rebuilt LAZILY through the Fragments property: a
+    // live page relayouts every animation tick, and walking the whole tree per
+    // tick costs milliseconds nobody uses unless they are mid-selection or
+    // mid-find. ShowPage only marks them dirty.
     private List<BoxHitTester.PlacedFragment> _fragments = [];
+    private bool _fragmentsDirty;
+    private bool _findIndexDirty;
+
+    private List<BoxHitTester.PlacedFragment> Fragments
+    {
+        get
+        {
+            if (_fragmentsDirty && _currentPage is { } page)
+            {
+                _fragments = BoxHitTester.CollectFragments(page.Root);
+                _fragmentsDirty = false;
+            }
+
+            return _fragments;
+        }
+    }
 
     private double _currentScale = 1.0;
 
@@ -214,6 +236,13 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     // immediate re-key of the base layer's slice — the demotion instead folds
     // into whatever full rebuild happens next.
     private readonly FrameCountdownSet<DomElement> _recentlyAnimated = new(RecentAnimationFrames);
+
+    // Hover-affected elements stay promoted for ~3 seconds after the last
+    // hover event (vs the 3-frame animation hysteresis): repeated enter/leave
+    // toggles then flip styles within an EXISTING layer instead of re-keying
+    // the base slice (and re-rastering its tiles) on every promotion flip.
+    private const int RecentHoverFrames = 180;
+    private readonly FrameCountdownSet<DomElement> _recentlyHovered = new(RecentHoverFrames);
     private const int RecentAnimationFrames = 3;
 
     // Scoped-relayout reuse (issue #82 item 1). _promotedBaseline snapshots, at
@@ -317,9 +346,20 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // bubble normally.
         _pageCanvas.PointerWheelChanged += OnPageWheel;
 
-        // ~60 Hz live-page pump (started only while a page has a JS context).
-        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-        _liveTimer.Tick += (_, _) => LiveTick();
+        // Live-page pump. The cadence comes from the compositor's frame
+        // callbacks (TryScheduleVsyncTick): each tick re-requests the next
+        // vsync, so the loop runs at the display refresh instead of
+        // timer-interval PLUS tick-work (a 16 ms DispatcherTimer reschedules
+        // after the handler returns, which capped the loop at ~39 fps under
+        // load). The timer survives as a ~30 fps WATCHDOG: it only fires a
+        // tick when no vsync tick has run recently — the headless test
+        // platform delivers no frame callbacks, and it keeps the loop alive
+        // if a frame request is ever dropped.
+        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(32) };
+        _liveTimer.Tick += (_, _) =>
+        {
+            if (Environment.TickCount64 - _lastLiveTickAtMs >= 30) LiveTick();
+        };
 
         // Caret blink — toggles the overlay's visibility on a fixed cadence
         // while a field is focused; stopped (and the overlay removed) on blur.
@@ -489,6 +529,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             _rootScrollSynced = default;
             // Promotion bookkeeping names elements of the outgoing document.
             _recentlyAnimated.Clear();
+            _recentlyHovered.Clear();
             _frameAnimatedElements.Clear();
             _frameTransitionElements.Clear();
             _promotedBaseline.Clear();
@@ -542,8 +583,8 @@ internal sealed class WebviewPanel : UserControl, IDisposable
                 _scroll.Offset = new Vector(0, 0);
             }
 
-            _fragments = BoxHitTester.CollectFragments(page.Root);
-            RebuildFindIndex();
+            _fragmentsDirty = true;
+            _findIndexDirty = true;
 
             // Re-establish (or drop) the text caret against the new box tree. The
             // caret overlay belongs to the prior layout's positions, so it is always
@@ -1638,10 +1679,35 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
         if (scripting is null && !_liveStopwatch.IsRunning) _liveStopwatch.Restart();
         if (!_liveTimer.IsEnabled) _liveTimer.Start();
+        TryScheduleVsyncTick();
+    }
+
+    // Vsync scheduling state. _lastLiveTickAtMs gates the watchdog timer;
+    // _vsyncTickScheduled keeps at most one frame callback in flight.
+    private long _lastLiveTickAtMs;
+    private bool _vsyncTickScheduled;
+
+    /// <summary>Requests the next compositor frame to drive <see cref="LiveTick"/>.
+    /// Re-armed at the end of every vsync tick while the loop runs; a no-op when
+    /// a request is already in flight or the panel has no TopLevel yet (the
+    /// watchdog timer covers those frames).</summary>
+    private void TryScheduleVsyncTick()
+    {
+        if (_vsyncTickScheduled || !_liveTimer.IsEnabled) return;
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
+        _vsyncTickScheduled = true;
+        top.RequestAnimationFrame(_ =>
+        {
+            _vsyncTickScheduled = false;
+            if (!_liveTimer.IsEnabled) return;
+            LiveTick();
+            TryScheduleVsyncTick();
+        });
     }
 
     private void LiveTick()
     {
+        _lastLiveTickAtMs = Environment.TickCount64;
         var page = _currentPage;
         if (page is null)
         {
@@ -1657,6 +1723,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // recently-animated window decays in step.
         page.Document.DecayRecentMutations();
         _recentlyAnimated.Decay();
+        _recentlyHovered.Decay();
 
         using var detachedActivity = GuiActivityScope.Detached();
 
@@ -1772,7 +1839,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // Stop the timer once neither scripting nor animation needs it — and the
         // promotion-hysteresis window has fully decayed, so a transiently
         // animated element does not stay promoted (its own layer) forever.
-        if (scripting is null && !animating && _recentlyAnimated.Count == 0)
+        if (scripting is null && !animating && _recentlyAnimated.Count == 0 && _recentlyHovered.Count == 0)
         {
             _liveTimer.Stop();
             _boundScripting = null;
@@ -2847,6 +2914,21 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var newOverrides = BuildHoverOverrides(_hoverElement, nowMs);
         var newScope = newOverrides is null ? null : new HashSet<DomElement>(newOverrides.Keys);
 
+        // Keep every hover-affected element promoted across the hover session
+        // (RecentHoverFrames) — the OLD set too, so the leave side reverts
+        // inside its existing layer instead of re-keying the base slice.
+        if (_hoverOverrides is not null)
+        {
+            foreach (var el in _hoverOverrides.Keys)
+                _recentlyHovered.Note(el);
+        }
+
+        if (newOverrides is not null)
+        {
+            foreach (var el in newOverrides.Keys)
+                _recentlyHovered.Note(el);
+        }
+
         // Elements leaving the scope revert: re-cascade each once with the new
         // hover context so the compositor sees the hover->base change and starts
         // the reverse transition. They then animate out via the live loop's
@@ -2856,10 +2938,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             var newCtx = _hoverElement is null
                 ? null
                 : new SelectorMatchContext { HoveredElement = _hoverElement };
+            var revertCache = new CascadeCache();
             foreach (var el in _hoverScope)
             {
                 if (newScope is not null && newScope.Contains(el)) continue;
-                style.ComputeWithAnimations(el, nowMs, newCtx);
+                var revertStatic = newCtx is null
+                    ? style.Compute(el, context: null, revertCache)
+                    : style.ComputeForContext(el, newCtx, revertCache);
+                style.Compositor.Compose(el, revertStatic, nowMs);
             }
         }
 
@@ -2945,6 +3031,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             if (!_promotedBaseline.Contains(el)) return false;
             if (page.Document.WasRecentlyMutated(el)) continue;
             if (_recentlyAnimated.Contains(el)) continue;
+            if (_recentlyHovered.Contains(el)) continue;
             if (HasActiveSample(page, el)) continue;
             return false;
         }
@@ -2997,9 +3084,10 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         get
         {
-            if (_fragments.Count == 0) return null;
-            var first = _fragments[0];
-            var last = _fragments[^1];
+            var frags = Fragments;
+            if (frags.Count == 0) return null;
+            var first = frags[0];
+            var last = frags[^1];
             return ((first.X + 0.5, first.Y + (first.Height / 2)),
                     (last.X + last.Width - 0.5, last.Y + (last.Height / 2)));
         }
@@ -3029,6 +3117,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         var ctx = new SelectorMatchContext { HoveredElement = hovered };
         var animate = _prepareAnimationFrame is not null;
         var result = new Dictionary<DomElement, ComputedStyle>();
+        // Per-pass cascade caches (one per context — entries must not mix
+        // pseudo-class states). Without them every Compose re-walked the same
+        // ancestor chain, which made a single hover toggle cost ~20 ms.
+        var ctxCache = new CascadeCache();
+        var baseCache = new CascadeCache();
 
         // The hovered element's subtree covers `.x:hover` (self) and
         // `.x:hover .descendant` rules.
@@ -3058,12 +3151,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // animation sample via ComputeWithAnimations.
         ComputedStyle? Compose(DomElement el)
         {
-            var hoverStatic = style.Compute(el, ctx);
+            var hoverStatic = style.ComputeForContext(el, ctx, ctxCache);
             // Compare the element's cascade with vs. without :hover; prune it when
             // nothing the painter emits changed (SamePaintProperties value-compares,
             // so identical cascades from two runs match).
-            if (SamePaintProperties(style.Compute(el), hoverStatic)) return null;
-            return animate ? style.ComputeWithAnimations(el, nowMs, ctx) : hoverStatic;
+            if (SamePaintProperties(style.Compute(el, context: null, baseCache), hoverStatic)) return null;
+            // Full compose (not Sample): the hover cascade change is exactly
+            // where transitions trigger, so the trigger detection must run.
+            return animate ? style.Compositor.Compose(el, hoverStatic, nowMs) : hoverStatic;
         }
 
         void Recurse(DomElement el)
@@ -3179,7 +3274,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         // The same hysteresis for animations/transitions: an element stays
         // promoted for a few frames after its last sample, so a transition end
         // does not re-key the base slice on its final frame.
-        return _recentlyAnimated.Contains(el);
+        return _recentlyAnimated.Contains(el) || _recentlyHovered.Contains(el);
     }
 
     private ComputedStyle? AnimatedStyle(LaidOutPage page, LayoutBox box)
@@ -3387,6 +3482,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         _promotedBaseline.UnionWith(_frameAnimatedElements);
         _promotedBaseline.UnionWith(_frameTransitionElements);
         _recentlyAnimated.CopyTo(_promotedBaseline);
+        _recentlyHovered.CopyTo(_promotedBaseline);
         page.Document.CollectRecentlyMutated(_promotedBaseline);
         _baselineScrollVersion = page.ScrollState.OffsetVersion;
     }
@@ -3409,10 +3505,11 @@ internal sealed class WebviewPanel : UserControl, IDisposable
         try
         {
             ClearSelectionOverlays();
-            if (_fragments.Count == 0) return;
+            var frags = Fragments;
+            if (frags.Count == 0) return;
 
-            var anchorCaret = SelectionModel.CaretFromPoint(_fragments, anchor.X, anchor.Y);
-            var cursorCaret = SelectionModel.CaretFromPoint(_fragments, cursor.X, cursor.Y);
+            var anchorCaret = SelectionModel.CaretFromPoint(frags, anchor.X, anchor.Y);
+            var cursorCaret = SelectionModel.CaretFromPoint(frags, cursor.X, cursor.Y);
             var range = SelectionModel.Order(anchorCaret, cursorCaret);
             if (range.IsEmpty)
             {
@@ -3421,14 +3518,14 @@ internal sealed class WebviewPanel : UserControl, IDisposable
             }
 
             var brush = new SolidColorBrush(AvColor.FromArgb(96, 80, 140, 255));
-            foreach (var r in SelectionModel.RectsFor(_fragments, range))
+            foreach (var r in SelectionModel.RectsFor(frags, range))
             {
                 var overlay = MakeOverlay(brush, r.X, r.Y, r.Width, r.Height);
                 _pageCanvas.Children.Add(overlay);
                 _selectionOverlays.Add(overlay);
             }
 
-            _selectionText = SelectionModel.TextFor(_fragments, range);
+            _selectionText = SelectionModel.TextFor(frags, range);
             _onStatus($"Selected {_selectionText.Length} chars — ⌘C to copy", false);
         }
         finally
@@ -3500,13 +3597,19 @@ internal sealed class WebviewPanel : UserControl, IDisposable
     {
         _findIndex.Clear();
         _findCursor = 0;
-        foreach (var f in _fragments)
+        foreach (var f in Fragments)
             _findIndex.Add((f.Y, f.Text));
     }
 
     private void FindNext()
     {
         ClearFindHighlight();
+        if (_findIndexDirty)
+        {
+            RebuildFindIndex();
+            _findIndexDirty = false;
+        }
+
         var query = (_findEntry.Text ?? string.Empty).Trim();
         if (query.Length == 0 || _findIndex.Count == 0) return;
 
@@ -3528,7 +3631,7 @@ internal sealed class WebviewPanel : UserControl, IDisposable
 
     private void FlashFindMatch(int idx)
     {
-        var f = _fragments[idx];
+        var f = Fragments[idx];
         var brush = new SolidColorBrush(AvColor.FromArgb(140, 255, 220, 70));
         var overlay = MakeOverlay(brush, f.X, f.Y, f.Width, f.Height);
         _pageCanvas.Children.Add(overlay);
