@@ -94,6 +94,15 @@ public sealed class TransitionEngine
         }
     }
 
+    /// <summary>Adds every element with at least one in-flight transition to
+    /// <paramref name="into"/>. The live compositor snapshots this once per
+    /// frame so its per-box probes are set lookups instead of enumerator
+    /// probes over the whole active table.</summary>
+    public void CollectActiveElements(ISet<Element> into)
+    {
+        foreach (var (element, _) in _active.Keys) into.Add(element);
+    }
+
     /// <summary>
     /// Called by the cascade after computing a property value for
     /// <paramref name="element"/>. If the property is transitionable and

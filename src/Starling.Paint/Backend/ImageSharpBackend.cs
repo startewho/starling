@@ -679,7 +679,7 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
                 break;
             case DrawBoxShadow shadow:
                 if (!BoxShadowIntersectsTarget(shadow, transforms.Peek(), target)) return;
-                DrawBoxShadow(canvas, shadow, scale, pendingImageSources);
+                DrawBoxShadow(canvas, shadow, scale, transforms.Peek(), pendingImageSources);
                 break;
             case DrawText text:
                 DrawText(canvas, text);
@@ -2400,29 +2400,90 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
     /// uses (so the device <paramref name="scale"/> composes correctly). Inset
     /// layers branch to <see cref="DrawInsetBoxShadow"/>.
     /// </summary>
-    private void DrawBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, float scale, DisposableBag pendingImageSources)
+    private void DrawBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, float scale, Matrix2D current, DisposableBag pendingImageSources)
     {
         if (shadow.Inset)
         {
-            DrawInsetBoxShadow(canvas, shadow, pendingImageSources);
+            DrawInsetBoxShadow(canvas, shadow, scale, current, pendingImageSources);
             return;
         }
 
-        if (!TryGetBoxShadowRasterGeometry(shadow, out var geometry)) return;
+        // Device-scale fast path: when the composed CSS transform is a pure
+        // translation, the shadow is rasterized AT DEVICE RESOLUTION (the blur
+        // sigma scales with the device scale, mirroring ApplyFilterChain), cached
+        // under a scale-aware key, and blitted 1:1 through an identity canvas
+        // transform. Without this every draw of a cached CSS-resolution shadow
+        // ran a CloningImageProcessor resample to device scale — 4.7 s of a 16 s
+        // hover-toggle trace on the animations demo. A non-translation transform
+        // falls back to the CSS-resolution raster the composed matrix resamples.
+        var fast = IsTranslationOnly(current);
+        var rasterScale = fast && scale > 0 ? scale : 1f;
+        var scaled = rasterScale == 1f ? shadow : ScaleShadow(shadow, rasterScale);
+        if (!TryGetBoxShadowRasterGeometry(scaled, out var geometry)) return;
 
-        var key = BoxShadowCacheKey.From(shadow, geometry);
+        var key = BoxShadowCacheKey.From(scaled, geometry, rasterScale);
         if (!_boxShadowCache.TryGet(key, out var shadowImage))
         {
-            shadowImage = RasterizeBoxShadow(shadow, geometry);
+            shadowImage = RasterizeBoxShadow(scaled, geometry);
+            Interlocked.Increment(ref _boxShadowRasterizations);
             _boxShadowCache.Put(key, shadowImage, pendingImageSources);
         }
 
-        canvas.DrawImage(
-            shadowImage,
-            new Rectangle(0, 0, geometry.ImageWidth, geometry.ImageHeight),
-            ToRectF(geometry.Destination),
-            _resampler);
+        var sourceRect = new Rectangle(0, 0, geometry.ImageWidth, geometry.ImageHeight);
+        if (fast)
+        {
+            DrawDeviceScaledShadow(canvas, shadowImage, sourceRect, new RectangleF(
+                (float)(geometry.Destination.X + current.E * rasterScale),
+                (float)(geometry.Destination.Y + current.F * rasterScale),
+                geometry.ImageWidth,
+                geometry.ImageHeight));
+            return;
+        }
+
+        canvas.DrawImage(shadowImage, sourceRect, ToRectF(geometry.Destination), _resampler);
     }
+
+    /// <summary>True when <paramref name="m"/> moves content without scaling,
+    /// rotating, or shearing it — the only transforms under which a
+    /// device-resolution shadow raster can be blitted 1:1.</summary>
+    private static bool IsTranslationOnly(Matrix2D m)
+        => m.A == 1 && m.B == 0 && m.C == 0 && m.D == 1;
+
+    /// <summary>Returns a copy of <paramref name="shadow"/> with every CSS
+    /// length scaled into device pixels, so the raster helpers produce a
+    /// device-resolution image without learning about scale themselves.</summary>
+    private static DrawBoxShadow ScaleShadow(DrawBoxShadow shadow, float scale) => shadow with
+    {
+        Bounds = new LayoutRect(
+            shadow.Bounds.X * scale, shadow.Bounds.Y * scale,
+            shadow.Bounds.Width * scale, shadow.Bounds.Height * scale),
+        Radii = ScaleRadii(shadow.Radii, scale),
+        OffsetX = shadow.OffsetX * scale,
+        OffsetY = shadow.OffsetY * scale,
+        Blur = shadow.Blur * scale,
+        Spread = shadow.Spread * scale,
+    };
+
+    /// <summary>Blits a device-resolution shadow raster at a device-pixel
+    /// destination under an identity transform. Source and destination are the
+    /// same size, so the draw is a plain blit — no resampling pass runs.</summary>
+    private static void DrawDeviceScaledShadow(DrawingCanvas canvas, Image<Rgba32> shadowImage, Rectangle sourceRect, RectangleF deviceDest)
+    {
+        canvas.Save(new DrawingOptions());
+        try
+        {
+            canvas.DrawImage(shadowImage, sourceRect, deviceDest);
+        }
+        finally
+        {
+            canvas.Restore();
+        }
+    }
+
+    // Cache-miss rasterizations since backend construction (outer + inset).
+    // Read by tests to prove a steady-state frame serves shadows from cache.
+    private int _boxShadowRasterizations;
+    internal int BoxShadowRasterizationsForTest => _boxShadowRasterizations;
 
     private Image<Rgba32> RasterizeBoxShadow(DrawBoxShadow shadow, BoxShadowRasterGeometry geometry)
     {
@@ -2453,28 +2514,48 @@ internal sealed partial class ImageSharpBackend : IPaintBackend, IGpuTexturePain
     /// the LEFT band, matching the spec's offset direction for inner shadows
     /// (verified against Chromium).
     /// </summary>
-    private void DrawInsetBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, DisposableBag pendingImageSources)
+    private void DrawInsetBoxShadow(DrawingCanvas canvas, DrawBoxShadow shadow, float scale, Matrix2D current, DisposableBag pendingImageSources)
     {
         if (shadow.Color.A == 0) return;
-        var padW = shadow.Bounds.Width;
-        var padH = shadow.Bounds.Height;
+
+        // Same device-scale fast path as the outer shadow: under a pure
+        // translation the ring is rasterized at device resolution and blitted
+        // 1:1, so no per-draw resample runs.
+        var fast = IsTranslationOnly(current);
+        var rasterScale = fast && scale > 0 ? scale : 1f;
+        var scaled = rasterScale == 1f ? shadow : ScaleShadow(shadow, rasterScale);
+
+        var padW = scaled.Bounds.Width;
+        var padH = scaled.Bounds.Height;
         if (padW <= 0 || padH <= 0) return;
 
-        var blur = Math.Max(0, shadow.Blur);
+        var blur = Math.Max(0, scaled.Blur);
         var margin = (int)Math.Ceiling(blur * 1.5) + 2;
         var imgW = (int)Math.Ceiling(padW) + 2 * margin;
         var imgH = (int)Math.Ceiling(padH) + 2 * margin;
         if ((long)imgW * imgH > 64_000_000L) return;
 
-        var key = BoxShadowCacheKey.FromInset(shadow, imgW, imgH, margin);
+        var key = BoxShadowCacheKey.FromInset(scaled, imgW, imgH, margin, rasterScale);
         if (!_boxShadowCache.TryGet(key, out var shadowImage))
         {
-            shadowImage = RasterizeInsetBoxShadow(shadow, imgW, imgH, margin);
+            shadowImage = RasterizeInsetBoxShadow(scaled, imgW, imgH, margin);
+            Interlocked.Increment(ref _boxShadowRasterizations);
             _boxShadowCache.Put(key, shadowImage, pendingImageSources);
         }
 
+        var sourceRect = new Rectangle(0, 0, imgW, imgH);
+        if (fast)
+        {
+            DrawDeviceScaledShadow(canvas, shadowImage, sourceRect, new RectangleF(
+                (float)(scaled.Bounds.X + current.E * rasterScale - margin),
+                (float)(scaled.Bounds.Y + current.F * rasterScale - margin),
+                imgW,
+                imgH));
+            return;
+        }
+
         var dest = new LayoutRect(shadow.Bounds.X - margin, shadow.Bounds.Y - margin, imgW, imgH);
-        canvas.DrawImage(shadowImage, new Rectangle(0, 0, imgW, imgH), ToRectF(dest), _resampler);
+        canvas.DrawImage(shadowImage, sourceRect, ToRectF(dest), _resampler);
     }
 
     private static Image<Rgba32> RasterizeInsetBoxShadow(DrawBoxShadow shadow, int imgW, int imgH, int margin)
