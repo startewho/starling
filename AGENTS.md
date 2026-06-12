@@ -312,6 +312,13 @@ allocation-conscious code. Do not introduce unsafe code, pooling, ref returns,
 `stackalloc`, `ValueTask`, or `CollectionsMarshal` unless the code is plausibly
 hot or allocation-heavy.
 
+**Comments and doc comments:** Use them sparingly. A comment should explain a
+decision local to the scope of the code when that decision isn't clear from the
+code itself. Skip comments that restate what the code already says.
+
+**Braces:** Always use braces for conditionals, loops, and other block
+statements, even when the body is a single line.
+
 **Hot paths:**
 
 - Avoid `Substring`; use `AsSpan`.
