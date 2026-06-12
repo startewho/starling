@@ -5,59 +5,40 @@ using Starling.Layout.Box;
 namespace Starling.Paint.Compositor;
 
 /// <summary>
-/// Identity of one cached tile: the layer it belongs to, its grid position, and the
-/// device scale it was rastered at. The slice content hash is NOT part of the key —
-/// it is validated on lookup so a content change overwrites the tile in place
-/// (bounding the cache to one entry per position, like <see cref="Cache.PictureCache"/>
-/// validates its <c>pageVersion</c>) rather than leaking a stale entry per version.
+/// Represents a unique identifier for a rasterized tile within a layer grid.
 /// </summary>
+/// <param name="LayerId">The unique identifier of the layer to which the tile belongs.</param>
+/// <param name="Col">The column index of the tile in the grid.</param>
+/// <param name="Row">The row index of the tile in the grid.</param>
+/// <param name="Scale">The scale factor applied to the tile.</param>
 internal readonly record struct TileKey(long LayerId, int Col, int Row, float Scale);
 
 /// <summary>
-/// A session-scoped, byte-budgeted LRU of rasterized layer tiles. Each compositor layer is tiled into a grid of fixed-size
-/// (<see cref="TileWidthDevice"/>×<see cref="TileHeightDevice"/> device px) tiles;
-/// only tiles intersecting the viewport are ever rastered, so per-frame raster is
-/// bounded by the viewport rather than the layer's full height, and — because every
-/// tile is well under the wgpu max-texture-dimension — the oversize-texture class of
-/// bug is structurally impossible. Tiles persist across frames keyed by
-/// <see cref="TileKey"/>; a scroll re-blits cached tiles and only rasters the
-/// newly-exposed row/column.
+/// A session-scoped, byte-budgeted LRU of rasterized layer tiles.
 /// </summary>
-/// <remarks>
-/// Tile geometry is WebRender-style: wide (2048) to span a typical viewport in ~one
-/// column, short (512) for fine vertical-scroll re-raster granularity. The grid is
-/// per-layer because Starling's compositor layer already plays WebRender's "slice"
-/// role. Recency is the linked-list order (front = most-recently-used); on a byte
-/// overflow the least-recently-used (back) tiles are dropped first. This is the
-/// CPU-side cache; the GPU keeps its own texture cache in <see cref="GpuBlendEngine"/>
-/// keyed by each tile op's content hash, evicted independently by frame age.
-/// </remarks>
-internal sealed class TileGrid
+internal sealed class TileGrid(long? maxBytes = null)
 {
     internal const int TileWidthDevice = 2048;
     internal const int TileHeightDevice = 512;
 
-    private const long DefaultBudgetBytes = 256L * 1024 * 1024; // 256 MB
-
-    private readonly long _maxBytes;
-    private readonly Dictionary<TileKey, LinkedListNode<Entry>> _map = new();
-    private readonly LinkedList<Entry> _lru = new(); // First = MRU, Last = LRU
+    private readonly long _maxBytes = maxBytes ?? 256L * 1024 * 1024; // 256 MB
+    private readonly Dictionary<TileKey, LinkedListNode<Entry>> _map = [];
+    private readonly LinkedList<Entry> _lru = []; // First = MRU, Last = LRU
     private long _bytes;
 
-    // Stable per-layer identity for the tile key. Keyed by the layer-root DOM element
-    // (stable across the per-frame layer-tree rebuild, like the old LayerCacheStore),
-    // so a layer's tiles persist across frames. Two distinct layers never collide even
-    // if their slices hash identically. Cleared with the tiles on navigation.
+    /// <summary>
+    /// Stable per-layer identity for the tile key. Keyed by the layer-root DOM element.
+    /// Cleared with the tiles on navigation.
+    /// </summary>
     private readonly Dictionary<Element, long> _layerIds = new();
+
     private long _nextLayerId = 1;
 
-    // Cache of the per-slice content-hash index (DisplayListContentHash.Prepare),
-    // keyed by the layer's slice content hash. Prepare walks every item in the slice
-    // and allocates an entry list, so for a static layer that is composited every
-    // frame (e.g. the page root behind a small animating element) recomputing it per
-    // frame is pure waste. Keyed by content hash: the same slice content yields the
-    // same prepared index, so a cache hit is exact. Bounded by the number of distinct
-    // layer contents (a handful for a static page); cleared with the tiles.
+    /// <summary>
+    /// A dictionary that associates content hashes with their corresponding prepared slices,
+    /// facilitating the reuse of processed display list data to optimize rendering performance.
+    /// Cleared during a tile grid reset.
+    /// </summary>
     private readonly Dictionary<long, DisplayList.DisplayListContentHash.PreparedSlice> _preparedByContentHash = new();
 
     private sealed class Entry
@@ -72,19 +53,6 @@ internal sealed class TileGrid
 
     internal readonly record struct ResidentTile(int Width, int Height);
 
-    public TileGrid(long? maxBytes = null)
-    {
-        _maxBytes = maxBytes ?? ReadBudgetEnv();
-    }
-
-    // Configurable like STARLING_PAINT_BACKEND — there is no paint-options type, so an
-    // env var keeps the seam consistent. A bad/absent value falls back to the default.
-    private static long ReadBudgetEnv()
-    {
-        var raw = Environment.GetEnvironmentVariable("STARLING_TILE_BUDGET_BYTES");
-        return long.TryParse(raw, out var v) && v > 0 ? v : DefaultBudgetBytes;
-    }
-
     /// <summary>
     /// Stable id for <paramref name="layerBox"/>'s layer across frames, keyed by its
     /// DOM element. Returns 0 for a layer whose root box has no element (no stable
@@ -94,12 +62,16 @@ internal sealed class TileGrid
     public long LayerIdFor(Box layerBox)
     {
         if (layerBox.Element is not { } element)
+        {
             return 0;
+        }
+
         if (!_layerIds.TryGetValue(element, out var id))
         {
             id = _nextLayerId++;
             _layerIds[element] = id;
         }
+
         return id;
     }
 
@@ -113,19 +85,19 @@ internal sealed class TileGrid
         long contentHash, DisplayList.DisplayList items)
     {
         if (contentHash == 0)
+        {
             return DisplayList.DisplayListContentHash.Prepare(items);
+        }
+
         if (_preparedByContentHash.TryGetValue(contentHash, out var cached))
+        {
             return cached;
+        }
+
         var prepared = DisplayList.DisplayListContentHash.Prepare(items);
         _preparedByContentHash[contentHash] = prepared;
         return prepared;
     }
-
-    /// <summary>Current resident byte total — for tests/metrics.</summary>
-    internal long Bytes => _bytes;
-
-    /// <summary>Number of resident tiles — for tests.</summary>
-    internal int Count => _map.Count;
 
     /// <summary>
     /// Serves the tile at <paramref name="key"/> when it is resident AND was rastered
@@ -144,6 +116,7 @@ internal sealed class TileGrid
             bitmap = residentBitmap;
             return true;
         }
+
         bitmap = null!;
         return false;
     }

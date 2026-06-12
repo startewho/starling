@@ -13,15 +13,9 @@ internal sealed class Compositor
 
     private readonly IPaintBackend _backend;
 
-    // Session-scoped per-layer tile cache. Supplied by the host so tiles
-    // persist across frames; one-shot renders / tests get a private grid so they still
-    // tile (and stay self-contained) without cross-frame reuse.
+    // Session-scoped per-layer tile cache
     private readonly TileGrid _tileGrid;
 
-    // Per-frame tile cache accounting. A Compositor instance is created per present
-    // (NativeViewportRenderer / PageRendererHost build a fresh one each frame), so
-    // these accumulate exactly one frame's tiles — the telemetry daemon reads the
-    // miss ratio to spot whole-layer invalidation defeating the per-tile cache.
     private int _frameTileHits;
     private int _frameTileMisses;
 
