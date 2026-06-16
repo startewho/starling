@@ -5,19 +5,6 @@ using Starling.Common.Image;
 
 namespace Starling.Codecs;
 
-/// <summary>
-/// Public entry point for OS-native image decoding. Sniffs the format, then
-/// dispatches to the platform backend — ImageIO on macOS, WIC on Windows,
-/// libpng/libjpeg/libwebp on Linux — selected by <see cref="OperatingSystem"/>
-/// runtime guards. Every backend returns the same backend-neutral
-/// <see cref="DecodedImage"/> (straight RGBA8888, top-down, tightly packed).
-/// </summary>
-/// <remarks>
-/// This is the decode half of the Phase-8 native-interop pivot: the engine no
-/// longer decodes via ImageSharp. Encode stays elsewhere (the paint backend).
-/// All failures — unknown format, corrupt data, unsupported OS — surface as
-/// <see cref="ImageDecodeException"/> so callers have a single catch.
-/// </remarks>
 public static class NativeImageDecoder
 {
     // Hard cap for decoded RGBA8888 surfaces to prevent memory-exhaustion

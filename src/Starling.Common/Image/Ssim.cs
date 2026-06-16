@@ -1,55 +1,58 @@
 namespace Starling.Common.Image;
 
 /// <summary>
-/// Pure-managed, window-based Structural Similarity Index (SSIM) metric.
-/// Operates on raw RGBA (or RGB) byte spans so the module stays decoupled
-/// from any specific image library — callers (typically tests using
-/// ImageSharp) lift pixels into a packed byte buffer before invoking.
+/// Window-based image similarity score (the Structural Similarity Index, or
+/// SSIM). Runs in pure managed code. It takes raw RGBA (or RGB) byte spans, so
+/// it does not depend on any image library. Callers pack pixels into a byte
+/// buffer first.
 /// </summary>
 /// <remarks>
-/// Implements the original Wang–Bovik–Sheikh–Simoncelli formulation
-/// (Image Quality Assessment: From Error Visibility to Structural
-/// Similarity, IEEE TIP 13(4), 2004). For RGBA inputs SSIM is computed per
-/// colour channel (RGB only, alpha is ignored) over non-overlapping square
-/// windows; the per-window scores are averaged. Per the paper a window
-/// side of 8 is canonical, with stabilisation constants C1=(K1·L)² and
-/// C2=(K2·L)² where K1=0.01, K2=0.03, L=255.
-///
-/// This is deliberately simple — no Gaussian weighting, no multi-scale
-/// pyramid, no per-pixel sliding window — but tracks the reference well
-/// enough to detect any visible regression in the layout/paint pipeline
-/// while keeping the implementation auditable in one file. Tighten if a
-/// scenario demands it; this file is intentionally the only home for SSIM
-/// to keep behaviour consistent across tests.
+/// <para>
+/// Implements the original Wang, Bovik, Sheikh, and Simoncelli formula
+/// (Image Quality Assessment: From Error Visibility to Structural Similarity,
+/// IEEE TIP 13(4), 2004). For RGBA input the score is computed per color
+/// channel (RGB only, alpha is ignored) over non-overlapping square windows.
+/// The per-window scores are then averaged. The paper uses a window side of 8.
+/// The stabilizing constants are C1 = (K1·L)² and C2 = (K2·L)², where
+/// K1 = 0.01, K2 = 0.03, and L = 255.
+/// </para>
+/// <para>
+/// This version is kept simple on purpose. No Gaussian weighting, no
+/// multi-scale pyramid, no per-pixel sliding window. It still tracks the
+/// reference closely enough to catch any visible regression in the layout and
+/// paint pipeline, and it fits in one file you can read top to bottom. Tighten
+/// it if a scenario needs it. This file is the only home for the score so the
+/// behavior stays the same across all tests.
+/// </para>
 /// </remarks>
 public static class Ssim
 {
     /// <summary>Window side length, in pixels. 8 is the canonical value.</summary>
-    public const int WindowSize = 8;
+    private const int WindowSize = 8;
 
-    /// <summary>K1 stabilisation constant for the luminance term.</summary>
-    public const double K1 = 0.01;
+    /// <summary>K1 stabilizing constant for the luminance term.</summary>
+    private const double K1 = 0.01;
 
-    /// <summary>K2 stabilisation constant for the contrast/structure term.</summary>
-    public const double K2 = 0.03;
+    /// <summary>K2 stabilizing constant for the contrast and structure term.</summary>
+    private const double K2 = 0.03;
 
     /// <summary>Maximum pixel value (8-bit channels).</summary>
-    public const double L = 255.0;
+    private const double L = 255.0;
 
     private const double C1 = K1 * L * (K1 * L);
     private const double C2 = K2 * L * (K2 * L);
 
     /// <summary>
-    /// Compute mean SSIM across all non-overlapping windows of two equally
-    /// sized RGBA buffers. Buffers must be row-major, 4 bytes per pixel
-    /// (RGBA, in any consistent ordering — only intra-channel comparison
-    /// matters). Alpha channel is ignored.
+    /// Computes the mean score across all non-overlapping windows of two
+    /// equally sized RGBA buffers. Buffers must be row-major, 4 bytes per pixel.
+    /// Channel order can be anything as long as both buffers use the same one,
+    /// since only matching channels are compared. The alpha channel is ignored.
     /// </summary>
     /// <returns>
-    /// A score in [-1, 1]; 1.0 means pixel-identical. Two zero-pixel images
-    /// score 1.0 by definition. If either dimension is smaller than
-    /// <see cref="WindowSize"/>, falls back to a single window covering the
-    /// whole image.
+    /// A score in [-1, 1]. 1.0 means the images are pixel-identical. Two
+    /// all-zero images score 1.0 by definition. If either dimension is smaller
+    /// than <see cref="WindowSize"/>, the whole image is scored as a single
+    /// window.
     /// </returns>
     public static double ComputeRgba(
         ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, int width, int height)
@@ -63,7 +66,6 @@ public static class Ssim
             throw new ArgumentException($"Buffer B length {b.Length} != expected {expected}.", nameof(b));
 
         var window = Math.Min(WindowSize, Math.Min(width, height));
-        if (window < 1) return 1.0;
 
         var winsX = width / window;
         var winsY = height / window;

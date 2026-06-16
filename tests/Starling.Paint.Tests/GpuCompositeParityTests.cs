@@ -211,7 +211,7 @@ public sealed class GpuCompositeParityTests
         var overlays = new[] { new SurfaceOverlayLayer(20, 30, 50, 40, overlayScene) };
 
         using var rendered = new CompositorEngine(backend)
-            .RenderGpuTextures(tree, new LayoutRect(0, 0, W, H), 1.0f, overlays);
+            .RenderGpuReadback(tree, new LayoutRect(0, 0, W, H), 1.0f, overlays);
 
         rendered.GetPixel(45, 50).Should().Be((255, 0, 0, 255),
             "viewport readback must include surface overlay quads after page content");
@@ -238,7 +238,7 @@ public sealed class GpuCompositeParityTests
         var tree = new LayerTreeBuilder().Build(root);
 
         using var rendered = new CompositorEngine(backend)
-            .RenderGpuTextures(tree, new LayoutRect(0, 0, W, H), 1.0f);
+            .RenderGpuReadback(tree, new LayoutRect(0, 0, W, H), 1.0f);
 
         rendered.GetPixel(10, 10).Should().Be((18, 52, 86, 255),
             "a fully clipped promoted layer must not invalidate the GPU command buffer");

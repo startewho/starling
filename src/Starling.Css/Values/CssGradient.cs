@@ -3,31 +3,29 @@ namespace Starling.Css.Values;
 /// <summary>
 /// Typed value for the CSS Images 3 <c>&lt;gradient&gt;</c> functions
 /// (<see href="https://www.w3.org/TR/css-images-3/#gradients">§3</see>).
-/// Produced from a generic <see cref="CssFunctionValue"/> by
-/// <see cref="CssGradientParser"/> (mirroring <see cref="CssTransformParser"/>),
-/// it carries enough information for the paint backend to build an ImageSharp
+/// <see cref="CssGradientParser"/> builds it from a generic
+/// <see cref="CssFunctionValue"/>, the same way <see cref="CssTransformParser"/>
+/// builds transforms. It carries what the paint backend needs to build a
 /// gradient brush.
 /// <para>
-/// Scope: <c>linear-gradient</c>, <c>radial-gradient</c>, and
-/// <c>conic-gradient</c> plus their <c>repeating-</c> variants. ImageSharp.Drawing
-/// has no conic/sweep brush, so the paint backend rasterizes conic gradients
-/// per-pixel into an offscreen layer; linear and radial map to ImageSharp brushes.
+/// Covers <c>linear-gradient</c>, <c>radial-gradient</c>, and
+/// <c>conic-gradient</c> plus their <c>repeating-</c> variants. Linear and
+/// radial map to a gradient brush. Conic gradients have no brush, so the
+/// paint backend rasterizes them per pixel into an offscreen layer.
 /// </para>
 /// <para>
-/// For a conic gradient, <see cref="Line"/> carries the <c>from &lt;angle&gt;</c>
-/// (its <see cref="CssGradientLine.AngleDegrees"/>, clockwise from straight up,
-/// default 0deg) and <see cref="Position"/> carries the <c>at &lt;position&gt;</c>
-/// center (default center). Color-stop positions are angles around the turn:
-/// a percentage is a fraction of one full turn and an angle stop is normalized
+/// For a conic gradient, <see cref="Line"/> holds the <c>from &lt;angle&gt;</c>
+/// in <see cref="CssGradientLine.AngleDegrees"/> (clockwise from straight up,
+/// default 0deg). <see cref="Position"/> holds the <c>at &lt;position&gt;</c>
+/// center (default center). Color-stop positions are angles around the turn.
+/// A percentage is a fraction of one full turn. An angle stop is normalized
 /// to <c>deg / 360</c>.
 /// </para>
 /// <para>
-/// CSS Color 4 <c>in &lt;colorspace&gt;</c> interpolation is stored in
-/// <see cref="Interpolation"/>. The paint backend honors it for the conic
-/// per-pixel path; the linear/radial ImageSharp brush path pre-bakes stops into
-/// sRGB and documents the fallback. A null <see cref="Interpolation"/> means the
-/// default (premultiplied sRGB for legacy gradients; Oklab per CSS Color 4 spec
-/// default, but we default to sRGB for compatibility).
+/// <see cref="Interpolation"/> stores the CSS Color 4 <c>in &lt;colorspace&gt;</c>
+/// choice. The conic per-pixel path honors it. The linear/radial brush path
+/// pre-bakes the stops into sRGB instead. Null means the default. CSS Color 4
+/// says the default is Oklab, but we use sRGB for compatibility.
 /// </para>
 /// </summary>
 public sealed record CssGradient(
@@ -40,16 +38,16 @@ public sealed record CssGradient(
     CssGradientPosition? Position = null,
     GradientInterpolationMethod? Interpolation = null) : CssValue
 {
-    /// <summary>True when this gradient is one the paint backend can rasterize.
-    /// All three kinds (linear, radial, conic) are paintable once they have at
-    /// least one color stop.</summary>
+    /// <summary>True when the paint backend can rasterize this gradient.
+    /// All three kinds are paintable once they have at least one color
+    /// stop.</summary>
     public bool IsPaintable => Stops.Count >= 1;
 }
 
 /// <summary>
 /// CSS Color 4 §12.3 — the <c>in &lt;colorspace&gt;</c> prelude of a gradient.
-/// Carries the color space to interpolate in and, for polar spaces (oklch, hsl,
-/// hwb, lch), the optional hue interpolation strategy.
+/// Holds the color space to interpolate in. For polar spaces (oklch, hsl,
+/// hwb, lch) it also holds the hue interpolation strategy.
 /// </summary>
 public sealed record GradientInterpolationMethod(
     GradientColorSpace ColorSpace,
@@ -57,9 +55,8 @@ public sealed record GradientInterpolationMethod(
 
 /// <summary>
 /// CSS Color 4 §12.3 — color spaces supported in gradient interpolation.
-/// The paint backend honors the conic per-pixel path for all of these.
-/// For the linear/radial ImageSharp brush path the stops are pre-baked to sRGB
-/// regardless of the requested space (documented sRGB fallback).
+/// The conic per-pixel path honors all of these. The linear/radial brush
+/// path pre-bakes the stops to sRGB no matter which space was asked for.
 /// </summary>
 public enum GradientColorSpace
 {
@@ -110,30 +107,30 @@ public enum HueInterpolationMethod
 }
 
 /// <summary>
-/// CSS Images 4 §3.4 — a color-stop transition hint: a bare
-/// <c>&lt;length-percentage&gt;</c> between two color stops that shifts the
-/// midpoint of the gradient transition. The color at the hint position is the
-/// midpoint of the interpolation between the surrounding stops, applying a
-/// power-curve skew so the transition accelerates or decelerates. The hint sits
-/// in the <see cref="CssColorStop"/> list interleaved with real color stops and
-/// has a null <see cref="CssColorStop.Color"/>.
+/// CSS Images 4 §3.4 — a color-stop transition hint. A bare
+/// <c>&lt;length-percentage&gt;</c> between two color stops that moves the
+/// midpoint of the transition. The color at the hint position is the midpoint
+/// between the surrounding stops. A power-curve skew makes the transition
+/// speed up or slow down around it. The hint sits in the
+/// <see cref="CssColorStop"/> list between real stops, marked by
+/// <see cref="CssColorStop.IsHint"/>.
 /// </summary>
 public static class CssTransitionHint
 {
     /// <summary>
-    /// Creates a color-stop hint entry: a <see cref="CssColorStop"/> with the
-    /// sentinel color <see cref="CssColorStop.IsHint"/> = true (Color is
-    /// transparent black, Position carries the hint position).
+    /// Creates a hint entry: a <see cref="CssColorStop"/> with
+    /// <see cref="CssColorStop.IsHint"/> set, a transparent-black sentinel
+    /// color, and the hint position in <see cref="CssColorStop.Position"/>.
     /// </summary>
     public static CssColorStop Create(CssGradientStopPosition position)
         => new(IsHint: true, Color: new CssColor(0, 0, 0, 0), Position: position);
 }
 
 /// <summary>One color stop: a color and an optional position. When
-/// <see cref="Position"/> is null the stop is evenly distributed at paint time
-/// per CSS Images 3 §3.4.3. When <see cref="IsHint"/> is true this entry is a
-/// transition hint (a bare percentage/length between stops) as defined in CSS
-/// Images 4; the backend applies a power-curve skew at the hint position.</summary>
+/// <see cref="Position"/> is null the stop is spread evenly at paint time per
+/// CSS Images 3 §3.4.3. When <see cref="IsHint"/> is true this entry is a CSS
+/// Images 4 transition hint. The backend applies a power-curve skew at the
+/// hint position.</summary>
 public sealed record CssColorStop(CssColor Color, CssGradientStopPosition? Position = null, bool IsHint = false);
 
 public enum CssGradientKind
@@ -143,13 +140,14 @@ public enum CssGradientKind
     Conic,
 }
 
-/// <summary>The direction of a linear gradient — either an explicit
-/// <c>&lt;angle&gt;</c> (measured clockwise from "to top", i.e. 0deg points up)
-/// or a <c>to &lt;side-or-corner&gt;</c> keyword pair.</summary>
+/// <summary>The direction of a linear gradient. Either an explicit
+/// <c>&lt;angle&gt;</c> (clockwise from "to top", so 0deg points up) or a
+/// <c>to &lt;side-or-corner&gt;</c> keyword pair.</summary>
 public sealed record CssGradientLine
 {
     /// <summary>Angle in degrees, clockwise from straight up (CSS convention:
-    /// 0deg = "to top", 90deg = "to right"). Null when a side/corner is set.</summary>
+    /// 0deg = "to top", 90deg = "to right"). Null when a side or corner is
+    /// set.</summary>
     public double? AngleDegrees { get; init; }
 
     /// <summary>Horizontal side component for <c>to &lt;side-or-corner&gt;</c>.</summary>
@@ -164,9 +162,10 @@ public sealed record CssGradientLine
 
     public static CssGradientLine FromSide(CssGradientSideX x, CssGradientSideY y) => new() { SideX = x, SideY = y };
 
-    /// <summary>Resolve the gradient line to an angle in degrees (clockwise from
-    /// "to top"). A <c>to &lt;side-or-corner&gt;</c> using the box's aspect ratio
-    /// per CSS Images 3 §3.1; for corners the angle points toward the corner.</summary>
+    /// <summary>Resolves the gradient line to an angle in degrees, clockwise
+    /// from "to top". A <c>to &lt;side-or-corner&gt;</c> uses the box's aspect
+    /// ratio per CSS Images 3 §3.1. For corners the angle points toward the
+    /// corner.</summary>
     public double ToDegrees(double boxWidth, double boxHeight)
     {
         if (AngleDegrees is { } a)
@@ -231,11 +230,11 @@ public enum CssRadialSize
     FarthestCorner,
 }
 
-/// <summary>A color-stop position: an absolute length (px-resolved) or a
-/// percentage of the gradient line. Only one is set.</summary>
+/// <summary>A color-stop position: an absolute length (already resolved to
+/// pixels) or a percentage of the gradient line. Only one is set.</summary>
 public readonly record struct CssGradientStopPosition(double Value, bool IsPercent)
 {
-    /// <summary>Resolve to a fraction (0..1) of the gradient line length.</summary>
+    /// <summary>Resolves to a fraction (0..1) of the gradient line length.</summary>
     public double ResolveFraction(double lineLengthPx)
         => IsPercent
             ? Value / 100.0
