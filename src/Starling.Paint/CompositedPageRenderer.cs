@@ -13,14 +13,12 @@ using LayoutRect = Starling.Layout.Rect;
 namespace Starling.Paint;
 
 /// <summary>
-/// Renders laid-out pages through the compositor's GPU texture path. This is the
-/// headless/offscreen sibling of the GUI surface path: tiles are rastered as GPU
-/// textures on the compositor device, adopted into the resident texture cache,
-/// then blended before the final PNG readback.
+/// Responsible for rendering composited pages using GPU textures. This class handles
+/// the rendering of a visual representation of a page layout, taking into account
+/// styles, images, animations, and overlays.
 /// </summary>
 public sealed class CompositedPageRenderer : IDisposable
 {
-    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger _log;
     private readonly IPaintBackend _backend;
     private readonly TileGrid _tiles;
@@ -31,13 +29,11 @@ public sealed class CompositedPageRenderer : IDisposable
         FontFaceRegistry? webFonts = null,
         ILoggerFactory? loggerFactory = null)
     {
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
-        _log = _loggerFactory.CreateLogger<CompositedPageRenderer>();
+        loggerFactory ??= NullLoggerFactory.Instance;
+        _log = loggerFactory.CreateLogger<CompositedPageRenderer>();
         _backend = PaintBackendSelector.Create(fonts ?? FontResolver.Default, webFonts);
         _tiles = new TileGrid();
     }
-
-    public string BackendName => _backend.Name;
 
     public RenderedBitmap Render(
         BlockBox root,
@@ -61,7 +57,7 @@ public sealed class CompositedPageRenderer : IDisposable
                 scrollOffsets: scrollOffsets,
                 stickyShifts: stickyShifts).Build(root);
             var compositor = new Starling.Paint.Compositor.Compositor(_backend, _tiles);
-            return compositor.RenderGpuTextures(tree, viewport, scale, drawingOverlays);
+            return compositor.RenderGpuReadback(tree, viewport, scale, drawingOverlays);
         }
         catch (Exception ex)
         {

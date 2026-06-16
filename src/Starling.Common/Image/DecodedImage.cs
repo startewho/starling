@@ -9,14 +9,14 @@ namespace Starling.Common.Image;
 /// padding.
 /// </summary>
 /// <remarks>
-/// This type is the decode/paint contract seam: it lets the engine pass pixels
-/// between the decoder (today ImageSharp; later <c>Starling.Codecs</c>) and the
-/// paint backend without either side naming the other's concrete bitmap type.
+/// This type is the seam between decode and paint. It lets the engine pass
+/// pixels from the decoder to the paint backend without either side naming the
+/// other's concrete bitmap type.
 /// <para>
-/// The backing buffer may be rented from <see cref="ArrayPool{T}"/>; callers
-/// must <see cref="Dispose"/> the image once they are done reading
-/// <see cref="Pixels"/> so the buffer can be returned. After disposal the
-/// <see cref="Pixels"/> span must not be read.
+/// The backing buffer may be rented from <see cref="ArrayPool{T}"/>. Callers
+/// must <see cref="Dispose"/> the image once they finish reading
+/// <see cref="Pixels"/> so the buffer can go back to the pool. After disposal
+/// the <see cref="Pixels"/> span must not be read.
 /// </para>
 /// </remarks>
 public sealed class DecodedImage : IDisposable
@@ -45,9 +45,9 @@ public sealed class DecodedImage : IDisposable
     /// <summary>
     /// The source image's true intrinsic width in pixels. Equal to
     /// <see cref="Width"/> unless the decoder clamped the decode resolution of
-    /// a very large image, in which case the pixel buffer is a high-quality
+    /// a very large image. When clamped, the pixel buffer is a high-quality
     /// downscale and this carries the original width. Layout and
-    /// background-size math must use the intrinsic dimensions; pixel access
+    /// background-size math must use the intrinsic dimensions. Pixel access
     /// (strides, source rects) must use <see cref="Width"/>/<see cref="Height"/>.
     /// </summary>
     public int IntrinsicWidth { get; }
@@ -72,8 +72,8 @@ public sealed class DecodedImage : IDisposable
     }
 
     /// <summary>
-    /// Allocate a <see cref="DecodedImage"/> with a pooled backing buffer and
-    /// hand the writable span to <paramref name="fill"/> so the decoder can
+    /// Allocates a <see cref="DecodedImage"/> with a pooled backing buffer and
+    /// hands the writable span to <paramref name="fill"/> so the decoder can
     /// copy pixels straight in. The span passed to <paramref name="fill"/> is
     /// exactly <c>width * height * 4</c> bytes long.
     /// </summary>
@@ -107,10 +107,10 @@ public sealed class DecodedImage : IDisposable
     }
 
     /// <summary>
-    /// Wrap an already-packed RGBA8888 buffer without copying. The buffer must
-    /// be at least <c>width * height * 4</c> bytes; ownership transfers to the
-    /// returned image but it is treated as non-pooled (not returned on
-    /// <see cref="Dispose"/>).
+    /// Wraps an already-packed RGBA8888 buffer without copying. The buffer must
+    /// be at least <c>width * height * 4</c> bytes. Ownership transfers to the
+    /// returned image, but the buffer counts as non-pooled and is not returned
+    /// on <see cref="Dispose"/>.
     /// </summary>
     public static DecodedImage FromBuffer(int width, int height, byte[] buffer)
     {
@@ -131,7 +131,8 @@ public sealed class DecodedImage : IDisposable
         return length;
     }
 
-    /// <summary>Return the pooled backing buffer (if any). Idempotent.</summary>
+    /// <summary>Returns the pooled backing buffer to the pool, if there is one.
+    /// Safe to call more than once.</summary>
     public void Dispose()
     {
         var buffer = _buffer;
