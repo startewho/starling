@@ -48,7 +48,7 @@ public sealed class BackdropFilterGpuRepeatTests
             var root = engine.LayoutDocument(doc, new Size(400, 200));
             var tree = new LayerTreeBuilder(layerIdFor: tiles.LayerIdFor).Build(root);
             var compositor = new CompositorEngine(backend, tiles);
-            using (compositor.RenderGpuTextures(tree, new LayoutRect(0, 0, 400, 200), 2f)) { }
+            using (compositor.RenderGpuReadback(tree, new LayoutRect(0, 0, 400, 200), 2f)) { }
         }
     }
 }

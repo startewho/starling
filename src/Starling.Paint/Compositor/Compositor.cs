@@ -26,7 +26,7 @@ internal sealed class Compositor
         _tileGrid = tileGrid ?? new TileGrid();
     }
 
-    public RenderedBitmap RenderGpuTextures(
+    public RenderedBitmap RenderGpuReadback(
         CompositorLayer root,
         LayoutRect viewport,
         float scale,

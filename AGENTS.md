@@ -316,6 +316,16 @@ hot or allocation-heavy.
 decision local to the scope of the code when that decision isn't clear from the
 code itself. Skip comments that restate what the code already says.
 
+**Keep comments local.** A comment explains the code right next to it. Do not
+send the reader three layers up or into another system. Skip lines like "Refer
+to the LayerComponentCompositor to see how it uses this." If a fact belongs to
+that other place, write it there.
+
+**Do not narrate a problem you hit.** A comment is not a changelog. Skip lines
+like "Fixes the issue where you wanted layers to be unique." Say what is true now
+and why it matters here. "Each layer needs a unique id" is fine. The story of the
+bug is not.
+
 **Braces:** Always use braces for conditionals, loops, and other block
 statements, even when the body is a single line.
 
