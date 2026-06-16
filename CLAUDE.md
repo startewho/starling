@@ -8,7 +8,9 @@ this repo. Follow it for every change.
 
 **Comments and doc comments:** Use them sparingly. A comment should explain a
 decision local to the scope of the code when that decision isn't clear from the
-code itself. Skip comments that restate what the code already says. See AGENTS.md
+code itself. Skip comments that restate what the code already says. Keep them
+local too — never send the reader three layers up or into another system, and do
+not narrate a problem you hit (no "fixes the issue where..."). See AGENTS.md
 under "Coding standards" for the full rule.
 
 **Braces:** Always use braces for conditionals, loops, and other block
