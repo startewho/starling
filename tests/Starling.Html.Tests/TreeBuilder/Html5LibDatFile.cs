@@ -38,7 +38,11 @@ internal static class Html5LibDatFile
         while (idx < text.Length)
         {
             var end = FindBlockEnd(text, idx);
-            var block = text.Substring(idx, end - idx);
+            // Trim the file-terminating newline: the spec says the file ends with
+            // "\n", and the final block would otherwise carry that newline as a
+            // spurious trailing empty #document line (breaking the last case in
+            // every file). Middle blocks end right before "\n\n" and have none.
+            var block = text.Substring(idx, end - idx).TrimEnd('\n');
             idx = end;
             // Skip the two-newline separator (or single trailing newline at EOF).
             while (idx < text.Length && text[idx] == '\n') idx++;
