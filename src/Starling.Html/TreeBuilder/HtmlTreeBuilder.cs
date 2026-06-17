@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Text;
 using Starling.Common.Diagnostics;
@@ -102,7 +103,10 @@ public sealed partial class HtmlTreeBuilder
         var tokenizer = new HtmlTokenizer(errorCounter);
         // §13.4 step 4: tokenizer state implied by the context element.
         if (contextElement.Namespace == HtmlNs)
+        {
             tokenizer.SetState(InitialTokenizerStateFor(contextElement.LocalName));
+        }
+
         tokenizer.Feed(markup);
         tokenizer.EndOfInput();
 
@@ -120,8 +124,11 @@ public sealed partial class HtmlTreeBuilder
         var root = _document.CreateElement("html");
         _document.AppendChild(root);
         _openElements.Push(root);
-        if (_fragmentContext!.Namespace == HtmlNs && _fragmentContext.LocalName == "template")
+        if (_fragmentContext is { Namespace: HtmlNs, LocalName: "template" })
+        {
             _templateInsertionModes.Push(InsertionMode.InTemplate);
+        }
+
         _formElement = FindFormAncestor(_fragmentContext);
         ResetInsertionModeAppropriately();
 
@@ -129,7 +136,10 @@ public sealed partial class HtmlTreeBuilder
         {
             _tokenCount++;
             HandleToken(token);
-            if (token is EndOfFileToken) break;
+            if (token is EndOfFileToken)
+            {
+                break;
+            }
         }
         FlushText();
 
@@ -144,11 +154,16 @@ public sealed partial class HtmlTreeBuilder
         return fragment;
     }
 
-    private static Element? FindFormAncestor(Element context)
+    private static Element? FindFormAncestor(Element? context)
     {
         for (Node? n = context; n is not null; n = n.ParentNode)
+        {
             if (n is Element { Namespace: HtmlNs, LocalName: "form" } form)
+            {
                 return form;
+            }
+        }
+
         return null;
     }
 
@@ -172,7 +187,10 @@ public sealed partial class HtmlTreeBuilder
             {
                 _tokenCount++;
                 HandleToken(token);
-                if (token is EndOfFileToken) break;
+                if (token is EndOfFileToken)
+                {
+                    break;
+                }
             }
             FlushText();
 
@@ -181,7 +199,10 @@ public sealed partial class HtmlTreeBuilder
             Activity.Current?.SetTag("html.parse_errors", errorCount);
             StarlingTelemetry.Counter("html.parses", 1);
             if (errorCount > 0)
+            {
                 StarlingTelemetry.Counter("html.parse_errors", errorCount);
+            }
+
             return _document;
         }
         catch (Exception ex)
@@ -205,15 +226,21 @@ public sealed partial class HtmlTreeBuilder
         if (_ignoreLf)
         {
             _ignoreLf = false;
-            if (token is CharacterToken { CodePoint: '\n' }) return;
+            if (token is CharacterToken { CodePoint: '\n' })
+            {
+                return;
+            }
         }
 
         // §13.2.6 tree construction dispatcher. Decide between the current
         // insertion mode and the foreign-content rules.
+        // acn is null exactly when the stack is empty (no adjusted current node);
+        // the `is null` short-circuit also tells the compiler acn is non-null in
+        // the operands below.
         var acn = AdjustedCurrentNode;
         var useHtml =
-            _openElements.IsEmpty ||
-            acn!.Namespace == HtmlNs ||
+            acn is null ||
+            acn.Namespace == HtmlNs ||
             (IsMathMlTextIntegrationPoint(acn) && token is StartTagToken stMi && stMi.Name is not "mglyph" and not "malignmark") ||
             (IsMathMlTextIntegrationPoint(acn) && token is CharacterToken) ||
             (acn.Namespace == MathMlNs && acn.LocalName == "annotation-xml" && token is StartTagToken { Name: "svg" }) ||
@@ -222,12 +249,18 @@ public sealed partial class HtmlTreeBuilder
             token is EndOfFileToken;
 
         if (token is not CharacterToken)
+        {
             FlushText();
+        }
 
         if (useHtml)
+        {
             ProcessUsingInsertionMode(token);
+        }
         else
+        {
             HandleForeignContent(token);
+        }
     }
 
     private void ProcessUsingInsertionMode(HtmlToken token)
@@ -268,9 +301,15 @@ public sealed partial class HtmlTreeBuilder
             ? _document.CreateElement(token.Name)
             : _document.CreateElementNS(@namespace, token.Name);
         foreach (var attr in token.Attributes)
+        {
             element.SetAttribute(attr.Name, attr.Value);
+        }
+
         if (@namespace == HtmlNs && token.Name == "form" && _formElement is null)
+        {
             _formElement = element;
+        }
+
         return element;
     }
 
@@ -319,7 +358,9 @@ public sealed partial class HtmlTreeBuilder
         }
 
         if (parent is HtmlTemplateElement tmpl)
+        {
             parent = tmpl.Content;
+        }
 
         return (parent, before);
     }
@@ -343,20 +384,35 @@ public sealed partial class HtmlTreeBuilder
 
     private void InsertCharacter(string data)
     {
-        if (data.Length == 0) return;
+        if (data.Length == 0)
+        {
+            return;
+        }
+
         var (parent, before) = AppropriatePlaceForInserting();
         // Never create a text node directly under the Document.
-        if (parent is Document) return;
+        if (parent is Document)
+        {
+            return;
+        }
+
         if (_pending.Length > 0 && (!ReferenceEquals(_pendingParent, parent) || !ReferenceEquals(_pendingBefore, before)))
+        {
             FlushText();
+        }
+
         if (_pending.Length == 0) { _pendingParent = parent; _pendingBefore = before; }
         _pending.Append(data);
     }
 
     private void FlushText()
     {
-        if (_pending.Length == 0) return;
-        var parent = _pendingParent!;
+        if (_pending.Length == 0 || _pendingParent is null)
+        {
+            return;
+        }
+
+        var parent = _pendingParent;
         var before = _pendingBefore;
         var data = _pending.ToString();
         _pending.Clear();
@@ -365,9 +421,13 @@ public sealed partial class HtmlTreeBuilder
 
         var prevNode = before is null ? parent.LastChild : before.PreviousSibling;
         if (prevNode is Text t)
+        {
             t.Data += data;
+        }
         else
+        {
             parent.InsertBefore(_document.CreateText(data), before);
+        }
     }
 
     private void InsertComment(CommentToken token, Node? overrideParent = null)
@@ -391,19 +451,34 @@ public sealed partial class HtmlTreeBuilder
 
     // ------------------------------------------------------- shared algorithms
 
-    private static readonly string[] ImpliedEndTagNames =
-        ["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
+    private static readonly FrozenSet<string> ImpliedEndTagNames =
+        new[] { "dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc" }
+            .ToFrozenSet(StringComparer.Ordinal);
 
     private void GenerateImpliedEndTags(string? except = null)
     {
         while (!_openElements.IsEmpty)
         {
             var cur = _openElements.Current;
-            if (cur.Namespace != HtmlNs) return;
+            if (cur.Namespace != HtmlNs)
+            {
+                return;
+            }
+
             var name = cur.LocalName;
-            if (except is not null && name == except) return;
-            if (Array.IndexOf(ImpliedEndTagNames, name) >= 0) _openElements.Pop();
-            else return;
+            if (except is not null && name == except)
+            {
+                return;
+            }
+
+            if (ImpliedEndTagNames.Contains(name))
+            {
+                _openElements.Pop();
+            }
+            else
+            {
+                return;
+            }
         }
     }
 
@@ -412,19 +487,30 @@ public sealed partial class HtmlTreeBuilder
         while (!_openElements.IsEmpty)
         {
             var cur = _openElements.Current;
-            if (cur.Namespace != HtmlNs) return;
+            if (cur.Namespace != HtmlNs)
+            {
+                return;
+            }
+
             if (cur.LocalName is "caption" or "colgroup" or "dd" or "dt" or "li"
                 or "optgroup" or "option" or "p" or "rb" or "rp" or "rt" or "rtc"
                 or "tbody" or "td" or "tfoot" or "th" or "thead" or "tr")
+            {
                 _openElements.Pop();
-            else return;
+            }
+            else
+            {
+                return;
+            }
         }
     }
 
     private void ClosePIfInButtonScope()
     {
         if (_openElements.HasInButtonScope("p"))
+        {
             ClosePElement();
+        }
     }
 
     private void ClosePElement()
@@ -440,7 +526,10 @@ public sealed partial class HtmlTreeBuilder
         {
             var node = _openElements[i];
             var last = i == 0;
-            if (last && _fragmentContext is not null) node = _fragmentContext;
+            if (last && _fragmentContext is not null)
+            {
+                node = _fragmentContext;
+            }
 
             if (node.Namespace == HtmlNs)
             {
@@ -452,7 +541,11 @@ public sealed partial class HtmlTreeBuilder
                             for (var j = i - 1; j >= 1; j--)
                             {
                                 var ancestor = _openElements[j];
-                                if (ancestor is { Namespace: HtmlNs, LocalName: "template" }) break;
+                                if (ancestor is { Namespace: HtmlNs, LocalName: "template" })
+                                {
+                                    break;
+                                }
+
                                 if (ancestor is { Namespace: HtmlNs, LocalName: "table" })
                                 {
                                     _mode = InsertionMode.InSelectInTable;
@@ -582,25 +675,37 @@ public sealed partial class HtmlTreeBuilder
             || PubStarts("-//WebTechs//DTD Mozilla HTML//")
             || (sys is null && PubStarts("-//W3C//DTD HTML 4.01 Frameset//"))
             || (sys is null && PubStarts("-//W3C//DTD HTML 4.01 Transitional//")))
+        {
             return QuirksMode.Quirks;
+        }
 
         if (PubStarts("-//W3C//DTD XHTML 1.0 Frameset//")
             || PubStarts("-//W3C//DTD XHTML 1.0 Transitional//")
             || (sys is not null && PubStarts("-//W3C//DTD HTML 4.01 Frameset//"))
             || (sys is not null && PubStarts("-//W3C//DTD HTML 4.01 Transitional//")))
+        {
             return QuirksMode.LimitedQuirks;
+        }
 
         return QuirksMode.NoQuirks;
     }
 
     private static void MergeAttributesInto(Element? target, StartTagToken start)
     {
-        if (target is null) return;
+        if (target is null)
+        {
+            return;
+        }
+
         foreach (var attr in start.Attributes)
+        {
             if (!target.HasAttribute(attr.Name))
+            {
                 target.SetAttribute(attr.Name, attr.Value);
+            }
+        }
     }
 
     private static StartTagToken Synthetic(string name)
-        => new(name, Array.Empty<HtmlAttribute>(), SelfClosing: false);
+        => new(name, [], SelfClosing: false);
 }

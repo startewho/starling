@@ -339,4 +339,144 @@ public sealed class TreeBuilderTests
 
         doc.Body!.DescendantElements().Should().Contain(e => e.LocalName == "p" && e.TextContent == "VISIBLE");
     }
+
+    // ---- §13.2.6.5 foreign content -----------------------------------------
+
+    private const string SvgNamespace = "http://www.w3.org/2000/svg";
+    private const string MathMlNamespace = "http://www.w3.org/1998/Math/MathML";
+
+    private static Element Body(Document doc) => doc.DescendantElements().First(e => e.LocalName == "body");
+
+    [TestMethod]
+    public void Svg_subtree_is_in_the_svg_namespace()
+    {
+        var doc = HtmlParser.Parse("<svg><circle></circle></svg>");
+
+        var svg = doc.DescendantElements().Single(e => e.LocalName == "svg");
+        svg.Namespace.Should().Be(SvgNamespace);
+        svg.DescendantElements().Single(e => e.LocalName == "circle").Namespace.Should().Be(SvgNamespace);
+    }
+
+    [TestMethod]
+    public void Svg_tag_name_case_is_adjusted()
+    {
+        var doc = HtmlParser.Parse("<svg><foreignobject></foreignobject></svg>");
+
+        doc.DescendantElements().Should().Contain(e => e.LocalName == "foreignObject");
+    }
+
+    [TestMethod]
+    public void Svg_attribute_name_case_is_adjusted()
+    {
+        var doc = HtmlParser.Parse("<svg viewbox=\"0 0 1 1\"></svg>");
+
+        var svg = doc.DescendantElements().Single(e => e.LocalName == "svg");
+        svg.Attributes.Should().Contain(a => a.LocalName == "viewBox");
+    }
+
+    [TestMethod]
+    public void Mathml_subtree_is_in_the_mathml_namespace()
+    {
+        var doc = HtmlParser.Parse("<math><mi>x</mi></math>");
+
+        doc.DescendantElements().Single(e => e.LocalName == "math").Namespace.Should().Be(MathMlNamespace);
+    }
+
+    [TestMethod]
+    public void Cdata_section_in_foreign_content_is_text_not_comment()
+    {
+        var doc = HtmlParser.Parse("<svg><![CDATA[hello]]></svg>");
+
+        var svg = doc.DescendantElements().Single(e => e.LocalName == "svg");
+        svg.TextContent.Should().Be("hello");
+        svg.Descendants().OfType<Comment>().Should().BeEmpty();
+    }
+
+    // ---- §13.2.6.4.7 adoption agency ---------------------------------------
+
+    [TestMethod]
+    public void Adoption_agency_reparents_misnested_formatting()
+    {
+        // <b><p>x</b>y</p>: the <p> becomes a sibling of the (now-empty) <b>, and a
+        // cloned <b> wrapping "x" is moved inside it. "y" is direct text of <p>.
+        var doc = HtmlParser.Parse("<body><b><p>x</b>y</p></body>");
+
+        var body = Body(doc);
+        body.ChildNodes.OfType<Element>().Select(e => e.LocalName).Should().ContainInOrder("b", "p");
+        var p = body.ChildNodes.OfType<Element>().Single(e => e.LocalName == "p");
+        p.ChildNodes.OfType<Element>().Should().ContainSingle(e => e.LocalName == "b" && e.TextContent == "x");
+        p.TextContent.Should().Be("xy");
+    }
+
+    // ---- §13.2.6.4.9 table foster parenting --------------------------------
+
+    [TestMethod]
+    public void Table_foster_parents_stray_text_before_the_table()
+    {
+        var doc = HtmlParser.Parse("<table>foo<tr><td>cell</td></tr></table>");
+
+        var kids = Body(doc).ChildNodes.ToList();
+        var fooIndex = kids.FindIndex(n => n is Text { Data: "foo" });
+        var tableIndex = kids.FindIndex(n => n is Element { LocalName: "table" });
+        fooIndex.Should().BeGreaterThanOrEqualTo(0, "stray text is foster-parented out of the table");
+        tableIndex.Should().BeGreaterThan(fooIndex, "the foster-parented text precedes the table");
+    }
+
+    // ---- §13.2.6.4.16 customizable <select> --------------------------------
+
+    [TestMethod]
+    public void Select_contains_flow_content()
+    {
+        var doc = HtmlParser.Parse("<select><div>x</div></select>");
+
+        var select = doc.DescendantElements().Single(e => e.LocalName == "select");
+        select.DescendantElements().Should().Contain(e => e.LocalName == "div" && e.TextContent == "x");
+    }
+
+    // ---- §13.2.6.4.4 template content fragment -----------------------------
+
+    [TestMethod]
+    public void Template_children_go_into_the_content_fragment()
+    {
+        var doc = HtmlParser.Parse("<template><span>tpl</span></template>");
+
+        var template = doc.Descendants().OfType<HtmlTemplateElement>().Single();
+        template.ChildNodes.OfType<Element>().Should().BeEmpty("template content lives in the content fragment");
+        template.Content.ChildNodes.OfType<Element>()
+            .Should().Contain(e => e.LocalName == "span" && e.TextContent == "tpl");
+    }
+
+    // ---- §13.2.6.2 quirks-sensitive <table> closing <p> --------------------
+
+    [TestMethod]
+    public void Table_closes_open_p_in_no_quirks_mode()
+    {
+        var doc = HtmlParser.Parse("<!doctype html><p><table></table>");
+
+        doc.Mode.Should().Be(QuirksMode.NoQuirks);
+        var body = Body(doc);
+        var p = body.ChildNodes.OfType<Element>().Single(e => e.LocalName == "p");
+        p.DescendantElements().Should().NotContain(e => e.LocalName == "table");
+        body.ChildNodes.OfType<Element>().Should().Contain(e => e.LocalName == "table");
+    }
+
+    [TestMethod]
+    public void Table_nests_inside_p_in_quirks_mode()
+    {
+        var doc = HtmlParser.Parse("<p><table></table>");
+
+        doc.Mode.Should().Be(QuirksMode.Quirks);
+        var p = doc.DescendantElements().Single(e => e.LocalName == "p");
+        p.DescendantElements().Should().Contain(e => e.LocalName == "table");
+    }
+
+    // ---- §13.2.6.4.7 </br> acts as a <br> start tag ------------------------
+
+    [TestMethod]
+    public void End_br_tag_produces_a_br_element()
+    {
+        var doc = HtmlParser.Parse("<div></br></div>");
+
+        doc.DescendantElements().Should().Contain(e => e.LocalName == "br");
+    }
 }

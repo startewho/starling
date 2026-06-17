@@ -28,11 +28,11 @@ namespace Starling.Html.Tokenizer;
 /// </list>
 /// </para>
 /// </remarks>
-public sealed partial class HtmlTokenizer
+public sealed partial class HtmlTokenizer(IParseErrorSink? errorSink = null)
 {
     private readonly PreprocessedStream _stream = new();
     private readonly Queue<HtmlToken> _emitted = new();
-    private readonly IParseErrorSink _errors;
+    private readonly IParseErrorSink _errors = errorSink ?? IParseErrorSink.Null;
 
     private TokenizerState _state = TokenizerState.Data;
     private bool _eofReached;
@@ -84,11 +84,6 @@ public sealed partial class HtmlTokenizer
     private uint _charRefCode;
     private bool _charRefOverflowed;
 
-    public HtmlTokenizer(IParseErrorSink? errorSink = null)
-    {
-        _errors = errorSink ?? IParseErrorSink.Null;
-    }
-
     /// <summary>The current state. Exposed for tests; not for general use.</summary>
     internal TokenizerState State => _state;
 
@@ -126,7 +121,10 @@ public sealed partial class HtmlTokenizer
     {
         while (_emitted.Count == 0)
         {
-            if (!Step()) return null;
+            if (!Step())
+            {
+                return null;
+            }
         }
         return _emitted.Dequeue();
     }
@@ -137,7 +135,10 @@ public sealed partial class HtmlTokenizer
     /// </summary>
     private bool Step()
     {
-        if (_eofProcessed) return false;
+        if (_eofProcessed)
+        {
+            return false;
+        }
 
         int c;
         if (_reconsume != NoReconsume)
@@ -147,7 +148,11 @@ public sealed partial class HtmlTokenizer
         }
         else if (_stream.Remaining == 0)
         {
-            if (!_eofReached) return false;
+            if (!_eofReached)
+            {
+                return false;
+            }
+
             return StepEof();
         }
         else

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Starling.Dom;
 using Starling.Html.Tokenizer;
 
@@ -5,18 +6,18 @@ namespace Starling.Html.TreeBuilder;
 
 public sealed partial class HtmlTreeBuilder
 {
-    // §13.2.6.4.7 element category sets.
-    private static readonly HashSet<string> AddressBlockTags = new(StringComparer.Ordinal)
+    // §13.2.6.4.7 element category sets — build-once/read-many, so frozen.
+    private static readonly FrozenSet<string> AddressBlockTags = new[]
     {
         "address", "article", "aside", "blockquote", "center", "details", "dialog",
         "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header",
         "hgroup", "main", "menu", "nav", "ol", "p", "search", "section", "summary", "ul",
-    };
+    }.ToFrozenSet(StringComparer.Ordinal);
 
-    private static readonly HashSet<string> FormattingTags = new(StringComparer.Ordinal)
+    private static readonly FrozenSet<string> FormattingTags = new[]
     {
         "b", "big", "code", "em", "font", "i", "s", "small", "strike", "strong", "tt", "u",
-    };
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     private static bool IsHeadingTag(string n) => n is "h1" or "h2" or "h3" or "h4" or "h5" or "h6";
 
@@ -25,17 +26,29 @@ public sealed partial class HtmlTreeBuilder
         switch (token)
         {
             case CharacterToken c:
-                if (c.CodePoint == 0) return; // U+0000: parse error, ignore.
+                if (c.CodePoint == 0)
+                {
+                    return; // U+0000: parse error, ignore.
+                }
+
                 ReconstructActiveFormattingElements();
                 InsertCharacter(CodePointToString(c.CodePoint));
-                if (!IsWhitespaceChar(c.CodePoint)) _framesetOk = false;
+                if (!IsWhitespaceChar(c.CodePoint))
+                {
+                    _framesetOk = false;
+                }
+
                 return;
 
             case CommentToken comment: InsertComment(comment); return;
             case DoctypeToken: return;
 
             case StartTagToken { Name: "html" } start:
-                if (_openElements.ContainsNamed("template")) return;
+                if (_openElements.ContainsNamed("template"))
+                {
+                    return;
+                }
+
                 MergeAttributesInto(_openElements.Count > 0 ? _openElements[0] : null, start);
                 return;
 
@@ -50,19 +63,32 @@ public sealed partial class HtmlTreeBuilder
             case StartTagToken { Name: "body" } start:
                 if (_openElements.Count < 2 || _openElements[1] is not { Namespace: HtmlNs, LocalName: "body" }
                     || _openElements.ContainsNamed("template"))
+                {
                     return;
+                }
+
                 _framesetOk = false;
                 MergeAttributesInto(_openElements[1], start);
                 return;
 
             case StartTagToken { Name: "frameset" } start:
                 if (_openElements.Count < 2 || _openElements[1] is not { Namespace: HtmlNs, LocalName: "body" })
+                {
                     return;
-                if (!_framesetOk) return;
+                }
+
+                if (!_framesetOk)
+                {
+                    return;
+                }
                 {
                     var body = _openElements[1];
                     body.ParentNode?.RemoveChild(body);
-                    while (_openElements.Count > 1) _openElements.Pop();
+                    while (_openElements.Count > 1)
+                    {
+                        _openElements.Pop();
+                    }
+
                     InsertHtmlElement(start);
                     _mode = InsertionMode.InFrameset;
                 }
@@ -73,11 +99,19 @@ public sealed partial class HtmlTreeBuilder
                 return; // stop parsing.
 
             case EndTagToken { Name: "body" }:
-                if (!_openElements.HasInScope("body")) return;
+                if (!_openElements.HasInScope("body"))
+                {
+                    return;
+                }
+
                 _mode = InsertionMode.AfterBody;
                 return;
             case EndTagToken { Name: "html" }:
-                if (!_openElements.HasInScope("body")) return;
+                if (!_openElements.HasInScope("body"))
+                {
+                    return;
+                }
+
                 _mode = InsertionMode.AfterBody;
                 HandleAfterBody(token);
                 return;
@@ -90,7 +124,10 @@ public sealed partial class HtmlTreeBuilder
             case StartTagToken start when IsHeadingTag(start.Name):
                 ClosePIfInButtonScope();
                 if (_openElements.Current is { Namespace: HtmlNs } cur && IsHeadingTag(cur.LocalName))
+                {
                     _openElements.Pop();
+                }
+
                 InsertHtmlElement(start);
                 return;
 
@@ -102,11 +139,18 @@ public sealed partial class HtmlTreeBuilder
                 return;
 
             case StartTagToken start when start.Name == "form":
-                if (_formElement is not null && !_openElements.ContainsNamed("template")) return;
+                if (_formElement is not null && !_openElements.ContainsNamed("template"))
+                {
+                    return;
+                }
+
                 ClosePIfInButtonScope();
                 {
                     var form = InsertHtmlElement(start);
-                    if (!_openElements.ContainsNamed("template")) _formElement = form;
+                    if (!_openElements.ContainsNamed("template"))
+                    {
+                        _formElement = form;
+                    }
                 }
                 return;
 
@@ -141,7 +185,11 @@ public sealed partial class HtmlTreeBuilder
             // would drain the stack. button keeps its own case below.
             case EndTagToken end when end.Name != "p"
                 && (AddressBlockTags.Contains(end.Name) || end.Name is "listing" or "pre"):
-                if (!_openElements.HasInScope(end.Name)) return;
+                if (!_openElements.HasInScope(end.Name))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags();
                 _openElements.PopUntilNamed(end.Name);
                 return;
@@ -152,7 +200,10 @@ public sealed partial class HtmlTreeBuilder
 
             case EndTagToken { Name: "p" }:
                 if (!_openElements.HasInButtonScope("p"))
+                {
                     HandleToken(Synthetic("p")); // re-dispatch: breaks out of foreign content.
+                }
+
                 ClosePElement();
                 return;
 
@@ -163,19 +214,31 @@ public sealed partial class HtmlTreeBuilder
                 return;
 
             case EndTagToken { Name: "li" }:
-                if (!_openElements.HasInListItemScope("li")) return;
+                if (!_openElements.HasInListItemScope("li"))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags(except: "li");
                 _openElements.PopUntilNamed("li");
                 return;
 
             case EndTagToken end when end.Name is "dd" or "dt":
-                if (!_openElements.HasInScope(end.Name)) return;
+                if (!_openElements.HasInScope(end.Name))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags(except: end.Name);
                 _openElements.PopUntilNamed(end.Name);
                 return;
 
             case EndTagToken end when IsHeadingTag(end.Name):
-                if (!AnyHeadingInScope()) return;
+                if (!AnyHeadingInScope())
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags();
                 _openElements.PopUntilOneOf("h1", "h2", "h3", "h4", "h5", "h6");
                 return;
@@ -187,7 +250,10 @@ public sealed partial class HtmlTreeBuilder
                     {
                         RunAdoptionAgency("a");
                         _activeFormatting.Remove(existing);
-                        if (_openElements.Contains(existing)) _openElements.Remove(existing);
+                        if (_openElements.Contains(existing))
+                        {
+                            _openElements.Remove(existing);
+                        }
                     }
                     ReconstructActiveFormattingElements();
                     var el = InsertHtmlElement(start);
@@ -228,14 +294,22 @@ public sealed partial class HtmlTreeBuilder
                 return;
 
             case EndTagToken end when end.Name is "applet" or "marquee" or "object":
-                if (!_openElements.HasInScope(end.Name)) return;
+                if (!_openElements.HasInScope(end.Name))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags();
                 _openElements.PopUntilNamed(end.Name);
                 _activeFormatting.ClearToLastMarker();
                 return;
 
             case StartTagToken { Name: "table" } start:
-                if (_document.Mode != QuirksMode.Quirks) ClosePIfInButtonScope();
+                if (_document.Mode != QuirksMode.Quirks)
+                {
+                    ClosePIfInButtonScope();
+                }
+
                 InsertHtmlElement(start);
                 _framesetOk = false;
                 _mode = InsertionMode.InTable;
@@ -255,7 +329,9 @@ public sealed partial class HtmlTreeBuilder
                 {
                     var type = start.Attributes.FirstOrDefault(a => a.Name == "type")?.Value;
                     if (type is null || !type.Equals("hidden", StringComparison.OrdinalIgnoreCase))
+                    {
                         _framesetOk = false;
+                    }
                 }
                 return;
 
@@ -313,31 +389,50 @@ public sealed partial class HtmlTreeBuilder
 
             case StartTagToken start when start.Name is "optgroup" or "option":
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "option" })
+                {
                     _openElements.Pop();
+                }
+
                 ReconstructActiveFormattingElements();
                 InsertHtmlElement(start);
                 return;
 
             case StartTagToken start when start.Name is "rb" or "rtc":
-                if (_openElements.HasInScope("ruby")) GenerateImpliedEndTags();
+                if (_openElements.HasInScope("ruby"))
+                {
+                    GenerateImpliedEndTags();
+                }
+
                 InsertHtmlElement(start);
                 return;
 
             case StartTagToken start when start.Name is "rp" or "rt":
-                if (_openElements.HasInScope("ruby")) GenerateImpliedEndTags(except: "rtc");
+                if (_openElements.HasInScope("ruby"))
+                {
+                    GenerateImpliedEndTags(except: "rtc");
+                }
+
                 InsertHtmlElement(start);
                 return;
 
             case StartTagToken { Name: "math" } start:
                 ReconstructActiveFormattingElements();
                 InsertForeignElement(start, MathMlNs);
-                if (start.SelfClosing) _openElements.Pop();
+                if (start.SelfClosing)
+                {
+                    _openElements.Pop();
+                }
+
                 return;
 
             case StartTagToken { Name: "svg" } start:
                 ReconstructActiveFormattingElements();
                 InsertForeignElement(start, SvgNs);
-                if (start.SelfClosing) _openElements.Pop();
+                if (start.SelfClosing)
+                {
+                    _openElements.Pop();
+                }
+
                 return;
 
             case StartTagToken start when start.Name is "caption" or "col" or "colgroup"
@@ -368,7 +463,9 @@ public sealed partial class HtmlTreeBuilder
                 break;
             }
             if (IsSpecial(node) && node is not { Namespace: HtmlNs, LocalName: "address" or "div" or "p" })
+            {
                 break;
+            }
         }
         ClosePIfInButtonScope();
         InsertHtmlElement(start);
@@ -388,7 +485,9 @@ public sealed partial class HtmlTreeBuilder
                 break;
             }
             if (IsSpecial(node) && node is not { Namespace: HtmlNs, LocalName: "address" or "div" or "p" })
+            {
                 break;
+            }
         }
         ClosePIfInButtonScope();
         InsertHtmlElement(start);
@@ -400,13 +499,21 @@ public sealed partial class HtmlTreeBuilder
         {
             var node = _formElement;
             _formElement = null;
-            if (node is null || !_openElements.HasInScope(node)) return;
+            if (node is null || !_openElements.HasInScope(node))
+            {
+                return;
+            }
+
             GenerateImpliedEndTags();
             _openElements.Remove(node);
         }
         else
         {
-            if (!_openElements.HasInScope("form")) return;
+            if (!_openElements.HasInScope("form"))
+            {
+                return;
+            }
+
             GenerateImpliedEndTags();
             _openElements.PopUntilNamed("form");
         }
@@ -423,7 +530,10 @@ public sealed partial class HtmlTreeBuilder
                 _openElements.PopUntilElement(node);
                 return;
             }
-            if (IsSpecial(node)) return; // parse error, ignore.
+            if (IsSpecial(node))
+            {
+                return; // parse error, ignore.
+            }
         }
     }
 
@@ -443,7 +553,11 @@ public sealed partial class HtmlTreeBuilder
                 return;
             case EndOfFileToken:
                 FlushText();
-                if (!_openElements.IsEmpty) _openElements.Pop();
+                if (!_openElements.IsEmpty)
+                {
+                    _openElements.Pop();
+                }
+
                 _mode = _originalMode;
                 ProcessUsingInsertionMode(token);
                 return;

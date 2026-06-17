@@ -39,7 +39,13 @@ internal sealed class StackOfOpenElements
     public bool ContainsNamed(string localName)
     {
         for (var i = _items.Count - 1; i >= 0; i--)
-            if (IsHtmlNamed(_items[i], localName)) return true;
+        {
+            if (IsHtmlNamed(_items[i], localName))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -59,7 +65,10 @@ internal sealed class StackOfOpenElements
         {
             var popped = _items[^1];
             _items.RemoveAt(_items.Count - 1);
-            if (IsHtmlNamed(popped, localName)) return;
+            if (IsHtmlNamed(popped, localName))
+            {
+                return;
+            }
         }
     }
 
@@ -71,7 +80,12 @@ internal sealed class StackOfOpenElements
             var popped = _items[^1];
             _items.RemoveAt(_items.Count - 1);
             foreach (var n in localNames)
-                if (IsHtmlNamed(popped, n)) return;
+            {
+                if (IsHtmlNamed(popped, n))
+                {
+                    return;
+                }
+            }
         }
     }
 
@@ -82,14 +96,23 @@ internal sealed class StackOfOpenElements
         {
             var popped = _items[^1];
             _items.RemoveAt(_items.Count - 1);
-            if (popped == target) return;
+            if (popped == target)
+            {
+                return;
+            }
         }
     }
 
     public Element? FindByName(string localName)
     {
         for (var i = _items.Count - 1; i >= 0; i--)
-            if (IsHtmlNamed(_items[i], localName)) return _items[i];
+        {
+            if (IsHtmlNamed(_items[i], localName))
+            {
+                return _items[i];
+            }
+        }
+
         return null;
     }
 
@@ -120,8 +143,16 @@ internal sealed class StackOfOpenElements
         for (var i = _items.Count - 1; i >= 0; i--)
         {
             var node = _items[i];
-            if (IsHtmlNamed(node, localName)) return true;
-            if (node.Namespace == Html && node.LocalName is "optgroup" or "option") continue;
+            if (IsHtmlNamed(node, localName))
+            {
+                return true;
+            }
+
+            if (node.Namespace == Html && node.LocalName is "optgroup" or "option")
+            {
+                continue;
+            }
+
             return false;
         }
         return false;
@@ -132,8 +163,15 @@ internal sealed class StackOfOpenElements
         for (var i = _items.Count - 1; i >= 0; i--)
         {
             var node = _items[i];
-            if (IsHtmlNamed(node, localName)) return true;
-            if (IsScopeTerminator(node, list, extra, extra2, includeForeign)) return false;
+            if (IsHtmlNamed(node, localName))
+            {
+                return true;
+            }
+
+            if (IsScopeTerminator(node, list, extra, extra2, includeForeign))
+            {
+                return false;
+            }
         }
         return false;
     }
@@ -143,8 +181,15 @@ internal sealed class StackOfOpenElements
         for (var i = _items.Count - 1; i >= 0; i--)
         {
             var node = _items[i];
-            if (node == target) return true;
-            if (IsScopeTerminator(node, list, null, null, includeForeign: true)) return false;
+            if (node == target)
+            {
+                return true;
+            }
+
+            if (IsScopeTerminator(node, list, null, null, includeForeign: true))
+            {
+                return false;
+            }
         }
         return false;
     }
@@ -154,18 +199,42 @@ internal sealed class StackOfOpenElements
         if (node.Namespace == Html)
         {
             foreach (var n in list)
-                if (node.LocalName == n) return true;
-            if (extra is not null && node.LocalName == extra) return true;
-            if (extra2 is not null && node.LocalName == extra2) return true;
+            {
+                if (node.LocalName == n)
+                {
+                    return true;
+                }
+            }
+
+            if (extra is not null && node.LocalName == extra)
+            {
+                return true;
+            }
+
+            if (extra2 is not null && node.LocalName == extra2)
+            {
+                return true;
+            }
+
             return false;
         }
         // The MathML/SVG integration elements terminate the default/button/list-item
         // scopes, but NOT table scope (html/table/template only).
-        if (!includeForeign) return false;
+        if (!includeForeign)
+        {
+            return false;
+        }
+
         if (node.Namespace == MathMl)
+        {
             return node.LocalName is "mi" or "mo" or "mn" or "ms" or "mtext" or "annotation-xml";
+        }
+
         if (node.Namespace == Svg)
+        {
             return node.LocalName is "foreignObject" or "desc" or "title";
+        }
+
         return false;
     }
 

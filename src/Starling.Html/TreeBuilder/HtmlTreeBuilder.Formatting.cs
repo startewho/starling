@@ -1,11 +1,12 @@
+using System.Collections.Frozen;
 using Starling.Dom;
 
 namespace Starling.Html.TreeBuilder;
 
 public sealed partial class HtmlTreeBuilder
 {
-    // §13.2.4.2 "special" category.
-    private static readonly HashSet<string> HtmlSpecial = new(StringComparer.Ordinal)
+    // §13.2.4.2 "special" category — build-once/read-many, so frozen.
+    private static readonly FrozenSet<string> HtmlSpecial = new[]
     {
         "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound",
         "blockquote", "body", "br", "button", "caption", "center", "col", "colgroup",
@@ -17,7 +18,7 @@ public sealed partial class HtmlTreeBuilder
         "search", "section", "select", "source", "style", "summary", "table", "tbody",
         "td", "template", "textarea", "tfoot", "th", "thead", "title", "tr", "track",
         "ul", "wbr", "xmp",
-    };
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     private static bool IsSpecial(Element e) => e.Namespace switch
     {
@@ -30,17 +31,23 @@ public sealed partial class HtmlTreeBuilder
     /// <summary>§13.2.4.3 "reconstruct the active formatting elements".</summary>
     private void ReconstructActiveFormattingElements()
     {
-        if (_activeFormatting.Count == 0) return;
-        var last = _activeFormatting[_activeFormatting.Count - 1];
-        if (last.IsMarker || _openElements.Contains(last.Element!)) return;
+        if (_activeFormatting.Count == 0)
+        {
+            return;
+        }
+
+        if (_activeFormatting[^1].Element is not { } last || _openElements.Contains(last))
+        {
+            return;
+        }
 
         var i = _activeFormatting.Count - 1;
         // Rewind.
         while (i > 0)
         {
             i--;
-            var entry = _activeFormatting[i];
-            if (entry.IsMarker || _openElements.Contains(entry.Element!))
+            var entry = _activeFormatting[i].Element;
+            if (entry is null || _openElements.Contains(entry))
             {
                 i++; // Advance to the entry after the marker/open element.
                 break;
@@ -49,7 +56,11 @@ public sealed partial class HtmlTreeBuilder
 
         for (; i < _activeFormatting.Count; i++)
         {
-            var clone = CloneElement(_activeFormatting[i].Element!);
+            if (_activeFormatting[i].Element is not { } entry)
+            {
+                continue;
+            }
+            var clone = CloneElement(entry);
             InsertElementAtAppropriatePlace(clone);
             _openElements.Push(clone);
             _activeFormatting.ReplaceAt(i, clone);
@@ -64,9 +75,13 @@ public sealed partial class HtmlTreeBuilder
         foreach (var a in src.Attributes)
         {
             if (string.IsNullOrEmpty(a.Namespace))
+            {
                 clone.SetAttribute(a.LocalName, a.Value);
+            }
             else
+            {
                 clone.SetAttributeNS(a.Namespace, QualifiedName(a.Prefix, a.LocalName), a.Value);
+            }
         }
         return clone;
     }
@@ -92,7 +107,7 @@ public sealed partial class HtmlTreeBuilder
             var formattingElement = _activeFormatting.LastBeforeMarker(subject);
             if (formattingElement is null)
             {
-                AnyOtherEndTag(new Tokenizer.EndTagToken(subject, Array.Empty<Tokenizer.HtmlAttribute>(), false));
+                AnyOtherEndTag(new Tokenizer.EndTagToken(subject, [], false));
                 return;
             }
             if (!_openElements.Contains(formattingElement))
@@ -101,7 +116,9 @@ public sealed partial class HtmlTreeBuilder
                 return;
             }
             if (!_openElements.HasInScope(formattingElement))
+            {
                 return; // parse error.
+            }
 
             var feIndex = _openElements.IndexOf(formattingElement);
 
@@ -133,15 +150,26 @@ public sealed partial class HtmlTreeBuilder
                 inner++;
                 // Move node up the stack.
                 nodeIndex--;
-                if (nodeIndex < 0) break;
+                if (nodeIndex < 0)
+                {
+                    break;
+                }
+
                 node = _openElements[nodeIndex];
-                if (node == formattingElement) break;
+                if (node == formattingElement)
+                {
+                    break;
+                }
 
                 var afeIndex = _activeFormatting.IndexOf(node);
                 if (inner > 3 && afeIndex >= 0)
                 {
                     _activeFormatting.RemoveAt(afeIndex);
-                    if (afeIndex < bookmark) bookmark--;
+                    if (afeIndex < bookmark)
+                    {
+                        bookmark--;
+                    }
+
                     afeIndex = -1;
                 }
 
@@ -162,7 +190,9 @@ public sealed partial class HtmlTreeBuilder
                 nodeIndex = stackIdx;
 
                 if (lastNode == furthestBlock)
+                {
                     bookmark = afeIndex + 1;
+                }
 
                 node.AppendChild(lastNode);
                 lastNode = node;
@@ -190,10 +220,21 @@ public sealed partial class HtmlTreeBuilder
             if (oldAfe >= 0)
             {
                 _activeFormatting.RemoveAt(oldAfe);
-                if (oldAfe < bookmark) bookmark--;
+                if (oldAfe < bookmark)
+                {
+                    bookmark--;
+                }
             }
-            if (bookmark < 0) bookmark = 0;
-            if (bookmark > _activeFormatting.Count) bookmark = _activeFormatting.Count;
+            if (bookmark < 0)
+            {
+                bookmark = 0;
+            }
+
+            if (bookmark > _activeFormatting.Count)
+            {
+                bookmark = _activeFormatting.Count;
+            }
+
             _activeFormatting.Insert(bookmark, newElement);
 
             // Update the stack: remove FE, insert newElement just below furthestBlock.

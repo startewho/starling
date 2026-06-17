@@ -201,9 +201,17 @@ public sealed partial class HtmlTreeBuilder
                                                        or "link" or "meta" or "noframes"
                                                        or "script" or "style" or "template"
                                                        or "title":
-                if (_headElement is not null) _openElements.Push(_headElement);
+                if (_headElement is not null)
+                {
+                    _openElements.Push(_headElement);
+                }
+
                 HandleInHead(token);
-                if (_headElement is not null) _openElements.Remove(_headElement);
+                if (_headElement is not null)
+                {
+                    _openElements.Remove(_headElement);
+                }
+
                 return;
             case EndTagToken { Name: "template" }:
                 HandleInHead(token);
@@ -223,11 +231,19 @@ public sealed partial class HtmlTreeBuilder
     /// end-tag steps, shared by every mode that delegates template closing.</summary>
     private void HandleTemplateEndTag()
     {
-        if (!_openElements.ContainsNamed("template")) return; // parse error: ignore.
+        if (!_openElements.ContainsNamed("template"))
+        {
+            return; // parse error: ignore.
+        }
+
         GenerateImpliedEndTagsThoroughly();
         _openElements.PopUntilNamed("template");
         _activeFormatting.ClearToLastMarker();
-        if (_templateInsertionModes.Count > 0) _templateInsertionModes.Pop();
+        if (_templateInsertionModes.Count > 0)
+        {
+            _templateInsertionModes.Pop();
+        }
+
         ResetInsertionModeAppropriately();
     }
 }
