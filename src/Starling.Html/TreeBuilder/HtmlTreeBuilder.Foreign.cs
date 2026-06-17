@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Starling.Dom;
 using Starling.Html.Tokenizer;
 
@@ -21,13 +22,13 @@ public sealed partial class HtmlTreeBuilder
     }
 
     // HTML start tags that break out of foreign content (§13.2.6.5).
-    private static readonly HashSet<string> ForeignBreakout = new(StringComparer.Ordinal)
+    private static readonly FrozenSet<string> ForeignBreakout = new[]
     {
         "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl",
         "dt", "em", "embed", "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i",
         "img", "li", "listing", "menu", "meta", "nobr", "ol", "p", "pre", "ruby", "s",
         "small", "span", "strong", "strike", "sub", "sup", "table", "tt", "u", "ul", "var",
-    };
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     private void HandleForeignContent(HtmlToken token)
     {
@@ -38,7 +39,11 @@ public sealed partial class HtmlTreeBuilder
                 return;
             case CharacterToken c:
                 InsertCharacter(CodePointToString(c.CodePoint));
-                if (!IsWhitespaceChar(c.CodePoint)) _framesetOk = false;
+                if (!IsWhitespaceChar(c.CodePoint))
+                {
+                    _framesetOk = false;
+                }
+
                 return;
             case CommentToken comment:
                 InsertComment(comment);
@@ -53,7 +58,10 @@ public sealed partial class HtmlTreeBuilder
                 {
                     var cur = _openElements.Current;
                     if (cur.Namespace == HtmlNs || IsMathMlTextIntegrationPoint(cur) || IsHtmlIntegrationPoint(cur))
+                    {
                         break;
+                    }
+
                     _openElements.Pop();
                 }
                 // Reprocess using the current insertion mode's HTML rules directly
@@ -64,9 +72,16 @@ public sealed partial class HtmlTreeBuilder
 
             case StartTagToken start:
                 {
-                    var ns = AdjustedCurrentNode!.Namespace;
-                    InsertForeignElement(start, ns);
-                    if (start.SelfClosing) _openElements.Pop();
+                    // The dispatcher only routes here with a foreign (non-null)
+                    // adjusted current node, so the new element inherits its namespace.
+                    if (AdjustedCurrentNode is { } acn)
+                    {
+                        InsertForeignElement(start, acn.Namespace);
+                        if (start.SelfClosing)
+                        {
+                            _openElements.Pop();
+                        }
+                    }
                 }
                 return;
 
@@ -83,7 +98,13 @@ public sealed partial class HtmlTreeBuilder
     private static bool HasFontBreakoutAttr(StartTagToken token)
     {
         foreach (var a in token.Attributes)
-            if (a.Name is "color" or "face" or "size") return true;
+        {
+            if (a.Name is "color" or "face" or "size")
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -94,13 +115,20 @@ public sealed partial class HtmlTreeBuilder
         // (parse error if names mismatch — not tracked for the tree result.)
         while (true)
         {
-            if (string.Equals(node.LocalName.ToLowerInvariant(), end.Name, StringComparison.Ordinal))
+            // The token name is already lowercased by the tokenizer; compare
+            // case-insensitively so a foreign element's mixed-case local name
+            // (e.g. foreignObject) matches without allocating a lowercased copy.
+            if (string.Equals(node.LocalName, end.Name, StringComparison.OrdinalIgnoreCase))
             {
                 _openElements.PopUntilElement(node);
                 return;
             }
             i--;
-            if (i < 0) return;
+            if (i < 0)
+            {
+                return;
+            }
+
             node = _openElements[i];
             if (node.Namespace == HtmlNs)
             {
@@ -118,7 +146,9 @@ public sealed partial class HtmlTreeBuilder
 
         var element = _document.CreateElementNS(@namespace, localName);
         foreach (var attr in token.Attributes)
+        {
             ApplyForeignAttribute(element, @namespace, attr);
+        }
 
         InsertElementAtAppropriatePlace(element);
         _openElements.Push(element);
@@ -136,17 +166,25 @@ public sealed partial class HtmlTreeBuilder
 
         var name = attr.Name;
         if (@namespace == MathMlNs && name == "definitionurl")
+        {
             name = "definitionURL";
+        }
         else if (@namespace == SvgNs && SvgAttrNames.TryGetValue(name, out var svgName))
+        {
             name = svgName;
+        }
 
         if (name == attr.Name)
+        {
             element.SetAttribute(name, attr.Value); // no case change needed.
+        }
         else
+        {
             element.SetAttributeNS(null, name, attr.Value); // preserve adjusted case.
+        }
     }
 
-    private static readonly Dictionary<string, (string? ns, string qualified)> ForeignAttrNamespaces = new(StringComparer.Ordinal)
+    private static readonly FrozenDictionary<string, (string? ns, string qualified)> ForeignAttrNamespaces = new Dictionary<string, (string? ns, string qualified)>(StringComparer.Ordinal)
     {
         ["xlink:actuate"] = (XLinkNs, "xlink:actuate"),
         ["xlink:arcrole"] = (XLinkNs, "xlink:arcrole"),
@@ -159,56 +197,108 @@ public sealed partial class HtmlTreeBuilder
         ["xml:space"] = (XmlNs, "xml:space"),
         ["xmlns"] = (XmlNsNs, "xmlns"),
         ["xmlns:xlink"] = (XmlNsNs, "xmlns:xlink"),
-    };
+    }.ToFrozenDictionary(StringComparer.Ordinal);
 
-    private static readonly Dictionary<string, string> SvgTagNames = new(StringComparer.Ordinal)
+    private static readonly FrozenDictionary<string, string> SvgTagNames = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["altglyph"] = "altGlyph", ["altglyphdef"] = "altGlyphDef", ["altglyphitem"] = "altGlyphItem",
-        ["animatecolor"] = "animateColor", ["animatemotion"] = "animateMotion",
-        ["animatetransform"] = "animateTransform", ["clippath"] = "clipPath",
-        ["feblend"] = "feBlend", ["fecolormatrix"] = "feColorMatrix",
-        ["fecomponenttransfer"] = "feComponentTransfer", ["fecomposite"] = "feComposite",
-        ["feconvolvematrix"] = "feConvolveMatrix", ["fediffuselighting"] = "feDiffuseLighting",
-        ["fedisplacementmap"] = "feDisplacementMap", ["fedistantlight"] = "feDistantLight",
-        ["fedropshadow"] = "feDropShadow", ["feflood"] = "feFlood", ["fefunca"] = "feFuncA",
-        ["fefuncb"] = "feFuncB", ["fefuncg"] = "feFuncG", ["fefuncr"] = "feFuncR",
-        ["fegaussianblur"] = "feGaussianBlur", ["feimage"] = "feImage", ["femerge"] = "feMerge",
-        ["femergenode"] = "feMergeNode", ["femorphology"] = "feMorphology", ["feoffset"] = "feOffset",
-        ["fepointlight"] = "fePointLight", ["fespecularlighting"] = "feSpecularLighting",
-        ["fespotlight"] = "feSpotLight", ["fetile"] = "feTile", ["feturbulence"] = "feTurbulence",
-        ["foreignobject"] = "foreignObject", ["glyphref"] = "glyphRef",
-        ["lineargradient"] = "linearGradient", ["radialgradient"] = "radialGradient",
+        ["altglyph"] = "altGlyph",
+        ["altglyphdef"] = "altGlyphDef",
+        ["altglyphitem"] = "altGlyphItem",
+        ["animatecolor"] = "animateColor",
+        ["animatemotion"] = "animateMotion",
+        ["animatetransform"] = "animateTransform",
+        ["clippath"] = "clipPath",
+        ["feblend"] = "feBlend",
+        ["fecolormatrix"] = "feColorMatrix",
+        ["fecomponenttransfer"] = "feComponentTransfer",
+        ["fecomposite"] = "feComposite",
+        ["feconvolvematrix"] = "feConvolveMatrix",
+        ["fediffuselighting"] = "feDiffuseLighting",
+        ["fedisplacementmap"] = "feDisplacementMap",
+        ["fedistantlight"] = "feDistantLight",
+        ["fedropshadow"] = "feDropShadow",
+        ["feflood"] = "feFlood",
+        ["fefunca"] = "feFuncA",
+        ["fefuncb"] = "feFuncB",
+        ["fefuncg"] = "feFuncG",
+        ["fefuncr"] = "feFuncR",
+        ["fegaussianblur"] = "feGaussianBlur",
+        ["feimage"] = "feImage",
+        ["femerge"] = "feMerge",
+        ["femergenode"] = "feMergeNode",
+        ["femorphology"] = "feMorphology",
+        ["feoffset"] = "feOffset",
+        ["fepointlight"] = "fePointLight",
+        ["fespecularlighting"] = "feSpecularLighting",
+        ["fespotlight"] = "feSpotLight",
+        ["fetile"] = "feTile",
+        ["feturbulence"] = "feTurbulence",
+        ["foreignobject"] = "foreignObject",
+        ["glyphref"] = "glyphRef",
+        ["lineargradient"] = "linearGradient",
+        ["radialgradient"] = "radialGradient",
         ["textpath"] = "textPath",
-    };
+    }.ToFrozenDictionary(StringComparer.Ordinal);
 
-    private static readonly Dictionary<string, string> SvgAttrNames = new(StringComparer.Ordinal)
+    private static readonly FrozenDictionary<string, string> SvgAttrNames = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["attributename"] = "attributeName", ["attributetype"] = "attributeType",
-        ["basefrequency"] = "baseFrequency", ["baseprofile"] = "baseProfile",
-        ["calcmode"] = "calcMode", ["clippathunits"] = "clipPathUnits",
-        ["diffuseconstant"] = "diffuseConstant", ["edgemode"] = "edgeMode",
-        ["filterunits"] = "filterUnits", ["glyphref"] = "glyphRef",
-        ["gradienttransform"] = "gradientTransform", ["gradientunits"] = "gradientUnits",
-        ["kernelmatrix"] = "kernelMatrix", ["kernelunitlength"] = "kernelUnitLength",
-        ["keypoints"] = "keyPoints", ["keysplines"] = "keySplines", ["keytimes"] = "keyTimes",
-        ["lengthadjust"] = "lengthAdjust", ["limitingconeangle"] = "limitingConeAngle",
-        ["markerheight"] = "markerHeight", ["markerunits"] = "markerUnits",
-        ["markerwidth"] = "markerWidth", ["maskcontentunits"] = "maskContentUnits",
-        ["maskunits"] = "maskUnits", ["numoctaves"] = "numOctaves", ["pathlength"] = "pathLength",
-        ["patterncontentunits"] = "patternContentUnits", ["patterntransform"] = "patternTransform",
-        ["patternunits"] = "patternUnits", ["pointsatx"] = "pointsAtX", ["pointsaty"] = "pointsAtY",
-        ["pointsatz"] = "pointsAtZ", ["preservealpha"] = "preserveAlpha",
-        ["preserveaspectratio"] = "preserveAspectRatio", ["primitiveunits"] = "primitiveUnits",
-        ["refx"] = "refX", ["refy"] = "refY", ["repeatcount"] = "repeatCount",
-        ["repeatdur"] = "repeatDur", ["requiredextensions"] = "requiredExtensions",
-        ["requiredfeatures"] = "requiredFeatures", ["specularconstant"] = "specularConstant",
-        ["specularexponent"] = "specularExponent", ["spreadmethod"] = "spreadMethod",
-        ["startoffset"] = "startOffset", ["stddeviation"] = "stdDeviation",
-        ["stitchtiles"] = "stitchTiles", ["surfacescale"] = "surfaceScale",
-        ["systemlanguage"] = "systemLanguage", ["tablevalues"] = "tableValues",
-        ["targetx"] = "targetX", ["targety"] = "targetY", ["textlength"] = "textLength",
-        ["viewbox"] = "viewBox", ["viewtarget"] = "viewTarget",
-        ["xchannelselector"] = "xChannelSelector", ["ychannelselector"] = "yChannelSelector",
+        ["attributename"] = "attributeName",
+        ["attributetype"] = "attributeType",
+        ["basefrequency"] = "baseFrequency",
+        ["baseprofile"] = "baseProfile",
+        ["calcmode"] = "calcMode",
+        ["clippathunits"] = "clipPathUnits",
+        ["diffuseconstant"] = "diffuseConstant",
+        ["edgemode"] = "edgeMode",
+        ["filterunits"] = "filterUnits",
+        ["glyphref"] = "glyphRef",
+        ["gradienttransform"] = "gradientTransform",
+        ["gradientunits"] = "gradientUnits",
+        ["kernelmatrix"] = "kernelMatrix",
+        ["kernelunitlength"] = "kernelUnitLength",
+        ["keypoints"] = "keyPoints",
+        ["keysplines"] = "keySplines",
+        ["keytimes"] = "keyTimes",
+        ["lengthadjust"] = "lengthAdjust",
+        ["limitingconeangle"] = "limitingConeAngle",
+        ["markerheight"] = "markerHeight",
+        ["markerunits"] = "markerUnits",
+        ["markerwidth"] = "markerWidth",
+        ["maskcontentunits"] = "maskContentUnits",
+        ["maskunits"] = "maskUnits",
+        ["numoctaves"] = "numOctaves",
+        ["pathlength"] = "pathLength",
+        ["patterncontentunits"] = "patternContentUnits",
+        ["patterntransform"] = "patternTransform",
+        ["patternunits"] = "patternUnits",
+        ["pointsatx"] = "pointsAtX",
+        ["pointsaty"] = "pointsAtY",
+        ["pointsatz"] = "pointsAtZ",
+        ["preservealpha"] = "preserveAlpha",
+        ["preserveaspectratio"] = "preserveAspectRatio",
+        ["primitiveunits"] = "primitiveUnits",
+        ["refx"] = "refX",
+        ["refy"] = "refY",
+        ["repeatcount"] = "repeatCount",
+        ["repeatdur"] = "repeatDur",
+        ["requiredextensions"] = "requiredExtensions",
+        ["requiredfeatures"] = "requiredFeatures",
+        ["specularconstant"] = "specularConstant",
+        ["specularexponent"] = "specularExponent",
+        ["spreadmethod"] = "spreadMethod",
+        ["startoffset"] = "startOffset",
+        ["stddeviation"] = "stdDeviation",
+        ["stitchtiles"] = "stitchTiles",
+        ["surfacescale"] = "surfaceScale",
+        ["systemlanguage"] = "systemLanguage",
+        ["tablevalues"] = "tableValues",
+        ["targetx"] = "targetX",
+        ["targety"] = "targetY",
+        ["textlength"] = "textLength",
+        ["viewbox"] = "viewBox",
+        ["viewtarget"] = "viewTarget",
+        ["xchannelselector"] = "xChannelSelector",
+        ["ychannelselector"] = "yChannelSelector",
         ["zoomandpan"] = "zoomAndPan",
-    };
+    }.ToFrozenDictionary(StringComparer.Ordinal);
 }

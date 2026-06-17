@@ -154,7 +154,10 @@ public sealed partial class HtmlTokenizer
         foreach (var ch in saved)
         {
             StepBogusComment(ch);
-            if (_eofProcessed) return;
+            if (_eofProcessed)
+            {
+                return;
+            }
         }
     }
 

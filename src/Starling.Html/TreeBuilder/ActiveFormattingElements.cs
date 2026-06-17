@@ -37,15 +37,22 @@ internal sealed class ActiveFormattingElements
         var earliestMatch = -1;
         for (var i = _items.Count - 1; i >= 0; i--)
         {
-            if (_items[i].IsMarker) break;
-            if (Equal(_items[i].Element!, element))
+            var existing = _items[i].Element;
+            if (existing is null)
+            {
+                break; // marker
+            }
+
+            if (Equal(existing, element))
             {
                 matchCount++;
                 earliestMatch = i;
             }
         }
         if (matchCount >= 3 && earliestMatch >= 0)
+        {
             _items.RemoveAt(earliestMatch);
+        }
 
         _items.Add(Entry.For(element));
     }
@@ -74,14 +81,26 @@ internal sealed class ActiveFormattingElements
     public bool Contains(Element element)
     {
         for (var i = _items.Count - 1; i >= 0; i--)
-            if (_items[i].Element == element) return true;
+        {
+            if (_items[i].Element == element)
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
     public int IndexOf(Element element)
     {
         for (var i = _items.Count - 1; i >= 0; i--)
-            if (_items[i].Element == element) return i;
+        {
+            if (_items[i].Element == element)
+            {
+                return i;
+            }
+        }
+
         return -1;
     }
 
@@ -93,7 +112,10 @@ internal sealed class ActiveFormattingElements
         {
             var last = _items[^1];
             _items.RemoveAt(_items.Count - 1);
-            if (last.IsMarker) return;
+            if (last.IsMarker)
+            {
+                return;
+            }
         }
     }
 
@@ -104,24 +126,44 @@ internal sealed class ActiveFormattingElements
     {
         for (var i = _items.Count - 1; i >= 0; i--)
         {
-            if (_items[i].IsMarker) return null;
-            var el = _items[i].Element!;
+            var el = _items[i].Element;
+            if (el is null)
+            {
+                return null; // marker
+            }
+
             if (string.Equals(el.LocalName, localName, StringComparison.Ordinal))
+            {
                 return el;
+            }
         }
         return null;
     }
 
     private static bool Equal(Element a, Element b)
     {
-        if (!string.Equals(a.LocalName, b.LocalName, StringComparison.Ordinal)) return false;
-        if (!string.Equals(a.Namespace, b.Namespace, StringComparison.Ordinal)) return false;
-        if (a.Attributes.Count != b.Attributes.Count) return false;
+        if (!string.Equals(a.LocalName, b.LocalName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.Equals(a.Namespace, b.Namespace, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (a.Attributes.Count != b.Attributes.Count)
+        {
+            return false;
+        }
+
         foreach (var attr in a.Attributes)
         {
             var other = b.Attributes.GetNamedItemNS(attr.Namespace, attr.LocalName);
             if (other is null || !string.Equals(other.Value, attr.Value, StringComparison.Ordinal))
+            {
                 return false;
+            }
         }
         return true;
     }

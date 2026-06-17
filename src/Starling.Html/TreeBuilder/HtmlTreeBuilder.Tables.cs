@@ -8,19 +8,25 @@ public sealed partial class HtmlTreeBuilder
     private void ClearStackToTableContext()
     {
         while (_openElements.Current is not ({ Namespace: HtmlNs, LocalName: "table" or "html" } or HtmlTemplateElement))
+        {
             _openElements.Pop();
+        }
     }
 
     private void ClearStackToTableBodyContext()
     {
         while (_openElements.Current is not ({ Namespace: HtmlNs, LocalName: "tbody" or "tfoot" or "thead" or "html" } or HtmlTemplateElement))
+        {
             _openElements.Pop();
+        }
     }
 
     private void ClearStackToTableRowContext()
     {
         while (_openElements.Current is not ({ Namespace: HtmlNs, LocalName: "tr" or "html" } or HtmlTemplateElement))
+        {
             _openElements.Pop();
+        }
     }
 
     // ---------------------------------------------------------------- InTable
@@ -68,13 +74,21 @@ public sealed partial class HtmlTreeBuilder
                 HandleInTableBody(token);
                 return;
             case StartTagToken { Name: "table" }:
-                if (!_openElements.HasInTableScope("table")) return;
+                if (!_openElements.HasInTableScope("table"))
+                {
+                    return;
+                }
+
                 _openElements.PopUntilNamed("table");
                 ResetInsertionModeAppropriately();
                 HandleToken(token);
                 return;
             case EndTagToken { Name: "table" }:
-                if (!_openElements.HasInTableScope("table")) return;
+                if (!_openElements.HasInTableScope("table"))
+                {
+                    return;
+                }
+
                 _openElements.PopUntilNamed("table");
                 ResetInsertionModeAppropriately();
                 return;
@@ -99,7 +113,10 @@ public sealed partial class HtmlTreeBuilder
                 }
                 break; // anything else.
             case StartTagToken { Name: "form" } start:
-                if (_openElements.ContainsNamed("template") || _formElement is not null) return;
+                if (_openElements.ContainsNamed("template") || _formElement is not null)
+                {
+                    return;
+                }
                 {
                     var form = InsertHtmlElement(start);
                     _formElement = form;
@@ -125,7 +142,11 @@ public sealed partial class HtmlTreeBuilder
                 return; // parse error, ignore.
             case CharacterToken c:
                 _pendingTableText.Append(CodePointToString(c.CodePoint));
-                if (!IsWhitespaceChar(c.CodePoint)) _pendingTableTextHasNonWhitespace = true;
+                if (!IsWhitespaceChar(c.CodePoint))
+                {
+                    _pendingTableTextHasNonWhitespace = true;
+                }
+
                 return;
         }
 
@@ -159,7 +180,11 @@ public sealed partial class HtmlTreeBuilder
         switch (token)
         {
             case EndTagToken { Name: "caption" }:
-                if (!_openElements.HasInTableScope("caption")) return;
+                if (!_openElements.HasInTableScope("caption"))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags();
                 _openElements.PopUntilNamed("caption");
                 _activeFormatting.ClearToLastMarker();
@@ -168,7 +193,11 @@ public sealed partial class HtmlTreeBuilder
             case StartTagToken start when start.Name is "caption" or "col" or "colgroup"
                 or "tbody" or "td" or "tfoot" or "th" or "thead" or "tr":
             case EndTagToken { Name: "table" }:
-                if (!_openElements.HasInTableScope("caption")) return;
+                if (!_openElements.HasInTableScope("caption"))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags();
                 _openElements.PopUntilNamed("caption");
                 _activeFormatting.ClearToLastMarker();
@@ -199,7 +228,11 @@ public sealed partial class HtmlTreeBuilder
                 _openElements.Pop();
                 return;
             case EndTagToken { Name: "colgroup" }:
-                if (_openElements.Current is not { Namespace: HtmlNs, LocalName: "colgroup" }) return;
+                if (_openElements.Current is not { Namespace: HtmlNs, LocalName: "colgroup" })
+                {
+                    return;
+                }
+
                 _openElements.Pop();
                 _mode = InsertionMode.InTable;
                 return;
@@ -214,7 +247,11 @@ public sealed partial class HtmlTreeBuilder
                 return;
         }
 
-        if (_openElements.Current is not { Namespace: HtmlNs, LocalName: "colgroup" }) return;
+        if (_openElements.Current is not { Namespace: HtmlNs, LocalName: "colgroup" })
+        {
+            return;
+        }
+
         _openElements.Pop();
         _mode = InsertionMode.InTable;
         HandleToken(token);
@@ -238,7 +275,11 @@ public sealed partial class HtmlTreeBuilder
                 HandleInRow(token);
                 return;
             case EndTagToken end when end.Name is "tbody" or "tfoot" or "thead":
-                if (!_openElements.HasInTableScope(end.Name)) return;
+                if (!_openElements.HasInTableScope(end.Name))
+                {
+                    return;
+                }
+
                 ClearStackToTableBodyContext();
                 _openElements.Pop();
                 _mode = InsertionMode.InTable;
@@ -248,7 +289,10 @@ public sealed partial class HtmlTreeBuilder
             case EndTagToken { Name: "table" }:
                 if (!_openElements.HasInTableScope("tbody") && !_openElements.HasInTableScope("thead")
                     && !_openElements.HasInTableScope("tfoot"))
+                {
                     return;
+                }
+
                 ClearStackToTableBodyContext();
                 _openElements.Pop();
                 _mode = InsertionMode.InTable;
@@ -274,7 +318,11 @@ public sealed partial class HtmlTreeBuilder
                 _activeFormatting.AddMarker();
                 return;
             case EndTagToken { Name: "tr" }:
-                if (!_openElements.HasInTableScope("tr")) return;
+                if (!_openElements.HasInTableScope("tr"))
+                {
+                    return;
+                }
+
                 ClearStackToTableRowContext();
                 _openElements.Pop();
                 _mode = InsertionMode.InTableBody;
@@ -282,15 +330,27 @@ public sealed partial class HtmlTreeBuilder
             case StartTagToken start when start.Name is "caption" or "col" or "colgroup"
                 or "tbody" or "tfoot" or "thead" or "tr":
             case EndTagToken { Name: "table" }:
-                if (!_openElements.HasInTableScope("tr")) return;
+                if (!_openElements.HasInTableScope("tr"))
+                {
+                    return;
+                }
+
                 ClearStackToTableRowContext();
                 _openElements.Pop();
                 _mode = InsertionMode.InTableBody;
                 HandleToken(token);
                 return;
             case EndTagToken end when end.Name is "tbody" or "tfoot" or "thead":
-                if (!_openElements.HasInTableScope(end.Name)) return;
-                if (!_openElements.HasInTableScope("tr")) return;
+                if (!_openElements.HasInTableScope(end.Name))
+                {
+                    return;
+                }
+
+                if (!_openElements.HasInTableScope("tr"))
+                {
+                    return;
+                }
+
                 ClearStackToTableRowContext();
                 _openElements.Pop();
                 _mode = InsertionMode.InTableBody;
@@ -318,7 +378,11 @@ public sealed partial class HtmlTreeBuilder
         switch (token)
         {
             case EndTagToken end when end.Name is "td" or "th":
-                if (!_openElements.HasInTableScope(end.Name)) return;
+                if (!_openElements.HasInTableScope(end.Name))
+                {
+                    return;
+                }
+
                 GenerateImpliedEndTags();
                 _openElements.PopUntilNamed(end.Name);
                 _activeFormatting.ClearToLastMarker();
@@ -326,14 +390,22 @@ public sealed partial class HtmlTreeBuilder
                 return;
             case StartTagToken start when start.Name is "caption" or "col" or "colgroup"
                 or "tbody" or "td" or "tfoot" or "th" or "thead" or "tr":
-                if (!_openElements.HasInTableScope("td") && !_openElements.HasInTableScope("th")) return;
+                if (!_openElements.HasInTableScope("td") && !_openElements.HasInTableScope("th"))
+                {
+                    return;
+                }
+
                 CloseCell();
                 HandleToken(token);
                 return;
             case EndTagToken end when end.Name is "body" or "caption" or "col" or "colgroup" or "html":
                 return;
             case EndTagToken end when end.Name is "table" or "tbody" or "tfoot" or "thead" or "tr":
-                if (!_openElements.HasInTableScope(end.Name)) return;
+                if (!_openElements.HasInTableScope(end.Name))
+                {
+                    return;
+                }
+
                 CloseCell();
                 HandleToken(token);
                 return;

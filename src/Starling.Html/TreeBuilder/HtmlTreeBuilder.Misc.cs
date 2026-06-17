@@ -17,43 +17,75 @@ public sealed partial class HtmlTreeBuilder
             case StartTagToken { Name: "html" }: HandleInBody(token); return;
             case StartTagToken { Name: "option" } start:
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "option" })
+                {
                     _openElements.Pop();
+                }
+
                 InsertHtmlElement(start);
                 return;
             case StartTagToken { Name: "optgroup" } start:
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "option" })
+                {
                     _openElements.Pop();
+                }
+
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "optgroup" })
+                {
                     _openElements.Pop();
+                }
+
                 InsertHtmlElement(start);
                 return;
             case StartTagToken { Name: "hr" } start:
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "option" })
+                {
                     _openElements.Pop();
+                }
+
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "optgroup" })
+                {
                     _openElements.Pop();
+                }
+
                 InsertHtmlElement(start);
                 _openElements.Pop();
                 return;
             case EndTagToken { Name: "optgroup" }:
                 if (_openElements.Count >= 2
                     && _openElements.Current is { Namespace: HtmlNs, LocalName: "option" }
-                    && _openElements[_openElements.Count - 2] is { Namespace: HtmlNs, LocalName: "optgroup" })
+                    && _openElements[^2] is { Namespace: HtmlNs, LocalName: "optgroup" })
+                {
                     _openElements.Pop();
+                }
+
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "optgroup" })
+                {
                     _openElements.Pop();
+                }
+
                 return;
             case EndTagToken { Name: "option" }:
                 if (_openElements.Current is { Namespace: HtmlNs, LocalName: "option" })
+                {
                     _openElements.Pop();
+                }
+
                 return;
             case EndTagToken { Name: "select" }:
-                if (!_openElements.HasInSelectScope("select")) return;
+                if (!_openElements.HasInSelectScope("select"))
+                {
+                    return;
+                }
+
                 _openElements.PopUntilNamed("select");
                 ResetInsertionModeAppropriately();
                 return;
             case StartTagToken { Name: "select" }:
-                if (!_openElements.HasInSelectScope("select")) return;
+                if (!_openElements.HasInSelectScope("select"))
+                {
+                    return;
+                }
+
                 _openElements.PopUntilNamed("select");
                 ResetInsertionModeAppropriately();
                 return;
@@ -61,7 +93,11 @@ public sealed partial class HtmlTreeBuilder
             // <select> content model <keygen>/<textarea> are inserted (they fall
             // through to the in-body delegation below).
             case StartTagToken { Name: "input" }:
-                if (!_openElements.HasInSelectScope("select")) return;
+                if (!_openElements.HasInSelectScope("select"))
+                {
+                    return;
+                }
+
                 _openElements.PopUntilNamed("select");
                 ResetInsertionModeAppropriately();
                 HandleToken(token);
@@ -92,7 +128,11 @@ public sealed partial class HtmlTreeBuilder
                 return;
             case EndTagToken end when end.Name is "caption" or "table" or "tbody"
                 or "tfoot" or "thead" or "tr" or "td" or "th":
-                if (!_openElements.HasInTableScope(end.Name)) return;
+                if (!_openElements.HasInTableScope(end.Name))
+                {
+                    return;
+                }
+
                 _openElements.PopUntilNamed("select");
                 ResetInsertionModeAppropriately();
                 HandleToken(token);
@@ -141,10 +181,18 @@ public sealed partial class HtmlTreeBuilder
             case EndTagToken:
                 return; // parse error, ignore.
             case EndOfFileToken:
-                if (!_openElements.ContainsNamed("template")) return; // stop parsing.
+                if (!_openElements.ContainsNamed("template"))
+                {
+                    return; // stop parsing.
+                }
+
                 _openElements.PopUntilNamed("template");
                 _activeFormatting.ClearToLastMarker();
-                if (_templateInsertionModes.Count > 0) _templateInsertionModes.Pop();
+                if (_templateInsertionModes.Count > 0)
+                {
+                    _templateInsertionModes.Pop();
+                }
+
                 ResetInsertionModeAppropriately();
                 HandleToken(token);
                 return;
@@ -153,7 +201,11 @@ public sealed partial class HtmlTreeBuilder
 
     private void SwitchTemplateMode(InsertionMode mode)
     {
-        if (_templateInsertionModes.Count > 0) _templateInsertionModes.Pop();
+        if (_templateInsertionModes.Count > 0)
+        {
+            _templateInsertionModes.Pop();
+        }
+
         _templateInsertionModes.Push(mode);
         _mode = mode;
     }
@@ -174,10 +226,17 @@ public sealed partial class HtmlTreeBuilder
                 InsertHtmlElement(start);
                 return;
             case EndTagToken { Name: "frameset" }:
-                if (_openElements.Current is { Namespace: HtmlNs, LocalName: "html" }) return;
+                if (_openElements.Current is { Namespace: HtmlNs, LocalName: "html" })
+                {
+                    return;
+                }
+
                 _openElements.Pop();
                 if (_fragmentContext is null && _openElements.Current is not { Namespace: HtmlNs, LocalName: "frameset" })
+                {
                     _mode = InsertionMode.AfterFrameset;
+                }
+
                 return;
             case StartTagToken { Name: "frame" } start:
                 InsertHtmlElement(start);
@@ -229,7 +288,11 @@ public sealed partial class HtmlTreeBuilder
             case DoctypeToken: return;
             case StartTagToken { Name: "html" }: HandleInBody(token); return;
             case EndTagToken { Name: "html" }:
-                if (_fragmentContext is not null) return;
+                if (_fragmentContext is not null)
+                {
+                    return;
+                }
+
                 _mode = InsertionMode.AfterAfterBody;
                 return;
             case EndOfFileToken:
