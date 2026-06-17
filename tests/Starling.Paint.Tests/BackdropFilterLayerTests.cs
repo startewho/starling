@@ -60,6 +60,12 @@ public sealed class BackdropFilterLayerTests
     [TestMethod]
     public void Backdrop_blur_mixes_the_pixels_composited_under_the_element()
     {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
         // A red|blue split background with a frosted panel straddling the seam.
         var doc = HtmlParser.Parse(
             "<body style=\"margin:0\">" +
@@ -72,9 +78,9 @@ public sealed class BackdropFilterLayerTests
             .LayoutDocument(doc, new Size(200, 200));
 
         var tree = new LayerTreeBuilder().Build(root);
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
-        var compositor = new CompositorEngine(backend) { DisableGpuBlend = true };
-        using var bmp = compositor.Render(tree, new LayoutRect(0, 0, 200, 200), 1f);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
+        var compositor = new CompositorEngine(backend);
+        using var bmp = compositor.RenderGpuReadback(tree, new LayoutRect(0, 0, 200, 200), 1f);
 
         // Outside the panel the seam stays razor sharp.
         var sharp = bmp.GetPixel(95, 10);
