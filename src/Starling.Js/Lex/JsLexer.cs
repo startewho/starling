@@ -1314,13 +1314,18 @@ public ref struct JsLexer
         => IsAsciiDigit(c) || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
 
     private static bool IsWhitespace(char c)
-        => c == ' '
-        || c == '\t'
-        || c == '\v'
-        || c == '\f'
-        || c == '\u00A0'   // NBSP
-        || c == '\uFEFF'
-        || c == '\u3000';  // IDEOGRAPHIC SPACE
+    {
+        // ECMAScript WhiteSpace (spec section 12.2): TAB, VT, FF, ZWNBSP, and
+        // every code point in Unicode general category "Space_Separator" (Zs):
+        // NBSP (U+00A0), the en/em/thin spaces (U+2000 to U+200A), NNBSP
+        // (U+202F), medium mathematical space (U+205F), ideographic space
+        // (U+3000), and Ogham space mark (U+1680). ASCII fast path first to
+        // keep the lexer loop cheap for the common cases.
+        if (c == ' ' || c == '\t' || c == '\v' || c == '\f') return true;
+        if (c < 0x80) return false;
+        if (c == '\uFEFF') return true; // ZWNBSP is not in Zs
+        return CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.SpaceSeparator;
+    }
 
     private static bool IsLineTerminator(char c)
         => c == '\n'
