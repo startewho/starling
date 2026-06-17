@@ -123,13 +123,18 @@ public sealed partial class HtmlTokenizer
         }
         if (cdataViable && p.Length == 7)
         {
-            // No foreign content yet. Spec says
-            // outside foreign content this is cdata-in-html-content parse
+            _tempBuffer.Clear();
+            // In foreign content (adjusted current node is non-HTML), this is a
+            // real CDATA section; otherwise it is a cdata-in-html-content parse
             // error → comment "[CDATA[" → bogus comment state.
+            if (CdataAllowed?.Invoke() == true)
+            {
+                _state = TokenizerState.CdataSection;
+                return;
+            }
             _errors.Report(HtmlParseError.CdataInHtmlContent, _line, _column);
             _commentData.Clear();
             _commentData.Append("[CDATA[");
-            _tempBuffer.Clear();
             _state = TokenizerState.BogusComment;
             return;
         }
@@ -149,7 +154,10 @@ public sealed partial class HtmlTokenizer
         foreach (var ch in saved)
         {
             StepBogusComment(ch);
-            if (_eofProcessed) return;
+            if (_eofProcessed)
+            {
+                return;
+            }
         }
     }
 

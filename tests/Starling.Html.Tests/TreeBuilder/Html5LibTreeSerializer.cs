@@ -130,6 +130,17 @@ internal static class Html5LibTreeSerializer
             }
         }
 
+        // A <template>'s contents live in a separate fragment. The corpus dumps
+        // them under a synthetic "content" line.
+        if (el is HtmlTemplateElement template)
+        {
+            sb.Append(LinePrefix);
+            AppendIndent(sb, depth + 1);
+            sb.Append("content").Append('\n');
+            WriteChildren(template.Content, depth + 2, sb);
+            return;
+        }
+
         WriteChildren(el, depth + 1, sb);
     }
 
