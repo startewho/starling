@@ -355,6 +355,12 @@ public sealed class FilterPaintTests
     [Spec("css-filter-effects-1", "https://www.w3.org/TR/filter-effects-1/#FilterProperty", section: "10.1")]
     public void Promoted_filtered_layer_matches_the_flat_path()
     {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
         // `filter` promotes a compositor layer (StackingContextResolver flags
         // LayerHint.Filter). The slice carries the PushFilter bracket, so the
         // tile rasterizer applies the chain and the composite blits the
@@ -370,11 +376,11 @@ public sealed class FilterPaintTests
         var engine = new LayoutEngine(new StyleEngine(), DefaultTextMeasurer.Instance);
         var root = engine.LayoutDocument(document, new LayoutSize(W, H));
 
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
         using var flat = backend.Render(new DisplayListBuilder().Build(root), new LayoutRect(0, 0, W, H), 1f);
 
         var tree = new LayerTreeBuilder().Build(root);
-        using var layered = new CompositorEngine(backend).Render(tree, new LayoutRect(0, 0, W, H), 1f);
+        using var layered = new CompositorEngine(backend).RenderGpuReadback(tree, new LayoutRect(0, 0, W, H), 1f);
 
         // The box must actually be grayscaled on the layered path…
         var centre = layered.GetPixel(100, 100);
