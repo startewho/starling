@@ -16,6 +16,114 @@ public class JsLexerTests
     public void Pure_whitespace_skipped()
         => Kinds("   \t  \n  ").Should().Equal(JsTokenKind.EndOfFile);
 
+    // ----- Unicode whitespace (section 12.2 White Space) ------------------
+    // ECMAScript WhiteSpace is TAB, VT, FF, SP, ZWNBSP, and every code point in
+    // Unicode general category Space_Separator (Zs). The lexer must skip all of
+    // them between tokens and reject look-alikes that are NOT in that set.
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void No_break_space_U00A0_is_whitespace()
+        // NBSP. Already accepted before the fix; now via the Zs path.
+        => AssertWhitespaceSeparates("\u00A0");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Ogham_space_mark_U1680_is_whitespace()
+        // Newly accepted: rejected as unexpected before the fix.
+        => AssertWhitespaceSeparates("\u1680");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void En_em_thin_space_range_U2000_to_U200A_all_whitespace()
+    {
+        // EN QUAD through HAIR SPACE: the whole Zs sub-range the old lexer
+        // rejected with "unexpected character".
+        for (char c = '\u2000'; c <= '\u200A'; c++)
+            AssertWhitespaceSeparates(c.ToString());
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Narrow_no_break_space_U202F_is_whitespace()
+        // Newly accepted.
+        => AssertWhitespaceSeparates("\u202F");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Medium_mathematical_space_U205F_is_whitespace()
+        // Newly accepted.
+        => AssertWhitespaceSeparates("\u205F");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Ideographic_space_U3000_is_whitespace()
+        // Already accepted before the fix.
+        => AssertWhitespaceSeparates("\u3000");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Zwnbsp_bom_UFEFF_is_whitespace()
+        // ZWNBSP (U+FEFF) is WhiteSpace per the spec but is NOT in category Zs,
+        // so the lexer accepts it explicitly.
+        => AssertWhitespaceSeparates("\uFEFF");
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Leading_bom_is_skipped()
+    {
+        var t = First("\uFEFFx");
+        t.Kind.Should().Be(JsTokenKind.Identifier);
+        t.Lexeme.Should().Be("x");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Ascii_vertical_tab_and_form_feed_are_whitespace()
+    {
+        // VT (U+000B) and FF (U+000C) are WhiteSpace via the ASCII fast path.
+        AssertWhitespaceSeparates("\v");
+        AssertWhitespaceSeparates("\f");
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Leading_and_trailing_unicode_whitespace_skipped()
+    {
+        // BOM and ideographic space surrounding a single identifier: all of it
+        // must be skipped, leaving just the identifier.
+        var toks = Tokens("\uFEFF  x  \u3000");
+        toks.Select(t => t.Kind).Should().Equal(
+            JsTokenKind.Identifier, JsTokenKind.EndOfFile);
+        toks[0].Lexeme.Should().Be("x");
+    }
+
+    // ----- No-regress: look-alikes that are NOT WhiteSpace ----------------
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Zero_width_space_U200B_is_not_whitespace()
+    {
+        // U+200B ZERO WIDTH SPACE is category Cf (Format), not Space_Separator,
+        // so it is NOT WhiteSpace. The lexer must reject it, not skip it. This
+        // guards against widening the rule to "any non-ASCII space-ish char".
+        var sink = new RecordingSink();
+        new JsLexer("a\u200Bb", sink).Drain();
+        sink.Errors.Should().Contain(e => e.code == JsLexError.InvalidCharacter);
+    }
+
+    [Spec("ecma262", "https://tc39.es/ecma262/#sec-white-space", "12.2 White Space")]
+    [SpecFact]
+    public void Non_ascii_letter_is_not_whitespace()
+    {
+        // U+00E9 (e-acute) is a Letter, not Space_Separator. The Zs category
+        // check must not misclassify it as whitespace: it joins the identifier
+        // rather than splitting it.
+        var t = First("a\u00E9b");
+        t.Kind.Should().Be(JsTokenKind.Identifier);
+        t.Lexeme.Should().Be("a\u00E9b");
+    }
+
     // ----- Identifier / keyword -------------------------------------------
 
     [TestMethod]
@@ -721,6 +829,21 @@ public class JsLexerTests
     {
         var l = new JsLexer(s);
         return l.Next();
+    }
+
+    // Asserts `a<ws>b` lexes as two separate identifiers, i.e. <ws> is
+    // recognized as ECMAScript WhiteSpace and skipped between tokens. WhiteSpace
+    // is not a LineTerminator, so the preceding-line-terminator (ASI) flag must
+    // stay clear.
+    private static void AssertWhitespaceSeparates(string ws)
+    {
+        var because = $"U+{(int)ws[0]:X4} is ECMAScript WhiteSpace";
+        var toks = Tokens("a" + ws + "b");
+        toks.Should().HaveCount(3, because);          // a, b, EOF
+        toks[0].Lexeme.Should().Be("a", because);
+        toks[1].Lexeme.Should().Be("b", because);
+        toks[1].PrecededByLineTerminator.Should().BeFalse(because);
+        toks[2].Kind.Should().Be(JsTokenKind.EndOfFile, because);
     }
 
     private sealed class RecordingSink : IJsLexErrorSink
