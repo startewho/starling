@@ -117,14 +117,17 @@ public sealed class TreeBuilderTests
     }
 
     [TestMethod]
-    public void Self_closing_marker_on_unknown_element_pops_immediately()
+    public void Self_closing_on_unknown_html_element_is_ignored()
     {
+        // §13.2.6.4.7 "any other start tag": the self-closing flag on a non-void
+        // HTML element (e.g. a custom element) is a parse error and is NOT
+        // acknowledged — the element stays open, so following content nests inside
+        // it. (The well-known "custom elements can't self-close" behavior.)
         var doc = HtmlParser.Parse("<body><x-self/><p>after</p></body>");
-        var children = doc.Body!.ChildNodes.OfType<Element>().Select(e => e.LocalName).ToList();
-        children.Should().ContainInOrder("x-self", "p");
-        // The <p> is a sibling of <x-self>, not a child.
-        doc.Body.Descendants().OfType<Element>().First(e => e.LocalName == "x-self")
-            .FirstChild.Should().BeNull();
+        var xself = doc.Body!.ChildNodes.OfType<Element>().Single();
+        xself.LocalName.Should().Be("x-self");
+        // <p> is a CHILD of <x-self>, not a sibling.
+        xself.ChildNodes.OfType<Element>().Select(e => e.LocalName).Should().ContainInOrder("p");
     }
 
     [TestMethod]

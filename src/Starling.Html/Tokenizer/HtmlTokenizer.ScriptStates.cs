@@ -49,12 +49,17 @@ public sealed partial class HtmlTokenizer
             case TokenizerState.ScriptDataEscapedEndTagName:
                 FlushEndTagAttemptAsCharacters();
                 break;
+            case TokenizerState.ScriptDataEscapedLessThanSign:
+                // "anything else" (EOF): emit the pending '<', reconsume in script
+                // data escaped → eof-in-script-html-comment-like-text.
+                _emitted.Enqueue(new CharacterToken('<'));
+                _errors.Report(HtmlParseError.EofInScriptHtmlCommentLikeText, _line, _column);
+                break;
             case TokenizerState.ScriptDataEscapeStart:
             case TokenizerState.ScriptDataEscapeStartDash:
             case TokenizerState.ScriptDataEscaped:
             case TokenizerState.ScriptDataEscapedDash:
             case TokenizerState.ScriptDataEscapedDashDash:
-            case TokenizerState.ScriptDataEscapedLessThanSign:
             case TokenizerState.ScriptDataDoubleEscapeStart:
             case TokenizerState.ScriptDataDoubleEscaped:
             case TokenizerState.ScriptDataDoubleEscapedDash:

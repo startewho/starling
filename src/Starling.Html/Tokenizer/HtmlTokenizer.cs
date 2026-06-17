@@ -101,6 +101,12 @@ public sealed partial class HtmlTokenizer
     /// </summary>
     public void SetState(TokenizerState state) => _state = state;
 
+    /// <summary>Tree-builder seam for §13.2.5.42: when <c>&lt;![CDATA[</c> is seen,
+    /// the markup-declaration-open state asks the tree builder whether the
+    /// adjusted current node is a non-HTML (foreign) element. If so the content
+    /// is a CDATA section; otherwise it is a bogus comment. Null ⇒ never (HTML).</summary>
+    public Func<bool>? CdataAllowed { get; set; }
+
     /// <summary>Push more input.</summary>
     public void Feed(ReadOnlySpan<char> chars) => _stream.Feed(chars);
 

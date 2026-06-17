@@ -30,11 +30,12 @@ public sealed class Html5LibTreeConstructionTests
 
         var filter = Environment.GetEnvironmentVariable("STARLING_TREEBUILD_FILTER");
         // Ratchet floor (same pattern as Test262 — bake in the current baseline
-        // and raise it as conformance improves). Baseline 2026-05-27: 44.23%
-        // (786 / 1777). The wp:M1-02 acceptance target is 95%; the remaining
-        // ~50 points sit behind the deferred-scope follow-up WPs (InTemplate,
-        // foreign content, adoption agency, table sub-modes, InHeadNoscript).
-        var floor = double.TryParse(Environment.GetEnvironmentVariable("STARLING_TREEBUILD_FLOOR"), out var f) ? f : 44d;
+        // and raise it as conformance improves). Baseline 2026-06-16: 99.04%
+        // (1760 / 1777) after the full §13.2.6 rewrite (all insertion modes,
+        // adoption agency, foreign content + CDATA, customizable <select>). The
+        // remaining ~17 require a JS engine (document.write/getElementById) or are
+        // niche customizable-<select> mirroring / fragment-foreign edges.
+        var floor = double.TryParse(Environment.GetEnvironmentVariable("STARLING_TREEBUILD_FLOOR"), out var f) ? f : 99d;
         var verbose = Environment.GetEnvironmentVariable("STARLING_TREEBUILD_VERBOSE") == "1";
 
         var cases = Enumerate(root!, filter).ToList();
@@ -151,7 +152,11 @@ public sealed class Html5LibTreeConstructionTests
             return ("http://www.w3.org/2000/svg", raw[4..]);
         if (raw.StartsWith("math ", StringComparison.Ordinal))
             return ("http://www.w3.org/1998/Math/MathML", raw[5..]);
-        return (null, raw);
+        // A bare context name is an HTML element — give it the HTML namespace so
+        // the context matches what a real innerHTML caller passes (Element built
+        // via Document.CreateElement is HTML-namespaced). Without this the
+        // CreateNamespaced(null, …) path would leave Namespace = "".
+        return (Element.HtmlNamespace, raw);
     }
 
     // ----- enumeration ------------------------------------------------------
