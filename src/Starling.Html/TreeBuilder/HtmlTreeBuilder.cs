@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Text;
 using Starling.Common.Diagnostics;
@@ -7,54 +8,50 @@ using Starling.Html.Tokenizer;
 namespace Starling.Html.TreeBuilder;
 
 /// <summary>
-/// WHATWG HTML §13.2.6 tree construction stage. This is a pragmatic subset:
-/// the seven baseline insertion modes (Initial, BeforeHtml, BeforeHead, InHead,
-/// AfterHead, InBody, Text, AfterBody, AfterAfterBody) plus implicit
-/// open/close handling for paragraphs, headings, list items, and the
-/// principal sectioning elements.
+/// WHATWG HTML §13.2.6 tree construction. A faithful implementation of the
+/// insertion-mode state machine: the document/head/body modes, the full table
+/// mode family with foster parenting, select, template, frameset, the list of
+/// active formatting elements with the adoption agency algorithm, and SVG/MathML
+/// foreign content. Drives the html5lib tree-construction conformance corpus.
 /// </summary>
-/// <remarks>
-/// <b>Known simplifications</b> (vs. full spec):
-/// <list type="bullet">
-///   <item>The list of active formatting elements and the adoption agency
-///         algorithm are not implemented; mis-nested formatting tags
-///         (e.g. <c>&lt;b&gt;&lt;i&gt;x&lt;/b&gt;y&lt;/i&gt;</c>) produce a
-///         valid but shallowly-nested tree.</item>
-///   <item>Table insertion uses InBody with no foster parenting; well-formed
-///         tables parse correctly, but stray inter-cell text is appended
-///         rather than re-parented.</item>
-///   <item>Framesets, <c>&lt;template&gt;</c> contents, and the MathML/SVG
-///         foreign-content modes are deferred.</item>
-/// </list>
-/// </remarks>
-public sealed class HtmlTreeBuilder
+public sealed partial class HtmlTreeBuilder
 {
+    internal const string HtmlNs = Element.HtmlNamespace;
+    internal const string MathMlNs = "http://www.w3.org/1998/Math/MathML";
+    internal const string SvgNs = "http://www.w3.org/2000/svg";
+    internal const string XLinkNs = "http://www.w3.org/1999/xlink";
+    internal const string XmlNs = "http://www.w3.org/XML/1998/namespace";
+    internal const string XmlNsNs = "http://www.w3.org/2000/xmlns/";
+
     private readonly HtmlTokenizer _tokenizer;
     private readonly Document _document = new();
     private readonly StackOfOpenElements _openElements = new();
-    private readonly StringBuilder _pendingText = new();
+    private readonly ActiveFormattingElements _activeFormatting = new();
     private readonly CountingParseErrorSink? _errorCounter;
     private readonly bool _scriptingEnabled;
 
+    // Coalesced character insertion. Characters accumulate here and flush to a
+    // single Text node when a non-character token (or EOF) arrives, so a run of
+    // character tokens becomes one DOM write rather than O(n²) string growth.
+    private readonly StringBuilder _pending = new();
+    private Node? _pendingParent;
+    private Node? _pendingBefore;
+
     private Element? _headElement;
-    private Element? _bodyElement;
+    private Element? _formElement;
     private InsertionMode _mode = InsertionMode.Initial;
     private InsertionMode _originalMode = InsertionMode.Initial;
+    private readonly Stack<InsertionMode> _templateInsertionModes = new();
+    private bool _framesetOk = true;
+    private bool _fosterParenting;
+    private bool _ignoreLf;
     private int _tokenCount;
 
-    // §13.2.4.4 "stack of template insertion modes". We don't model the full
-    // "in template" mode; instead each open <template> saves the mode it
-    // interrupted, restored when its end tag pops it. Template content itself is
-    // parsed in <see cref="InsertionMode.InBody"/> and redirected into the
-    // template's content fragment by <see cref="InsertionTarget"/>.
-    private readonly Stack<InsertionMode> _templateInsertionModes = new();
+    // InTableText buffering (§13.2.6.4.10). Collected separately from _pending
+    // because the whole run is reclassified (whitespace vs not) on flush.
+    private readonly StringBuilder _pendingTableText = new();
+    private bool _pendingTableTextHasNonWhitespace;
 
-    /// <summary>
-    /// Non-null when this builder is running the HTML fragment parsing algorithm
-    /// (§13.4). The fragment's parsing context element steers initial tokenizer
-    /// state and insertion mode; the resulting nodes are the children of the
-    /// synthetic <c>html</c> root rather than the document tree.
-    /// </summary>
     private readonly Element? _fragmentContext;
 
     public HtmlTreeBuilder(HtmlTokenizer tokenizer,
@@ -67,25 +64,12 @@ public sealed class HtmlTreeBuilder
     }
 
     private HtmlTreeBuilder(HtmlTokenizer tokenizer, Element fragmentContext,
-        CountingParseErrorSink? errorCounter)
-        : this(tokenizer, errorCounter)
+        CountingParseErrorSink? errorCounter, bool scriptingEnabled)
+        : this(tokenizer, errorCounter, scriptingEnabled)
     {
         _fragmentContext = fragmentContext;
     }
 
-    /// <summary>
-    /// Runs tree construction over <paramref name="html"/>.
-    /// </summary>
-    /// <param name="html">The HTML source to parse.</param>
-    /// <param name="scriptingEnabled">
-    /// WHATWG HTML §13.2 "scripting flag". When <c>true</c> (the engine, which
-    /// runs JS) a <c>&lt;noscript&gt;</c> start tag in the "in head" insertion
-    /// mode follows the generic raw text element parsing algorithm
-    /// (§13.2.6.4.4) so its contents become an inert text node rather than
-    /// parsed elements. When <c>false</c> (the html5lib conformance harness,
-    /// which assumes scripting disabled) the legacy element-parsing behavior is
-    /// preserved.
-    /// </param>
     public static Document Parse(string html, bool scriptingEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(html);
@@ -94,18 +78,22 @@ public sealed class HtmlTreeBuilder
         tokenizer.Feed(html);
         tokenizer.EndOfInput();
         var builder = new HtmlTreeBuilder(tokenizer, errorCounter, scriptingEnabled);
+        tokenizer.CdataAllowed = builder.AdjustedCurrentNodeIsForeign;
         return builder.Run();
     }
+
+    /// <summary>Tokenizer seam (§13.2.5.42): a <c>&lt;![CDATA[</c> is a real CDATA
+    /// section only when the adjusted current node is a non-HTML element.</summary>
+    private bool AdjustedCurrentNodeIsForeign()
+        => AdjustedCurrentNode is { } acn && acn.Namespace != HtmlNs;
 
     /// <summary>
     /// HTML fragment parsing algorithm (§13.4). Parses <paramref name="markup"/>
     /// in the context of <paramref name="contextElement"/> and returns the
-    /// resulting nodes as a detached <see cref="DocumentFragment"/> owned by
-    /// <paramref name="ownerDocument"/> (so the new nodes share the element's
-    /// document). The context element itself is not added to the output.
+    /// resulting nodes as a detached <see cref="DocumentFragment"/>.
     /// </summary>
     public static DocumentFragment ParseFragment(string markup, Element contextElement,
-        Document ownerDocument)
+        Document ownerDocument, bool scriptingEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(markup);
         ArgumentNullException.ThrowIfNull(contextElement);
@@ -113,13 +101,17 @@ public sealed class HtmlTreeBuilder
 
         var errorCounter = new CountingParseErrorSink();
         var tokenizer = new HtmlTokenizer(errorCounter);
-        // §13.4 step 4: set the tokenizer's state per the context element so RCDATA
-        // / RAWTEXT / script / plaintext contexts treat their contents as text.
-        tokenizer.SetState(InitialTokenizerStateFor(contextElement.LocalName));
+        // §13.4 step 4: tokenizer state implied by the context element.
+        if (contextElement.Namespace == HtmlNs)
+        {
+            tokenizer.SetState(InitialTokenizerStateFor(contextElement.LocalName));
+        }
+
         tokenizer.Feed(markup);
         tokenizer.EndOfInput();
 
-        var builder = new HtmlTreeBuilder(tokenizer, contextElement, errorCounter);
+        var builder = new HtmlTreeBuilder(tokenizer, contextElement, errorCounter, scriptingEnabled);
+        tokenizer.CdataAllowed = builder.AdjustedCurrentNodeIsForeign;
         return builder.RunFragment(ownerDocument);
     }
 
@@ -127,86 +119,64 @@ public sealed class HtmlTreeBuilder
     {
         using var _ = StarlingTelemetry.Span("html", "parse-fragment");
 
-        // §13.4 steps 5-7: create a synthetic <html> root, push it as the only
-        // open element, and reset the insertion mode appropriately for the
-        // context element so its children land in the right place.
+        // §13.4 steps 5-9: synthetic <html> root, push it, set up template mode
+        // stack if the context is a template, then reset the insertion mode.
         var root = _document.CreateElement("html");
         _document.AppendChild(root);
         _openElements.Push(root);
-        ResetInsertionModeForContext(_fragmentContext!.LocalName);
+        if (_fragmentContext is { Namespace: HtmlNs, LocalName: "template" })
+        {
+            _templateInsertionModes.Push(InsertionMode.InTemplate);
+        }
+
+        _formElement = FindFormAncestor(_fragmentContext);
+        ResetInsertionModeAppropriately();
 
         while (_tokenizer.ReadToken() is { } token)
         {
             _tokenCount++;
             HandleToken(token);
-            if (token is EndOfFileToken) break;
+            if (token is EndOfFileToken)
+            {
+                break;
+            }
         }
         FlushText();
 
-        // §13.4 step 14: the fragment is the child nodes of the root element.
         var fragment = ownerDocument.CreateDocumentFragment();
         var child = root.FirstChild;
         while (child is not null)
         {
             var next = child.NextSibling;
-            fragment.AppendChild(child); // re-parents into the fragment
+            fragment.AppendChild(child);
             child = next;
         }
         return fragment;
     }
 
-    /// <summary>
-    /// §13.4 step 4 — the tokenizer state implied by the fragment's context
-    /// element. Most contexts use the Data state; the text-content elements
-    /// switch to RCDATA / RAWTEXT / script / plaintext.
-    /// </summary>
+    private static Element? FindFormAncestor(Element? context)
+    {
+        for (Node? n = context; n is not null; n = n.ParentNode)
+        {
+            if (n is Element { Namespace: HtmlNs, LocalName: "form" } form)
+            {
+                return form;
+            }
+        }
+
+        return null;
+    }
+
     private static TokenizerState InitialTokenizerStateFor(string contextLocalName)
-        => contextLocalName.ToLowerInvariant() switch
+        => contextLocalName switch
         {
             "title" or "textarea" => TokenizerState.Rcdata,
             "style" or "xmp" or "iframe" or "noembed" or "noframes" => TokenizerState.Rawtext,
             "script" => TokenizerState.ScriptData,
-            "noscript" => TokenizerState.Rawtext, // scripting is enabled in this engine
+            "noscript" => TokenizerState.Rawtext,
             "plaintext" => TokenizerState.Plaintext,
             _ => TokenizerState.Data,
         };
-
-    /// <summary>
-    /// §13.4 step 7 — pick the insertion mode for fragment parsing from the
-    /// context element. The common case (any descendant of body, or arbitrary
-    /// element) is InBody; head/text contexts get their own modes so that, e.g.,
-    /// parsing into a &lt;title&gt; produces a single text node.
-    /// </summary>
-    private void ResetInsertionModeForContext(string contextLocalName)
-    {
-        switch (contextLocalName.ToLowerInvariant())
-        {
-            case "head":
-                _mode = InsertionMode.InHead;
-                break;
-            case "html":
-                _mode = InsertionMode.BeforeHead;
-                break;
-            case "title":
-            case "textarea":
-            case "style":
-            case "xmp":
-            case "iframe":
-            case "noembed":
-            case "noframes":
-            case "noscript":
-            case "script":
-                // Text contexts: the contents are pure character data; route
-                // through the Text mode so the tokenizer's RCDATA/RAWTEXT output
-                // becomes a single coalesced text node under the root.
-                _originalMode = InsertionMode.InBody;
-                _mode = InsertionMode.Text;
-                break;
-            default:
-                _mode = InsertionMode.InBody;
-                break;
-        }
-    }
 
     public Document Run()
     {
@@ -217,7 +187,10 @@ public sealed class HtmlTreeBuilder
             {
                 _tokenCount++;
                 HandleToken(token);
-                if (token is EndOfFileToken) break;
+                if (token is EndOfFileToken)
+                {
+                    break;
+                }
             }
             FlushText();
 
@@ -226,7 +199,10 @@ public sealed class HtmlTreeBuilder
             Activity.Current?.SetTag("html.parse_errors", errorCount);
             StarlingTelemetry.Counter("html.parses", 1);
             if (errorCount > 0)
+            {
                 StarlingTelemetry.Counter("html.parse_errors", errorCount);
+            }
+
             return _document;
         }
         catch (Exception ex)
@@ -236,614 +212,500 @@ public sealed class HtmlTreeBuilder
         }
     }
 
+    // ------------------------------------------------------------ dispatcher
+
+    private Element? AdjustedCurrentNode =>
+        _fragmentContext is not null && _openElements.Count == 1
+            ? _fragmentContext
+            : _openElements.IsEmpty ? null : _openElements.Current;
+
     private void HandleToken(HtmlToken token)
     {
-        // Text accumulation lives across many tokens; flush only when a
-        // non-character token boundary arrives.
-        if (token is not CharacterToken)
-            FlushText();
+        // "ignore the next token if it is a U+000A LINE FEED" — set after a
+        // <pre>/<listing>/<textarea> start tag (§13.2.6.4.7).
+        if (_ignoreLf)
+        {
+            _ignoreLf = false;
+            if (token is CharacterToken { CodePoint: '\n' })
+            {
+                return;
+            }
+        }
 
+        // §13.2.6 tree construction dispatcher. Decide between the current
+        // insertion mode and the foreign-content rules.
+        // acn is null exactly when the stack is empty (no adjusted current node);
+        // the `is null` short-circuit also tells the compiler acn is non-null in
+        // the operands below.
+        var acn = AdjustedCurrentNode;
+        var useHtml =
+            acn is null ||
+            acn.Namespace == HtmlNs ||
+            (IsMathMlTextIntegrationPoint(acn) && token is StartTagToken stMi && stMi.Name is not "mglyph" and not "malignmark") ||
+            (IsMathMlTextIntegrationPoint(acn) && token is CharacterToken) ||
+            (acn.Namespace == MathMlNs && acn.LocalName == "annotation-xml" && token is StartTagToken { Name: "svg" }) ||
+            (IsHtmlIntegrationPoint(acn) && token is StartTagToken) ||
+            (IsHtmlIntegrationPoint(acn) && token is CharacterToken) ||
+            token is EndOfFileToken;
+
+        if (token is not CharacterToken)
+        {
+            FlushText();
+        }
+
+        if (useHtml)
+        {
+            ProcessUsingInsertionMode(token);
+        }
+        else
+        {
+            HandleForeignContent(token);
+        }
+    }
+
+    private void ProcessUsingInsertionMode(HtmlToken token)
+    {
         switch (_mode)
         {
             case InsertionMode.Initial: HandleInitial(token); break;
             case InsertionMode.BeforeHtml: HandleBeforeHtml(token); break;
             case InsertionMode.BeforeHead: HandleBeforeHead(token); break;
             case InsertionMode.InHead: HandleInHead(token); break;
+            case InsertionMode.InHeadNoscript: HandleInHeadNoscript(token); break;
             case InsertionMode.AfterHead: HandleAfterHead(token); break;
             case InsertionMode.InBody: HandleInBody(token); break;
             case InsertionMode.Text: HandleText(token); break;
+            case InsertionMode.InTable: HandleInTable(token); break;
+            case InsertionMode.InTableText: HandleInTableText(token); break;
+            case InsertionMode.InCaption: HandleInCaption(token); break;
+            case InsertionMode.InColumnGroup: HandleInColumnGroup(token); break;
+            case InsertionMode.InTableBody: HandleInTableBody(token); break;
+            case InsertionMode.InRow: HandleInRow(token); break;
+            case InsertionMode.InCell: HandleInCell(token); break;
+            case InsertionMode.InSelect: HandleInSelect(token); break;
+            case InsertionMode.InSelectInTable: HandleInSelectInTable(token); break;
+            case InsertionMode.InTemplate: HandleInTemplate(token); break;
             case InsertionMode.AfterBody: HandleAfterBody(token); break;
+            case InsertionMode.InFrameset: HandleInFrameset(token); break;
+            case InsertionMode.AfterFrameset: HandleAfterFrameset(token); break;
             case InsertionMode.AfterAfterBody: HandleAfterAfterBody(token); break;
+            case InsertionMode.AfterAfterFrameset: HandleAfterAfterFrameset(token); break;
         }
     }
 
-    // ------------------------------------------------------------------ helpers
+    // ------------------------------------------------- element construction
 
-    private Element CreateElement(StartTagToken token)
+    private Element CreateElementForToken(StartTagToken token, string @namespace)
     {
-        var element = _document.CreateElement(token.Name);
+        Element element = @namespace == HtmlNs
+            ? _document.CreateElement(token.Name)
+            : _document.CreateElementNS(@namespace, token.Name);
         foreach (var attr in token.Attributes)
+        {
             element.SetAttribute(attr.Name, attr.Value);
+        }
+
+        if (@namespace == HtmlNs && token.Name == "form" && _formElement is null)
+        {
+            _formElement = element;
+        }
+
         return element;
     }
 
-    /// <summary>Insert an element as a child of the current insertion location.</summary>
-    private Element InsertElement(StartTagToken token)
+    /// <summary>§13.2.6.1 "appropriate place for inserting a node", including
+    /// foster parenting and template-content redirection.</summary>
+    private (Node parent, Node? before) AppropriatePlaceForInserting(Node? overrideTarget = null, bool forceFoster = false)
     {
-        var element = CreateElement(token);
-        InsertionTarget().AppendChild(element);
+        var target = overrideTarget ?? _openElements.Current;
+
+        Node parent;
+        Node? before = null;
+        if ((_fosterParenting || forceFoster) && target is Element te && IsFosterParentTarget(te))
+        {
+            // Foster parenting: find the last <template>/<table> on the stack.
+            Element? lastTemplate = null;
+            int lastTemplateIdx = -1, lastTableIdx = -1;
+            Element? lastTable = null;
+            for (var i = _openElements.Count - 1; i >= 0; i--)
+            {
+                var e = _openElements[i];
+                if (lastTemplate is null && e is HtmlTemplateElement) { lastTemplate = e; lastTemplateIdx = i; }
+                if (lastTable is null && e.Namespace == HtmlNs && e.LocalName == "table") { lastTable = e; lastTableIdx = i; }
+            }
+
+            if (lastTemplate is not null && (lastTable is null || lastTemplateIdx > lastTableIdx))
+            {
+                parent = ((HtmlTemplateElement)lastTemplate).Content;
+            }
+            else if (lastTable is null)
+            {
+                parent = _openElements[0]; // fragment case: the html element.
+            }
+            else if (lastTable.ParentNode is not null)
+            {
+                parent = lastTable.ParentNode;
+                before = lastTable;
+            }
+            else
+            {
+                parent = _openElements[lastTableIdx - 1];
+            }
+        }
+        else
+        {
+            parent = target;
+        }
+
+        if (parent is HtmlTemplateElement tmpl)
+        {
+            parent = tmpl.Content;
+        }
+
+        return (parent, before);
+    }
+
+    private static bool IsFosterParentTarget(Element e)
+        => e.Namespace == HtmlNs && e.LocalName is "table" or "tbody" or "tfoot" or "thead" or "tr";
+
+    private Element InsertHtmlElement(StartTagToken token)
+    {
+        var element = CreateElementForToken(token, HtmlNs);
+        InsertElementAtAppropriatePlace(element);
         _openElements.Push(element);
         return element;
     }
 
-    /// <summary>§13.2.6.4.4 "in head" — &lt;template&gt; start tag. Insert and
-    /// keep the element open so its children are redirected into its content
-    /// fragment, and remember the mode to restore on the matching end tag.</summary>
-    private void StartTemplate(StartTagToken token)
+    private void InsertElementAtAppropriatePlace(Element element)
     {
-        InsertElement(token);
-        _templateInsertionModes.Push(_mode);
-        _mode = InsertionMode.InBody;
+        var (parent, before) = AppropriatePlaceForInserting();
+        parent.InsertBefore(element, before);
     }
 
-    /// <summary>§13.2.6.4.4 "in head" — &lt;/template&gt; end tag. Pop the open
-    /// template (with any still-open descendants) and restore the saved mode.</summary>
-    private void EndTemplate()
+    private void InsertCharacter(string data)
     {
-        if (!_openElements.HasInScope("template")) return; // parse error: ignore.
-        GenerateImpliedEndTags();
-        _openElements.PopUntilNamed("template");
-        if (_templateInsertionModes.Count > 0)
-            _mode = _templateInsertionModes.Pop();
-    }
+        if (data.Length == 0)
+        {
+            return;
+        }
 
-    private Node InsertionTarget()
-    {
-        if (_openElements.IsEmpty) return _document;
-        var current = _openElements.Current;
-        // §13.2.6.1 "appropriate place for inserting a node": when the target is
-        // a <template>, nodes go into its content fragment, not the element.
-        return current is HtmlTemplateElement template ? template.Content : current;
-    }
+        var (parent, before) = AppropriatePlaceForInserting();
+        // Never create a text node directly under the Document.
+        if (parent is Document)
+        {
+            return;
+        }
 
-    private void InsertText(string data)
-    {
-        if (data.Length == 0) return;
-        var parent = InsertionTarget();
-        // Coalesce with a preceding Text node when possible.
-        if (parent.LastChild is Text existing)
-            existing.Data += data;
-        else
-            parent.AppendChild(_document.CreateText(data));
-    }
+        if (_pending.Length > 0 && (!ReferenceEquals(_pendingParent, parent) || !ReferenceEquals(_pendingBefore, before)))
+        {
+            FlushText();
+        }
 
-    private void InsertComment(CommentToken token, Node? overrideParent = null)
-    {
-        var parent = overrideParent ?? InsertionTarget();
-        parent.AppendChild(_document.CreateComment(token.Data));
+        if (_pending.Length == 0) { _pendingParent = parent; _pendingBefore = before; }
+        _pending.Append(data);
     }
 
     private void FlushText()
     {
-        if (_pendingText.Length == 0) return;
-        InsertText(_pendingText.ToString());
-        _pendingText.Clear();
+        if (_pending.Length == 0 || _pendingParent is null)
+        {
+            return;
+        }
+
+        var parent = _pendingParent;
+        var before = _pendingBefore;
+        var data = _pending.ToString();
+        _pending.Clear();
+        _pendingParent = null;
+        _pendingBefore = null;
+
+        var prevNode = before is null ? parent.LastChild : before.PreviousSibling;
+        if (prevNode is Text t)
+        {
+            t.Data += data;
+        }
+        else
+        {
+            parent.InsertBefore(_document.CreateText(data), before);
+        }
     }
 
-    private void AppendChar(int codePoint)
+    private void InsertComment(CommentToken token, Node? overrideParent = null)
     {
-        if (codePoint <= char.MaxValue) _pendingText.Append((char)codePoint);
-        else _pendingText.Append(char.ConvertFromUtf32(codePoint));
+        if (overrideParent is not null)
+        {
+            overrideParent.AppendChild(_document.CreateComment(token.Data));
+            return;
+        }
+        var (parent, before) = AppropriatePlaceForInserting();
+        parent.InsertBefore(_document.CreateComment(token.Data), before);
     }
+
+    private void AppendCharToken(CharacterToken c) => InsertCharacter(CodePointToString(c.CodePoint));
+
+    private static string CodePointToString(int codePoint)
+        => codePoint <= char.MaxValue ? ((char)codePoint).ToString() : char.ConvertFromUtf32(codePoint);
 
     private static bool IsWhitespaceChar(int c)
-        => c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' ';
+        => c is '\t' or '\n' or '\f' or '\r' or ' ';
+
+    // ------------------------------------------------------- shared algorithms
+
+    private static readonly FrozenSet<string> ImpliedEndTagNames =
+        new[] { "dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc" }
+            .ToFrozenSet(StringComparer.Ordinal);
 
     private void GenerateImpliedEndTags(string? except = null)
     {
         while (!_openElements.IsEmpty)
         {
-            var name = _openElements.Current.LocalName;
-            if (except is not null && string.Equals(name, except, StringComparison.OrdinalIgnoreCase))
+            var cur = _openElements.Current;
+            if (cur.Namespace != HtmlNs)
+            {
                 return;
-            if (IsImpliedEndTag(name)) _openElements.Pop();
-            else return;
+            }
+
+            var name = cur.LocalName;
+            if (except is not null && name == except)
+            {
+                return;
+            }
+
+            if (ImpliedEndTagNames.Contains(name))
+            {
+                _openElements.Pop();
+            }
+            else
+            {
+                return;
+            }
         }
     }
 
-    private static bool IsImpliedEndTag(string localName) => localName.ToLowerInvariant() switch
+    private void GenerateImpliedEndTagsThoroughly()
     {
-        "dd" or "dt" or "li" or "optgroup" or "option" or "p" or "rb"
-            or "rp" or "rt" or "rtc" => true,
-        _ => false,
-    };
+        while (!_openElements.IsEmpty)
+        {
+            var cur = _openElements.Current;
+            if (cur.Namespace != HtmlNs)
+            {
+                return;
+            }
 
-    private static bool IsSpecialBlock(string localName) => localName.ToLowerInvariant() switch
-    {
-        "address" or "article" or "aside" or "blockquote" or "center" or "details"
-            or "dialog" or "dir" or "div" or "dl" or "fieldset" or "figcaption"
-            or "figure" or "footer" or "header" or "hgroup" or "main" or "menu"
-            or "nav" or "ol" or "p" or "search" or "section" or "summary" or "ul" => true,
-        _ => false,
-    };
+            if (cur.LocalName is "caption" or "colgroup" or "dd" or "dt" or "li"
+                or "optgroup" or "option" or "p" or "rb" or "rp" or "rt" or "rtc"
+                or "tbody" or "td" or "tfoot" or "th" or "thead" or "tr")
+            {
+                _openElements.Pop();
+            }
+            else
+            {
+                return;
+            }
+        }
+    }
 
-    private void ClosePIfOpen()
+    private void ClosePIfInButtonScope()
     {
         if (_openElements.HasInButtonScope("p"))
         {
-            GenerateImpliedEndTags(except: "p");
-            _openElements.PopUntilNamed("p");
+            ClosePElement();
         }
     }
 
-    // ----------------------------------------------------------------- Initial
-
-    private void HandleInitial(HtmlToken token)
+    private void ClosePElement()
     {
-        switch (token)
-        {
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint):
-                return; // Whitespace before DOCTYPE is ignored.
-            case CommentToken comment:
-                InsertComment(comment, overrideParent: _document);
-                return;
-            case DoctypeToken doctype:
-                _document.AppendChild(_document.CreateDocumentType(doctype.Name ?? "", doctype.PublicId ?? "", doctype.SystemId ?? ""));
-                if (doctype.ForceQuirks || !IsHtml5Doctype(doctype))
-                    _document.Mode = QuirksMode.Quirks;
-                _mode = InsertionMode.BeforeHtml;
-                return;
-        }
-
-        // Anything else: treat as no DOCTYPE seen, set quirks, fall through.
-        _document.Mode = QuirksMode.Quirks;
-        _mode = InsertionMode.BeforeHtml;
-        HandleBeforeHtml(token);
+        GenerateImpliedEndTags(except: "p");
+        _openElements.PopUntilNamed("p");
     }
 
-    private static bool IsHtml5Doctype(DoctypeToken d)
-        => string.Equals(d.Name, "html", StringComparison.OrdinalIgnoreCase) &&
-           string.IsNullOrEmpty(d.PublicId) &&
-           (string.IsNullOrEmpty(d.SystemId) || d.SystemId.Equals("about:legacy-compat", StringComparison.OrdinalIgnoreCase));
-
-    // ---------------------------------------------------------------- BeforeHtml
-
-    private void HandleBeforeHtml(HtmlToken token)
+    /// <summary>§13.2.6.3 "reset the insertion mode appropriately".</summary>
+    private void ResetInsertionModeAppropriately()
     {
-        switch (token)
+        for (var i = _openElements.Count - 1; i >= 0; i--)
         {
-            case DoctypeToken: return; // Parse error, ignore.
-            case CommentToken comment: InsertComment(comment, overrideParent: _document); return;
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint): return;
-            case StartTagToken { Name: "html" } start:
+            var node = _openElements[i];
+            var last = i == 0;
+            if (last && _fragmentContext is not null)
+            {
+                node = _fragmentContext;
+            }
+
+            if (node.Namespace == HtmlNs)
+            {
+                switch (node.LocalName)
                 {
-                    var html = CreateElement(start);
-                    _document.AppendChild(html);
-                    _openElements.Push(html);
-                    _mode = InsertionMode.BeforeHead;
-                    return;
+                    case "select":
+                        if (!last)
+                        {
+                            for (var j = i - 1; j >= 1; j--)
+                            {
+                                var ancestor = _openElements[j];
+                                if (ancestor is { Namespace: HtmlNs, LocalName: "template" })
+                                {
+                                    break;
+                                }
+
+                                if (ancestor is { Namespace: HtmlNs, LocalName: "table" })
+                                {
+                                    _mode = InsertionMode.InSelectInTable;
+                                    return;
+                                }
+                            }
+                        }
+                        _mode = InsertionMode.InSelect;
+                        return;
+                    case "td":
+                    case "th":
+                        if (!last) { _mode = InsertionMode.InCell; return; }
+                        break;
+                    case "tr":
+                        _mode = InsertionMode.InRow;
+                        return;
+                    case "tbody":
+                    case "thead":
+                    case "tfoot":
+                        _mode = InsertionMode.InTableBody;
+                        return;
+                    case "caption":
+                        _mode = InsertionMode.InCaption;
+                        return;
+                    case "colgroup":
+                        _mode = InsertionMode.InColumnGroup;
+                        return;
+                    case "table":
+                        _mode = InsertionMode.InTable;
+                        return;
+                    case "template":
+                        _mode = _templateInsertionModes.Count > 0 ? _templateInsertionModes.Peek() : InsertionMode.InBody;
+                        return;
+                    case "head":
+                        if (!last) { _mode = InsertionMode.InHead; return; }
+                        break;
+                    case "body":
+                        _mode = InsertionMode.InBody;
+                        return;
+                    case "frameset":
+                        _mode = InsertionMode.InFrameset;
+                        return;
+                    case "html":
+                        _mode = _headElement is null ? InsertionMode.BeforeHead : InsertionMode.AfterHead;
+                        return;
                 }
-            case EndTagToken end when end.Name is "head" or "body" or "html" or "br":
-                break; // Fall through to anything-else.
-            case EndTagToken: return; // Parse error.
-        }
+            }
 
-        // Anything else: implicitly create <html>, then reprocess.
-        var implicitHtml = _document.CreateElement("html");
-        _document.AppendChild(implicitHtml);
-        _openElements.Push(implicitHtml);
-        _mode = InsertionMode.BeforeHead;
-        HandleBeforeHead(token);
-    }
-
-    // ---------------------------------------------------------------- BeforeHead
-
-    private void HandleBeforeHead(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint): return;
-            case CommentToken comment: InsertComment(comment); return;
-            case DoctypeToken: return;
-            case StartTagToken { Name: "html" } start: HandleInBody(start); return;
-            case StartTagToken { Name: "head" } start:
-                _headElement = InsertElement(start);
-                _mode = InsertionMode.InHead;
-                return;
-            case EndTagToken end when end.Name is "head" or "body" or "html" or "br":
-                break;
-            case EndTagToken: return;
-        }
-
-        // Anything else: implicit <head>, then reprocess in InHead.
-        _headElement = InsertElement(new StartTagToken("head", Array.Empty<HtmlAttribute>(), SelfClosing: false));
-        _mode = InsertionMode.InHead;
-        HandleInHead(token);
-    }
-
-    // ------------------------------------------------------------------- InHead
-
-    private void HandleInHead(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint):
-                InsertText(((char)c.CodePoint).ToString());
-                return;
-            case CommentToken comment: InsertComment(comment); return;
-            case DoctypeToken: return;
-            case StartTagToken { Name: "html" } start: HandleInBody(start); return;
-            case StartTagToken start when start.Name is "base" or "basefont" or "bgsound" or "link" or "meta":
-                InsertElement(start);
-                _openElements.Pop(); // Void element.
-                return;
-            case StartTagToken start when start.Name == "template":
-                // §13.2.6.4.4 "in head" — <template> start tag. Insert it, keep it
-                // open, and collect its children into the content fragment (see
-                // StartTemplate / InsertionTarget). AfterHead and InBody both route
-                // their <template> start tags here.
-                StartTemplate(start);
-                return;
-            case EndTagToken end when end.Name == "template":
-                EndTemplate();
-                return;
-            case StartTagToken start when start.Name == "title":
-                InsertElement(start);
-                _originalMode = _mode;
-                _mode = InsertionMode.Text;
-                _tokenizer.SetState(TokenizerState.Rcdata);
-                return;
-            case StartTagToken start when start.Name is "noframes" or "style":
-                InsertElement(start);
-                _originalMode = _mode;
-                _mode = InsertionMode.Text;
-                _tokenizer.SetState(TokenizerState.Rawtext);
-                return;
-            // §13.2.6.4.4 "in head" — <noscript> start tag. When the scripting
-            // flag is ENABLED, follow the generic raw text element parsing
-            // algorithm: the contents become an inert text node, never elements.
-            // When DISABLED the spec switches to the "in head noscript" mode and
-            // parses the contents as elements; this builder doesn't model that
-            // sub-mode, so we leave the scripting-disabled path on its existing
-            // "anything else" fall-through (html5lib conformance default).
-            case StartTagToken start when start.Name == "noscript" && _scriptingEnabled:
-                InsertElement(start);
-                _originalMode = _mode;
-                _mode = InsertionMode.Text;
-                _tokenizer.SetState(TokenizerState.Rawtext);
-                return;
-            case StartTagToken start when start.Name == "script":
-                InsertElement(start);
-                _originalMode = _mode;
-                _mode = InsertionMode.Text;
-                _tokenizer.SetState(TokenizerState.ScriptData);
-                return;
-            case EndTagToken end when end.Name == "head":
-                _openElements.Pop();
-                _mode = InsertionMode.AfterHead;
-                return;
-            case EndTagToken end when end.Name is "body" or "html" or "br":
-                break;
-            case EndTagToken: return;
-            case StartTagToken start when start.Name == "head": return;
-        }
-
-        // Anything else: pop head, switch to AfterHead, reprocess.
-        _openElements.Pop();
-        _mode = InsertionMode.AfterHead;
-        HandleAfterHead(token);
-    }
-
-    // ----------------------------------------------------------------- AfterHead
-
-    private void HandleAfterHead(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint):
-                InsertText(((char)c.CodePoint).ToString());
-                return;
-            case CommentToken comment: InsertComment(comment); return;
-            case DoctypeToken: return;
-            case StartTagToken { Name: "html" } start: HandleInBody(start); return;
-            case StartTagToken { Name: "body" } start:
-                _bodyElement = InsertElement(start);
+            if (last)
+            {
                 _mode = InsertionMode.InBody;
                 return;
-            case StartTagToken start when start.Name is "base" or "basefont" or "bgsound"
-                                                       or "link" or "meta" or "noframes"
-                                                       or "script" or "style"
-                                                       or "title":
-                // Push head back onto the stack temporarily so InHead inserts there, then pop.
-                if (_headElement is not null) _openElements.Push(_headElement);
-                HandleInHead(token);
-                if (_headElement is not null && _openElements.Contains(_headElement))
-                {
-                    // Pop head if it ended up on top after InHead processing.
-                    while (!_openElements.IsEmpty && _openElements.Current == _headElement)
-                        _openElements.Pop();
-                }
-                return;
-            // <template> stays open to collect content, so it must NOT use the
-            // push-head/pop-head dance above (that would leave <head> on the
-            // stack under the open template). Insert it into <html> directly.
-            case StartTagToken { Name: "template" } start:
-                StartTemplate(start);
-                return;
-            case EndTagToken { Name: "template" }:
-                EndTemplate();
-                return;
-            case EndTagToken end when end.Name is "body" or "html" or "br": break;
-            case EndTagToken: return;
-            case StartTagToken start when start.Name == "head": return;
-        }
-
-        // Anything else: implicit <body>, switch, reprocess.
-        _bodyElement = InsertElement(new StartTagToken("body", Array.Empty<HtmlAttribute>(), SelfClosing: false));
-        _mode = InsertionMode.InBody;
-        HandleInBody(token);
-    }
-
-    // -------------------------------------------------------------------- InBody
-
-    private void HandleInBody(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CharacterToken c:
-                if (c.CodePoint == 0) return; // U+0000 NULL is a parse error, ignore in this mode.
-                AppendChar(c.CodePoint);
-                return;
-            case CommentToken comment: InsertComment(comment); return;
-            case DoctypeToken: return;
-            case EndOfFileToken: return;
-            case StartTagToken { Name: "html" } start:
-                MergeAttributesInto(_openElements.Count > 0 ? _openElements[0] : null, start);
-                return;
-            case StartTagToken start when start.Name is "base" or "basefont" or "bgsound"
-                                                       or "link" or "meta" or "noframes"
-                                                       or "script" or "style" or "template"
-                                                       or "title":
-                // §13.2.6.4.7 "in body" routes these (template included) through
-                // "in head"; HandleInHead's <template> case opens the content
-                // fragment and saves InBody to restore on </template>.
-                HandleInHead(start);
-                return;
-            case EndTagToken { Name: "template" }:
-                EndTemplate();
-                return;
-            case StartTagToken start when start.Name == "body":
-                MergeAttributesInto(_bodyElement, start);
-                return;
-            case StartTagToken start when IsSpecialBlock(start.Name):
-                ClosePIfOpen();
-                InsertElement(start);
-                return;
-            case StartTagToken start when start.Name is "h1" or "h2" or "h3" or "h4" or "h5" or "h6":
-                ClosePIfOpen();
-                if (IsHeading(_openElements.Current.LocalName)) _openElements.Pop();
-                InsertElement(start);
-                return;
-            case StartTagToken start when start.Name is "pre" or "listing":
-                ClosePIfOpen();
-                InsertElement(start);
-                return;
-            case StartTagToken start when start.Name is "li":
-                CloseListItem();
-                ClosePIfOpen();
-                InsertElement(start);
-                return;
-            case StartTagToken start when start.Name is "dt" or "dd":
-                CloseDefinitionItem();
-                ClosePIfOpen();
-                InsertElement(start);
-                return;
-            case StartTagToken start when start.Name == "button":
-                if (_openElements.HasInScope("button"))
-                {
-                    GenerateImpliedEndTags();
-                    _openElements.PopUntilNamed("button");
-                }
-                InsertElement(start);
-                return;
-            case StartTagToken start when start.Name is "area" or "br" or "embed" or "img"
-                                                       or "keygen" or "wbr" or "input"
-                                                       or "param" or "source" or "track"
-                                                       or "hr" or "col":
-                InsertElement(start);
-                _openElements.Pop();
-                return;
-            case StartTagToken start when start.Name == "textarea":
-                InsertElement(start);
-                _originalMode = _mode;
-                _mode = InsertionMode.Text;
-                _tokenizer.SetState(TokenizerState.Rcdata);
-                return;
-            case StartTagToken start:
-                InsertElement(start);
-                if (start.SelfClosing) _openElements.Pop();
-                return;
-            case EndTagToken end when end.Name == "body":
-                if (_openElements.HasInScope("body")) _mode = InsertionMode.AfterBody;
-                return;
-            case EndTagToken end when end.Name == "html":
-                if (_openElements.HasInScope("body")) _mode = InsertionMode.AfterBody;
-                HandleAfterBody(end);
-                return;
-            // </p> must be tested BEFORE the generic IsSpecialBlock case below:
-            // `p` is itself in the implied-end-tag set, so the generic handler's
-            // unbounded GenerateImpliedEndTags() would pop the <p> we're trying
-            // to close, then PopUntilNamed("p") would scan the whole stack and
-            // drain <body>/<html>. The HTML spec's "close a p element" step
-            // exempts `p` from implied end tags for exactly this reason.
-            case EndTagToken end when end.Name == "p":
-                if (!_openElements.HasInButtonScope("p"))
-                {
-                    // Implicit <p> creation per spec; we approximate by inserting an empty one.
-                    InsertElement(new StartTagToken("p", Array.Empty<HtmlAttribute>(), SelfClosing: false));
-                }
-                GenerateImpliedEndTags(except: "p");
-                _openElements.PopUntilNamed("p");
-                return;
-            case EndTagToken end when IsSpecialBlock(end.Name):
-                if (!_openElements.HasInScope(end.Name)) return;
-                GenerateImpliedEndTags();
-                _openElements.PopUntilNamed(end.Name);
-                return;
-            case EndTagToken end when end.Name is "h1" or "h2" or "h3" or "h4" or "h5" or "h6":
-                if (!AnyHeadingInScope()) return;
-                GenerateImpliedEndTags();
-                while (!_openElements.IsEmpty && !IsHeading(_openElements.Current.LocalName))
-                    _openElements.Pop();
-                if (!_openElements.IsEmpty) _openElements.Pop();
-                return;
-            case EndTagToken end when end.Name == "li":
-                if (!_openElements.HasInListItemScope("li")) return;
-                GenerateImpliedEndTags(except: "li");
-                _openElements.PopUntilNamed("li");
-                return;
-            case EndTagToken end when end.Name is "dt" or "dd":
-                if (!_openElements.HasInScope(end.Name)) return;
-                GenerateImpliedEndTags(except: end.Name);
-                _openElements.PopUntilNamed(end.Name);
-                return;
-            case EndTagToken end when end.Name is "button":
-                if (_openElements.HasInScope("button"))
-                {
-                    GenerateImpliedEndTags();
-                    _openElements.PopUntilNamed("button");
-                }
-                return;
-            case EndTagToken end:
-                // Generic end tag: walk down stack and close if found in scope.
-                for (var i = _openElements.Count - 1; i >= 0; i--)
-                {
-                    var node = _openElements[i];
-                    if (string.Equals(node.LocalName, end.Name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        GenerateImpliedEndTags(except: end.Name);
-                        _openElements.PopUntilNamed(end.Name);
-                        return;
-                    }
-                    if (IsSpecialBlock(node.LocalName)) return; // Parse error.
-                }
-                return;
-        }
-    }
-
-    private bool AnyHeadingInScope()
-    {
-        return _openElements.HasInScope("h1") || _openElements.HasInScope("h2")
-            || _openElements.HasInScope("h3") || _openElements.HasInScope("h4")
-            || _openElements.HasInScope("h5") || _openElements.HasInScope("h6");
-    }
-
-    private static bool IsHeading(string localName) => localName.ToLowerInvariant() switch
-    {
-        "h1" or "h2" or "h3" or "h4" or "h5" or "h6" => true,
-        _ => false,
-    };
-
-    private void CloseListItem()
-    {
-        // Walk down the stack looking for an "li" before hitting a special block other than li/address/div/p.
-        for (var i = _openElements.Count - 1; i >= 0; i--)
-        {
-            var name = _openElements[i].LocalName;
-            if (string.Equals(name, "li", StringComparison.OrdinalIgnoreCase))
-            {
-                GenerateImpliedEndTags(except: "li");
-                _openElements.PopUntilNamed("li");
-                return;
             }
-            if (IsSpecialBlock(name) && name is not ("address" or "div" or "p"))
-                return;
         }
     }
 
-    private void CloseDefinitionItem()
+    /// <summary>§13.2.6.2 — quirks / limited-quirks / no-quirks from a DOCTYPE.</summary>
+    private static QuirksMode DetermineQuirksMode(DoctypeToken d)
     {
-        for (var i = _openElements.Count - 1; i >= 0; i--)
+        var name = d.Name ?? "";
+        var pub = d.PublicId;
+        var sys = d.SystemId;
+
+        bool PubIs(string v) => pub is not null && pub.Equals(v, StringComparison.OrdinalIgnoreCase);
+        bool PubStarts(string v) => pub is not null && pub.StartsWith(v, StringComparison.OrdinalIgnoreCase);
+
+        if (d.ForceQuirks
+            || !name.Equals("html", StringComparison.Ordinal)
+            || PubIs("-//W3O//DTD W3 HTML Strict 3.0//EN//")
+            || PubIs("-/W3C/DTD HTML 4.0 Transitional/EN")
+            || PubIs("HTML")
+            || (sys is not null && sys.Equals("http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd", StringComparison.OrdinalIgnoreCase))
+            || PubStarts("+//Silmaril//dtd html Pro v0r11 19970101//")
+            || PubStarts("-//AS//DTD HTML 3.0 asWedit + extensions//")
+            || PubStarts("-//AdvaSoft Ltd//DTD HTML 3.0 asWedit + extensions//")
+            || PubStarts("-//IETF//DTD HTML 2.0 Level 1//")
+            || PubStarts("-//IETF//DTD HTML 2.0 Level 2//")
+            || PubStarts("-//IETF//DTD HTML 2.0 Strict Level 1//")
+            || PubStarts("-//IETF//DTD HTML 2.0 Strict Level 2//")
+            || PubStarts("-//IETF//DTD HTML 2.0 Strict//")
+            || PubStarts("-//IETF//DTD HTML 2.0//")
+            || PubStarts("-//IETF//DTD HTML 2.1E//")
+            || PubStarts("-//IETF//DTD HTML 3.0//")
+            || PubStarts("-//IETF//DTD HTML 3.2 Final//")
+            || PubStarts("-//IETF//DTD HTML 3.2//")
+            || PubStarts("-//IETF//DTD HTML 3//")
+            || PubStarts("-//IETF//DTD HTML Level 0//")
+            || PubStarts("-//IETF//DTD HTML Level 1//")
+            || PubStarts("-//IETF//DTD HTML Level 2//")
+            || PubStarts("-//IETF//DTD HTML Level 3//")
+            || PubStarts("-//IETF//DTD HTML Strict Level 0//")
+            || PubStarts("-//IETF//DTD HTML Strict Level 1//")
+            || PubStarts("-//IETF//DTD HTML Strict Level 2//")
+            || PubStarts("-//IETF//DTD HTML Strict Level 3//")
+            || PubStarts("-//IETF//DTD HTML Strict//")
+            || PubStarts("-//IETF//DTD HTML//")
+            || PubStarts("-//Metrius//DTD Metrius Presentational//")
+            || PubStarts("-//Microsoft//DTD Internet Explorer 2.0 HTML Strict//")
+            || PubStarts("-//Microsoft//DTD Internet Explorer 2.0 HTML//")
+            || PubStarts("-//Microsoft//DTD Internet Explorer 2.0 Tables//")
+            || PubStarts("-//Microsoft//DTD Internet Explorer 3.0 HTML Strict//")
+            || PubStarts("-//Microsoft//DTD Internet Explorer 3.0 HTML//")
+            || PubStarts("-//Microsoft//DTD Internet Explorer 3.0 Tables//")
+            || PubStarts("-//Netscape Comm. Corp.//DTD HTML//")
+            || PubStarts("-//Netscape Comm. Corp.//DTD Strict HTML//")
+            || PubStarts("-//O'Reilly and Associates//DTD HTML 2.0//")
+            || PubStarts("-//O'Reilly and Associates//DTD HTML Extended 1.0//")
+            || PubStarts("-//O'Reilly and Associates//DTD HTML Extended Relaxed 1.0//")
+            || PubStarts("-//SQ//DTD HTML 2.0 HoTMetaL + extensions//")
+            || PubStarts("-//SoftQuad Software//DTD HoTMetaL PRO 6.0::19990601::extensions to HTML 4.0//")
+            || PubStarts("-//SoftQuad//DTD HoTMetaL PRO 4.0::19971010::extensions to HTML 4.0//")
+            || PubStarts("-//Spyglass//DTD HTML 2.0 Extended//")
+            || PubStarts("-//Sun Microsystems Corp.//DTD HotJava HTML//")
+            || PubStarts("-//Sun Microsystems Corp.//DTD HotJava Strict HTML//")
+            || PubStarts("-//W3C//DTD HTML 3 1995-03-24//")
+            || PubStarts("-//W3C//DTD HTML 3.2 Draft//")
+            || PubStarts("-//W3C//DTD HTML 3.2 Final//")
+            || PubStarts("-//W3C//DTD HTML 3.2//")
+            || PubStarts("-//W3C//DTD HTML 3.2S Draft//")
+            || PubStarts("-//W3C//DTD HTML 4.0 Frameset//")
+            || PubStarts("-//W3C//DTD HTML 4.0 Transitional//")
+            || PubStarts("-//W3C//DTD HTML Experimental 19960712//")
+            || PubStarts("-//W3C//DTD HTML Experimental 970421//")
+            || PubStarts("-//W3C//DTD W3 HTML//")
+            || PubStarts("-//W3O//DTD W3 HTML 3.0//")
+            || PubStarts("-//WebTechs//DTD Mozilla HTML 2.0//")
+            || PubStarts("-//WebTechs//DTD Mozilla HTML//")
+            || (sys is null && PubStarts("-//W3C//DTD HTML 4.01 Frameset//"))
+            || (sys is null && PubStarts("-//W3C//DTD HTML 4.01 Transitional//")))
         {
-            var name = _openElements[i].LocalName;
-            if (string.Equals(name, "dd", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(name, "dt", StringComparison.OrdinalIgnoreCase))
-            {
-                GenerateImpliedEndTags(except: name);
-                _openElements.PopUntilNamed(name);
-                return;
-            }
-            if (IsSpecialBlock(name) && name is not ("address" or "div" or "p"))
-                return;
+            return QuirksMode.Quirks;
         }
+
+        if (PubStarts("-//W3C//DTD XHTML 1.0 Frameset//")
+            || PubStarts("-//W3C//DTD XHTML 1.0 Transitional//")
+            || (sys is not null && PubStarts("-//W3C//DTD HTML 4.01 Frameset//"))
+            || (sys is not null && PubStarts("-//W3C//DTD HTML 4.01 Transitional//")))
+        {
+            return QuirksMode.LimitedQuirks;
+        }
+
+        return QuirksMode.NoQuirks;
     }
 
     private static void MergeAttributesInto(Element? target, StartTagToken start)
     {
-        if (target is null) return;
+        if (target is null)
+        {
+            return;
+        }
+
         foreach (var attr in start.Attributes)
+        {
             if (!target.HasAttribute(attr.Name))
+            {
                 target.SetAttribute(attr.Name, attr.Value);
-    }
-
-    // ---------------------------------------------------------------------- Text
-
-    private void HandleText(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CharacterToken c:
-                AppendChar(c.CodePoint);
-                return;
-            case EndTagToken:
-                FlushText();
-                _openElements.Pop();
-                _mode = _originalMode;
-                return;
-            case EndOfFileToken:
-                FlushText();
-                if (!_openElements.IsEmpty) _openElements.Pop();
-                _mode = _originalMode;
-                return;
+            }
         }
     }
 
-    // ------------------------------------------------------------------- AfterBody
-
-    private void HandleAfterBody(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint):
-                HandleInBody(token); return;
-            case CommentToken comment:
-                // Comment is appended to the html element.
-                if (_openElements.Count > 0) _openElements[0].AppendChild(_document.CreateComment(comment.Data));
-                return;
-            case DoctypeToken: return;
-            case StartTagToken { Name: "html" } start: HandleInBody(start); return;
-            case EndTagToken { Name: "html" }:
-                _mode = InsertionMode.AfterAfterBody;
-                return;
-            case EndOfFileToken: return;
-        }
-        _mode = InsertionMode.InBody;
-        HandleInBody(token);
-    }
-
-    // --------------------------------------------------------------- AfterAfterBody
-
-    private void HandleAfterAfterBody(HtmlToken token)
-    {
-        switch (token)
-        {
-            case CommentToken comment: InsertComment(comment, overrideParent: _document); return;
-            case DoctypeToken: return;
-            case CharacterToken c when IsWhitespaceChar(c.CodePoint): HandleInBody(token); return;
-            case StartTagToken { Name: "html" } start: HandleInBody(start); return;
-            case EndOfFileToken: return;
-        }
-        _mode = InsertionMode.InBody;
-        HandleInBody(token);
-    }
+    private static StartTagToken Synthetic(string name)
+        => new(name, [], SelfClosing: false);
 }
