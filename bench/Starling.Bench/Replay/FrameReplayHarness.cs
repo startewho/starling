@@ -220,7 +220,7 @@ public sealed class FrameReplayHarness : IDisposable
             var before = _compositeBackend!.RenderCount;
             var tree = new LayerTreeBuilder(isAnimatingLayerRoot: Promote,
                 layerIdFor: _tiles.LayerIdFor).Build(root);
-            using var bmp = new Compositor(_compositeBackend, _tiles).Render(
+            using var bmp = new Compositor(_compositeBackend, _tiles).RenderGpuReadback(
                 tree, new Rect(0, 0, _scenario.Viewport.Width, _scenario.Viewport.Height), _options.Scale);
             sw.Stop();
             pt.RasterTicks = sw.ElapsedTicks;
