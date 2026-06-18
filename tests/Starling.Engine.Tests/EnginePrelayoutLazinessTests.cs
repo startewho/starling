@@ -82,7 +82,13 @@ public sealed class EnginePrelayoutLazinessTests
 
     private static void TryDelete(string path)
     {
-        try { if (File.Exists(path)) File.Delete(path); }
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
         catch { /* best-effort */ }
     }
 
@@ -101,7 +107,9 @@ public sealed class EnginePrelayoutLazinessTests
                 ActivityStarted = a =>
                 {
                     if (a.OperationName == "engine.prelayout_for_js")
+                    {
                         Interlocked.Increment(ref _prelayoutCount);
+                    }
                 },
             };
             ActivitySource.AddActivityListener(_al);
