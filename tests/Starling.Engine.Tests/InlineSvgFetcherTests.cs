@@ -28,7 +28,7 @@ public sealed class InlineSvgFetcherTests
         var xml = InlineSvgSerializer.Serialize(svg);
 
         xml.Should().StartWith("<svg");
-        xml.Should().Contain("viewbox=\"0 0 24 24\"").And.Contain("stroke=\"currentColor\"");
+        xml.Should().Contain("viewBox=\"0 0 24 24\"").And.Contain("stroke=\"currentColor\"");
         xml.Should().Contain("<circle").And.Contain("cx=\"11\"").And.Contain("r=\"8\"");
         xml.Should().Contain("<path").And.Contain("d=\"m21 21-4.35-4.35\"");
         // Well-formed enough for the decoder's XML parser to consume.
