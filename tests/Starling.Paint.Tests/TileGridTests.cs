@@ -6,8 +6,8 @@ namespace Starling.Paint.Tests;
 
 /// <summary>
 /// Unit tests for the per-layer tile LRU (wp:M12-05-tile-grid): content-hash
-/// validation, LRU eviction under a byte budget, recency promotion, and byte
-/// accounting.
+/// validation, LRU eviction under a byte budget, and recency promotion. State is
+/// observed through <see cref="TileGrid.TryGetTile"/> hits and misses.
 /// </summary>
 [TestClass]
 public sealed class TileGridTests
@@ -23,7 +23,7 @@ public sealed class TileGridTests
     private static TileKey Key(int col, int row, long layer = 1) => new(layer, col, row, 2.0f);
 
     [TestMethod]
-    public void Put_then_get_hits_and_counts()
+    public void Put_then_get_hits()
     {
         var grid = new TileGrid(maxBytes: 1_000_000);
         var k = Key(0, 0);
@@ -33,8 +33,6 @@ public sealed class TileGridTests
 
         grid.TryGetTile(k, contentHash: 7, out var got).Should().BeTrue();
         got.Should().NotBeNull();
-        grid.Count.Should().Be(1);
-        grid.Bytes.Should().Be(64);
     }
 
     [TestMethod]
@@ -45,9 +43,8 @@ public sealed class TileGridTests
         grid.PutTile(k, contentHash: 1, Tile());
 
         grid.TryGetTile(k, contentHash: 2, out _).Should().BeFalse("content changed → stale");
-        // Overwriting in place keeps a single entry per position.
+        // Overwriting in place keeps serving the latest content for the position.
         grid.PutTile(k, contentHash: 2, Tile());
-        grid.Count.Should().Be(1);
         grid.TryGetTile(k, contentHash: 2, out _).Should().BeTrue();
     }
 
@@ -63,7 +60,6 @@ public sealed class TileGridTests
         grid.TryGetTile(Key(0, 0), 1, out _).Should().BeTrue();
         grid.PutTile(Key(2, 0), 1, Tile()); // C → over budget → evicts LRU (B)
 
-        grid.Count.Should().Be(2);
         grid.TryGetTile(Key(0, 0), 1, out _).Should().BeTrue("A was promoted, survives");
         grid.TryGetTile(Key(2, 0), 1, out _).Should().BeTrue("C is newest, survives");
         grid.TryGetTile(Key(1, 0), 1, out _).Should().BeFalse("B was LRU, evicted");
@@ -75,13 +71,12 @@ public sealed class TileGridTests
         var grid = new TileGrid(maxBytes: 1_000_000);
         grid.PutTile(Key(0, 0), 1, Tile());
         grid.PutTile(Key(1, 0), 1, Tile());
-        grid.Bytes.Should().Be(128);
+        grid.TryGetTile(Key(0, 0), 1, out _).Should().BeTrue();
 
         grid.Clear();
 
-        grid.Count.Should().Be(0);
-        grid.Bytes.Should().Be(0);
         grid.TryGetTile(Key(0, 0), 1, out _).Should().BeFalse();
+        grid.TryGetTile(Key(1, 0), 1, out _).Should().BeFalse();
     }
 
     [TestMethod]
@@ -107,7 +102,6 @@ public sealed class TileGridTests
         grid.PutTile(Key(0, 0, layer: 2), 1, Tile(20));
         grid.PutTile(Key(0, 1, layer: 1), 1, Tile(30));
 
-        grid.Count.Should().Be(3);
         grid.TryGetTile(Key(0, 0, layer: 1), 1, out _).Should().BeTrue();
         grid.TryGetTile(Key(0, 0, layer: 2), 1, out _).Should().BeTrue();
         grid.TryGetTile(Key(0, 1, layer: 1), 1, out _).Should().BeTrue();

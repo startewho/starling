@@ -63,7 +63,7 @@ public class CompositorBench
         var warmTiles = new TileGrid();
         _compositor = new Compositor(_backend, warmTiles);
         _warmTree = new LayerTreeBuilder(layerIdFor: warmTiles.LayerIdFor).Build(_root);
-        using (_compositor.Render(_warmTree, ViewportRect, Scale)) { }
+        using (_compositor.RenderGpuReadback(_warmTree, ViewportRect, Scale)) { }
     }
 
     [GlobalCleanup]
@@ -72,7 +72,7 @@ public class CompositorBench
     [Benchmark(Baseline = true)]
     public int Composite_WarmCache()
     {
-        using var bmp = _compositor.Render(_warmTree, ViewportRect, Scale);
+        using var bmp = _compositor.RenderGpuReadback(_warmTree, ViewportRect, Scale);
         return bmp.Width;
     }
 
@@ -85,7 +85,7 @@ public class CompositorBench
         var coldTiles = new TileGrid();
         var coldComp = new Compositor(_backend, coldTiles);
         var coldTree = new LayerTreeBuilder(layerIdFor: coldTiles.LayerIdFor).Build(_root);
-        using var bmp = coldComp.Render(coldTree, ViewportRect, Scale);
+        using var bmp = coldComp.RenderGpuReadback(coldTree, ViewportRect, Scale);
         return bmp.Width;
     }
 }

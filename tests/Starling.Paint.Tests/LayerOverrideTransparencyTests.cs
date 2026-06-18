@@ -14,6 +14,15 @@ namespace Starling.Paint.Tests;
 [TestClass]
 public sealed class LayerOverrideTransparencyTests
 {
+    [TestInitialize]
+    public void RequireGpu()
+    {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+        }
+    }
+
     [TestMethod]
     public void Identity_styleOverride_is_a_noop_in_the_layer_tree_path()
     {
@@ -28,13 +37,13 @@ public sealed class LayerOverrideTransparencyTests
         var doc = HtmlParser.Parse(html);
         var root = new LayoutEngine(new StyleEngine(), Starling.Layout.Text.DefaultTextMeasurer.Instance)
             .LayoutDocument(doc, new Size(W, H));
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         RenderedBitmap Render(System.Func<Box, ComputedStyle?>? ov)
         {
             var tree = new LayerTreeBuilder(ov, null, null).Build(root);
-            return new CompositorEngine(backend) { DisableGpuBlend = true }
-                .Render(tree, new LayoutRect(0, 0, W, H), 1.0f);
+            return new CompositorEngine(backend)
+                .RenderGpuReadback(tree, new LayoutRect(0, 0, W, H), 1.0f);
         }
 
         using var noOverride = Render(null);

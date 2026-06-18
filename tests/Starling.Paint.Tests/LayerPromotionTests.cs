@@ -71,6 +71,12 @@ public sealed class LayerPromotionTests
     [TestMethod]
     public void Animated_transform_promoted_by_predicate_matches_the_flat_render()
     {
+        if (GpuLayerCompositor.Shared is null)
+        {
+            Assert.Inconclusive("No GPU adapter available.");
+            return;
+        }
+
         const int W = 200, H = 200;
         const float scale = 1f;
         const double clock = 500; // mid-way through a 0->60deg, 1000ms linear spin
@@ -102,7 +108,7 @@ public sealed class LayerPromotionTests
         Func<Box, bool> promote = box =>
             box.Element is { } e && style.AnimationEngine.ActiveProperties(e).Any();
 
-        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null);
+        using var backend = new ImageSharpBackend(FontResolver.Default, webFonts: null, useWebGpu: true);
 
         // Flat path bakes the sampled rotation into the display list.
         PaintList flatList = new DisplayListBuilder().Build(root, null, styleOverride);
@@ -113,7 +119,7 @@ public sealed class LayerPromotionTests
         var tree = new LayerTreeBuilder(styleOverride, isAnimatingLayerRoot: promote).Build(root);
         tree.Children.Should().HaveCount(1, "the predicate promotes the spinning div");
         tree.Children[0].Transform.IsIdentity.Should().BeFalse("the sampled rotation rides on the layer transform");
-        using var layered = new CompositorEngine(backend).Render(tree, new LayoutRect(0, 0, W, H), scale);
+        using var layered = new CompositorEngine(backend).RenderGpuReadback(tree, new LayoutRect(0, 0, W, H), scale);
 
         layered.Width.Should().Be(flat.Width);
         layered.Height.Should().Be(flat.Height);
