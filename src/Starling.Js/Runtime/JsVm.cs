@@ -1618,7 +1618,7 @@ public sealed class JsVm
                             var ctor = Pop(stack, ref sp);
                             if (!ctor.IsObject)
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
+                                throw new JsThrow(_runtime.Realm.NewTypeError(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
                             }
 
                             if (TryPushConstruct(ctor, newArgs, newTarget: null, frame, ip, sp, maxSp,
