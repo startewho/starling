@@ -79,8 +79,8 @@ public static class BigIntCtor
             return JsValue.String(BigIntOps.ToRadixString(v, radix));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "valueOf", 0, (thisV, _) => JsValue.BigInt(ThisBigIntValue(realm, thisV)));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, _) =>
-            JsValue.String(BigIntOps.ToRadixString(ThisBigIntValue(realm, thisV), 10)));
+        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, args) =>
+            JsValue.String(IntlObj.FormatBigIntToLocaleString(realm, ThisBigIntValue(realm, thisV), args)));
 
         realm.BigIntConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("BigInt",

@@ -190,11 +190,43 @@ public static partial class IntlObj
     //                          Intl.PluralRules
     // =====================================================================
 
-    private sealed class IntlPluralRulesObject(JsObject prototype, string locale, string type) : JsObject(prototype)
+    private sealed record IntlPluralRulesState(
+        string Locale,
+        string Language,
+        string Type,
+        string Notation,
+        int MinIntegerDigits,
+        int MinFractionDigits,
+        int MaxFractionDigits,
+        int MinSignificantDigits,
+        int MaxSignificantDigits,
+        bool UseSignificant,
+        int RoundingIncrement,
+        string RoundingMode,
+        string RoundingPriority,
+        string TrailingZeroDisplay,
+        string? CompactDisplay);
+
+    private sealed class IntlPluralRulesObject(JsObject prototype, IntlPluralRulesState state) : JsObject(prototype)
     {
-        public string Locale { get; } = locale;
-        public string Type { get; } = type;
+        public IntlPluralRulesState State { get; } = state;
     }
+
+    private static readonly Dictionary<string, string[]> PluralCategoriesByLanguage = new(StringComparer.Ordinal)
+    {
+        ["ar"] = ["zero", "one", "two", "few", "many", "other"],
+        ["en"] = ["one", "other"],
+        ["fa"] = ["one", "other"],
+        ["fr"] = ["one", "many", "other"],
+        ["gv"] = ["one", "two", "few", "many", "other"],
+        ["ko"] = ["other"],
+        ["ja"] = ["other"],
+        ["zh"] = ["other"],
+        ["th"] = ["other"],
+        ["pl"] = ["one", "few", "many", "other"],
+        ["ru"] = ["one", "few", "many", "other"],
+        ["sl"] = ["one", "two", "few", "other"],
+    };
 
     private static void InstallPluralRules(JsRealm realm, JsObject intl)
     {
@@ -206,21 +238,90 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.PluralRules requires 'new'"));
             }
 
-            var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var requested = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
             _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
             var type = GetOptionEnum(realm, options, "type", ["cardinal", "ordinal"], "cardinal")!;
+            var notation = GetOptionEnum(realm, options, "notation", ["standard", "compact", "scientific", "engineering"], "standard")!;
+            var compactDisplay = GetOptionEnum(realm, options, "compactDisplay", ["short", "long"], "short")!;
+
+            // SetNumberFormatDigitOptions (§15.1.6) with mnfd=0, mxfd=3.
+            var mnid = GetNumberOptionSpec(realm, options, "minimumIntegerDigits", 1, 21, 1)!.Value;
+            var mnfdRaw = OptGet(realm, options, "minimumFractionDigits");
+            var mxfdRaw = OptGet(realm, options, "maximumFractionDigits");
+            var mnsdRaw = OptGet(realm, options, "minimumSignificantDigits");
+            var mxsdRaw = OptGet(realm, options, "maximumSignificantDigits");
+            var roundingIncrement = GetNumberOptionSpec(realm, options, "roundingIncrement", 1, 5000, 1)!.Value;
+            if (Array.IndexOf(AllowedRoundingIncrements, roundingIncrement) < 0)
+            {
+                throw new JsThrow(realm.NewRangeError($"Invalid roundingIncrement: {roundingIncrement}"));
+            }
+
+            var roundingMode = GetOptionEnum(realm, options, "roundingMode", RoundingModeValues, "halfExpand")!;
+            var roundingPriority = GetOptionEnum(realm, options, "roundingPriority", ["auto", "morePrecision", "lessPrecision"], "auto")!;
+            var trailingZeroDisplay = GetOptionEnum(realm, options, "trailingZeroDisplay", ["auto", "stripIfInteger"], "auto")!;
+            var hasSd = !(mnsdRaw.IsUndefined && mxsdRaw.IsUndefined);
+            var mnsd = 0;
+            var mxsd = 0;
+            var mnfd = 0;
+            var mxfd = 3;
+            if (hasSd)
+            {
+                mnsd = DefaultNumberOption(realm, mnsdRaw, 1, 21, 1, "minimumSignificantDigits")!.Value;
+                mxsd = DefaultNumberOption(realm, mxsdRaw, mnsd, 21, 21, "maximumSignificantDigits")!.Value;
+            }
+            else
+            {
+                var mnfdOpt = DefaultNumberOption(realm, mnfdRaw, 0, 100, null, "minimumFractionDigits");
+                var mxfdOpt = DefaultNumberOption(realm, mxfdRaw, 0, 100, null, "maximumFractionDigits");
+                if (mnfdOpt is null && mxfdOpt is not null)
+                {
+                    mnfd = 0;
+                    mxfd = mxfdOpt.Value;
+                }
+                else if (mnfdOpt is not null && mxfdOpt is null)
+                {
+                    mnfd = mnfdOpt.Value;
+                    mxfd = Math.Max(3, mnfd);
+                }
+                else if (mnfdOpt is not null && mxfdOpt is not null)
+                {
+                    if (mnfdOpt.Value > mxfdOpt.Value)
+                    {
+                        throw new JsThrow(realm.NewRangeError("minimumFractionDigits is greater than maximumFractionDigits"));
+                    }
+
+                    mnfd = mnfdOpt.Value;
+                    mxfd = mxfdOpt.Value;
+                }
+            }
+
+            var locale = DefaultLocale;
+            foreach (var tag in requested)
+            {
+                if (TryCreateLocale(tag, out var loc))
+                {
+                    locale = StripExtensions(loc.Name);
+                    break;
+                }
+            }
+
+            var dashIdx = locale.IndexOf('-');
+            var language = dashIdx >= 0 ? locale[..dashIdx] : locale;
+            var state = new IntlPluralRulesState(
+                locale, language, type, notation, mnid, mnfd, mxfd, mnsd, mxsd, hasSd,
+                roundingIncrement, roundingMode, roundingPriority, trailingZeroDisplay,
+                notation == "compact" ? compactDisplay : null);
             var instProto = IntlPrototypeFor(realm, newTarget, "PluralRules", proto);
-            return JsValue.Object(new IntlPluralRulesObject(instProto, StripExtensions(locale.Name), type));
+            return JsValue.Object(new IntlPluralRulesObject(instProto, state));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "PluralRules", "Intl.PluralRules");
 
         IntrinsicHelpers.DefineMethod(realm, proto, "select", 1, (thisV, args) =>
         {
             var pr = RequirePluralRules(realm, thisV);
-            var n = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm,
-                args.Length > 0 ? args[0] : JsValue.Undefined, "number"));
-            return JsValue.String(SelectPlural(pr.Type, n));
+            var n = PluralRuleNumber(realm, args.Length > 0 ? args[0] : JsValue.Undefined, requireFinite: false);
+            return JsValue.String(SelectPluralFor(pr.State, n));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "selectRange", 2, (thisV, args) =>
         {
@@ -232,44 +333,134 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Intl.PluralRules.prototype.selectRange requires two arguments"));
             }
 
-            var end = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm, b, "number"));
-            if (double.IsNaN(end))
-            {
-                throw new JsThrow(realm.NewRangeError("Invalid selectRange bound"));
-            }
-
-            // en: the range category follows the END of the range.
-            return JsValue.String(SelectPlural(pr.Type, end));
+            _ = PluralRuleNumber(realm, a, requireFinite: true);
+            var end = PluralRuleNumber(realm, b, requireFinite: true);
+            // en-family: the range category follows the END of the range.
+            return JsValue.String(SelectPluralFor(pr.State, end));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0, (thisV, _) =>
         {
-            var pr = RequirePluralRules(realm, thisV);
+            var st = RequirePluralRules(realm, thisV).State;
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String(pr.Locale));
-            o.Set("type", JsValue.String(pr.Type));
-            var cats = new JsArray(realm);
-            if (pr.Type == "ordinal")
+            o.Set("locale", JsValue.String(st.Locale));
+            o.Set("type", JsValue.String(st.Type));
+            o.Set("notation", JsValue.String(st.Notation));
+            if (st.CompactDisplay is not null)
             {
-                foreach (var c in new[] { "few", "one", "other", "two" })
-                {
-                    cats.Push(JsValue.String(c));
-                }
+                o.Set("compactDisplay", JsValue.String(st.CompactDisplay));
+            }
+
+            o.Set("minimumIntegerDigits", JsValue.Number(st.MinIntegerDigits));
+            if (st.UseSignificant)
+            {
+                o.Set("minimumSignificantDigits", JsValue.Number(st.MinSignificantDigits));
+                o.Set("maximumSignificantDigits", JsValue.Number(st.MaxSignificantDigits));
             }
             else
             {
-                cats.Push(JsValue.String("one"));
-                cats.Push(JsValue.String("other"));
+                o.Set("minimumFractionDigits", JsValue.Number(st.MinFractionDigits));
+                o.Set("maximumFractionDigits", JsValue.Number(st.MaxFractionDigits));
+            }
+
+            var cats = new JsArray(realm);
+            var categories = PluralCategoriesByLanguage.GetValueOrDefault(st.Language)
+                ?? (st.Type == "ordinal" ? ["few", "one", "other", "two"] : ["one", "other"]);
+            if (st.Type == "ordinal" && st.Language is "en" or "en-US")
+            {
+                categories = ["one", "two", "few", "other"];
+            }
+
+            foreach (var c in categories)
+            {
+                cats.Push(JsValue.String(c));
             }
 
             o.Set("pluralCategories", JsValue.Object(cats));
+            o.Set("roundingIncrement", JsValue.Number(st.RoundingIncrement));
+            o.Set("roundingMode", JsValue.String(st.RoundingMode));
+            o.Set("roundingPriority", JsValue.String(st.RoundingPriority));
+            o.Set("trailingZeroDisplay", JsValue.String(st.TrailingZeroDisplay));
             return JsValue.Object(o);
         });
+    }
+
+    private static double PluralRuleNumber(JsRealm realm, JsValue value, bool requireFinite)
+    {
+        var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, value, "number");
+        if (prim.IsSymbol || prim.IsBigInt)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert this value to a number"));
+        }
+
+        var n = JsValue.ToNumber(prim);
+        if (requireFinite && (double.IsNaN(n) || double.IsInfinity(n)))
+        {
+            throw new JsThrow(realm.NewRangeError("Invalid number for Intl.PluralRules"));
+        }
+
+        return n;
     }
 
     private static IntlPluralRulesObject RequirePluralRules(JsRealm realm, JsValue thisV)
         => thisV.IsObject && thisV.AsObject is IntlPluralRulesObject pr
             ? pr
             : throw new JsThrow(realm.NewTypeError("Intl.PluralRules method called on incompatible receiver"));
+
+    private static string SelectPluralFor(IntlPluralRulesState st, double n)
+    {
+        if (double.IsNaN(n) || double.IsInfinity(n))
+        {
+            return "other";
+        }
+
+        var abs = Math.Abs(n);
+        if (st.Type == "ordinal")
+        {
+            var mod100 = abs % 100;
+            if (mod100 is >= 11 and <= 13)
+            {
+                return "other";
+            }
+
+            return (abs % 10) switch
+            {
+                1 => "one",
+                2 => "two",
+                3 => "few",
+                _ => "other",
+            };
+        }
+
+        switch (st.Language)
+        {
+            case "pl":
+                return SelectPluralPl(abs);
+            case "fr":
+            {
+                if (Math.Floor(abs) is 0 or 1 && abs < 2)
+                {
+                    return "one";
+                }
+
+                if (st.Notation == "compact" && abs >= 1_000_000)
+                {
+                    return "many";
+                }
+
+                if (abs == Math.Floor(abs) && abs != 0 && abs % 1_000_000 == 0)
+                {
+                    return "many";
+                }
+
+                return "other";
+            }
+
+            case "ko" or "ja" or "zh" or "th":
+                return "other";
+            default:
+                return abs == 1 ? "one" : "other";
+        }
+    }
 
     private static string SelectPlural(string type, double n)
     {
@@ -296,7 +487,6 @@ public static partial class IntlObj
             };
         }
 
-        // en cardinal: exactly 1 (integer) is "one"; everything else "other".
         return n == 1 ? "one" : "other";
     }
 
@@ -580,6 +770,24 @@ public static partial class IntlObj
     // =====================================================================
     //                              Shared
     // =====================================================================
+
+    /// <summary>BigInt.prototype.toLocaleString (ECMA-402 §20.2.1) — format
+    /// through a NumberFormat built from the call's locales/options.</summary>
+    internal static string FormatBigIntToLocaleString(JsRealm realm, System.Numerics.BigInteger value, JsValue[] args)
+    {
+        var state = CreateNumberFormatState(
+            realm,
+            args.Length > 0 ? args[0] : JsValue.Undefined,
+            args.Length > 1 ? args[1] : JsValue.Undefined);
+        var parts = PartitionNumberPattern(state, DecimalNum.FromBigInteger(value));
+        var sb = new System.Text.StringBuilder(16);
+        for (var i = 0; i < parts.Count; i++)
+        {
+            sb.Append(parts[i].Value);
+        }
+
+        return sb.ToString();
+    }
 
     private static void WireIntlCtor(JsRealm realm, JsObject intl, JsNativeFunction ctor, JsObject proto, string name, string tag)
     {

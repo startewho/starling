@@ -52,7 +52,7 @@ public static partial class IntlObj
 
     private static JsNativeFunction CreateCollatorCtor(JsRealm realm, JsObject proto)
     {
-        var ctor = new JsNativeFunction(realm, "Collator", 2, (newTarget, args) =>
+        var ctor = new JsNativeFunction(realm, "Collator", 0, (newTarget, args) =>
         {
             var state = CreateCollatorState(realm, args);
             var instProto = IntlPrototypeFor(realm, newTarget, "Collator", proto);
@@ -86,14 +86,137 @@ public static partial class IntlObj
     private static IntlCollatorObject CreateCollatorInstance(JsRealm realm, JsObject proto, IntlCollatorState state)
         => new(proto, state);
 
+    private static bool CollationSupportedFor(string lang, string co) => co switch
+    {
+        "standard" or "search" => false,
+        "emoji" or "eor" => true,
+        "phonebk" or "dict" => lang == "de",
+        "pinyin" or "stroke" or "zhuyin" or "gb2312" or "big5han" => lang == "zh",
+        _ => false,
+    };
+
+    /// <summary>Presence check for a -u- keyword (a bare key like "-u-kn"
+    /// reads as an empty value, which ExtensionValue reports as null).</summary>
+    private static bool HasUnicodeExtKey(string tag, string key)
+    {
+        var norm = tag.Replace('_', '-');
+        var uIdx = norm.IndexOf("-u-", StringComparison.OrdinalIgnoreCase);
+        var xIdx = norm.IndexOf("-x-", StringComparison.OrdinalIgnoreCase);
+        if (uIdx < 0 || (xIdx >= 0 && xIdx < uIdx))
+        {
+            return false;
+        }
+
+        var parts = norm[(uIdx + 3)..].Split('-');
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].Length == 1)
+            {
+                break;
+            }
+
+            if (parts[i].Length == 2 && string.Equals(parts[i], key, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static IntlCollatorState CreateCollatorState(JsRealm realm, JsValue[] args)
     {
-        var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var options = args.Length > 1 && args[1].IsObject ? args[1].AsObject : null;
-        var usage = GetStringOption(realm, options, "usage", "sort", "search") ?? "sort";
-        var sensitivity = GetStringOption(realm, options, "sensitivity", "base", "accent", "case", "variant") ?? "variant";
-        var numeric = GetBooleanOption(realm, options, "numeric") ?? false;
-        return new IntlCollatorState(locale, usage, sensitivity, numeric);
+        var requested = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
+        var usage = GetOptionEnum(realm, options, "usage", ["sort", "search"], "sort")!;
+        _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+        var coOpt = GetOptionEnum(realm, options, "collation", null, null);
+        if (coOpt is not null)
+        {
+            if (!IsWellFormedNumberingSystem(coOpt))
+            {
+                throw new JsThrow(realm.NewRangeError($"Invalid collation: \"{coOpt}\""));
+            }
+
+            coOpt = coOpt.ToLowerInvariant();
+        }
+
+        var knOpt = GetBooleanOption(realm, options, "numeric");
+        var kfOpt = GetOptionEnum(realm, options, "caseFirst", ["upper", "lower", "false"], null);
+
+        var baseName = DefaultLocale;
+        string? extCo = null;
+        string? extKn = null;
+        string? extKf = null;
+        foreach (var tag in requested)
+        {
+            if (!TryCreateLocale(tag, out var loc))
+            {
+                continue;
+            }
+
+            baseName = StripExtensions(loc.Name);
+            extCo = ExtensionValue(tag, "co");
+            extKf = ExtensionValue(tag, "kf");
+            if (HasUnicodeExtKey(tag, "kn"))
+            {
+                extKn = ExtensionValue(tag, "kn") ?? "true";
+            }
+
+            break;
+        }
+
+        var dash = baseName.IndexOf('-');
+        var lang = dash >= 0 ? baseName[..dash] : baseName;
+
+        string collation;
+        var reflectCo = false;
+        if (coOpt is not null && CollationSupportedFor(lang, coOpt))
+        {
+            collation = coOpt;
+            reflectCo = string.Equals(extCo, coOpt, StringComparison.Ordinal);
+        }
+        else if (extCo is not null && CollationSupportedFor(lang, extCo))
+        {
+            collation = extCo;
+            reflectCo = true;
+        }
+        else
+        {
+            collation = "default";
+        }
+
+        var extKnValid = extKn is "true" or "false" ? extKn : null;
+        var numeric = knOpt ?? extKnValid == "true";
+        var reflectKn = extKnValid is not null
+            && (knOpt is null || knOpt.Value == (extKnValid == "true"));
+
+        var extKfValid = extKf is "upper" or "lower" or "false" ? extKf : null;
+        var caseFirst = kfOpt ?? extKfValid ?? "false";
+        var reflectKf = extKfValid is not null
+            && (kfOpt is null || string.Equals(kfOpt, extKfValid, StringComparison.Ordinal));
+
+        var sensitivity = GetOptionEnum(realm, options, "sensitivity", ["base", "accent", "case", "variant"], null) ?? "variant";
+        var ignorePunctuation = GetBooleanOption(realm, options, "ignorePunctuation") ?? lang == "th";
+
+        var ext = new List<string>(3);
+        if (reflectCo)
+        {
+            ext.Add("co-" + collation);
+        }
+
+        if (reflectKf)
+        {
+            ext.Add("kf-" + caseFirst);
+        }
+
+        if (reflectKn)
+        {
+            ext.Add(numeric ? "kn" : "kn-false");
+        }
+
+        var localeName = ext.Count == 0 ? baseName : baseName + "-u-" + string.Join('-', ext);
+        return new IntlCollatorState(localeName, lang, usage, sensitivity, ignorePunctuation, collation, numeric, caseFirst);
     }
 
     private static JsValue SupportedLocalesOf(JsRealm realm, JsValue[] args)
@@ -321,7 +444,8 @@ public static partial class IntlObj
         "zh" or "zh-CN" or "zh-TW" or "zh-HK" or "zh-MO" or
         "pt" or "pt-BR" or "pt-PT" or "nl" or "nl-NL" or
         "ar" or "ar-SA" or "th" or "th-TH" or "ru" or "ru-RU" or
-        "tr" or "tr-TR" or "pl" or "pl-PL" or "sv" or "sv-SE" or "sr" or "sr-RS";
+        "tr" or "tr-TR" or "pl" or "pl-PL" or "sv" or "sv-SE" or "sr" or "sr-RS" or
+        "fa" or "gv" or "sl";
 
     private static bool IsRegionSubtag(string value)
         => value.Length == 2 && IsAsciiLetters(value) || value.Length == 3 && IsAsciiDigits(value);
@@ -448,6 +572,21 @@ public static partial class IntlObj
         throw new JsThrow(realm.NewTypeError("Intl.Collator method called on incompatible receiver"));
     }
 
+    /// <summary>ECMA-402 §19.1.2 step 4 — the first requested locale's
+    /// language subtag (after CanonicalizeLocaleList validation), or null.</summary>
+    internal static string? FirstRequestedLanguage(JsRealm realm, JsValue locales)
+    {
+        var requested = ReadRequestedLocales(realm, locales);
+        if (requested.Count == 0)
+        {
+            return null;
+        }
+
+        var tag = requested[0];
+        var dash = tag.IndexOf('-');
+        return dash >= 0 ? tag[..dash] : tag;
+    }
+
     private static void DefineData(JsObject obj, string name, JsValue value)
         => obj.DefineOwnProperty(name, PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: true));
 
@@ -560,39 +699,230 @@ public static partial class IntlObj
         return sb.ToString();
     }
 
-    private sealed record IntlCollatorState(IntlLocale Locale, string Usage, string Sensitivity, bool Numeric);
+    private sealed record IntlCollatorState(
+        string LocaleName,
+        string DataLanguage,
+        string Usage,
+        string Sensitivity,
+        bool IgnorePunctuation,
+        string Collation,
+        bool Numeric,
+        string CaseFirst);
 
     private sealed class IntlCollatorObject(JsObject prototype, IntlCollatorState state) : JsObject(prototype)
     {
         public JsObject? BoundCompare;
+        public IntlCollatorState State { get; } = state;
 
         public int Compare(JsValue[] args)
         {
             var left = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
             var right = args.Length > 1 ? JsValue.ToStringValue(args[1]) : "undefined";
-            var result = state.Locale.Culture.CompareInfo.Compare(left, right, CompareOptionsForSensitivity(state.Sensitivity));
-            return Math.Sign(result);
+            return CollatorCompareStrings(State, left, right);
         }
 
         public JsValue ResolvedOptions(JsRealm realm)
         {
             var obj = realm.NewOrdinaryObject();
-            obj.Set("locale", JsValue.String(state.Locale.Name));
-            obj.Set("usage", JsValue.String(state.Usage));
-            obj.Set("sensitivity", JsValue.String(state.Sensitivity));
-            obj.Set("ignorePunctuation", JsValue.Boolean(false));
-            obj.Set("collation", JsValue.String("default"));
-            obj.Set("numeric", JsValue.Boolean(state.Numeric));
-            obj.Set("caseFirst", JsValue.String("false"));
+            obj.Set("locale", JsValue.String(State.LocaleName));
+            obj.Set("usage", JsValue.String(State.Usage));
+            obj.Set("sensitivity", JsValue.String(State.Sensitivity));
+            obj.Set("ignorePunctuation", JsValue.Boolean(State.IgnorePunctuation));
+            obj.Set("collation", JsValue.String(State.Collation));
+            obj.Set("numeric", JsValue.Boolean(State.Numeric));
+            obj.Set("caseFirst", JsValue.String(State.CaseFirst));
             return JsValue.Object(obj);
         }
+    }
 
-        private static CompareOptions CompareOptionsForSensitivity(string sensitivity) => sensitivity switch
+    /// <summary>String.prototype.localeCompare (ECMA-402 §19.1.1) — compares
+    /// through a Collator built from the call's locales/options.</summary>
+    internal static int CompareForLocaleCompare(JsRealm realm, string x, string y, JsValue[] args)
+    {
+        var ctorArgs = new JsValue[2];
+        ctorArgs[0] = args.Length > 1 ? args[1] : JsValue.Undefined;
+        ctorArgs[1] = args.Length > 2 ? args[2] : JsValue.Undefined;
+        var state = CreateCollatorState(realm, ctorArgs);
+        return CollatorCompareStrings(state, x, y);
+    }
+
+    private static bool IsCombiningMark(char c)
+    {
+        var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+        return cat is System.Globalization.UnicodeCategory.NonSpacingMark
+            or System.Globalization.UnicodeCategory.SpacingCombiningMark
+            or System.Globalization.UnicodeCategory.EnclosingMark;
+    }
+
+    private static int CollatorCompareStrings(IntlCollatorState st, string a, string b)
+    {
+        if (st.IgnorePunctuation)
         {
-            "base" => CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace,
-            "accent" => CompareOptions.IgnoreCase,
-            "case" => CompareOptions.IgnoreNonSpace,
-            _ => CompareOptions.None,
-        };
+            a = StripIgnorable(a);
+            b = StripIgnorable(b);
+        }
+
+        if (st.DataLanguage == "de" && (st.Usage == "search" || st.Collation == "phonebk"))
+        {
+            a = ExpandGermanSearch(a);
+            b = ExpandGermanSearch(b);
+        }
+
+        var da = StringNormalization.Normalize(a, compatibility: false, compose: false);
+        var db = StringNormalization.Normalize(b, compatibility: false, compose: false);
+
+        var pa = CollatorLevelKey(da, stripMarks: true, lower: true);
+        var pb = CollatorLevelKey(db, stripMarks: true, lower: true);
+        var r = st.Numeric ? CompareNumericAware(pa, pb) : string.CompareOrdinal(pa, pb);
+        if (r != 0)
+        {
+            return Math.Sign(r);
+        }
+
+        if (st.Sensitivity is "accent" or "variant")
+        {
+            r = string.CompareOrdinal(
+                CollatorLevelKey(da, stripMarks: false, lower: true),
+                CollatorLevelKey(db, stripMarks: false, lower: true));
+            if (r != 0)
+            {
+                return Math.Sign(r);
+            }
+        }
+
+        if (st.Sensitivity is "case" or "variant")
+        {
+            var ca = CollatorLevelKey(da, stripMarks: true, lower: false);
+            var cb = CollatorLevelKey(db, stripMarks: true, lower: false);
+            var upperFirst = st.CaseFirst == "upper";
+            var len = Math.Min(ca.Length, cb.Length);
+            for (var i = 0; i < len; i++)
+            {
+                if (ca[i] == cb[i])
+                {
+                    continue;
+                }
+
+                var ua = char.IsUpper(ca[i]);
+                var ub = char.IsUpper(cb[i]);
+                if (ua != ub)
+                {
+                    var rankA = ua == upperFirst ? 0 : 1;
+                    var rankB = ub == upperFirst ? 0 : 1;
+                    return rankA < rankB ? -1 : 1;
+                }
+
+                return ca[i] < cb[i] ? -1 : 1;
+            }
+
+            if (ca.Length != cb.Length)
+            {
+                return ca.Length < cb.Length ? -1 : 1;
+            }
+        }
+
+        return 0;
+    }
+
+    private static string StripIgnorable(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (!char.IsSurrogate(s[i]) && (char.IsPunctuation(s[i]) || char.IsWhiteSpace(s[i])))
+            {
+                continue;
+            }
+
+            sb.Append(s[i]);
+        }
+
+        return sb.ToString();
+    }
+
+    private static string ExpandGermanSearch(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length + 4);
+        for (var i = 0; i < s.Length; i++)
+        {
+            switch (s[i])
+            {
+                case 'ä': sb.Append("ae"); break;
+                case 'ö': sb.Append("oe"); break;
+                case 'ü': sb.Append("ue"); break;
+                case 'Ä': sb.Append("AE"); break;
+                case 'Ö': sb.Append("OE"); break;
+                case 'Ü': sb.Append("UE"); break;
+                case 'ß': sb.Append("ss"); break;
+                default: sb.Append(s[i]); break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string CollatorLevelKey(string nfd, bool stripMarks, bool lower)
+    {
+        var sb = new System.Text.StringBuilder(nfd.Length);
+        for (var i = 0; i < nfd.Length; i++)
+        {
+            var c = nfd[i];
+            if (stripMarks && !char.IsSurrogate(c) && IsCombiningMark(c))
+            {
+                continue;
+            }
+
+            sb.Append(lower ? char.ToLowerInvariant(c) : c);
+        }
+
+        return sb.ToString();
+    }
+
+    private static int CompareNumericAware(string a, string b)
+    {
+        var i = 0;
+        var j = 0;
+        while (i < a.Length && j < b.Length)
+        {
+            if (char.IsAsciiDigit(a[i]) && char.IsAsciiDigit(b[j]))
+            {
+                var si = i;
+                var sj = j;
+                while (i < a.Length && char.IsAsciiDigit(a[i]))
+                {
+                    i++;
+                }
+
+                while (j < b.Length && char.IsAsciiDigit(b[j]))
+                {
+                    j++;
+                }
+
+                var ra = a.AsSpan(si, i - si).TrimStart('0');
+                var rb = b.AsSpan(sj, j - sj).TrimStart('0');
+                if (ra.Length != rb.Length)
+                {
+                    return ra.Length < rb.Length ? -1 : 1;
+                }
+
+                var cmp = ra.CompareTo(rb, StringComparison.Ordinal);
+                if (cmp != 0)
+                {
+                    return Math.Sign(cmp);
+                }
+
+                continue;
+            }
+
+            if (a[i] != b[j])
+            {
+                return a[i] < b[j] ? -1 : 1;
+            }
+
+            i++;
+            j++;
+        }
+
+        return (a.Length - i).CompareTo(b.Length - j);
     }
 }

@@ -1,4 +1,3 @@
-using System.Globalization;
 using Starling.Js.Runtime;
 
 namespace Starling.Js.Intrinsics;
@@ -307,11 +306,14 @@ public static partial class IntlObj
     //                          Intl.DisplayNames
     // =====================================================================
 
-    private sealed class IntlDisplayNamesObject(JsObject prototype, string type, string style, string fallback) : JsObject(prototype)
+    private sealed class IntlDisplayNamesObject(
+        JsObject prototype, string locale, string type, string style, string fallback, string? languageDisplay) : JsObject(prototype)
     {
+        public string Locale { get; } = locale;
         public string Type { get; } = type;
         public string Style { get; } = style;
         public string Fallback { get; } = fallback;
+        public string? LanguageDisplay { get; } = languageDisplay;
     }
 
     private static void InstallDisplayNames(JsRealm realm, JsObject intl)
@@ -325,7 +327,10 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.DisplayNames requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            // §12.1.1 step 2 — OrdinaryCreateFromConstructor reads
+            // newTarget.prototype before any option validation.
+            var instProto = IntlPrototypeFor(realm, newTarget, "DisplayNames", proto);
+            var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             // §12.1.1 step 3 — options is REQUIRED (GetOptionsObject, then a
             // required `type`).
             if (args.Length < 2 || args[1].IsUndefined)
@@ -333,14 +338,17 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Intl.DisplayNames requires an options argument with a 'type'"));
             }
 
-            var options = ReadOptionsObject(realm, args[1]);
-            var style = GetStringOption(realm, options, "style", "narrow", "short", "long") ?? "long";
-            var type = GetStringOption(realm, options, "type",
-                "language", "region", "script", "currency", "calendar", "dateTimeField")
+            var options = GetOptionsObject(realm, args[1]);
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var style = GetOptionEnum(realm, options, "style", ["narrow", "short", "long"], "long")!;
+            var type = GetOptionEnum(realm, options, "type",
+                ["language", "region", "script", "currency", "calendar", "dateTimeField"], null)
                 ?? throw new JsThrow(realm.NewTypeError("Intl.DisplayNames options must include a 'type'"));
-            var fallback = GetStringOption(realm, options, "fallback", "code", "none") ?? "code";
-            var instProto = IntlPrototypeFor(realm, newTarget, "DisplayNames", proto);
-            return JsValue.Object(new IntlDisplayNamesObject(instProto, type, style, fallback));
+            var fallback = GetOptionEnum(realm, options, "fallback", ["code", "none"], "code")!;
+            var languageDisplay = GetOptionEnum(realm, options, "languageDisplay", ["dialect", "standard"], "dialect")!;
+            return JsValue.Object(new IntlDisplayNamesObject(
+                instProto, StripExtensions(locale.Name), type, style, fallback,
+                type == "language" ? languageDisplay : null));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "DisplayNames", "Intl.DisplayNames");
 
@@ -350,6 +358,7 @@ public static partial class IntlObj
                 ? d
                 : throw new JsThrow(realm.NewTypeError("Intl.DisplayNames.prototype.of called on incompatible receiver"));
             var code = AbstractOperations.ToStringJs(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            code = CanonicalizeDisplayNamesCode(realm, dn.Type, code);
             var name = DisplayNameOf(realm, dn.Type, code);
             if (name is not null)
             {
@@ -364,12 +373,66 @@ public static partial class IntlObj
                 ? d
                 : throw new JsThrow(realm.NewTypeError("Intl.DisplayNames.prototype.resolvedOptions called on incompatible receiver"));
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
+            o.Set("locale", JsValue.String(dn.Locale));
             o.Set("style", JsValue.String(dn.Style));
             o.Set("type", JsValue.String(dn.Type));
             o.Set("fallback", JsValue.String(dn.Fallback));
+            if (dn.LanguageDisplay is not null)
+            {
+                o.Set("languageDisplay", JsValue.String(dn.LanguageDisplay));
+            }
+
             return JsValue.Object(o);
         });
+    }
+
+    private static string CanonicalizeDisplayNamesCode(JsRealm realm, string type, string code)
+    {
+        switch (type)
+        {
+            case "language":
+            {
+                if (!TryParseUnicodeLocaleId(code, out var id)
+                    || id.HasT || id.HasU || id.OtherExtensions.Count > 0 || id.PrivateUse is not null)
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid language code: '{code}'"));
+                }
+
+                CanonicalizeLocaleId(id);
+                return id.BaseName();
+            }
+
+            case "region":
+                if (!IsRegionSubtag(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid region code: '{code}'"));
+                }
+
+                return code.ToUpperInvariant();
+            case "script":
+                if (!IsScriptSubtag(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid script code: '{code}'"));
+                }
+
+                return TitleCaseSubtag(code);
+            case "currency":
+                if (!IsWellFormedCurrencyCode(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid currency code: '{code}'"));
+                }
+
+                return code.ToUpperInvariant();
+            case "calendar":
+                if (!IsWellFormedNumberingSystem(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid calendar: '{code}'"));
+                }
+
+                return CanonicalizeCalendarAlias(code.ToLowerInvariant());
+            default:
+                return code;
+        }
     }
 
     private static string? DisplayNameOf(JsRealm realm, string type, string code)
@@ -377,42 +440,54 @@ public static partial class IntlObj
         switch (type)
         {
             case "language":
-                if (code.Length is < 2 or > 11 || code.Contains('_', StringComparison.Ordinal))
+                return code switch
                 {
-                    throw new JsThrow(realm.NewRangeError($"Invalid language code: '{code}'"));
-                }
-
-                try
-                {
-                    var name = CultureInfo.GetCultureInfo(code).EnglishName;
-                    return name.StartsWith("Unknown", StringComparison.Ordinal) ? null : name;
-                }
-                catch (CultureNotFoundException)
-                {
-                    return null;
-                }
+                    "en" => "English",
+                    "en-US" => "American English",
+                    "en-GB" => "British English",
+                    "de" => "German",
+                    "fr" => "French",
+                    "es" => "Spanish",
+                    "it" => "Italian",
+                    "ja" => "Japanese",
+                    "ko" => "Korean",
+                    "zh" => "Chinese",
+                    "pt" => "Portuguese",
+                    "ru" => "Russian",
+                    "ar" => "Arabic",
+                    "hi" => "Hindi",
+                    "nl" => "Dutch",
+                    "pl" => "Polish",
+                    "th" => "Thai",
+                    "tr" => "Turkish",
+                    "sv" => "Swedish",
+                    _ => null,
+                };
 
             case "region":
-                if (code.Length != 2 && !(code.Length == 3 && code.All(char.IsAsciiDigit)))
+                return code switch
                 {
-                    throw new JsThrow(realm.NewRangeError($"Invalid region code: '{code}'"));
-                }
-
-                try
-                {
-                    return new RegionInfo(code).EnglishName;
-                }
-                catch (ArgumentException)
-                {
-                    return null;
-                }
+                    "US" => "United States",
+                    "GB" => "United Kingdom",
+                    "DE" => "Germany",
+                    "FR" => "France",
+                    "ES" => "Spain",
+                    "IT" => "Italy",
+                    "JP" => "Japan",
+                    "KR" => "South Korea",
+                    "CN" => "China",
+                    "BR" => "Brazil",
+                    "RU" => "Russia",
+                    "IN" => "India",
+                    "CA" => "Canada",
+                    "AU" => "Australia",
+                    "MX" => "Mexico",
+                    "NL" => "Netherlands",
+                    "419" => "Latin America",
+                    _ => null,
+                };
 
             case "script":
-                if (code.Length != 4 || !char.IsAsciiLetterUpper(code[0]))
-                {
-                    throw new JsThrow(realm.NewRangeError($"Invalid script code: '{code}'"));
-                }
-
                 return code switch
                 {
                     "Latn" => "Latin",
