@@ -17,7 +17,9 @@ public class IntlTests
         Eval("typeof Intl.Collator === 'function';").AsBool.Should().BeTrue();
         Eval("typeof Intl.Locale === 'function';").AsBool.Should().BeTrue();
         Eval("typeof Intl.supportedValuesOf === 'function';").AsBool.Should().BeTrue();
-        Eval("Intl.getCanonicalLocales(['en-us', 'bad-locale']).join('|');").AsString.Should().Be("en-US");
+        // "bad-locale" is structurally valid ("bad" language + "locale" variant),
+        // so CanonicalizeLocaleList keeps it (§9.2.1).
+        Eval("Intl.getCanonicalLocales(['en-us', 'bad-locale']).join('|');").AsString.Should().Be("en-US|bad-locale");
         Eval("Object.prototype.toString.call(Intl);").AsString.Should().Be("[object Intl]");
     }
 
