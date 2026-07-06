@@ -201,7 +201,12 @@ public ref partial struct JsParser
     private bool IsLetDeclarationStart()
     {
         var next = _lex.Peek();
+        // `let yield` is a lexical declaration in sloppy non-generator code —
+        // the lexer always classifies `yield` as its keyword token, so the
+        // Identifier check alone would misparse the statement as the
+        // IDENTIFIER `let` followed by a stray token.
         return next.Kind == JsTokenKind.Identifier
+            || (next.Kind == JsTokenKind.Yield && !_strict && !_inGenerator)
             || next.Kind == JsTokenKind.LBracket
             || next.Kind == JsTokenKind.LBrace;
     }
