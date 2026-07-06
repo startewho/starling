@@ -9,42 +9,43 @@ public static class TypedArrayCtors
     {
         ArgumentNullException.ThrowIfNull(realm);
         var shared = realm.TypedArrayPrototype;
+        var abstractCtor = InstallAbstractCtor(realm, shared);
         InstallSharedPrototype(realm, shared);
 
-        // §23.2.1 — the ABSTRACT %TypedArray% constructor. Not a global, but
-        // reachable via Object.getPrototypeOf(Int8Array); throws when invoked
-        // directly. It owns `from`/`of` (generic, this-aware — subclasses and
-        // every concrete ctor inherit them) and @@species; its `prototype` is
-        // the shared method prototype the concrete prototypes inherit from.
-        JsNativeFunction? abstractCtor = null;
-        abstractCtor = new JsNativeFunction("TypedArray", (_, _) =>
-            throw new JsThrow(realm.NewTypeError("Abstract class TypedArray not directly constructable")),
-            isConstructor: true);
-        abstractCtor.SetPrototypeOf(realm.FunctionPrototype);
-        ArrayBufferCtor.DefineData(abstractCtor, "prototype", JsValue.Object(shared), false, false, false);
-        ArrayBufferCtor.DefineData(abstractCtor, "name", JsValue.String("TypedArray"), false, false, true);
-        ArrayBufferCtor.DefineData(abstractCtor, "length", JsValue.Number(0), false, false, true);
-        ArrayBufferCtor.DefineMethod(abstractCtor, "from", (thisV, args) => GenericFrom(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(abstractCtor, "of", (thisV, args) => GenericOf(realm, thisV, args), 0);
-        abstractCtor.DefineOwnProperty(SymbolCtor.Species,
-            PropertyDescriptor.Accessor(new JsNativeFunction("get [Symbol.species]", (thisV, _) => thisV), null));
-        ArrayBufferCtor.DefineData(shared, "constructor", JsValue.Object(abstractCtor), true, false, true);
-        realm.TypedArrayAbstract = abstractCtor;
-
-        InstallType(realm, "Int8Array", JsTypedArrayKind.Int8);
-        InstallType(realm, "Uint8Array", JsTypedArrayKind.Uint8);
-        InstallType(realm, "Uint8ClampedArray", JsTypedArrayKind.Uint8Clamped);
-        InstallType(realm, "Int16Array", JsTypedArrayKind.Int16);
-        InstallType(realm, "Uint16Array", JsTypedArrayKind.Uint16);
-        InstallType(realm, "Int32Array", JsTypedArrayKind.Int32);
-        InstallType(realm, "Uint32Array", JsTypedArrayKind.Uint32);
-        InstallType(realm, "Float32Array", JsTypedArrayKind.Float32);
-        InstallType(realm, "Float64Array", JsTypedArrayKind.Float64);
-        InstallType(realm, "BigInt64Array", JsTypedArrayKind.BigInt64);
-        InstallType(realm, "BigUint64Array", JsTypedArrayKind.BigUint64);
+        InstallType(realm, abstractCtor, "Int8Array", JsTypedArrayKind.Int8);
+        InstallType(realm, abstractCtor, "Uint8Array", JsTypedArrayKind.Uint8);
+        InstallType(realm, abstractCtor, "Uint8ClampedArray", JsTypedArrayKind.Uint8Clamped);
+        InstallType(realm, abstractCtor, "Int16Array", JsTypedArrayKind.Int16);
+        InstallType(realm, abstractCtor, "Uint16Array", JsTypedArrayKind.Uint16);
+        InstallType(realm, abstractCtor, "Int32Array", JsTypedArrayKind.Int32);
+        InstallType(realm, abstractCtor, "Uint32Array", JsTypedArrayKind.Uint32);
+        InstallType(realm, abstractCtor, "Float32Array", JsTypedArrayKind.Float32);
+        InstallType(realm, abstractCtor, "Float64Array", JsTypedArrayKind.Float64);
+        InstallType(realm, abstractCtor, "BigInt64Array", JsTypedArrayKind.BigInt64);
+        InstallType(realm, abstractCtor, "BigUint64Array", JsTypedArrayKind.BigUint64);
     }
 
-    private static void InstallType(JsRealm realm, string name, JsTypedArrayKind kind)
+    /// <summary>§23.2.1 the %TypedArray% abstract constructor — never directly
+    /// constructible; carries <c>from</c>/<c>of</c>/@@species that the eleven
+    /// concrete constructors inherit.</summary>
+    private static JsNativeFunction InstallAbstractCtor(JsRealm realm, JsObject shared)
+    {
+        var ctor = new JsNativeFunction("TypedArray", (_, _) =>
+            throw new JsThrow(realm.NewTypeError("Abstract class TypedArray not directly constructable")), isConstructor: true);
+        ctor.SetPrototypeOf(realm.FunctionPrototype);
+        ArrayBufferCtor.DefineData(ctor, "prototype", JsValue.Object(shared), false, false, false);
+        ArrayBufferCtor.DefineData(ctor, "name", JsValue.String("TypedArray"), false, false, true);
+        ArrayBufferCtor.DefineData(ctor, "length", JsValue.Number(0), false, false, true);
+        ArrayBufferCtor.DefineData(shared, "constructor", JsValue.Object(ctor), true, false, true);
+        ArrayBufferCtor.DefineMethod(realm, ctor, "from", (thisV, args) => From(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, ctor, "of", (thisV, args) => Of(realm, thisV, args), 0);
+        var speciesGetter = new JsNativeFunction(realm, "get [Symbol.species]", 0, (thisV, _) => thisV, isConstructor: false);
+        ctor.DefineOwnProperty(SymbolCtor.Species,
+            PropertyDescriptor.Accessor(speciesGetter, setter: null, enumerable: false, configurable: true));
+        return ctor;
+    }
+
+    private static void InstallType(JsRealm realm, JsNativeFunction abstractCtor, string name, JsTypedArrayKind kind)
     {
         var proto = new JsObject(realm.TypedArrayPrototype);
 
@@ -59,12 +60,22 @@ public static class TypedArrayCtors
                 throw new JsThrow(realm.NewTypeError(name + " constructor requires 'new'"));
             }
 
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            // §23.2.5.1 step 6.b: for a non-object argument ToIndex runs
+            // BEFORE AllocateTypedArray reads new.target.prototype.
+            var firstArg = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (!firstArg.IsObject)
+            {
+                var elementLength = ArrayBufferCtor.ToIndex(realm, firstArg);
+                var lenProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto,
+                    r => FindRealmTypePrototype(r, name));
+                return JsValue.Object(Allocate(realm, lenProto, kind, elementLength));
+            }
+
+            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto,
+                r => FindRealmTypePrototype(r, name));
             return JsValue.Object(Construct(realm, instProto, kind, args));
         }, isConstructor: true);
-        // §23.2.5 — every concrete TypedArray constructor inherits from the
-        // abstract %TypedArray% (so `from`/`of`/@@species resolve through it).
-        ctor.SetPrototypeOf(realm.TypedArrayAbstract ?? realm.FunctionPrototype);
+        ctor.SetPrototypeOf(abstractCtor);
         ArrayBufferCtor.DefineData(ctor, "prototype", JsValue.Object(proto), false, false, false);
         ArrayBufferCtor.DefineData(ctor, "name", JsValue.String(name), false, false, true);
         ArrayBufferCtor.DefineData(ctor, "length", JsValue.Number(3), false, false, true);
@@ -74,114 +85,204 @@ public static class TypedArrayCtors
         // §23.2.3.34: @@toStringTag lives on %TypedArray%.prototype as an
         // accessor, not on each concrete prototype — installed once in
         // InstallSharedPrototype below.
+
         realm.GlobalObject.DefineOwnProperty(name, PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));
+    }
+
+    /// <summary>§9.1.14 GetPrototypeFromConstructor fallback: the named concrete
+    /// prototype from the constructor function's realm.</summary>
+    private static JsObject? FindRealmTypePrototype(JsRealm realm, string name)
+    {
+        var ctorV = realm.GlobalObject.Get(name);
+        if (ctorV.IsObject)
+        {
+            var protoV = ctorV.AsObject.Get("prototype");
+            if (protoV.IsObject)
+            {
+                return protoV.AsObject;
+            }
+        }
+
+        return null;
     }
 
     private static JsTypedArray Construct(JsRealm realm, JsObject proto, JsTypedArrayKind kind, JsValue[] args)
     {
-        var bpe = JsTypedArray.BytesPerElementOf(kind);
-        var first = args.Length > 0 ? args[0] : JsValue.Undefined;
-        if (first.IsObject && first.AsObject is JsArrayBuffer buffer)
+        var first = args[0];
+        if (first.AsObject is JsArrayBuffer buffer)
         {
-            var offset = args.Length > 1 ? ArrayBufferCtor.ToIndex(realm, args[1]) : 0;
-            if (offset % bpe != 0)
+            return ConstructFromArrayBuffer(realm, proto, kind, buffer, args);
+        }
+
+        if (first.AsObject is JsTypedArray source)
+        {
+            return ConstructFromTypedArray(realm, proto, kind, source);
+        }
+
+        return ConstructFromObject(realm, proto, kind, first);
+    }
+
+    /// <summary>§23.2.5.1.b InitializeTypedArrayFromArrayBuffer.</summary>
+    private static JsTypedArray ConstructFromArrayBuffer(JsRealm realm, JsObject proto, JsTypedArrayKind kind, JsArrayBuffer buffer, JsValue[] args)
+    {
+        var bpe = JsTypedArray.BytesPerElementOf(kind);
+        var offset = args.Length > 1 ? ArrayBufferCtor.ToIndex(realm, args[1]) : 0;
+        if (offset % bpe != 0)
+        {
+            throw new JsThrow(realm.NewRangeError("TypedArray byteOffset must align to element size"));
+        }
+
+        var lengthArg = args.Length > 2 ? args[2] : JsValue.Undefined;
+        var explicitLength = -1;
+        if (!lengthArg.IsUndefined)
+        {
+            explicitLength = ArrayBufferCtor.ToIndex(realm, lengthArg);
+        }
+
+        // The ToIndex coercions above can run user code; detachment is checked
+        // only after them (§23.2.5.1.b step 6).
+        if (buffer.IsDetached)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray viewed buffer is detached"));
+        }
+
+        var bufferByteLength = buffer.ByteLength;
+        if (lengthArg.IsUndefined)
+        {
+            if (buffer.IsResizable)
             {
-                throw new JsThrow(realm.NewRangeError("TypedArray byteOffset must align to element size"));
+                if (offset > bufferByteLength)
+                {
+                    throw new JsThrow(realm.NewRangeError("TypedArray byteOffset out of range"));
+                }
+
+                return new JsTypedArray(proto, kind, buffer, offset, 0, lengthTracking: true, realm);
             }
 
-            if (offset > buffer.ByteLength)
+            if (bufferByteLength % bpe != 0)
+            {
+                throw new JsThrow(realm.NewRangeError("TypedArray byteLength must align to element size"));
+            }
+
+            var newByteLength = bufferByteLength - offset;
+            if (newByteLength < 0)
             {
                 throw new JsThrow(realm.NewRangeError("TypedArray byteOffset out of range"));
             }
 
-            var remaining = buffer.ByteLength - offset;
-            int viewLength;
-            if (args.Length > 2 && !args[2].IsUndefined)
-            {
-                viewLength = ArrayBufferCtor.ToIndex(realm, args[2]);
-                if (viewLength > remaining / bpe)
-                {
-                    throw new JsThrow(realm.NewRangeError("TypedArray length out of range"));
-                }
-            }
-            else
-            {
-                // ES2024 — an auto-length view over a RESIZABLE buffer is
-                // length-tracking: its length follows the buffer on resize.
-                if (buffer.IsResizable)
-                {
-                    return new JsTypedArray(proto, kind, buffer, offset, null);
-                }
-
-                if (remaining % bpe != 0)
-                {
-                    throw new JsThrow(realm.NewRangeError("TypedArray byteLength must align to element size"));
-                }
-
-                viewLength = remaining / bpe;
-            }
-            return new JsTypedArray(proto, kind, buffer, offset, viewLength);
+            return new JsTypedArray(proto, kind, buffer, offset, newByteLength / bpe, lengthTracking: false, realm);
         }
 
-        if (first.IsObject && first.AsObject is JsTypedArray source)
+        var byteLength = (long)explicitLength * bpe;
+        if (offset + byteLength > bufferByteLength)
         {
-            var target = Allocate(realm, proto, kind, source.Length);
-            for (var i = 0; i < source.Length; i++)
+            throw new JsThrow(realm.NewRangeError("TypedArray length out of range"));
+        }
+
+        return new JsTypedArray(proto, kind, buffer, offset, explicitLength, lengthTracking: false, realm);
+    }
+
+    /// <summary>§23.2.5.1.c InitializeTypedArrayFromTypedArray.</summary>
+    private static JsTypedArray ConstructFromTypedArray(JsRealm realm, JsObject proto, JsTypedArrayKind kind, JsTypedArray source)
+    {
+        if (source.IsOutOfBounds)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray source is detached or out of bounds"));
+        }
+
+        var targetIsBig = kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64;
+        if (targetIsBig != source.IsBigIntKind)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray content type mismatch"));
+        }
+
+        var len = source.Length;
+        var target = Allocate(realm, proto, kind, len);
+        for (var i = 0; i < len; i++)
+        {
+            target.SetElement(i, source.GetElement(i), realm);
+        }
+
+        return target;
+    }
+
+    /// <summary>§23.2.5.1.e InitializeTypedArrayFromArrayLike (plus the
+    /// @@iterator branch of step 8).</summary>
+    private static JsTypedArray ConstructFromObject(JsRealm realm, JsObject proto, JsTypedArrayKind kind, JsValue first)
+    {
+        var vm = realm.ActiveVm;
+        var usingIterator = AbstractOperations.GetMethod(vm, first, SymbolCtor.Iterator);
+        if (!usingIterator.IsUndefined)
+        {
+            var values = IteratorToList(realm, first, usingIterator);
+            var target = Allocate(realm, proto, kind, values.Count);
+            for (var i = 0; i < values.Count; i++)
             {
-                target.SetElement(i, source.GetElement(i), realm);
+                target.SetElement(i, values[i], realm);
             }
 
             return target;
         }
 
-        if (first.IsObject)
+        var src = first.AsObject;
+        var len = LengthOfArrayLike(realm, src);
+        var arrayLike = Allocate(realm, proto, kind, len);
+        for (var i = 0; i < len; i++)
         {
-            // §23.2.5.1 step 6.b.iii — any other object initializes FROM its
-            // contents: the iterator protocol when @@iterator is present,
-            // otherwise array-like (ToLength of "length", absent → 0). A plain
-            // object never reaches the numeric-length coercion below.
-            var src = first.AsObject;
-            var vm = realm.ActiveVm;
-            var iterMethod = AbstractOperations.GetMethod(vm, first, SymbolCtor.Iterator);
-            if (!iterMethod.IsUndefined && !iterMethod.IsNull)
-            {
-                var values = new List<JsValue>();
-                var record = AbstractOperations.GetIterator(realm, vm, first);
-                while (true)
-                {
-                    var step = AbstractOperations.IteratorNext(realm, vm, record);
-                    if (AbstractOperations.IteratorComplete(vm, step))
-                    {
-                        break;
-                    }
-
-                    values.Add(AbstractOperations.IteratorValue(vm, step));
-                }
-
-                var iterTarget = Allocate(realm, proto, kind, values.Count);
-                for (var i = 0; i < values.Count; i++)
-                {
-                    iterTarget.SetElement(i, values[i], realm);
-                }
-
-                return iterTarget;
-            }
-
-            var lenV = AbstractOperations.Get(vm, src, "length");
-            var len = (int)Math.Clamp(
-                lenV.IsUndefined ? 0 : Math.Truncate(JsValue.ToNumber(AbstractOperations.ToPrimitive(vm, lenV, "number"))),
-                0, int.MaxValue);
-            var target = Allocate(realm, proto, kind, len);
-            for (var i = 0; i < len; i++)
-            {
-                target.SetElement(i, AbstractOperations.Get(vm, src, ArrayBufferCtor.IndexKey(i)), realm);
-            }
-
-            return target;
+            arrayLike.SetElement(i, AbstractOperations.Get(vm, src, ArrayBufferCtor.IndexKey(i)), realm);
         }
 
-        var length = ArrayBufferCtor.ToIndex(realm, first);
-        return Allocate(realm, proto, kind, length);
+        return arrayLike;
+    }
+
+    /// <summary>§7.4.3 GetIteratorFromMethod + §7.4.14 IteratorToList. The
+    /// caller passes the already-fetched @@iterator method so the getter is not
+    /// observably read twice; pass undefined to fetch it here (string sources).</summary>
+    private static List<JsValue> IteratorToList(JsRealm realm, JsValue iterable, JsValue method)
+    {
+        var vm = realm.ActiveVm;
+        IteratorRecord record;
+        if (method.IsUndefined || !method.IsObject)
+        {
+            record = AbstractOperations.GetIterator(realm, vm, iterable);
+        }
+        else
+        {
+            var iterObj = AbstractOperations.Call(vm, method, iterable, Array.Empty<JsValue>());
+            if (!iterObj.IsObject)
+            {
+                throw new JsThrow(realm.NewTypeError("iterator method did not return an object"));
+            }
+
+            var nextMethod = AbstractOperations.Get(vm, iterObj.AsObject, "next");
+            record = new IteratorRecord(iterObj, nextMethod, Done: false);
+        }
+
+        var values = new List<JsValue>();
+        while (AbstractOperations.IteratorStep(realm, vm, ref record) is { } result)
+        {
+            values.Add(AbstractOperations.IteratorValue(vm, result));
+        }
+
+        return values;
+    }
+
+    /// <summary>§7.3.19 LengthOfArrayLike clamped to the allocatable range.</summary>
+    private static int LengthOfArrayLike(JsRealm realm, JsObject src)
+    {
+        var lenV = AbstractOperations.Get(realm.ActiveVm, src, "length");
+        var n = ArrayBufferCtor.ToIntegerOrInfinity(realm, lenV);
+        if (n <= 0)
+        {
+            return 0;
+        }
+
+        if (n > int.MaxValue)
+        {
+            throw new JsThrow(realm.NewRangeError("TypedArray length out of range"));
+        }
+
+        return (int)n;
     }
 
     private static JsTypedArray Allocate(JsRealm realm, JsObject proto, JsTypedArrayKind kind, int length)
@@ -192,19 +293,58 @@ public static class TypedArrayCtors
             throw new JsThrow(realm.NewRangeError("TypedArray length out of range"));
         }
 
-        return new JsTypedArray(proto, kind, new JsArrayBuffer(realm.ArrayBufferPrototype, length * bpe), 0, length);
+        return new JsTypedArray(proto, kind, new JsArrayBuffer(realm.ArrayBufferPrototype, length * bpe), 0, length, lengthTracking: false, realm);
     }
 
-    /// <summary>§23.2.2.1 %TypedArray%.from — generic over `this` (the target
-    /// constructor), honoring iterables, array-likes, and a map function.</summary>
-    private static JsValue GenericFrom(JsRealm realm, JsValue thisV, JsValue[] args)
+    /// <summary>§23.2.4.2 TypedArrayCreate + §23.2.4.3 ValidateTypedArray.</summary>
+    private static JsTypedArray TypedArrayCreate(JsRealm realm, JsValue ctor, JsValue[] args, int? mustHaveLength)
     {
-        var vm = realm.ActiveVm;
-        if (!AbstractOperations.IsConstructor(thisV))
+        var result = AbstractOperations.Construct(realm.ActiveVm, ctor, args);
+        if (!result.IsObject || result.AsObject is not JsTypedArray ta)
         {
-            throw new JsThrow(realm.NewTypeError("TypedArray.from called on non-constructor"));
+            throw new JsThrow(realm.NewTypeError("Constructor did not return a TypedArray"));
         }
 
+        if (ta.IsOutOfBounds)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray is detached or out of bounds"));
+        }
+
+        // Immutable-ArrayBuffer proposal: a view created to be written into
+        // must not be backed by an immutable buffer.
+        if (ta.Buffer.IsImmutable)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray is backed by an immutable ArrayBuffer"));
+        }
+
+        if (mustHaveLength is { } required && ta.Length < required)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray is too small"));
+        }
+
+        return ta;
+    }
+
+    /// <summary>Write during %TypedArray%.from/of — spec Set(…, throw=true), so a
+    /// write refused by an immutable backing buffer is a TypeError.</summary>
+    private static void SetCreated(JsRealm realm, JsTypedArray target, int index, JsValue value)
+    {
+        if (target.Buffer.IsImmutable)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot write into an immutable ArrayBuffer"));
+        }
+
+        target.SetIntegerIndexed(index, value, realm);
+    }
+
+    private static JsValue From(JsRealm realm, JsValue thisV, JsValue[] args)
+    {
+        if (!AbstractOperations.IsConstructor(thisV))
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray.from requires a constructor receiver"));
+        }
+
+        var vm = realm.ActiveVm;
         var source = args.Length > 0 ? args[0] : JsValue.Undefined;
         var mapFn = args.Length > 1 ? args[1] : JsValue.Undefined;
         var thisArg = args.Length > 2 ? args[2] : JsValue.Undefined;
@@ -213,24 +353,13 @@ public static class TypedArrayCtors
             throw new JsThrow(realm.NewTypeError("TypedArray.from mapFn must be callable"));
         }
 
-        var usingIterator = AbstractOperations.GetMethod(vm, source, SymbolCtor.Iterator);
-        if (!usingIterator.IsUndefined && !usingIterator.IsNull)
+        var usingIterator = source.IsString
+            ? JsValue.Undefined
+            : AbstractOperations.GetMethod(vm, source, SymbolCtor.Iterator);
+        if (source.IsString || !usingIterator.IsUndefined)
         {
-            var values = new List<JsValue>();
-            var record = AbstractOperations.GetIterator(realm, vm, source);
-            while (true)
-            {
-                var step = AbstractOperations.IteratorNext(realm, vm, record);
-                if (AbstractOperations.IteratorComplete(vm, step))
-                {
-                    break;
-                }
-
-                values.Add(AbstractOperations.IteratorValue(vm, step));
-            }
-
-            var target = AbstractOperations.Construct(vm, thisV, new[] { JsValue.Number(values.Count) });
-            var targetObj = target.AsObject;
+            var values = IteratorToList(realm, source, usingIterator);
+            var target = TypedArrayCreate(realm, thisV, new[] { JsValue.Number(values.Count) }, values.Count);
             for (var i = 0; i < values.Count; i++)
             {
                 var v = values[i];
@@ -239,101 +368,84 @@ public static class TypedArrayCtors
                     v = AbstractOperations.Call(vm, mapFn, thisArg, new[] { v, JsValue.Number(i) });
                 }
 
-                AbstractOperations.Set(vm, targetObj, ArrayBufferCtor.IndexKey(i), v);
+                SetCreated(realm, target, i, v);
             }
 
-            return target;
+            return JsValue.Object(target);
         }
 
-        // Array-like path.
-        var srcObj = AbstractOperations.ToObject(realm, source);
-        var len = ArrayBufferCtor.ToIndex(realm, AbstractOperations.Get(vm, srcObj, "length"));
-        var target2 = AbstractOperations.Construct(vm, thisV, new[] { JsValue.Number(len) });
-        var target2Obj = target2.AsObject;
+        if (source.IsNullish)
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray.from source must be array-like"));
+        }
+
+        var arrayLike = AbstractOperations.ToObject(realm, source);
+        var len = LengthOfArrayLike(realm, arrayLike);
+        var result = TypedArrayCreate(realm, thisV, new[] { JsValue.Number(len) }, len);
         for (var i = 0; i < len; i++)
         {
-            var v = AbstractOperations.Get(vm, srcObj, ArrayBufferCtor.IndexKey(i));
+            var v = AbstractOperations.Get(vm, arrayLike, ArrayBufferCtor.IndexKey(i));
             if (!mapFn.IsUndefined)
             {
                 v = AbstractOperations.Call(vm, mapFn, thisArg, new[] { v, JsValue.Number(i) });
             }
 
-            AbstractOperations.Set(vm, target2Obj, ArrayBufferCtor.IndexKey(i), v);
+            SetCreated(realm, result, i, v);
         }
 
-        return target2;
+        return JsValue.Object(result);
     }
 
-    /// <summary>§23.2.2.2 %TypedArray%.of — generic over `this`.</summary>
-    private static JsValue GenericOf(JsRealm realm, JsValue thisV, JsValue[] args)
+    private static JsValue Of(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var vm = realm.ActiveVm;
         if (!AbstractOperations.IsConstructor(thisV))
         {
-            throw new JsThrow(realm.NewTypeError("TypedArray.of called on non-constructor"));
+            throw new JsThrow(realm.NewTypeError("TypedArray.of requires a constructor receiver"));
         }
 
-        var target = AbstractOperations.Construct(vm, thisV, new[] { JsValue.Number(args.Length) });
-        var targetObj = target.AsObject;
+        var target = TypedArrayCreate(realm, thisV, new[] { JsValue.Number(args.Length) }, args.Length);
         for (var i = 0; i < args.Length; i++)
         {
-            AbstractOperations.Set(vm, targetObj, ArrayBufferCtor.IndexKey(i), args[i]);
+            SetCreated(realm, target, i, args[i]);
         }
 
-        return target;
+        return JsValue.Object(target);
     }
-
-
 
     private static void InstallSharedPrototype(JsRealm realm, JsObject proto)
     {
-        // §23.2.3 — buffer/byteOffset/byteLength/length are ACCESSORS on
-        // %TypedArray%.prototype (not instance data), so length-tracking views
-        // over resizable buffers report their current size on every read.
-        void Getter(string name, Func<JsTypedArray, JsValue> read) =>
-            proto.DefineOwnProperty(name, PropertyDescriptor.Accessor(
-                new JsNativeFunction(realm, "get " + name, 0, (thisV, _) =>
-                    thisV.IsObject && thisV.AsObject is JsTypedArray ta
-                        ? read(ta)
-                        : throw new JsThrow(realm.NewTypeError("get %TypedArray%.prototype." + name + " called on incompatible receiver"))),
-                null));
-        Getter("buffer", ta => JsValue.Object(ta.Buffer));
-        Getter("byteOffset", ta => JsValue.Number(ta.IsOutOfBounds ? 0 : ta.ByteOffset));
-        Getter("byteLength", ta => JsValue.Number(ta.ByteLength));
-        Getter("length", ta => JsValue.Number(ta.Length));
-
-        ArrayBufferCtor.DefineMethod(proto, "at", (thisV, args) => At(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "copyWithin", (thisV, args) => CopyWithin(realm, thisV, args), 2);
-        ArrayBufferCtor.DefineMethod(proto, "entries", (thisV, args) => Entries(realm, thisV), 0);
-        ArrayBufferCtor.DefineMethod(proto, "every", (thisV, args) => Every(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "fill", (thisV, args) => Fill(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "filter", (thisV, args) => Filter(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "find", (thisV, args) => Find(realm, thisV, args, last: false, indexOnly: false), 1);
-        ArrayBufferCtor.DefineMethod(proto, "findIndex", (thisV, args) => Find(realm, thisV, args, last: false, indexOnly: true), 1);
-        ArrayBufferCtor.DefineMethod(proto, "findLast", (thisV, args) => Find(realm, thisV, args, last: true, indexOnly: false), 1);
-        ArrayBufferCtor.DefineMethod(proto, "findLastIndex", (thisV, args) => Find(realm, thisV, args, last: true, indexOnly: true), 1);
-        ArrayBufferCtor.DefineMethod(proto, "forEach", (thisV, args) => ForEach(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "includes", (thisV, args) => Includes(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "indexOf", (thisV, args) => IndexOf(realm, thisV, args, last: false), 1);
-        ArrayBufferCtor.DefineMethod(proto, "join", (thisV, args) => Join(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "keys", (thisV, args) => Keys(realm, thisV), 0);
-        ArrayBufferCtor.DefineMethod(proto, "lastIndexOf", (thisV, args) => IndexOf(realm, thisV, args, last: true), 1);
-        ArrayBufferCtor.DefineMethod(proto, "map", (thisV, args) => Map(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "reduce", (thisV, args) => Reduce(realm, thisV, args, right: false), 1);
-        ArrayBufferCtor.DefineMethod(proto, "reduceRight", (thisV, args) => Reduce(realm, thisV, args, right: true), 1);
-        ArrayBufferCtor.DefineMethod(proto, "reverse", (thisV, args) => Reverse(realm, thisV), 0);
-        ArrayBufferCtor.DefineMethod(proto, "set", (thisV, args) => Set(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "slice", (thisV, args) => Slice(realm, thisV, args), 2);
-        ArrayBufferCtor.DefineMethod(proto, "some", (thisV, args) => Some(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "sort", (thisV, args) => Sort(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "subarray", (thisV, args) => Subarray(realm, thisV, args), 2);
-        ArrayBufferCtor.DefineMethod(proto, "toLocaleString", (thisV, args) => Join(realm, thisV, args), 0);
-        ArrayBufferCtor.DefineMethod(proto, "toReversed", (thisV, args) => ToReversed(realm, thisV), 0);
-        ArrayBufferCtor.DefineMethod(proto, "toSorted", (thisV, args) => ToSorted(realm, thisV, args), 1);
-        ArrayBufferCtor.DefineMethod(proto, "toString", (thisV, args) => Join(realm, thisV, args), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "at", (thisV, args) => At(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "copyWithin", (thisV, args) => CopyWithin(realm, thisV, args), 2);
+        ArrayBufferCtor.DefineMethod(realm, proto, "entries", (thisV, args) => Entries(realm, thisV), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "every", (thisV, args) => Every(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "fill", (thisV, args) => Fill(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "filter", (thisV, args) => Filter(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "find", (thisV, args) => Find(realm, thisV, args, last: false, indexOnly: false), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "findIndex", (thisV, args) => Find(realm, thisV, args, last: false, indexOnly: true), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "findLast", (thisV, args) => Find(realm, thisV, args, last: true, indexOnly: false), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "findLastIndex", (thisV, args) => Find(realm, thisV, args, last: true, indexOnly: true), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "forEach", (thisV, args) => ForEach(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "includes", (thisV, args) => Includes(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "indexOf", (thisV, args) => IndexOf(realm, thisV, args, last: false), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "join", (thisV, args) => Join(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "keys", (thisV, args) => Keys(realm, thisV), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "lastIndexOf", (thisV, args) => IndexOf(realm, thisV, args, last: true), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "map", (thisV, args) => Map(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "reduce", (thisV, args) => Reduce(realm, thisV, args, right: false), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "reduceRight", (thisV, args) => Reduce(realm, thisV, args, right: true), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "reverse", (thisV, args) => Reverse(realm, thisV), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "set", (thisV, args) => Set(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "slice", (thisV, args) => Slice(realm, thisV, args), 2);
+        ArrayBufferCtor.DefineMethod(realm, proto, "some", (thisV, args) => Some(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "sort", (thisV, args) => Sort(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "subarray", (thisV, args) => Subarray(realm, thisV, args), 2);
+        ArrayBufferCtor.DefineMethod(realm, proto, "toLocaleString", (thisV, args) => Join(realm, thisV, args), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "toReversed", (thisV, args) => ToReversed(realm, thisV), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "toSorted", (thisV, args) => ToSorted(realm, thisV, args), 1);
+        ArrayBufferCtor.DefineMethod(realm, proto, "toString", (thisV, args) => Join(realm, thisV, args), 0);
         var valuesFn = IntrinsicHelpers.DefineMethod(realm, proto, "values", 0,
             (thisV, args) => Values(realm, thisV));
-        ArrayBufferCtor.DefineMethod(proto, "with", (thisV, args) => With(realm, thisV, args), 2);
+        ArrayBufferCtor.DefineMethod(realm, proto, "with", (thisV, args) => With(realm, thisV, args), 2);
 
         // §23.2.3.36 %TypedArray%.prototype[@@iterator] is the same function
         // object as %TypedArray%.prototype.values per spec.
@@ -354,82 +466,32 @@ public static class TypedArrayCtors
         }, isConstructor: false);
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
             PropertyDescriptor.Accessor(tagGetter, setter: null, enumerable: false, configurable: true));
+
+        // §23.2.3.{1,2,3,18} buffer / byteLength / byteOffset / length accessors.
+        DefineTaAccessor(realm, proto, "buffer", ta => JsValue.Object(ta.Buffer));
+        DefineTaAccessor(realm, proto, "byteLength", ta => JsValue.Number(ta.ByteLength));
+        DefineTaAccessor(realm, proto, "byteOffset", ta => JsValue.Number(ta.IsOutOfBounds ? 0 : ta.ByteOffset));
+        DefineTaAccessor(realm, proto, "length", ta => JsValue.Number(ta.Length));
     }
 
-    /// <summary>§23.2.4.1 TypedArraySpeciesCreate — reads the receiver's
-    /// `constructor` and its @@species (both observable), constructs through
-    /// it, and validates the result; falls back to the receiver's default
-    /// constructor when unset.</summary>
-    private static JsTypedArray SpeciesAllocate(JsRealm realm, JsTypedArray ta, int len)
+    private static void DefineTaAccessor(JsRealm realm, JsObject proto, string name, Func<JsTypedArray, JsValue> getter)
     {
-        var vm = realm.ActiveVm;
-        var ctorV = AbstractOperations.Get(vm, ta, "constructor");
-        JsValue species = JsValue.Undefined;
-        if (!ctorV.IsUndefined)
+        var fn = new JsNativeFunction(realm, "get " + name, 0, (thisV, _) =>
         {
-            if (!ctorV.IsObject)
+            if (thisV.IsObject && thisV.AsObject is JsTypedArray ta)
             {
-                throw new JsThrow(realm.NewTypeError("TypedArray constructor property is not an object"));
+                return getter(ta);
             }
 
-            species = AbstractOperations.Get(vm, ctorV.AsObject, JsPropertyKey.Symbol(SymbolCtor.Species));
-        }
-
-        if (species.IsUndefined || species.IsNull)
-        {
-            return Allocate(realm, TypePrototype(realm, ta), ta.Kind, len);
-        }
-
-        if (!AbstractOperations.IsConstructor(species))
-        {
-            throw new JsThrow(realm.NewTypeError("@@species is not a constructor"));
-        }
-
-        var created = AbstractOperations.Construct(vm, species, new[] { JsValue.Number(len) });
-        if (!created.IsObject || created.AsObject is not JsTypedArray result)
-        {
-            throw new JsThrow(realm.NewTypeError("@@species did not construct a TypedArray"));
-        }
-
-        if (result.IsOutOfBounds)
-        {
-            throw new JsThrow(realm.NewTypeError("@@species constructed a detached or out-of-bounds TypedArray"));
-        }
-
-        if (result.Length < len)
-        {
-            throw new JsThrow(realm.NewTypeError("@@species constructed a TypedArray that is too small"));
-        }
-
-        var wantBig = ta.Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64;
-        var gotBig = result.Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64;
-        if (wantBig != gotBig)
-        {
-            throw new JsThrow(realm.NewTypeError("@@species constructed a TypedArray with a different content type"));
-        }
-
-        return result;
+            throw new JsThrow(realm.NewTypeError("TypedArray." + name + " called on incompatible receiver"));
+        }, isConstructor: false);
+        proto.DefineOwnProperty(name, PropertyDescriptor.Accessor(fn, setter: null, enumerable: false, configurable: true));
     }
 
     private static JsTypedArray ThisTA(JsRealm realm, JsValue thisV)
-    {
-        if (!thisV.IsObject || thisV.AsObject is not JsTypedArray ta)
-        {
-            throw new JsThrow(realm.NewTypeError("TypedArray method called on incompatible receiver"));
-        }
-
-        // §23.2.4.4 ValidateTypedArray — a detached buffer OR a fixed-length
-        // view left out of bounds by a resizable-buffer shrink is a TypeError
-        // at method entry.
-        if (ta.IsOutOfBounds)
-        {
-            throw new JsThrow(realm.NewTypeError(ta.Buffer.IsDetached
-                ? "Cannot perform operation on a detached ArrayBuffer"
-                : "TypedArray is out of bounds on its resizable ArrayBuffer"));
-        }
-
-        return ta;
-    }
+        => thisV.IsObject && thisV.AsObject is JsTypedArray ta
+            ? ta
+            : throw new JsThrow(realm.NewTypeError("TypedArray method called on incompatible receiver"));
 
     private static JsObject TypePrototype(JsRealm realm, JsTypedArray ta)
         => ta.Prototype ?? realm.TypedArrayPrototype;
@@ -553,7 +615,7 @@ public static class TypedArrayCtors
         var start = RelativeIndex(realm, args.Length > 0 ? args[0] : JsValue.Undefined, ta.Length);
         var end = RelativeIndex(realm, args.Length > 1 ? args[1] : JsValue.Undefined, ta.Length, defaultEnd: true);
         var len = Math.Max(end - start, 0);
-        var result = SpeciesAllocate(realm, ta, len);
+        var result = Allocate(realm, TypePrototype(realm, ta), ta.Kind, len);
         for (var i = 0; i < len; i++)
         {
             result.SetElement(i, ta.GetElement(start + i), realm);
@@ -587,12 +649,8 @@ public static class TypedArrayCtors
     private static JsValue ToReversed(JsRealm realm, JsValue thisV)
     {
         var ta = ThisTA(realm, thisV);
-        var result = SpeciesAllocate(realm, ta, ta.Length);
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        var result = Allocate(realm, TypePrototype(realm, ta), ta.Kind, ta.Length);
+        for (var i = 0; i < ta.Length; i++)
         {
             result.SetElement(i, ta.GetElement(ta.Length - 1 - i), realm);
         }
@@ -609,58 +667,17 @@ public static class TypedArrayCtors
     private static JsValue Sort(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var ta = ThisTA(realm, thisV);
-        // §23.2.3.29 — a non-callable, non-undefined comparator is a TypeError
-        // before any element is read.
-        var compare = args.Length > 0 ? args[0] : JsValue.Undefined;
-        if (!compare.IsUndefined && !AbstractOperations.IsCallable(compare))
-        {
-            throw new JsThrow(realm.NewTypeError("The comparison function must be either a function or undefined"));
-        }
-
         var values = ToList(realm, ta);
-        try
+        var compare = args.Length > 0 ? args[0] : JsValue.Undefined;
+        values.Sort((a, b) =>
         {
-            values.Sort((a, b) =>
+            if (AbstractOperations.IsCallable(compare))
             {
-                if (AbstractOperations.IsCallable(compare))
-                {
-                    var r = ArrayBufferCtor.Number(realm, AbstractOperations.Call(realm.ActiveVm, compare, JsValue.Undefined, new[] { a, b }));
-                    return double.IsNaN(r) ? 0 : Math.Sign(r);
-                }
+                return Math.Sign(ArrayBufferCtor.Number(AbstractOperations.Call(realm.ActiveVm, compare, JsValue.Undefined, new[] { a, b })));
+            }
 
-                // Default sort: BigInt elements compare as BigIntegers (a
-                // Number conversion would be a host crash), numbers per
-                // §23.2.4.7 (NaN sorts last; -0 before +0).
-                if (a.IsBigInt || b.IsBigInt)
-                {
-                    return a.AsBigInt.CompareTo(b.AsBigInt);
-                }
-
-                var x = JsValue.ToNumber(a);
-                var y = JsValue.ToNumber(b);
-                if (double.IsNaN(x))
-                {
-                    return double.IsNaN(y) ? 0 : 1;
-                }
-
-                if (double.IsNaN(y))
-                {
-                    return -1;
-                }
-
-                if (x == 0 && y == 0)
-                {
-                    return (double.IsNegative(x) ? 0 : 1) - (double.IsNegative(y) ? 0 : 1);
-                }
-
-                return x.CompareTo(y);
-            });
-        }
-        catch (InvalidOperationException ex) when (ex.InnerException is JsThrow inner)
-        {
-            // List.Sort wraps comparator exceptions; surface the JS throw.
-            throw inner;
-        }
+            return ArrayBufferCtor.Number(a).CompareTo(ArrayBufferCtor.Number(b));
+        });
         for (var i = 0; i < values.Count; i++)
         {
             ta.SetElement(i, values[i], realm);
@@ -675,11 +692,7 @@ public static class TypedArrayCtors
         var cb = RequireCallback(realm, args);
         var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
         var result = Allocate(realm, TypePrototype(realm, ta), ta.Kind, ta.Length);
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        for (var i = 0; i < ta.Length; i++)
         {
             result.SetElement(i, AbstractOperations.Call(realm.ActiveVm, cb, thisArg, new[] { ta.GetElement(i), JsValue.Number(i), thisV }), realm);
         }
@@ -693,11 +706,7 @@ public static class TypedArrayCtors
         var cb = RequireCallback(realm, args);
         var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
         var kept = new List<JsValue>();
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        for (var i = 0; i < ta.Length; i++)
         {
             var v = ta.GetElement(i);
             if (JsValue.ToBoolean(AbstractOperations.Call(realm.ActiveVm, cb, thisArg, new[] { v, JsValue.Number(i), thisV })))
@@ -705,7 +714,7 @@ public static class TypedArrayCtors
                 kept.Add(v);
             }
         }
-        var result = SpeciesAllocate(realm, ta, kept.Count);
+        var result = Allocate(realm, TypePrototype(realm, ta), ta.Kind, kept.Count);
         for (var i = 0; i < kept.Count; i++)
         {
             result.SetElement(i, kept[i], realm);
@@ -719,11 +728,7 @@ public static class TypedArrayCtors
         var ta = ThisTA(realm, thisV);
         var cb = RequireCallback(realm, args);
         var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        for (var i = 0; i < ta.Length; i++)
         {
             AbstractOperations.Call(realm.ActiveVm, cb, thisArg, new[] { ta.GetElement(i), JsValue.Number(i), thisV });
         }
@@ -736,11 +741,7 @@ public static class TypedArrayCtors
         var ta = ThisTA(realm, thisV);
         var cb = RequireCallback(realm, args);
         var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        for (var i = 0; i < ta.Length; i++)
         {
             if (!JsValue.ToBoolean(AbstractOperations.Call(realm.ActiveVm, cb, thisArg, new[] { ta.GetElement(i), JsValue.Number(i), thisV })))
             {
@@ -756,11 +757,7 @@ public static class TypedArrayCtors
         var ta = ThisTA(realm, thisV);
         var cb = RequireCallback(realm, args);
         var thisArg = args.Length > 1 ? args[1] : JsValue.Undefined;
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        for (var i = 0; i < ta.Length; i++)
         {
             if (JsValue.ToBoolean(AbstractOperations.Call(realm.ActiveVm, cb, thisArg, new[] { ta.GetElement(i), JsValue.Number(i), thisV })))
             {
@@ -804,8 +801,7 @@ public static class TypedArrayCtors
             i += right ? -1 : 1;
         }
 
-        var reduceLen = ta.Length;
-        for (; right ? i >= 0 : i < reduceLen; i += right ? -1 : 1)
+        for (; right ? i >= 0 : i < ta.Length; i += right ? -1 : 1)
         {
             acc = AbstractOperations.Call(realm.ActiveVm, cb, JsValue.Undefined, new[] { acc, ta.GetElement(i), JsValue.Number(i), thisV });
         }
@@ -818,8 +814,7 @@ public static class TypedArrayCtors
         var ta = ThisTA(realm, thisV);
         var search = args.Length > 0 ? args[0] : JsValue.Undefined;
         var start = RelativeIndex(realm, args.Length > 1 ? args[1] : JsValue.Undefined, ta.Length);
-        var scanLen = ta.Length;
-        for (var i = start; i < scanLen; i++)
+        for (var i = start; i < ta.Length; i++)
         {
             if (AbstractOperations.SameValueZero(ta.GetElement(i), search))
             {
@@ -847,8 +842,7 @@ public static class TypedArrayCtors
         }
         else
         {
-            var scanLen = ta.Length;
-        for (var i = start; i < scanLen; i++)
+            for (var i = start; i < ta.Length; i++)
             {
                 if (JsValue.StrictEquals(ta.GetElement(i), search))
                 {
@@ -864,11 +858,7 @@ public static class TypedArrayCtors
         var ta = ThisTA(realm, thisV);
         var sep = args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : ",";
         var parts = new string[ta.Length];
-        // Length snapshots at method entry (§23.2.3) — a detach or
-        // resize inside the callback yields undefined elements, it does
-        // not truncate the visit count.
-        var len = ta.Length;
-        for (var i = 0; i < len; i++)
+        for (var i = 0; i < ta.Length; i++)
         {
             parts[i] = JsValue.ToStringValue(ta.GetElement(i));
         }

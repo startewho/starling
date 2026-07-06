@@ -98,6 +98,41 @@ public static class ObjectCtor
             new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, args) => ProtoToLocaleString(realm, thisV)),
         });
 
+        // §B.2.2.1 Object.prototype.__proto__ accessor.
+        var protoGetter = new JsNativeFunction(realm, "get __proto__", 0, (thisV, _) =>
+        {
+            var o = AbstractOperations.ToObject(realm, thisV);
+            var p = o.GetPrototypeOf();
+            return p is null ? JsValue.Null : JsValue.Object(p);
+        }, isConstructor: false);
+        var protoSetter = new JsNativeFunction(realm, "set __proto__", 1, (thisV, args) =>
+        {
+            if (thisV.IsNullish)
+            {
+                throw new JsThrow(realm.NewTypeError("Object.prototype.__proto__ setter called on null or undefined"));
+            }
+
+            var v = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (!v.IsObject && !v.IsNull)
+            {
+                return JsValue.Undefined;
+            }
+
+            if (!thisV.IsObject)
+            {
+                return JsValue.Undefined;
+            }
+
+            if (!thisV.AsObject.SetPrototypeOf(v.IsNull ? null : v.AsObject))
+            {
+                throw new JsThrow(realm.NewTypeError("Object.prototype.__proto__ setter: cyclic or non-extensible"));
+            }
+
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        objectProto.DefineOwnProperty("__proto__",
+            PropertyDescriptor.Accessor(protoGetter, protoSetter, enumerable: false, configurable: true));
+
         realm.ObjectConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Object",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));

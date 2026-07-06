@@ -363,7 +363,8 @@ public sealed class Test262Runner
     ///   classic (sloppy) script in <em>this</em> realm and returns the
     ///   completion value.</item>
     /// </list>
-    /// <c>detachArrayBuffer</c> performs a real §25.1.3.5 detach.</summary>
+    /// <c>detachArrayBuffer</c> calls the engine's real detach so tests can
+    /// observe detachment.</summary>
     private static void InstallHost262(JsRuntime runtime, JsVm vm)
     {
         var realm = runtime.Realm;
@@ -403,14 +404,17 @@ public sealed class Test262Runner
                 return child.GetGlobal("$262");
             }, isConstructor: false)));
 
-        // §25.1.3.5 DetachArrayBuffer — real detach (views go out of bounds;
-        // ValidateTypedArray throws).
         host.Set("detachArrayBuffer", JsValue.Object(new JsNativeFunction(realm, "detachArrayBuffer", length: 1,
             (_, args) =>
             {
-                if (args.Length > 0 && args[0].IsObject && args[0].AsObject is JsArrayBuffer ab)
+                if (args.Length > 0 && args[0].IsObject && args[0].AsObject is JsArrayBuffer buffer)
                 {
-                    ab.Detach();
+                    if (buffer.IsImmutable)
+                    {
+                        throw new JsThrow(realm.NewTypeError("Cannot detach an immutable ArrayBuffer"));
+                    }
+
+                    buffer.Detach();
                 }
 
                 return JsValue.Undefined;
