@@ -1589,6 +1589,9 @@ public sealed class JsVm
                             // it inherits Function.prototype and gets a per-call
                             // `prototype` own-property.
                             var closure = JsFunction.CreateInstance(_runtime.Realm, template, captured);
+                            // §6.2.12 — closures inherit the enclosing class
+                            // evaluation's private-name identity lexically.
+                            closure.PrivateNameMap = frame.CurrentFunction?.PrivateNameMap;
                             // §14.11 / §10.2.1 — capture the active with-objects (see
                             // LoadFunction) so the closure body resolves free identifiers
                             // against the enclosing object Environment Records.
@@ -3600,7 +3603,7 @@ public sealed class JsVm
                     // a subclass constructor for a static private member, a Proxy
                     // wrapping an instance, or any object before its brand is
                     // installed (derived class, pre-super()) — throws here.
-                    if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(name))
+                    if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(ResolvePrivateBrand(frame, name)))
                     {
                         throw new JsThrow(_runtime.Realm.NewTypeError(
                             "Cannot read private member from an object whose class did not declare it"));
@@ -3638,7 +3641,7 @@ public sealed class JsVm
                     // §13.3.4.3 PrivateSet → PrivateElementFind: a TypeError unless
                     // the receiver ITSELF carries the brand (per-object set, never
                     // prototype-walked) — see PrivateGet above.
-                    if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(name))
+                    if (!receiver.IsObject || !receiver.AsObject.HasPrivateBrand(ResolvePrivateBrand(frame, name)))
                     {
                         throw new JsThrow(_runtime.Realm.NewTypeError(
                             "Cannot write private member from an object whose class did not declare it"));
@@ -3696,7 +3699,7 @@ public sealed class JsVm
                     // the receiver's [[PrivateElements]] — i.e. the brand. The
                     // brand check (PrivateGet/PrivateSet/PrivateIn/call) consults
                     // this per-object set, not the prototype chain.
-                    receiver.AsObject.AddPrivateBrand(name);
+                    receiver.AsObject.AddPrivateBrand(ResolvePrivateBrand(frame, name));
                     break;
                 }
             case Opcode.PrivateIn:
@@ -3715,7 +3718,7 @@ public sealed class JsVm
                     // the brand for #x (per-object set, never prototype-walked). A
                     // subclass constructor or a Proxy wrapping an instance does not
                     // carry the brand, so this yields false rather than true.
-                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(operand.AsObject.HasPrivateBrand(name)));
+                    Push(frame, ref stack, ref sp, ref maxSp, JsValue.Boolean(operand.AsObject.HasPrivateBrand(ResolvePrivateBrand(frame, name))));
                     break;
                 }
             case Opcode.LoadCallerArgs:
@@ -3851,6 +3854,7 @@ public sealed class JsVm
                         selfNameCell = (Cell)locals[template.SelfNameSlot].AsObject;
                     }
 
+                    _currentFramePrivateMap = frame.CurrentFunction?.PrivateNameMap;
                     var classCtor = BuildClassRuntime(template, baseClassValue,
                         ctorUps, methodUpvalues, fieldUpvalues, staticBlockUpvalues,
                         methodComputedKeys, fieldComputedKeys, selfNameCell);
@@ -5378,6 +5382,22 @@ public sealed class JsVm
     /// dispatch time. Sets up the prototype chain, installs methods/static
     /// members, stamps the instance field initializer table on the
     /// constructor, and runs static initializers in declaration order.</summary>
+    /// <summary>§6.2.12 — resolve a compile-time mangled private name to the
+    /// running class evaluation's unique brand (lexically inherited through
+    /// the function chain); identity when outside class code.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string ResolvePrivateBrand(CallFrame frame, string name)
+        => frame.CurrentFunction?.PrivateNameMap is { } map && map.TryGetValue(name, out var uniq)
+            ? uniq
+            : name;
+
+    private static long s_privateEvalCounter;
+
+    /// <summary>Scratch: the invoking frame's PrivateNameMap for
+    /// <see cref="BuildClassRuntime"/> (set at the BuildClass opcode arm; the
+    /// runtime method has no frame parameter).</summary>
+    private Dictionary<string, string>? _currentFramePrivateMap;
+
     private JsValue BuildClassRuntime(
         Starling.Js.Bytecode.ClassTemplate template,
         JsValue baseClassValue,
@@ -5433,6 +5453,48 @@ public sealed class JsVm
 
         // Build the constructor function instance.
         var ctorInstance = JsFunction.CreateInstance(realm, template.ConstructorTemplate, ctorUpvalues);
+
+        // §6.2.12 — each EVALUATION of a class definition mints fresh Private
+        // Names. Brand identity is what makes them observable: two
+        // evaluations of the same class expression must not honor each
+        // other's #members. Member STORAGE keeps the shared compile-time
+        // mangled keys (brand gates fire first); only brand names get the
+        // per-evaluation suffix, resolved through PrivateNameMap at the
+        // brand-check opcodes.
+        var inheritedPrivate = _currentFramePrivateMap;
+        Dictionary<string, string>? evalPrivateMap = null;
+        foreach (var m0 in template.Methods)
+        {
+            if (m0.MangledPrivateKey is { } mk)
+            {
+                evalPrivateMap ??= inheritedPrivate is null
+                    ? new Dictionary<string, string>(StringComparer.Ordinal)
+                    : new Dictionary<string, string>(inheritedPrivate, StringComparer.Ordinal);
+                if (!evalPrivateMap.ContainsKey(mk))
+                {
+                    evalPrivateMap[mk] = mk + "~" + System.Threading.Interlocked.Increment(ref s_privateEvalCounter)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        foreach (var f0 in template.Fields)
+        {
+            if (f0.MangledPrivateKey is { } fk)
+            {
+                evalPrivateMap ??= inheritedPrivate is null
+                    ? new Dictionary<string, string>(StringComparer.Ordinal)
+                    : new Dictionary<string, string>(inheritedPrivate, StringComparer.Ordinal);
+                if (!evalPrivateMap.ContainsKey(fk))
+                {
+                    evalPrivateMap[fk] = fk + "~" + System.Threading.Interlocked.Increment(ref s_privateEvalCounter)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        evalPrivateMap ??= inheritedPrivate;
+        ctorInstance.PrivateNameMap = evalPrivateMap;
         // Override `prototype` to point at our prototype object, and link
         // constructor back. Spec defaults: writable=false, enumerable=false,
         // configurable=false (we use configurable=true to permit JSON-style
@@ -5472,6 +5534,7 @@ public sealed class JsVm
         {
             var m = template.Methods[i];
             var fnInstance = JsFunction.CreateInstance(realm, m.Template, methodUpvalues[i]);
+            fnInstance.PrivateNameMap = evalPrivateMap;
             fnInstance.HomeObject = m.IsStatic ? ctorInstance : protoObj;
             var owner = m.IsStatic ? (JsObject)ctorInstance : protoObj;
             if (m.IsComputed)
@@ -5495,15 +5558,18 @@ public sealed class JsVm
                 InstallMethodOrAccessor(owner, keyForInstall, m.Kind, fnInstance);
                 if (m.MangledPrivateKey is { } mangledMethod)
                 {
+                    var brandName = evalPrivateMap is not null && evalPrivateMap.TryGetValue(mangledMethod, out var uniq)
+                        ? uniq
+                        : mangledMethod;
                     if (m.IsStatic)
                     {
                         // §15.7.10 — only the constructor object carries the brand
                         // for a static private method/accessor.
-                        ctorInstance.AddPrivateBrand(mangledMethod);
+                        ctorInstance.AddPrivateBrand(brandName);
                     }
                     else
                     {
-                        (instancePrivateBrands ??= new List<string>()).Add(mangledMethod);
+                        (instancePrivateBrands ??= new List<string>()).Add(brandName);
                     }
                 }
             }
@@ -5581,6 +5647,7 @@ public sealed class JsVm
                     if (f.InitializerTemplate is not null)
                     {
                         var initFnC = JsFunction.CreateInstance(realm, f.InitializerTemplate, fieldUpvalues[i]);
+                        initFnC.PrivateNameMap = evalPrivateMap;
                         initFnC.HomeObject = ctorInstance;
                         value = AbstractOperations.Call(this, JsValue.Object(initFnC), JsValue.Object(ctorInstance), Array.Empty<JsValue>());
                     }
@@ -5597,7 +5664,7 @@ public sealed class JsVm
                             PropertyDescriptor.Data(JsValue.Undefined, writable: true, enumerable: false, configurable: false));
                         // §15.7.10 — only the constructor object carries the brand
                         // for a static private field.
-                        ctorInstance.AddPrivateBrand(key);
+                        ctorInstance.AddPrivateBrand(evalPrivateMap is not null && evalPrivateMap.TryGetValue(key, out var fUniq) ? fUniq : key);
                     }
                     else
                     {
@@ -5607,6 +5674,7 @@ public sealed class JsVm
                     continue;
                 }
                 var initFn = JsFunction.CreateInstance(realm, f.InitializerTemplate, fieldUpvalues[i]);
+                initFn.PrivateNameMap = evalPrivateMap;
                 initFn.HomeObject = ctorInstance;
                 AbstractOperations.Call(this, JsValue.Object(initFn), JsValue.Object(ctorInstance), Array.Empty<JsValue>());
             }
@@ -5619,6 +5687,7 @@ public sealed class JsVm
                 var thunk = f.InitializerTemplate is not null
                     ? JsFunction.CreateInstance(realm, f.InitializerTemplate, fieldUpvalues[i])
                     : MakeUndefinedReturningThunk(realm);
+                thunk.PrivateNameMap = evalPrivateMap;
                 // wp:M3-71 — an instance field initializer has [[HomeObject]] =
                 // the class prototype so `super.x` (incl. inside a direct eval in
                 // the initializer) resolves against the parent prototype.
@@ -5633,6 +5702,7 @@ public sealed class JsVm
                 {
                     // No initializer — still need to define slot at construction time.
                     var nullThunk = MakeUndefinedFieldThunk(realm, f);
+                    nullThunk.PrivateNameMap = evalPrivateMap;
                     instanceFieldInits.Add(new InstanceFieldInit(
                         f.MangledPrivateKey ?? f.StaticKey!,
                         f.MangledPrivateKey is not null,
@@ -5641,6 +5711,7 @@ public sealed class JsVm
                 else
                 {
                     var initFn = JsFunction.CreateInstance(realm, thunkInit, fieldUpvalues[i]);
+                    initFn.PrivateNameMap = evalPrivateMap;
                     // wp:M3-71 — [[HomeObject]] = class prototype so `super.x`
                     // (incl. inside a direct eval in the initializer) resolves.
                     initFn.HomeObject = protoObj;
@@ -5661,6 +5732,7 @@ public sealed class JsVm
         {
             var sb = template.StaticBlocks[i];
             var sbFn = JsFunction.CreateInstance(realm, sb.Template, staticBlockUpvalues[i]);
+            sbFn.PrivateNameMap = evalPrivateMap;
             sbFn.HomeObject = ctorInstance;
             AbstractOperations.Call(this, JsValue.Object(sbFn), JsValue.Object(ctorInstance), Array.Empty<JsValue>());
         }

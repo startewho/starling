@@ -85,6 +85,13 @@ public sealed class JsFunction : JsObject
     /// <see cref="Bytecode.Opcode.RunFieldInits"/>.</summary>
     public IReadOnlyList<string>? InstancePrivateBrands { get; set; }
 
+    /// <summary>Per-CLASS-EVALUATION private-name identity (§6.2.12): maps a
+    /// compile-time mangled private name to the unique brand minted when the
+    /// class definition EVALUATED. Two evaluations of the same class
+    /// expression mint distinct brands, so cross-instance access throws.
+    /// Inherited lexically through MakeClosure; null outside class code.</summary>
+    public Dictionary<string, string>? PrivateNameMap { get; set; }
+
     /// <summary>B1b-2c — function kind. Normal functions run synchronously
     /// and return their body's value. Async functions return a Promise;
     /// generator functions return a Generator object; async generators
