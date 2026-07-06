@@ -6060,6 +6060,40 @@ public sealed partial class JsCompiler
             MaybeBindArguments(parameters, Array.Empty<Statement>());
         }
 
+        // §10.2.11 parameter TDZ — when any default exists, every
+        // default/pattern parameter's bindings are declared UP FRONT in the
+        // uninitialized state, so a default that references itself or a later
+        // parameter (`(x = x)`, `(a = b, b)`) reads the sentinel and throws
+        // ReferenceError. The binding stores below run in declaration-init
+        // mode (like a let initializer) so they perform the one legal write.
+        // Plain identifier parameters bind straight to their (already
+        // initialized) argument slots and are unaffected.
+        var paramTdz = parameters.Any(HasParamDefault);
+        if (paramTdz)
+        {
+            foreach (var param in parameters)
+            {
+                var target = param is SpreadElement sp ? sp.Argument : param;
+                if (target is Identifier)
+                {
+                    continue;
+                }
+
+                DeclarePatternBindings(target, forceBlockLocal: true);
+                var names = new List<string>();
+                CollectBoundNames(target, names);
+                foreach (var n in names)
+                {
+                    MarkLexical(n);
+                    if (_scopes[^1].TryGetValue(n, out var declared))
+                    {
+                        _b.EmitSlot(IsSlotCaptured(declared)
+                            ? Opcode.InitCellLocalTdz : Opcode.DeclareLocalTdz, declared);
+                    }
+                }
+            }
+        }
+
         for (var i = 0; i < parameters.Count; i++)
         {
             var param = parameters[i];
@@ -6070,9 +6104,16 @@ public sealed partial class JsCompiler
                 // gather args[i..argc) via RestParam, then bind the array to the
                 // target (a plain identifier or a destructuring pattern). Rest
                 // is always the last parameter, so `i` is the gather start.
-                DeclarePatternBindings(spread.Argument);
+                if (!paramTdz || spread.Argument is Identifier)
+                {
+                    DeclarePatternBindings(spread.Argument);
+                }
+
                 _b.EmitU16(Opcode.RestParam, i);
+                var prevRest = _inLexicalDeclInit;
+                _inLexicalDeclInit = paramTdz || prevRest;
                 EmitPatternFromStack(spread.Argument, isDeclaration: true);
+                _inLexicalDeclInit = prevRest;
                 continue;
             }
 
@@ -6090,8 +6131,15 @@ public sealed partial class JsCompiler
                 continue;
             }
 
-            DeclarePatternBindings(param);
+            if (!paramTdz)
+            {
+                DeclarePatternBindings(param);
+            }
+
+            var prev = _inLexicalDeclInit;
+            _inLexicalDeclInit = paramTdz || prev;
             EmitPatternFromLocal(param, argSlots[i], isDeclaration: true);
+            _inLexicalDeclInit = prev;
         }
 
         if (bracket)
