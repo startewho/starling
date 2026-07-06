@@ -17,8 +17,8 @@
     <ProjectReference Include="..\Starling.Mcp\Starling.Mcp.csproj" />
   </ItemGroup>
   <!-- Ship license notices alongside the distributable app so binary
-       redistribution terms are satisfied (BSD-2-Clause Jint, BSD-3-Clause
-       Acornima, etc.). Copied to build output and included in publish. -->
+       redistribution terms are satisfied. Copied to build output and included
+       in publish. -->
   <ItemGroup>
     <Content Include="..\..\LICENSE" Link="LICENSE">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -27,9 +27,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="..\..\THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="..\..\third-party-licenses\**\*" Link="third-party-licenses\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

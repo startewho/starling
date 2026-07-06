@@ -6,7 +6,6 @@ namespace Starling.Engine;
 internal enum JsEngineKind
 {
     Starling,
-    Jint,
 }
 
 /// <summary>
@@ -18,10 +17,8 @@ internal enum JsEngineKind
 /// </summary>
 /// <remarks>
 /// The selector lives in <c>Starling.Engine</c> (not <c>Starling.Js.Hosting</c>)
-/// on purpose: the seam project must not reference either backend, so the
-/// concrete factory wiring belongs here, where both backend assemblies are
-/// referenced. Removing Jint = delete its arm + the project reference; the seam
-/// is untouched.
+/// on purpose: the seam project must not reference the backend, so the concrete
+/// factory wiring belongs here, where the backend assembly is referenced.
 /// </remarks>
 internal static class JsEngineSelector
 {
@@ -43,26 +40,15 @@ internal static class JsEngineSelector
         return raw.Trim().ToLowerInvariant() switch
         {
             "starling" => JsEngineKind.Starling,
-            "jint" => JsEngineKind.Jint,
             _ => throw new InvalidOperationException(
-                $"{EnvVar}='{raw}' is not a recognised JS engine. Allowed values: 'starling', 'jint'."),
+                $"{EnvVar}='{raw}' is not a recognised JS engine. Allowed values: 'starling'."),
         };
     }
 
-    /// <summary>The chosen factory, constructed once. Both backends are
-    /// stateless factories; sessions hold the per-page state.</summary>
+    /// <summary>The chosen factory, constructed once. The backend is a
+    /// stateless factory; sessions hold the per-page state.</summary>
     internal static IScriptEngineFactory Factory => _factory.Value;
 
-    private static readonly Lazy<IScriptEngineFactory> _factory = new(CreateFactory);
-
-    // CA1859: the return type is intentionally the polymorphic interface — the
-    // arms select between distinct backend factories (Starling vs Jint).
-#pragma warning disable CA1859
-    private static IScriptEngineFactory CreateFactory() => Selected switch
-    {
-        JsEngineKind.Starling => new StarlingScriptEngineFactory(),
-        JsEngineKind.Jint => new Starling.Bindings.Jint.JintScriptEngineFactory(),
-        _ => throw new InvalidOperationException($"Unhandled JS engine: {Selected}."),
-    };
-#pragma warning restore CA1859
+    private static readonly Lazy<IScriptEngineFactory> _factory =
+        new(static () => new StarlingScriptEngineFactory());
 }

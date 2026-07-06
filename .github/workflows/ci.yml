@@ -45,15 +45,6 @@ jobs:
         # native MTP --coverage flag is ignored in this mode). The collector
         # ships with the MSTest meta-package, so no extra dependency is needed.
         run: dotnet test --no-build -c Release --logger "trx;LogFileName=test.trx" --collect:"Code Coverage;Format=cobertura"
-      - name: Test (Jint alt-engine — Engine suite under STARLING_JS_ENGINE=jint)
-        # The default test run above exercises the in-house Starling.Js backend.
-        # Jint is a runtime-selectable alternative (a temporary compat crutch);
-        # re-run the engine integration suite against it so the alt backend can
-        # never silently regress. The Jint backend's own unit tests
-        # (Starling.Bindings.Jint.Tests) already ran in the default step.
-        env:
-          STARLING_JS_ENGINE: jint
-        run: dotnet test tests/Starling.Engine.Tests/Starling.Engine.Tests.csproj --no-build -c Release --logger "trx;LogFileName=test-jint.trx"
       - name: Test (golden-image)
         run: dotnet test --no-build -c Release --filter Category=GoldenImage
       - name: Upload coverage to Codecov
@@ -117,7 +108,6 @@ jobs:
               src/Starling.Js/       \
               src/Starling.Js.Hosting/    \
               src/Starling.Bindings/ \
-              src/Starling.Bindings.Jint/ \
               src/Starling.Loop/     \
               src/Starling.Engine/
 

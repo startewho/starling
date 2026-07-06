@@ -1,6 +1,5 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
-using Jint;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
@@ -9,10 +8,9 @@ namespace Starling.JsEngineBench;
 
 /// <summary>
 /// Starling-authored microbenchmarks, one per engine optimization, run through
-/// the SAME Starling-vs-Jint harness as <see cref="EngineComparisonBench"/>
-/// (cold + prepared, Jint as the baseline). Where the vendored dromaeo suite
-/// conflates many things, each case here isolates one piece of work so its
-/// standing against Jint is visible and trackable on its own:
+/// the SAME harness as <see cref="ScriptSuiteBench"/> (cold + prepared). Where
+/// the vendored dromaeo suite conflates many things, each case here isolates
+/// one piece of work so its cost is visible and trackable on its own:
 /// <list type="bullet">
 /// <item>calls — call-argument and frame-stack pooling.</item>
 /// <item>prop-read-mono — monomorphic own-property read inline cache.</item>
@@ -35,7 +33,7 @@ namespace Starling.JsEngineBench;
 [RankColumn]
 public class StarlingFeatureBench
 {
-    // Strict-mode parity with EngineComparisonBench's prelude (no dromaeo stubs
+    // Strict-mode parity with ScriptSuiteBench's prelude (no dromaeo stubs
     // needed — these scripts are self-contained).
     private const string Prelude = "\"use strict\";\n";
 
@@ -109,8 +107,8 @@ public class StarlingFeatureBench
             "for (var i = 0; i < 100000; i++) { s += str.split(/,/).length; }\n" +
             "s;",
 
-        // Regex global replace: the @@replace path (still slower than Jint —
-        // tracks the next regex lever).
+        // Regex global replace: the @@replace path (the known remaining regex
+        // gap — tracks the next regex lever).
         ["regex-replace"] =
             "var str = 'the quick brown fox jumps over';\n" +
             "var s = 0;\n" +
@@ -129,39 +127,26 @@ public class StarlingFeatureBench
     public static IEnumerable<string> Cases => Scripts.Keys;
 
     private string _src = "";
-    private Chunk? _starlingChunk;
-    private Prepared<Acornima.Ast.Script> _jintPrepared;
+    private Chunk? _chunk;
 
     [GlobalSetup]
     public void Setup()
     {
         _src = Prelude + Scripts[Case];
-        _starlingChunk = JsCompiler.CompileForEval(new JsParser(_src).ParseProgram());
-        _jintPrepared = Engine.PrepareScript(_src, strict: true);
+        _chunk = JsCompiler.CompileForEval(new JsParser(_src).ParseProgram());
 
-        // Fail fast if a case throws on either engine, so a broken script never
-        // masquerades as a (mis)measured benchmark.
-        RunStarling();
-        RunJint();
+        // Fail fast if a case throws, so a broken script never masquerades as a
+        // (mis)measured benchmark.
+        RunCold();
     }
 
     [Benchmark(Baseline = true)]
-    public Engine Jint() => RunJint();
-
-    [Benchmark]
-    public Engine Jint_ParsedScript() =>
-        new Engine(o => o.Strict = true).Execute(_jintPrepared);
-
-    [Benchmark]
-    public JsValue Starling() => RunStarling();
+    public JsValue Starling() => RunCold();
 
     [Benchmark]
     public JsValue Starling_Prepared() =>
-        new JsVm(new JsRuntime()).Run(_starlingChunk!);
+        new JsVm(new JsRuntime()).Run(_chunk!);
 
-    private JsValue RunStarling() =>
+    private JsValue RunCold() =>
         new JsVm(new JsRuntime()).Run(JsCompiler.CompileForEval(new JsParser(_src).ParseProgram()));
-
-    private Engine RunJint() =>
-        new Engine(o => o.Strict = true).Execute(_src);
 }

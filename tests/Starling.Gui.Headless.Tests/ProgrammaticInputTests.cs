@@ -4,7 +4,6 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Xunit;
 using Starling.Engine;
 using Starling.Gui.Controls;
 using Starling.Gui.Theme;
@@ -76,10 +75,6 @@ public class ProgrammaticInputTests
     [AvaloniaFact]
     public async Task ClickAt_and_TypeText_submit_a_form_via_the_Add_button()
     {
-        Assert.SkipUnless(
-            Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") == "jint",
-            "Pins the Jint backend; run with STARLING_JS_ENGINE=jint (e.g. the Jint CI arm).");
-
         var (engine, page) = await LoadInteractiveAsync(FormFixture);
         var doc = page.Document;
         var input = doc.GetElementById("q")!;
@@ -108,10 +103,6 @@ public class ProgrammaticInputTests
     [AvaloniaFact]
     public async Task TypeText_with_submit_presses_Enter_to_submit_the_form()
     {
-        Assert.SkipUnless(
-            Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") == "jint",
-            "Pins the Jint backend; run with STARLING_JS_ENGINE=jint (e.g. the Jint CI arm).");
-
         var (engine, page) = await LoadInteractiveAsync(FormFixture);
         var doc = page.Document;
         var input = doc.GetElementById("q")!;
@@ -134,10 +125,6 @@ public class ProgrammaticInputTests
     [AvaloniaFact]
     public async Task MoveTo_dispatches_DOM_mouseover_to_the_hovered_element()
     {
-        Assert.SkipUnless(
-            Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") == "jint",
-            "Pins the Jint backend; run with STARLING_JS_ENGINE=jint (e.g. the Jint CI arm).");
-
         var (engine, page) = await LoadInteractiveAsync(
             "<!doctype html><html><body>"
             + "<div id=\"target\" style=\"width:200px;height:80px\">hover me</div>"

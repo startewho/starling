@@ -163,16 +163,14 @@ Runtime selection flags go after `aspire run --` and are forwarded to both GUI
 and headless resources:
 
 ```bash
-aspire run -- --jint --imagesharp     # Jint JS backend + CPU paint
+aspire run -- --starling --imagesharp # Starling JS backend + CPU paint
 aspire run -- --starling --gpu        # Starling JS backend + WebGPU paint
 ```
 
 Flags win over `STARLING_JS_ENGINE` and `STARLING_PAINT_BACKEND`.
 
-The default JS engine is **Starling**. Pass `--jint` (or set
-`STARLING_JS_ENGINE=jint`) to use the Jint backend instead. Binding / DOM /
-JS-OM work should target `src/Starling.Bindings` and its matching tests unless
-the task is explicitly about the Jint backend.
+The JS engine is **Starling** — the only backend. Binding / DOM / JS-OM work
+targets `src/Starling.Bindings` and its matching tests.
 
 The default HTML parser is the **Starling parser**. The Aspire resources and the
 desktop `Starling.Gui` startup both default to it. Pass `--anglesharp-html` (or

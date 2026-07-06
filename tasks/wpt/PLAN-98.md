@@ -10,16 +10,15 @@ real WPT test sources, and the Starling source, then reported its root causes,
 the exact files it would edit, and a realistic subtest gain. The per-cluster
 detail is in the appendix.
 
-## Target engine: Starling, not Jint
+## Target engine: Starling
 
-WPT runs on the **Starling JS engine**, not Jint. `WptRunner.cs:66` builds
+WPT runs on the **Starling JS engine**. `WptRunner.cs:66` builds
 `new StarlingEngine(diag)` with no engine override, and `Engine.cs:1224` stands
 up "Starling.Js by default". So `failures.txt` and the 81.92% number (run on
 2026-05-29) reflect the Starling backend. Every fix below lands in the Starling
 stack:
 
-- `src/Starling.Bindings/` (the Starling host objects — **not**
-  `src/Starling.Bindings.Jint/`)
+- `src/Starling.Bindings/` (the Starling host objects)
 - `src/Starling.Dom`, `src/Starling.Css`, `src/Starling.Js`, `src/Starling.Html`,
   `src/Starling.Layout`, `src/Starling.Codecs`, `src/Starling.Common`
 

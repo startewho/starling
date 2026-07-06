@@ -6,7 +6,6 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Xunit;
 using Starling.Engine;
 using Starling.Gui.Controls;
 using Starling.Gui.Theme;
@@ -23,22 +22,12 @@ namespace Starling.Gui.Headless.Tests;
 /// append a list item — exercising the GUI click → implicit-form-submit path,
 /// the live JS realm, and the <c>.value</c> binding reading the typed text.
 /// </summary>
-/// <remarks>
-/// Pins the Jint backend, so it must run in isolation with
-/// <c>STARLING_JS_ENGINE=jint</c> — the engine's JS-backend selector caches the
-/// env var on first use, so another test reading it first would defeat the pin.
-/// </remarks>
 public class TodoInteractionTests
 {
     [AvaloniaFact]
     public async Task Type_a_title_and_click_Add_appends_a_todo()
     {
-        // The JS-backend selector caches the env var on first use, so this test
-        // can only guarantee Jint when the whole test process is pinned to it.
-        // Skip (rather than silently run on whatever backend is cached) otherwise.
-        Assert.SkipUnless(
-            Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") == "jint",
-            "Pins the Jint backend; run with STARLING_JS_ENGINE=jint (e.g. the Jint CI arm).");
+        GpuTests.SkipUnlessAvailable();
 
         var (engine, page) = await LoadInteractiveAsync(TodoIndexUrl());
         var doc = page.Document;            // stable across relayouts

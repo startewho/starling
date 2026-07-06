@@ -1289,9 +1289,9 @@ public sealed class StarlingEngine
     /// </summary>
     private sealed class ScriptSession
     {
-        // The JS-engine-neutral session (Starling.Js or Jint). Owns the realm,
-        // the simulated loop, the dynamic-script runner, and the src/inject
-        // hooks — all JS-touching work goes through it.
+        // The engine-neutral session. Owns the realm, the simulated loop, the
+        // dynamic-script runner, and the src/inject hooks — all JS-touching
+        // work goes through it.
         public required IScriptSession Session { get; init; }
         public required HashSet<Element> Executed { get; init; }
         public required StarlingHttpClient Http { get; init; }
@@ -1313,8 +1313,7 @@ public sealed class StarlingEngine
     {
         var http = _httpFactory();
 
-        // Stand up the active JS backend (Starling.Js by default, or Jint when
-        // STARLING_JS_ENGINE=jint). The session owns the realm, the simulated
+        // Stand up the JS backend. The session owns the realm, the simulated
         // loop, the dynamic-script runner, and the src/inject hooks; the engine
         // keeps only script ordering/selection/dedup and the pump-loop shape.
         var inner = JsEngineSelector.Factory.CreateSession(new ScriptSessionOptions(

@@ -10,14 +10,10 @@ DOM (`src/Starling.Bindings`).
 `IntersectionObserver`), and HTML-spec script loading. The tests drive a
 full `StarlingEngine` so they catch wiring bugs.
 
-[`Starling.Bindings.Jint.Tests`](../Starling.Bindings.Jint.Tests) runs the
-same surface against the Jint backend.
-
 ## How to run
 
 ```bash
 dotnet test tests/Starling.Bindings.Tests
-dotnet test tests/Starling.Bindings.Jint.Tests
 ```
 
 ## What the badge means

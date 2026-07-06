@@ -26,7 +26,7 @@
 | Native code | None. Pure managed. `System.Security.Cryptography` BCL primitives are allowed; everything above the primitive layer is hand-written. | user |
 | UI | Avalonia 12 (stable 12.0.x, released Apr 2026; targets .NET 10 directly; .NET 8+ only) | user |
 | Rasterization | `SixLabors.ImageSharp` 3.x + `SixLabors.ImageSharp.Drawing` 2.x + `SixLabors.Fonts` 2.x | user |
-| JS engine | Hand-written in C#. Jint and Acornima may be consulted as references but are **not dependencies**. | user |
+| JS engine | The Starling JS engine, written from scratch in C#. No third-party JS engine dependencies. | user |
 | Networking | Hand-written from `System.Net.Sockets` up. No `HttpClient`, no `SslStream`. | user |
 | Process model | Single-process for v1. Ladybird-style multi-process sandboxing deferred to v2. | this plan |
 | Cross-platform | Windows + macOS + Linux from day one. No platform branches without an `OPEN QUESTION`. | user |
