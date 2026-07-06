@@ -91,7 +91,7 @@ public static class TypedArrayCtors
 
     /// <summary>§9.1.14 GetPrototypeFromConstructor fallback: the named concrete
     /// prototype from the constructor function's realm.</summary>
-    private static JsObject? FindRealmTypePrototype(JsRealm realm, string name)
+    private static JsObject FindRealmTypePrototype(JsRealm realm, string name)
     {
         var ctorV = realm.GlobalObject.Get(name);
         if (ctorV.IsObject)
@@ -103,7 +103,7 @@ public static class TypedArrayCtors
             }
         }
 
-        return null;
+        return realm.ObjectPrototype;
     }
 
     private static JsTypedArray Construct(JsRealm realm, JsObject proto, JsTypedArrayKind kind, JsValue[] args)

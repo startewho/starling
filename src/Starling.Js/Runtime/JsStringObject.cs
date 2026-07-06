@@ -110,6 +110,17 @@ public sealed class JsStringObject : JsObject
         base.Set(name, value);
     }
 
+    public override bool Delete(string name)
+    {
+        // §10.4.3: indices and length are non-configurable, so delete fails.
+        if (name == "length" || TryIndex(name, out _))
+        {
+            return false;
+        }
+
+        return base.Delete(name);
+    }
+
     public override bool DefineOwnProperty(string name, PropertyDescriptor desc)
     {
         // §10.4.3.5: a String exotic's indices and length are non-configurable

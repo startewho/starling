@@ -131,12 +131,14 @@ internal static class IntrinsicHelpers
     public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto)
         => NewTargetPrototype(vm, thisV, defaultProto, intrinsicSelector: null);
 
-    /// <summary>§10.1.13 GetPrototypeFromConstructor. When new.target's
-    /// <c>prototype</c> is not an object, <paramref name="intrinsicSelector"/>
-    /// picks the named intrinsic from the constructor function's realm
-    /// (§7.3.25 GetFunctionRealm) so cross-realm construction lands on the
-    /// foreign realm's prototype.</summary>
-    public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto, Func<JsRealm, JsObject?>? intrinsicSelector)
+    /// <summary>§10.1.13 GetPrototypeFromConstructor: when new.target's
+    /// `prototype` is not an object, the intrinsic default comes from
+    /// new.target's FUNCTION REALM (§7.3.25), selected by
+    /// <paramref name="intrinsicSelector"/>; <paramref name="defaultProto"/>
+    /// covers the callers that haven't opted in and function objects whose
+    /// realm is unknown.</summary>
+    public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto,
+        Func<JsRealm, JsObject>? intrinsicSelector)
     {
         if (thisV.IsObject && AbstractOperations.IsConstructor(thisV))
         {
@@ -146,20 +148,31 @@ internal static class IntrinsicHelpers
                 return proto.AsObject;
             }
 
-            if (intrinsicSelector is not null)
+            if (intrinsicSelector is not null && FunctionRealm(thisV.AsObject) is { } fnRealm)
             {
-                var target = thisV.AsObject;
-                while (target is JsBoundFunction bound)
-                {
-                    target = bound.Target;
-                }
-
-                if (target is JsFunction fn && fn.Realm is { } fnRealm && intrinsicSelector(fnRealm) is { } intrinsic)
-                {
-                    return intrinsic;
-                }
+                return intrinsicSelector(fnRealm);
             }
         }
         return defaultProto;
+    }
+
+    private static JsRealm? FunctionRealm(JsObject fn)
+    {
+        while (true)
+        {
+            switch (fn)
+            {
+                case JsFunction f:
+                    return f.Realm;
+                case JsBoundFunction bf:
+                    fn = bf.Target;
+                    continue;
+                case JsProxy { IsRevoked: false } proxy:
+                    fn = proxy.Target!;
+                    continue;
+                default:
+                    return null;
+            }
+        }
     }
 }

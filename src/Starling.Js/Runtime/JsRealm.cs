@@ -353,7 +353,9 @@ public sealed class JsRealm
         // All other prototypes default to Object.prototype-inheriting empties.
         // Intrinsic install passes replace these with fully-populated objects.
         ArrayPrototype = new JsObject(ObjectPrototype);
-        StringPrototype = new JsObject(ObjectPrototype);
+        // §22.1.3: the String prototype is itself a String exotic object whose
+        // [[StringData]] is the empty String.
+        StringPrototype = new JsStringObject(ObjectPrototype, string.Empty);
         NumberPrototype = new JsObject(ObjectPrototype);
         BooleanPrototype = new JsObject(ObjectPrototype);
         BigIntPrototype = new JsObject(ObjectPrototype);

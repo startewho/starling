@@ -952,6 +952,12 @@ public static class ObjectCtor
         {
             return "Error";
         }
+        // §20.1.3.6 step 7 — [[StringData]] ⇒ "String" (covers %String.prototype%
+        // itself, which sits on Object.prototype).
+        if (o is JsStringObject)
+        {
+            return "String";
+        }
         // Boxed primitives (String / Number / Boolean) — detect via prototype.
         for (var p = o.Prototype; p is not null; p = p.Prototype)
         {
