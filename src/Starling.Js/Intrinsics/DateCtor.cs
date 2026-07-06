@@ -155,7 +155,7 @@ public static class DateCtor
                 return JsValue.NaN;
             }
 
-            return JsValue.Number(GetField(realm, thisV, dto => dto.Year).AsNumber - 1900);
+            return JsValue.Number(GetField(realm, thisV, DateField.Year).AsNumber - 1900);
         });
         // Annex B §B.2.4.2 setYear(year) — 0 ≤ y ≤ 99 means 1900 + y; a NaN
         // year invalidates the date.
