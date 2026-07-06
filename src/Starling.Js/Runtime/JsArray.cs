@@ -53,6 +53,17 @@ public sealed class JsArray : JsObject
 
     public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { _realm = realm; DisableInlineCache(); }
 
+    /// <summary>%Array.prototype% is itself an array exotic object (§23.1.3)
+    /// — this overload exists for realm bootstrap, before
+    /// <see cref="JsRealm.ArrayPrototype"/> is assigned.</summary>
+    internal JsArray(JsRealm realm, JsObject? prototype, bool asIntrinsicPrototype)
+        : base(prototype)
+    {
+        _realm = realm;
+        _ = asIntrinsicPrototype;
+        DisableInlineCache();
+    }
+
     /// <summary>Create an empty array whose dense backing is pre-sized to
     /// <paramref name="capacity"/> slots, so a known number of subsequent
     /// <see cref="Push(JsValue)"/> calls grow the list without reallocating.
@@ -130,9 +141,24 @@ public sealed class JsArray : JsObject
         return false;
     }
 
-    /// <summary>Dense fast-path write: in-range overwrite or exact append on
-    /// a hole-free, bag-free array. Returns false when the caller must take
-    /// the generic (spec-observable) path.</summary>
+    /// <summary>Dense fast-path OVERWRITE of an existing slot. Appends must
+    /// take a spec path: [[Set]] appends consult prototype-chain setters and
+    /// [[DefineOwnProperty]] appends go through <see cref="TrySetDense"/>.</summary>
+    internal bool TryOverwriteDense(long index, JsValue value)
+    {
+        if (!_slow && (ulong)index < (ulong)_items.Count)
+        {
+            _items[(int)index] = value;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Dense fast-path define: in-range overwrite or exact append on
+    /// a hole-free, bag-free array (CreateDataProperty semantics — prototype
+    /// setters do NOT fire). Returns false when the caller must take the
+    /// generic (spec-observable) path.</summary>
     internal bool TrySetDense(long index, JsValue value)
     {
         if (_slow || (ulong)index > (ulong)_items.Count)
@@ -355,15 +381,20 @@ public sealed class JsArray : JsObject
     {
         if (name == "length")
         {
-            if (desc.IsAccessor || desc.Configurable || desc.Enumerable)
+            if (desc.IsAccessor)
             {
                 return false;
             }
 
-            // §10.4.2.1 ArraySetLength steps 3-4 — BOTH coercions run (each
-            // may hit valueOf) before any validation.
+            // §10.4.2.1 ArraySetLength steps 3-5 — BOTH coercions (and the
+            // RangeError) run BEFORE OrdinaryDefineOwnProperty validation.
             var newLen = ToUint32Checked(desc.Value);
-            if (!_lengthWritable && newLen != _length)
+            if (desc.Configurable || desc.Enumerable)
+            {
+                return false;
+            }
+
+            if (!_lengthWritable && (newLen != _length || desc.Writable))
             {
                 return false;
             }

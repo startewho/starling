@@ -142,10 +142,9 @@ public static class NumberCtor
 
         if (thisV.IsObject)
         {
-            var slot = thisV.AsObject.GetOwnPropertyDescriptor("__primitiveValue");
-            if (slot is { } d && d.Value.IsNumber)
+            if (thisV.AsObject is JsPrimitiveBox box && box.Primitive.IsNumber)
             {
-                return d.Value.AsNumber;
+                return box.Primitive.AsNumber;
             }
         }
         throw new JsThrow(realm.NewTypeError("Number.prototype method called on incompatible receiver"));

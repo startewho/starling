@@ -352,7 +352,7 @@ public sealed class JsRealm
 
         // All other prototypes default to Object.prototype-inheriting empties.
         // Intrinsic install passes replace these with fully-populated objects.
-        ArrayPrototype = new JsObject(ObjectPrototype);
+        ArrayPrototype = new JsArray(this, ObjectPrototype, asIntrinsicPrototype: true);
         // §22.1.3: the String prototype is itself a String exotic object whose
         // [[StringData]] is the empty String.
         StringPrototype = new JsStringObject(ObjectPrototype, string.Empty);
@@ -526,10 +526,8 @@ public sealed class JsRealm
     public JsValue NewUriError(string message, JsValue cause) => NewError(UriErrorPrototype, message, cause);
     public JsValue NewEvalError(string message, JsValue cause) => NewError(EvalErrorPrototype, message, cause);
 
-    /// <summary>§7.1.18 boxing for primitives. Placeholder: returns a wrapper
-    /// object whose [[Prototype]] is the matching <c>*Prototype</c> and which
-    /// stores the primitive in an internal slot under <c>__primitiveValue</c>
-    /// until the typed wrapper subclasses land.</summary>
+    /// <summary>§7.1.18 boxing for primitives: a <see cref="JsPrimitiveBox"/>
+    /// whose [[Prototype]] is the matching <c>*Prototype</c>.</summary>
     internal JsObject BoxBoolean(JsValue v) => BoxPrimitive(BooleanPrototype, v);
     internal JsObject BoxNumber(JsValue v) => BoxPrimitive(NumberPrototype, v);
     internal JsObject BoxString(JsValue v)
@@ -544,18 +542,26 @@ public sealed class JsRealm
     internal JsObject BoxBigInt(JsValue v) => BoxPrimitive(BigIntPrototype, v);
     internal JsObject BoxSymbol(JsValue v) => BoxPrimitive(SymbolPrototype, v);
 
-    private static JsObject BoxPrimitive(JsObject proto, JsValue value)
-    {
-        var box = new JsObject(proto);
-        box.DefineOwnProperty("__primitiveValue",
-            PropertyDescriptor.Data(value, writable: false, enumerable: false, configurable: false));
-        return box;
-    }
+    private static JsPrimitiveBox BoxPrimitive(JsObject proto, JsValue value)
+        => new(proto, value);
 
     private static void DefaultConsoleSink(ConsoleLevel level, string message)
     {
         var writer = level is ConsoleLevel.Warn or ConsoleLevel.Error ? Console.Error : Console.Out;
         writer.WriteLine(message);
+    }
+}
+
+/// <summary>§7.1.18 primitive wrapper (Boolean / Number / BigInt / Symbol
+/// boxes): the primitive lives in a host slot, invisible to property
+/// enumeration and getOwnPropertyNames.</summary>
+public sealed class JsPrimitiveBox : JsObject
+{
+    public JsValue Primitive { get; }
+
+    internal JsPrimitiveBox(JsObject? prototype, JsValue primitive) : base(prototype)
+    {
+        Primitive = primitive;
     }
 }
 

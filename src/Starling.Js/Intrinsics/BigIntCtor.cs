@@ -58,6 +58,9 @@ public static class BigIntCtor
             return JsValue.BigInt(BigIntOps.AsUintN(realm, bits, value));
         });
 
+        proto.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("BigInt"), writable: false, enumerable: false, configurable: true));
+
         // Prototype methods — toString(radix), valueOf, toLocaleString.
         IntrinsicHelpers.DefineMethod(realm, proto, "toString", 1, (thisV, args) =>
         {
@@ -95,10 +98,9 @@ public static class BigIntCtor
 
         if (thisV.IsObject)
         {
-            var slot = thisV.AsObject.Get("__primitiveValue");
-            if (slot.IsBigInt)
+            if (thisV.AsObject is JsPrimitiveBox box && box.Primitive.IsBigInt)
             {
-                return slot.AsBigInt;
+                return box.Primitive.AsBigInt;
             }
         }
         throw new JsThrow(realm.NewTypeError("BigInt.prototype method called on non-BigInt receiver"));

@@ -995,6 +995,10 @@ public sealed class JsNativeFunction : JsObject
     public Func<JsValue, JsValue[], JsValue> Body { get; }
     public bool IsConstructor { get; }
 
+    /// <summary>§7.3.25 GetFunctionRealm — populated by the realm-aware
+    /// constructor; null for realm-less host functions.</summary>
+    internal JsRealm? Realm { get; }
+
     /// <summary>Declared <c>length</c> (declared positional arity). Mirrored
     /// as an own non-enumerable property when set via the realm-aware
     /// constructor; intrinsics that build descriptors by hand may also stamp
@@ -1030,6 +1034,7 @@ public sealed class JsNativeFunction : JsObject
         : base(realm?.FunctionPrototype)
     {
         ArgumentNullException.ThrowIfNull(realm);
+        Realm = realm;
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Body = body ?? throw new ArgumentNullException(nameof(body));
         IsConstructor = isConstructor;

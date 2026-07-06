@@ -35,7 +35,7 @@ public static class ArrayCtor
             (newTarget, args) =>
             {
                 var arr = ConstructArray(realm, args);
-                var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+                var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto, static r => r.ArrayPrototype);
                 if (!ReferenceEquals(instProto, proto))
                 {
                     arr.SetPrototypeOf(instProto);
@@ -181,6 +181,11 @@ public static class ArrayCtor
         var vm = realm.ActiveVm;
         var v = AbstractOperations.Get(vm, obj, "length");
         var prim = AbstractOperations.ToPrimitive(vm, v, "number");
+        if (prim.IsSymbol)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
+        }
+
         var n = prim.IsBigInt
             ? throw new JsThrow(realm.NewTypeError("Cannot convert a BigInt to array length"))
             : JsValue.ToNumber(prim);
@@ -265,10 +270,12 @@ public static class ArrayCtor
         return true;
     }
 
-    /// <summary>§7.3.4 Set(O, P, V, true) — a rejected write is a TypeError.</summary>
+    /// <summary>§7.3.4 Set(O, P, V, true) — a rejected write is a TypeError.
+    /// Only in-range dense overwrites bypass the generic path: an APPEND is a
+    /// prototype-chain-observable [[Set]] (a setter at that index fires).</summary>
     private static void SetElementThrow(JsRealm realm, JsObject obj, long i, JsValue v)
     {
-        if (obj is JsArray ja && ja.TrySetDense(i, v))
+        if (obj is JsArray ja && ja.TryOverwriteDense(i, v))
         {
             return;
         }
@@ -856,6 +863,17 @@ public static class ArrayCtor
         }
 
         var ctorV = AbstractOperations.Get(vm, original, "constructor");
+        // §7.3.22 step 3.b — a FOREIGN realm's %Array% constructor counts as
+        // "no constructor": the result is a plain current-realm array and the
+        // foreign @@species is never read.
+        if (ctorV.IsObject && AbstractOperations.IsConstructor(ctorV)
+            && IntrinsicHelpers.FunctionRealm(ctorV.AsObject) is { } fnRealm
+            && !ReferenceEquals(fnRealm, realm)
+            && ReferenceEquals(ctorV.AsObject, fnRealm.ArrayConstructor))
+        {
+            ctorV = JsValue.Undefined;
+        }
+
         JsValue species = ctorV;
         if (ctorV.IsObject)
         {
@@ -1541,6 +1559,11 @@ public static class ArrayCtor
 
         long insertCount = Math.Max(0, args.Length - 2);
         var newLen = len + insertCount - skipCount;
+        if (newLen > MaxSafeLength)
+        {
+            throw new JsThrow(realm.NewTypeError("Spliced length exceeds the maximum array-like length"));
+        }
+
         if (newLen > MaxArrayLength)
         {
             throw new JsThrow(realm.NewRangeError("Invalid array length"));
