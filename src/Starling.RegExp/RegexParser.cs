@@ -480,7 +480,7 @@ public sealed class RegexParser
                 }
 
                 _i += 2; // past "\u"
-                cp = ParseUnicodeEscapeSequence();
+                cp = ParseNameUnicodeEscapeSequence();
             }
             else
             {
@@ -800,7 +800,20 @@ public sealed class RegexParser
 
                 SkipPropertyBraces();
                 var setSeq = ClassSet.Empty();
-                setSeq.Patterns.Add(BuildSequenceProperty(seqName));
+                if (seqName == "Emoji_Keycap_Sequence")
+                {
+                    // Finite (12 members) — enumerate as strings so the class
+                    // set algebra (&& and --) works on it.
+                    foreach (var ch in "0123456789#*")
+                    {
+                        setSeq.Strings.Add(ch + "\uFE0F\u20E3");
+                    }
+                }
+                else
+                {
+                    setSeq.Patterns.Add(BuildSequenceProperty(seqName));
+                }
+
                 return setSeq;
             }
 
@@ -1145,10 +1158,38 @@ public sealed class RegexParser
         RegexNode Alt(params RegexNode[] alts) => new AlternationNode(alts);
         // emoji presentation unit: an Emoji_Presentation char, or any Emoji
         // char followed by VS16 (FE0F), or a modifier-base + skin tone.
+        // emoji presentation unit: modifier-base + skin tone, any Emoji char
+        // + VS16, or an Emoji_Presentation char — excluding a bare skin-tone
+        // modifier, which never stands alone in an RGI sequence.
+        RegexNode PresentationMinusModifiers()
+        {
+            var ranges = new List<(int, int)>();
+            foreach (var (lo, hi) in RegexCharClass.GetPropertyRanges("Emoji_Presentation"))
+            {
+                if (hi < 0x1F3FB || lo > 0x1F3FF)
+                {
+                    ranges.Add((lo, hi));
+                    continue;
+                }
+
+                if (lo < 0x1F3FB)
+                {
+                    ranges.Add((lo, 0x1F3FA));
+                }
+
+                if (hi > 0x1F3FF)
+                {
+                    ranges.Add((0x1F400, hi));
+                }
+            }
+
+            return new CharClassNode(new RegexCharClass(ranges, negated: false, caseInsensitive: false));
+        }
+
         RegexNode EmojiUnit() => Alt(
             Seq(CharSet("Emoji_Modifier_Base"), CharSet("Emoji_Modifier")),
             Seq(CharSet("Emoji"), Lit(0xFE0F)),
-            CharSet("Emoji_Presentation"));
+            PresentationMinusModifiers());
 
         switch (name)
         {
@@ -1322,7 +1363,14 @@ public sealed class RegexParser
                 case 't': _i++; return '\t';
                 case 'v': _i++; return '\v';
                 case 'f': _i++; return '\f';
-                case '0': _i++; return 0;
+                case '0':
+                    _i++;
+                    if (_unicode && _i < _src.Length && _src[_i] >= '0' && _src[_i] <= '9')
+                    {
+                        throw new RegexSyntaxException("\\0 may not be followed by another digit under u/v flag");
+                    }
+
+                    return 0;
                 case 'b': _i++; return 0x08; // backspace in class
                 case 'x':
                     _i++;
@@ -1370,7 +1418,8 @@ public sealed class RegexParser
 
     private static void AddNegatedRanges(List<(int, int)> dest, List<(int, int)> src)
     {
-        // Add the complement of src ranges to dest. Limit to BMP.
+        // Add the complement of src ranges to dest, over the full code point
+        // space (astral input only arrives under u/v, where it matters).
         src.Sort((a, b) => a.Item1.CompareTo(b.Item1));
         int cursor = 0;
         foreach (var (lo, hi) in src)
@@ -1382,9 +1431,9 @@ public sealed class RegexParser
 
             cursor = hi + 1;
         }
-        if (cursor <= 0xFFFF)
+        if (cursor <= 0x10FFFF)
         {
-            dest.Add((cursor, 0xFFFF));
+            dest.Add((cursor, 0x10FFFF));
         }
     }
 
@@ -1409,22 +1458,26 @@ public sealed class RegexParser
             throw new RegexSyntaxException("Unterminated \\p{ escape");
         }
 
-        var raw = _src[start.._i];
+        var raw = _src[start.._i].ToString();
         _i++;
-        // Accept "Property=Value" or just "Value"
-        var name = raw;
+        // UnicodePropertyValueExpression: either Name=Value (only the three
+        // enumerated properties admit values) or a lone binary/GC name. Both
+        // sides are case-sensitive.
         var eq = raw.IndexOf('=');
         if (eq >= 0)
         {
-            name = raw[(eq + 1)..];
+            var lhs = raw[..eq];
+            if (lhs is not ("General_Category" or "gc" or "Script" or "sc" or "Script_Extensions" or "scx"))
+            {
+                throw new RegexSyntaxException($"Unknown Unicode property name: {lhs}");
+            }
         }
 
-        if (!RegexCharClass.SupportedProperties.Contains(name))
+        if (!RegexCharClass.TryGetPropertyRanges(raw, out var baseRanges))
         {
-            throw new RegexSyntaxException($"Unsupported Unicode property: {name}");
+            throw new RegexSyntaxException($"Unsupported Unicode property: {raw}");
         }
-        // Use precomputed (cached at type init) ranges to avoid per-\p scan + allocs.
-        var baseRanges = RegexCharClass.GetPropertyRanges(name);
+
         var caseInsensitive = (_flags & RegexFlags.IgnoreCase) != 0;
         return new RegexCharClass(baseRanges, negated, caseInsensitive);
     }
@@ -1607,11 +1660,25 @@ public sealed class RegexParser
         return cp;
     }
 
-    private int ParseUnicodeEscape(out bool braced)
+    /// <summary>RegExpIdentifierName escapes always parse with [+UnicodeMode]
+    /// (§22.2.1): \u{…} and paired \uD…\uD… are legal in a group name even
+    /// when the pattern has neither the u nor v flag.</summary>
+    private int ParseNameUnicodeEscapeSequence()
+    {
+        var cp = ParseUnicodeEscape(out var braced, forceUnicode: true);
+        if (!braced && IsLeadSurrogate(cp) && TryConsumeTrailingSurrogateEscape(out var trail))
+        {
+            return char.ConvertToUtf32((char)cp, (char)trail);
+        }
+
+        return cp;
+    }
+
+    private int ParseUnicodeEscape(out bool braced, bool forceUnicode = false)
     {
         // \u{HHHH...} (u flag) or \uHHHH
         braced = false;
-        if (_unicode && _i < _src.Length && _src[_i] == '{')
+        if ((_unicode || forceUnicode) && _i < _src.Length && _src[_i] == '{')
         {
             braced = true;
             _i++;
