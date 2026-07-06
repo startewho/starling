@@ -34,7 +34,7 @@ public class Test262Tests
     private const double BuiltInsFloor = 79d;  // 79.21% after TypedArray ctor/species + Promise/RegExp generics (2026-07-06)
     private const double Intl402Floor = 69d;   // 69.77% after the NumberFormat option/decimal engine (2026-07-06)
     private const double AnnexBFloor = 85d;   // 85.38% — + catch-pattern bindings forced catch-local in eval/script tops (2026-07-06)
-    private const double StagingFloor = 50d;   // baseline 50.63% (2026-07-06)
+    private const double StagingFloor = 61d;   // 61.51% after the day-2 sweep + agent merges (2026-07-06)
 
     [TestMethod]
     public void Conformance_language() => RunBucket("language", LanguageFloor);
