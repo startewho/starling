@@ -62,7 +62,7 @@ public sealed class Test262Runner
     internal static readonly HashSet<string> OutOfScopeFeatures = new(StringComparer.Ordinal)
     {
         // Stage-3 proposals (not in any published edition):
-        "decorators", "explicit-resource-management", "Temporal",
+        "decorators", "explicit-resource-management", "Temporal", "ShadowRealm",
         "import-attributes", "import-assertions",
         // Source-phase imports (`import source x from …`, `import.source(…)`):
         // a Stage-3 proposal beyond ES2024. Test262 tags it `source-phase-imports`
@@ -75,6 +75,7 @@ public sealed class Test262Runner
         // ES2025+ library proposals:
         "iterator-helpers", "set-methods", "Float16Array", "uint8array-base64",
         "regexp-duplicate-named-groups", "promise-try", "regexp-escape",
+        "regexp-modifiers",
         "Array.fromAsync", "json-parse-with-source", "iterator-sequencing",
         // ECMA-402 (Intl) — out of scope per 09_JS_ENGINE.md:
         "Intl.DurationFormat", "Intl-enumeration", "Intl.Locale-info",
@@ -126,10 +127,9 @@ public sealed class Test262Runner
 
         // Skip tests that require a feature outside our targeted spec level
         // (ES2024 / ES15). These are post-ES2024 proposals or explicitly
-        // out-of-scope subsystems (see browser-plan/09_JS_ENGINE.md "Out"),
-        // analogous to Jint's Test262Harness exclusion list — an ES2024 engine
-        // is not expected to pass them, so counting them would understate
-        // conformance against the targeted surface.
+        // out-of-scope subsystems (see browser-plan/09_JS_ENGINE.md "Out") — an
+        // ES2024 engine is not expected to pass them, so counting them would
+        // understate conformance against the targeted surface.
         foreach (var f in meta.Features)
         {
             if (OutOfScopeFeatures.Contains(f))
@@ -170,9 +170,16 @@ public sealed class Test262Runner
         Outcome outcome = Outcome.Fail;
         string? detail = null;
 
+        // Cancellation reaches the VM's dispatch loop (polled every ~1024
+        // opcodes), so a timed-out scenario actually STOPS instead of leaving a
+        // spinning background thread. Hundreds of leaked spinners from
+        // long-running buckets (built-ins string builders) used to starve the
+        // scheduler until the whole run wedged.
+        using var cts = new CancellationTokenSource();
+        var ct = cts.Token;
         var worker = new Thread(() =>
         {
-            try { (outcome, detail) = Execute(source, meta, mode, absPath); }
+            try { (outcome, detail) = Execute(source, meta, mode, absPath, ct); }
             catch (Exception ex) { outcome = Outcome.Fail; detail = "host:" + ex.GetType().Name + ":" + Truncate(ex.Message); }
         }, maxStackSize: 64 * 1024 * 1024)  // headroom for the depth-1000 guard (~16 KB/frame)
         { IsBackground = true };
@@ -180,13 +187,17 @@ public sealed class Test262Runner
         worker.Start();
         if (!worker.Join(_timeoutMs))
         {
+            cts.Cancel();
+            // Give the dispatch loop a moment to observe the token and unwind;
+            // a worker stuck outside the VM (native code) is abandoned as before.
+            worker.Join(2_000);
             return new ScenarioResult(rel, mode, Outcome.Timeout, "timeout");
         }
 
         return new ScenarioResult(rel, mode, outcome, detail);
     }
 
-    private (Outcome, string?) Execute(string source, Test262Metadata meta, ScenarioMode mode, string absPath)
+    private (Outcome, string?) Execute(string source, Test262Metadata meta, ScenarioMode mode, string absPath, CancellationToken abort = default)
     {
         // ---- Negative parse: the test body itself must fail to parse. ----
         if (meta.IsNegative && meta.NegativePhase == "parse")
@@ -222,7 +233,7 @@ public sealed class Test262Runner
         }
 
         // ---- Build a fresh realm + harness for an executable scenario. ----
-        var runtime = new JsRuntime();
+        var runtime = new JsRuntime { AbortToken = abort };
         var printed = new List<string>();
         runtime.RegisterGlobal("print", args =>
         {
@@ -352,10 +363,7 @@ public sealed class Test262Runner
     ///   classic (sloppy) script in <em>this</em> realm and returns the
     ///   completion value.</item>
     /// </list>
-    /// <c>detachArrayBuffer</c> stays a no-op stub: the engine has no
-    /// ArrayBuffer-detach machinery (that is engine work, not harness wiring), so
-    /// tests that observe detachment still fail — but the common cluster that only
-    /// needs the function to <em>exist</em> (and createRealm/evalScript) runs.</summary>
+    /// <c>detachArrayBuffer</c> performs a real §25.1.3.5 detach.</summary>
     private static void InstallHost262(JsRuntime runtime, JsVm vm)
     {
         var realm = runtime.Realm;
@@ -372,10 +380,12 @@ public sealed class Test262Runner
             {
                 var src = args.Length > 0 && args[0].IsString ? args[0].AsString : Stringify(args.Length > 0 ? args[0] : JsValue.Undefined);
                 Chunk chunk;
-                // CompileForEval (the path the global `eval` builtin uses) so a
-                // top-level `var` creates a persistent global binding — the
-                // ScriptEvaluation contract $262.evalScript requires.
-                try { chunk = JsCompiler.CompileForEval(new JsParser(src).ParseProgram(), "<evalScript>"); }
+                // CompileForScriptEval — SCRIPT semantics with the completion
+                // value kept: a top-level `var` creates a persistent global
+                // binding and a top-level `let`/`const` lands in the realm's
+                // shared global lexical record, the §16.1.7 ScriptEvaluation
+                // contract $262.evalScript requires.
+                try { chunk = JsCompiler.CompileForScriptEval(new JsParser(src).ParseProgram(), "<evalScript>"); }
                 catch (JsParseException ex) { throw new JsThrow(realm.NewSyntaxError(ex.Message)); }
                 return vm.RunEval(chunk);
             }, isConstructor: false)));
@@ -393,9 +403,18 @@ public sealed class Test262Runner
                 return child.GetGlobal("$262");
             }, isConstructor: false)));
 
-        // No-op stubs (engine has no detach/gc hooks).
+        // §25.1.3.5 DetachArrayBuffer — real detach (views go out of bounds;
+        // ValidateTypedArray throws).
         host.Set("detachArrayBuffer", JsValue.Object(new JsNativeFunction(realm, "detachArrayBuffer", length: 1,
-            (_, _) => JsValue.Undefined, isConstructor: false)));
+            (_, args) =>
+            {
+                if (args.Length > 0 && args[0].IsObject && args[0].AsObject is JsArrayBuffer ab)
+                {
+                    ab.Detach();
+                }
+
+                return JsValue.Undefined;
+            }, isConstructor: false)));
         host.Set("gc", JsValue.Object(new JsNativeFunction(realm, "gc", length: 0,
             (_, _) => JsValue.Undefined, isConstructor: false)));
 
@@ -418,7 +437,24 @@ public sealed class Test262Runner
         }
 
         var n = value.AsObject.Get("name");
-        return n.IsString ? n.AsString : null;
+        if (n.IsString)
+        {
+            return n.AsString;
+        }
+
+        // Test262Error (harness sta.js) never sets a `name` — identify it via
+        // constructor.name, the same fallback upstream test262 hosts use.
+        var ctor = value.AsObject.Get("constructor");
+        if (ctor.IsObject)
+        {
+            var cn = ctor.AsObject.Get("name");
+            if (cn.IsString)
+            {
+                return cn.AsString;
+            }
+        }
+
+        return null;
     }
 
     private static string ExtractMessage(Exception ex) =>

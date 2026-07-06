@@ -5,52 +5,93 @@ namespace Starling.Js.Test262.Tests;
 
 /// <summary>
 /// Runs the tc39/test262 conformance corpus against the Starling JS engine and
-/// reports a pass rate. The corpus is NOT vendored — fetch it first with
-/// <c>tools/fetch-test262.sh</c> (pinned SHA → testdata/test262/, gitignored).
-/// When the corpus is absent the test is inconclusive (skipped), so CI without
-/// the corpus stays green.
+/// reports a pass rate per corpus bucket. The corpus is NOT vendored — fetch it
+/// first with <c>tools/fetch-test262.sh</c> (pinned SHA → testdata/test262/,
+/// gitignored). When the corpus is absent the tests are inconclusive (skipped),
+/// so CI without the corpus stays green.
+///
+/// One test per top-level corpus bucket (language, built-ins, intl402, annexB,
+/// staging), each with its own ratchet floor and results files
+/// (<c>results/summary-&lt;bucket&gt;.txt</c> / <c>failures-&lt;bucket&gt;.txt</c>).
+/// A floor of 0 means report-only — set it to the measured baseline once the
+/// bucket has one, then ratchet upward as conformance improves.
 ///
 /// Config via environment variables:
-///   STARLING_TEST262_DIRS    comma list of subdirs under test/ (default "language,built-ins")
 ///   STARLING_TEST262_FILTER  case-insensitive path substring filter
 ///   STARLING_TEST262_MAX     cap on number of files (0 = no cap)
-///   STARLING_TEST262_TIMEOUT_MS  per-scenario timeout (default 10000)
-///   STARLING_TEST262_FLOOR   minimum pass rate to require, percent (default 0 = report only)
+///   STARLING_TEST262_TIMEOUT_MS  per-scenario timeout (default 5000)
+///   STARLING_TEST262_FLOOR   floor override, percent (applies to every bucket run)
+///   STARLING_TEST262_DIRS    ad-hoc scope for Conformance_custom_scope only
 /// </summary>
 [TestClass]
 public class Test262Tests
 {
     public TestContext TestContext { get; set; } = null!;
 
+    // Ratchet floors, percent. Raise deliberately after a measured improvement;
+    // never lower. 0 = report-only (bucket not yet baselined).
+    private const double LanguageFloor = 97d;
+    private const double BuiltInsFloor = 72d;  // 72.61% chunked after TypedArray/RegExp arc (2026-07-06)
+    private const double Intl402Floor = 50d;   // 50.61% after DateTimeFormat parts/range (2026-07-06)
+    private const double AnnexBFloor = 65d;    // 65.60% after RegExp legacy statics (2026-07-06)
+    private const double StagingFloor = 50d;   // baseline 50.63% (2026-07-06)
+
     [TestMethod]
-    public void Conformance_pass_rate()
+    public void Conformance_language() => RunBucket("language", LanguageFloor);
+
+    [TestMethod]
+    public void Conformance_built_ins() => RunBucket("built-ins", BuiltInsFloor);
+
+    [TestMethod]
+    public void Conformance_intl402() => RunBucket("intl402", Intl402Floor);
+
+    [TestMethod]
+    public void Conformance_annexB() => RunBucket("annexB", AnnexBFloor);
+
+    [TestMethod]
+    public void Conformance_staging() => RunBucket("staging", StagingFloor);
+
+    /// <summary>Ad-hoc slice runner: set STARLING_TEST262_DIRS (comma list of
+    /// subdirs under test/, e.g. "language/statements/for-of") to run just that
+    /// scope. Inconclusive when the variable is unset, so the per-bucket tests
+    /// stay the canonical measurement.</summary>
+    [TestMethod]
+    public void Conformance_custom_scope()
     {
-        var root = LocateCorpus();
+        var dirsRaw = Environment.GetEnvironmentVariable("STARLING_TEST262_DIRS");
+        if (string.IsNullOrWhiteSpace(dirsRaw))
+        {
+            Assert.Inconclusive("STARLING_TEST262_DIRS not set — the per-bucket tests are the canonical runs.");
+            return;
+        }
+
+        var dirs = dirsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Run("custom", dirs, floorDefault: 0d);
+    }
+
+    private void RunBucket(string bucket, double floorDefault) =>
+        Run(bucket, [bucket], floorDefault);
+
+    private void Run(string label, string[] dirs, double floorDefault)
+    {
+        var root = Test262Corpus.LocateCorpus();
         if (root is null)
         {
             Assert.Inconclusive("test262 corpus not found — run tools/fetch-test262.sh (expects testdata/test262/test).");
             return;
         }
 
-        // Default scope is `language` (core ECMAScript semantics): it runs
-        // cleanly and fast. `built-ins` is opt-in via STARLING_TEST262_DIRS —
-        // a few of its tests allocate huge arrays and hit the timeout. Override
-        // STARLING_TEST262_FLOOR too when you widen the scope.
-        var dirs = (Environment.GetEnvironmentVariable("STARLING_TEST262_DIRS") ?? "language")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var filter = Environment.GetEnvironmentVariable("STARLING_TEST262_FILTER");
         var max = int.TryParse(Environment.GetEnvironmentVariable("STARLING_TEST262_MAX"), out var m) ? m : 0;
         var timeout = int.TryParse(Environment.GetEnvironmentVariable("STARLING_TEST262_TIMEOUT_MS"), out var t) ? t : 5_000;
-        // Ratchet floor for the default `language` scope (baseline 2026-05-21:
-        // 37.77%). Raise as conformance improves; override for other scopes.
-        var floor = double.TryParse(Environment.GetEnvironmentVariable("STARLING_TEST262_FLOOR"), out var f) ? f
-            : (dirs.Length == 1 && dirs[0] == "language" ? 37d : 0d);
+        var floor = double.TryParse(Environment.GetEnvironmentVariable("STARLING_TEST262_FLOOR"), out var f) ? f : floorDefault;
 
-        var files = EnumerateTests(Path.Combine(root, "test"), dirs, filter, max);
+        var files = Test262Corpus.EnumerateTests(Path.Combine(root, "test"), dirs, filter, max);
         var runner = new Test262Runner(root, timeout);
 
-        Directory.CreateDirectory(Path.Combine(root, "results"));
-        var progressPath = Path.Combine(root, "results", "progress.txt");
+        var resultsDir = Path.Combine(root, "results");
+        Directory.CreateDirectory(resultsDir);
+        var progressPath = Path.Combine(resultsDir, $"progress-{label}.txt");
 
         int pass = 0, fail = 0, timeoutN = 0, skip = 0;
         var byCat = new SortedDictionary<string, (int pass, int total)>(StringComparer.Ordinal);
@@ -67,7 +108,7 @@ public class Test262Tests
             File.WriteAllText(progressPath, $"{fileCount}: {file}\n");
             foreach (var r in runner.RunFile(file))
             {
-                var cat = Category(r.File);
+                var cat = Test262Corpus.Category(r.File);
                 var cur = byCat.TryGetValue(cat, out var c) ? c : (0, 0);
                 switch (r.Outcome)
                 {
@@ -85,7 +126,7 @@ public class Test262Tests
         var rate = ran == 0 ? 0d : 100d * pass / ran;
 
         var report = new StringBuilder();
-        report.AppendLine($"Test262 conformance — {DateTime.UtcNow:u}");
+        report.AppendLine($"Test262 conformance [{label}] — {DateTime.UtcNow:u}");
         report.AppendLine($"dirs=[{string.Join(",", dirs)}] filter={filter ?? "(none)"} max={(max == 0 ? "∞" : max.ToString())}");
         report.AppendLine($"files={fileCount} scenarios_run={ran} pass={pass} fail={fail} timeout={timeoutN} skip(module/io)={skip}");
         report.AppendLine($"PASS RATE: {rate:F2}%  ({pass}/{ran})  in {sw.Elapsed.TotalSeconds:F1}s");
@@ -103,23 +144,21 @@ public class Test262Tests
             report.AppendLine("  " + s);
         }
 
-        var resultsDir = Path.Combine(root, "results");
-        Directory.CreateDirectory(resultsDir);
-        var reportPath = Path.Combine(resultsDir, "summary.txt");
+        var reportPath = Path.Combine(resultsDir, $"summary-{label}.txt");
         // Failure details can contain lone surrogates copied out of a test's
         // source text; a strict encoder throws on those. Use a UTF-8 encoder
         // that replaces unencodable chars so the dump never crashes.
         var enc = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
         File.WriteAllText(reportPath, report.ToString(), enc);
         // Full failure dump (every failing scenario) for offline triage.
-        File.WriteAllLines(Path.Combine(resultsDir, "failures.txt"), allFails, enc);
+        File.WriteAllLines(Path.Combine(resultsDir, $"failures-{label}.txt"), allFails, enc);
 
         TestContext.WriteLine(report.ToString());
         TestContext.WriteLine("report: " + reportPath);
 
         if (floor > 0)
         {
-            Assert.IsTrue(rate >= floor, $"Test262 pass rate {rate:F2}% < floor {floor:F2}% — see {reportPath}");
+            Assert.IsTrue(rate >= floor, $"Test262 [{label}] pass rate {rate:F2}% < floor {floor:F2}% — see {reportPath}");
         }
     }
 
@@ -130,13 +169,4 @@ public class Test262Tests
             samples.Add($"[{r.Mode}] {r.File} :: {r.Detail}");
         }
     }
-
-    private static string Category(string relFile) => Test262Corpus.Category(relFile);
-
-    private static IEnumerable<string> EnumerateTests(string testDir, string[] dirs, string? filter, int max) =>
-        Test262Corpus.EnumerateTests(testDir, dirs, filter, max);
-
-    /// <summary>Walk up from the test binary to the repo and locate
-    /// testdata/test262 (gitignored, fetched separately).</summary>
-    private static string? LocateCorpus() => Test262Corpus.LocateCorpus();
 }

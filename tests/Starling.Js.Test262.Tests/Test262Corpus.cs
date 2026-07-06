@@ -1,30 +1,11 @@
 namespace Starling.Js.Test262.Tests;
 
 /// <summary>
-/// Shared Test262 corpus discovery + enumeration + the env-var config block,
-/// used by both the Starling.Js runner (<see cref="Test262Tests"/>) and the Jint
-/// runner (<see cref="JintTest262Tests"/>) so the two engines measure against the
-/// identical file set with identical configuration. Factored out of
-/// <see cref="Test262Tests"/> verbatim — the Starling.Js path is unchanged.
+/// Test262 corpus discovery + enumeration + the env-var config block used by
+/// the runner (<see cref="Test262Tests"/>).
 /// </summary>
 internal static class Test262Corpus
 {
-    /// <summary>The shared env-var configuration the two runners read.</summary>
-    public readonly record struct Config(string[] Dirs, string? Filter, int Max, int TimeoutMs);
-
-    /// <summary>Read the STARLING_TEST262_* env vars (DIRS/FILTER/MAX/TIMEOUT_MS).
-    /// FLOOR is read separately by each runner since the two have different
-    /// defaults (Starling.Js ratchets a baseline; Jint is report-only).</summary>
-    public static Config ReadConfig()
-    {
-        var dirs = (Environment.GetEnvironmentVariable("STARLING_TEST262_DIRS") ?? "language")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var filter = Environment.GetEnvironmentVariable("STARLING_TEST262_FILTER");
-        var max = int.TryParse(Environment.GetEnvironmentVariable("STARLING_TEST262_MAX"), out var m) ? m : 0;
-        var timeout = int.TryParse(Environment.GetEnvironmentVariable("STARLING_TEST262_TIMEOUT_MS"), out var t) ? t : 5_000;
-        return new Config(dirs, filter, max, timeout);
-    }
-
     public static IEnumerable<string> EnumerateTests(string testDir, string[] dirs, string? filter, int max)
     {
         var count = 0;
