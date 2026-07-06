@@ -348,6 +348,13 @@ public sealed partial class JsCompiler
     /// in the innermost scope frame so later writes throw TypeError.</summary>
     private void MarkConst(string name) => _constScopes[^1].Add(name);
 
+    /// <summary>Annex B §B.3.3 promotion candidates for THIS eval/script unit:
+    /// block-level function names with no lexical declaration between their
+    /// block and the var scope. The per-declaration write-through consults
+    /// this — a shadowed function (`{ let f; { function f(){} } }`) keeps its
+    /// block binding but must NOT leak into the var environment.</summary>
+    private HashSet<string>? _annexBCandidates;
+
     /// <summary>Function-expression self-name bindings (§15.2.5) — writes are
     /// TypeError in strict code and silently ignored in sloppy code, distinct
     /// from const's always-throw.</summary>
@@ -698,6 +705,7 @@ public sealed partial class JsCompiler
                     CollectAnnexBFnNames(s, abNames, topLevel: true, abPath);
                 }
 
+                _annexBCandidates = new HashSet<string>(abNames, StringComparer.Ordinal);
                 foreach (var vn in abNames)
                 {
                     if (_callerScopeNames is { } cs2 && cs2.Contains(vn))
@@ -821,6 +829,7 @@ public sealed partial class JsCompiler
                 CollectAnnexBFnNames(s, blockFns, topLevel: true, abLexPath);
             }
 
+            _annexBCandidates = new HashSet<string>(blockFns, StringComparer.Ordinal);
             foreach (var n in blockFns)
             {
                 if (!funcNames.Contains(n) && !varNames.Contains(n)
@@ -1025,7 +1034,22 @@ public sealed partial class JsCompiler
                 WalkContainer(t.Block.Body, into, lexPath);
                 if (t.Handler is not null)
                 {
+                    // §B.3.3.3 + §B.3.5 — a DESTRUCTURED catch parameter
+                    // named F blocks the promotion like an intervening
+                    // lexical; a simple identifier catch parameter permits it
+                    // (the same web-compat carve-out that lets `var f` shadow
+                    // a simple catch binding).
+                    var catchNames = new HashSet<string>(StringComparer.Ordinal);
+                    if (t.Handler.Param is not null and not Identifier)
+                    {
+                        var bound = new List<string>();
+                        CollectBoundNames(t.Handler.Param, bound);
+                        catchNames.UnionWith(bound);
+                    }
+
+                    lexPath.Add(catchNames);
                     WalkContainer(t.Handler.Body.Body, into, lexPath);
+                    lexPath.RemoveAt(lexPath.Count - 1);
                 }
 
                 if (t.Finalizer is not null)
@@ -1202,7 +1226,8 @@ public sealed partial class JsCompiler
                 if (!_b.IsStrict && _scopes.Count > 1)
                 {
                     var fnName = fd.Name.Name;
-                    if (IsScriptTop && !_directEvalLocalVars)
+                    if (IsScriptTop && !_directEvalLocalVars
+                        && (_annexBCandidates is null || _annexBCandidates.Contains(fnName)))
                     {
                         _b.Emit(Opcode.Dup);
                         if (_evalInjectVars)
@@ -2277,7 +2302,10 @@ public sealed partial class JsCompiler
             {
                 var srcSlot = _b.ReserveLocal();
                 _b.EmitSlot(Opcode.StoreLocal, srcSlot);
-                DeclarePatternBindings(handler.Param);
+                // Catch bindings are catch-scoped, never script/eval vars —
+                // without the force, a destructured catch parameter at eval
+                // top level would leak into the caller's var environment.
+                DeclarePatternBindings(handler.Param, forceBlockLocal: true);
                 EmitPatternFromLocal(handler.Param, srcSlot, isDeclaration: true);
             }
             // The catch block is its own lexical scope: TDZ-hoist its top-level
@@ -6215,7 +6243,9 @@ public sealed partial class JsCompiler
     /// the block-local slot while the closure reads the (never-initialized)
     /// cell, yielding <c>undefined</c>/<c>NaN</c>. <c>let</c>/<c>const</c> and
     /// catch/parameter bindings stay block-scoped (false).</param>
-    private void DeclarePatternBindings(Expression pattern, bool functionScoped = false)
+    /// <param name="forceBlockLocal">Catch parameters bind in the catch scope
+    /// even at script/eval top level — never as global or eval-injected vars.</param>
+    private void DeclarePatternBindings(Expression pattern, bool functionScoped = false, bool forceBlockLocal = false)
     {
         switch (pattern)
         {
@@ -6227,7 +6257,7 @@ public sealed partial class JsCompiler
                 // an initializer doesn't reset an existing value, and a
                 // hoisted function-decl that already installed the name
                 // keeps its function value.
-                if (IsScriptTop && !_directEvalLocalVars)
+                if (IsScriptTop && !_directEvalLocalVars && !forceBlockLocal)
                 {
                     // wp:M3-73 — a non-strict direct eval whose caller is a
                     // function injects its top-level vars into the caller's
@@ -6264,10 +6294,10 @@ public sealed partial class JsCompiler
                 }
                 return;
             case AssignmentExpression { Op: JsTokenKind.Eq } a:
-                DeclarePatternBindings(a.Target, functionScoped);
+                DeclarePatternBindings(a.Target, functionScoped, forceBlockLocal);
                 return;
             case AssignmentPattern a:
-                DeclarePatternBindings(a.Target, functionScoped);
+                DeclarePatternBindings(a.Target, functionScoped, forceBlockLocal);
                 return;
             case ArrayPattern arr:
                 foreach (var element in arr.Elements)
@@ -6275,10 +6305,10 @@ public sealed partial class JsCompiler
                     switch (element)
                     {
                         case ArrayPatternBindingElement binding:
-                            DeclarePatternBindings(binding.Target, functionScoped);
+                            DeclarePatternBindings(binding.Target, functionScoped, forceBlockLocal);
                             break;
                         case ArrayPatternRestElement rest:
-                            DeclarePatternBindings(rest.Target, functionScoped);
+                            DeclarePatternBindings(rest.Target, functionScoped, forceBlockLocal);
                             break;
                     }
                 }
@@ -6286,12 +6316,12 @@ public sealed partial class JsCompiler
             case ObjectPattern obj:
                 foreach (var prop in obj.Properties)
                 {
-                    DeclarePatternBindings(prop.Target, functionScoped);
+                    DeclarePatternBindings(prop.Target, functionScoped, forceBlockLocal);
                 }
 
                 if (obj.Rest is not null)
                 {
-                    DeclarePatternBindings(obj.Rest.Argument, functionScoped);
+                    DeclarePatternBindings(obj.Rest.Argument, functionScoped, forceBlockLocal);
                 }
 
                 return;
@@ -6303,7 +6333,7 @@ public sealed partial class JsCompiler
                         continue;
                     }
 
-                    DeclarePatternBindings(element is SpreadElement spread ? spread.Argument : element, functionScoped);
+                    DeclarePatternBindings(element is SpreadElement spread ? spread.Argument : element, functionScoped, forceBlockLocal);
                 }
                 return;
             case ObjectExpression obj:
@@ -6311,16 +6341,16 @@ public sealed partial class JsCompiler
                 {
                     if (prop.Value is SpreadElement spread)
                     {
-                        DeclarePatternBindings(spread.Argument, functionScoped);
+                        DeclarePatternBindings(spread.Argument, functionScoped, forceBlockLocal);
                     }
                     else
                     {
-                        DeclarePatternBindings(prop.Value, functionScoped);
+                        DeclarePatternBindings(prop.Value, functionScoped, forceBlockLocal);
                     }
                 }
                 return;
             case SpreadElement spread:
-                DeclarePatternBindings(spread.Argument, functionScoped);
+                DeclarePatternBindings(spread.Argument, functionScoped, forceBlockLocal);
                 return;
         }
     }

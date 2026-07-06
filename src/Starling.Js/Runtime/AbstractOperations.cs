@@ -517,15 +517,6 @@ public static class AbstractOperations
         };
     }
 
-    /// <summary>Real <c>TypeError</c> when a VM is available (so
-    /// <c>assert.throws(TypeError, () => new fn())</c> observes an Error
-    /// object); string fallback only for the realm-less path — mirrors
-    /// <see cref="NotAFunction"/>.</summary>
-    private static JsThrow NotAConstructor(JsVm? vm, string detail) =>
-        vm is not null
-            ? new JsThrow(vm.Realm.NewTypeError($"not a constructor: {detail}"))
-            : new JsThrow(JsValue.String($"not a constructor: {detail}"));
-
     /// <summary>wp:M3-83 — mirror <see cref="CallForeignRealm"/> for
     /// [[Construct]]: a VM-less host construct of a foreign-realm function
     /// runs on that realm's own VM. Kept out of <see cref="Construct"/> so

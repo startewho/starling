@@ -290,6 +290,16 @@ public ref partial struct JsParser
             _forbidLabelledFunction = false;
         }
 
+        // Annex B.3.4 — a sloppy function declaration as an if-arm behaves
+        // "as if the declaration appeared in a block": normalize to a
+        // single-statement BlockStatement so hoisting, the B.3.3 candidate
+        // walk, and the var write-through all see the standard block shape.
+        if (_current.Kind == JsTokenKind.Function)
+        {
+            var fd = ParseStatement();
+            return new BlockStatement(new List<Statement> { fd }, fd.Start, fd.End);
+        }
+
         return ParseStatement();
     }
 
