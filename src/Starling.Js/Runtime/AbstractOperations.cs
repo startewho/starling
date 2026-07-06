@@ -398,29 +398,34 @@ public static class AbstractOperations
         }
 
         var target = receiver.AsObject;
-        if (target.HasOwn(key))
+        // §10.1.9.2 steps 2-3 — the receiver's own descriptor comes from its
+        // [[GetOwnProperty]] (a Proxy's trap fires here, an Array's exotic
+        // length/index slots are seen).
+        var existing = target.GetOwnPropertyDescriptor(key);
+        if (existing is { } ex)
         {
-            var existing = target.GetOwnPropertyDescriptor(key);
-            // A receiver own accessor / non-writable data property blocks the
-            // create-data path per §10.1.9.2 (CreateDataProperty would fail).
-            if (existing is { IsAccessor: true })
+            if (ex.IsAccessor || !ex.Writable)
             {
                 return false;
             }
 
-            if (existing is { Writable: false })
+            if (target is JsProxy or JsArray)
             {
-                return false;
+                // Step 3.d — a value-only [[DefineOwnProperty]] so the exotic
+                // receiver applies its own semantics (defineProperty trap,
+                // ArraySetLength). Ordinary receivers keep the cheap Set path,
+                // which is behaviorally identical for a writable data slot.
+                return target.DefineOwnPropertyPartial(key, PropertyDescriptor.Data(value),
+                    DescriptorFields.Build(value: true, writable: false, enumerable: false,
+                        configurable: false, get: false, set: false));
             }
 
             target.Set(key, value);
             return true;
         }
-        if (!target.Extensible)
-        {
-            return false;
-        }
 
+        // Step 4 CreateDataProperty — [[DefineOwnProperty]] owns the
+        // extensibility rejection (and a Proxy's defineProperty trap fires).
         return target.DefineOwnProperty(key, PropertyDescriptor.Data(value));
     }
 
