@@ -4,9 +4,11 @@ using Starling.Js.Runtime;
 namespace Starling.Js.Intrinsics;
 
 /// <summary>
-/// §21.4 The Date constructor and §21.4.4 Date.prototype. Spec-faithful surface
-/// backed by .NET <see cref="System.DateTimeOffset"/>; <see cref="JsDate"/>
-/// stores the millisecond timestamp directly (with NaN encoding invalid dates).
+/// §21.4 The Date constructor and §21.4.4 Date.prototype. The time value is a
+/// millisecond <c>double</c> (NaN = invalid) and every calendar operation is
+/// computed directly on it (§21.4.1 MakeDay/MakeTime/TimeClip), so the full
+/// ±8.64e15 ms range — years −271821..275760 — works without the narrower
+/// range limits of the host date types.
 /// </summary>
 /// <remarks>
 /// Locale is intentionally invariant — every <c>toLocale*</c> method delegates
@@ -20,6 +22,12 @@ public static class DateCtor
     private static readonly string[] WeekdayShort = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     private static readonly string[] MonthShort = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
+    private const double MsPerDay = 86_400_000d;
+    private const double MsPerHour = 3_600_000d;
+    private const double MsPerMinute = 60_000d;
+    private const double MsPerSecond = 1_000d;
+    private const double MaxTimeValue = 8.64e15;
+
     public static void Install(JsRealm realm)
     {
         ArgumentNullException.ThrowIfNull(realm);
@@ -28,7 +36,7 @@ public static class DateCtor
         JsNativeFunction? ctor = null;
         ctor = new JsNativeFunction(realm, "Date", length: 7, (newTarget, args) =>
         {
-            // §21.4.1.1 — Called without new, return the current date as a
+            // §21.4.2.1 — Called without new, return the current date as a
             // string regardless of args (spec oddity that real bundles use to
             // sniff host locale formatting; we return a stable UTC string).
             var calledAsConstructor = IntrinsicHelpers.IsConstructInvocation(newTarget);
@@ -45,27 +53,29 @@ public static class DateCtor
             else if (args.Length == 1)
             {
                 var v = args[0];
-                if (v.IsString)
-                {
-                    ms = ParseDate(v.AsString);
-                }
-                else if (v.IsObject && v.AsObject is JsDate other)
+                if (v.IsObject && v.AsObject is JsDate other)
                 {
                     ms = other.TimeValueMs;
                 }
                 else
                 {
-                    ms = JsValue.ToNumber(v);
+                    var prim = v.IsObject
+                        ? AbstractOperations.ToPrimitive(realm.ActiveVm, v, "default")
+                        : v;
+                    ms = prim.IsString ? ParseDate(prim.AsString) : ToNumberPrim(realm, prim);
                 }
+                ms = TimeClip(ms);
             }
             else
             {
-                ms = MakeLocalMs(args);
+                ms = TimeClip(MakeFromFields(realm, args));
             }
-            // §21.4.1.1 step 14: OrdinaryCreateFromConstructor — prototype from
-            // new.target so `class D extends Date {}` produces a D-prototyped date.
+            // §21.4.2.1 step 7: OrdinaryCreateFromConstructor — prototype from
+            // new.target so `class D extends Date {}` produces a D-prototyped
+            // date, falling back to new.target's function realm per
+            // GetPrototypeFromConstructor when its "prototype" is not an object.
             var date = new JsDate(realm, ms);
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = PrototypeFromNewTarget(realm, newTarget, proto);
             if (!ReferenceEquals(instProto, proto))
             {
                 date.SetPrototypeOf(instProto);
@@ -82,20 +92,20 @@ public static class DateCtor
         // Static methods.
         IntrinsicHelpers.DefineMethod(realm, ctor, "now", 0, (_, _) => JsValue.Number(NowMs()));
         IntrinsicHelpers.DefineMethod(realm, ctor, "parse", 1, (_, args) =>
-            JsValue.Number(args.Length == 0 ? double.NaN : ParseDate(JsValue.ToStringValue(args[0]))));
-        IntrinsicHelpers.DefineMethod(realm, ctor, "UTC", 7, (_, args) => JsValue.Number(MakeUtcMs(args)));
+            JsValue.Number(args.Length == 0 ? double.NaN : ParseDate(AbstractOperations.ToStringJs(realm.ActiveVm, args[0]))));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "UTC", 7, (_, args) => JsValue.Number(TimeClip(MakeFromFields(realm, args))));
 
         // Prototype getters.
         IntrinsicHelpers.DefineMethod(realm, proto, "getTime", 0, (thisV, _) => Time(realm, thisV));
         IntrinsicHelpers.DefineMethod(realm, proto, "valueOf", 0, (thisV, _) => Time(realm, thisV));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getFullYear", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Year));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getMonth", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Month - 1));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getDate", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Day));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getDay", 0, (thisV, _) => GetField(realm, thisV, dto => (int)dto.DayOfWeek));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getHours", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Hour));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getMinutes", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Minute));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getSeconds", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Second));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getMilliseconds", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Millisecond));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getFullYear", 0, (thisV, _) => GetField(realm, thisV, DateField.Year));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getMonth", 0, (thisV, _) => GetField(realm, thisV, DateField.Month));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getDate", 0, (thisV, _) => GetField(realm, thisV, DateField.Day));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getDay", 0, (thisV, _) => GetField(realm, thisV, DateField.Weekday));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getHours", 0, (thisV, _) => GetField(realm, thisV, DateField.Hours));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getMinutes", 0, (thisV, _) => GetField(realm, thisV, DateField.Minutes));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getSeconds", 0, (thisV, _) => GetField(realm, thisV, DateField.Seconds));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getMilliseconds", 0, (thisV, _) => GetField(realm, thisV, DateField.Milliseconds));
         IntrinsicHelpers.DefineMethod(realm, proto, "getTimezoneOffset", 0, (thisV, _) =>
         {
             var d = RequireDate(realm, thisV);
@@ -104,22 +114,22 @@ public static class DateCtor
 
         // UTC variants — equivalent under our invariant-UTC locale, but kept
         // distinct so dual lookups still resolve.
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCFullYear", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Year));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCMonth", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Month - 1));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCDate", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Day));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCDay", 0, (thisV, _) => GetField(realm, thisV, dto => (int)dto.DayOfWeek));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCHours", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Hour));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCMinutes", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Minute));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCSeconds", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Second));
-        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCMilliseconds", 0, (thisV, _) => GetField(realm, thisV, dto => dto.Millisecond));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCFullYear", 0, (thisV, _) => GetField(realm, thisV, DateField.Year));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCMonth", 0, (thisV, _) => GetField(realm, thisV, DateField.Month));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCDate", 0, (thisV, _) => GetField(realm, thisV, DateField.Day));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCDay", 0, (thisV, _) => GetField(realm, thisV, DateField.Weekday));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCHours", 0, (thisV, _) => GetField(realm, thisV, DateField.Hours));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCMinutes", 0, (thisV, _) => GetField(realm, thisV, DateField.Minutes));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCSeconds", 0, (thisV, _) => GetField(realm, thisV, DateField.Seconds));
+        IntrinsicHelpers.DefineMethod(realm, proto, "getUTCMilliseconds", 0, (thisV, _) => GetField(realm, thisV, DateField.Milliseconds));
 
         // Setters.
         IntrinsicHelpers.DefineMethod(realm, proto, "setTime", 1, (thisV, args) =>
         {
             var d = RequireDate(realm, thisV);
-            var ms = args.Length == 0 ? double.NaN : JsValue.ToNumber(args[0]);
+            var ms = TimeClip(args.Length == 0 ? double.NaN : ToNumberArg(realm, args[0]));
             d.SetTimeMs(ms);
-            return JsValue.Number(d.TimeValueMs);
+            return JsValue.Number(ms);
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "setFullYear", 3, (thisV, args) => SetParts(realm, thisV, args, DatePart.Year));
         IntrinsicHelpers.DefineMethod(realm, proto, "setMonth", 2, (thisV, args) => SetParts(realm, thisV, args, DatePart.Month));
@@ -186,32 +196,27 @@ public static class DateCtor
                 throw new JsThrow(realm.NewRangeError("Invalid time value"));
             }
 
-            var dto = d.ToDto();
-            if (dto is null)
-            {
-                throw new JsThrow(realm.NewRangeError("Invalid time value"));
-            }
-
-            return JsValue.String(dto.Value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture));
+            return JsValue.String(FormatIsoString(d.TimeValueMs));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "toJSON", 1, (thisV, _) =>
         {
-            // §21.4.4.37 — toJSON re-uses toISOString. Invalid dates per spec
-            // return null (the TimeClip / NaN check on the time value short-
-            // circuits before toISOString throws).
-            var d = RequireDate(realm, thisV);
-            if (!d.IsValid)
+            // §21.4.4.37 — generic: ToObject(this), ToPrimitive(number) to
+            // detect a non-finite time value, then Invoke(O, "toISOString").
+            var vm = realm.ActiveVm;
+            var obj = AbstractOperations.ToObject(realm, thisV);
+            var tv = AbstractOperations.ToPrimitive(vm, JsValue.Object(obj), "number");
+            if (tv.IsNumber && !double.IsFinite(tv.AsNumber))
             {
                 return JsValue.Null;
             }
 
-            var dto = d.ToDto();
-            if (dto is null)
+            var method = AbstractOperations.Get(vm, obj, "toISOString");
+            if (!AbstractOperations.IsCallable(method))
             {
-                return JsValue.Null;
+                throw new JsThrow(realm.NewTypeError("toISOString is not a function"));
             }
 
-            return JsValue.String(dto.Value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture));
+            return AbstractOperations.Call(vm, method, JsValue.Object(obj), Array.Empty<JsValue>());
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "toUTCString", 0, (thisV, _) =>
         {
@@ -239,19 +244,24 @@ public static class DateCtor
             return JsValue.String(d.IsValid ? FormatTimeString(d.TimeValueMs) : "Invalid Date");
         });
 
-        // §21.4.4.45 Date.prototype[@@toPrimitive] — coerces to string for
-        // "default"/"string" hints, number otherwise. Real bundles call
-        // String(date) which goes through this.
+        // §21.4.4.45 Date.prototype[@@toPrimitive] — generic over any object
+        // receiver: validates the hint, then runs OrdinaryToPrimitive.
         var toPrimitive = new JsNativeFunction(realm, "[Symbol.toPrimitive]", 1, (thisV, args) =>
         {
-            var d = RequireDate(realm, thisV);
-            var hint = args.Length > 0 && args[0].IsString ? args[0].AsString : "default";
-            if (hint == "number")
+            if (!thisV.IsObject)
             {
-                return d.IsValid ? JsValue.Number(d.TimeValueMs) : JsValue.NaN;
+                throw new JsThrow(realm.NewTypeError("Date.prototype[Symbol.toPrimitive] called on non-object"));
             }
 
-            return JsValue.String(d.IsValid ? FormatToString(d.TimeValueMs) : "Invalid Date");
+            var hintV = args.Length > 0 ? args[0] : JsValue.Undefined;
+            var hint = hintV.IsString ? hintV.AsString : null;
+            var stringFirst = hint is "string" or "default";
+            if (!stringFirst && hint != "number")
+            {
+                throw new JsThrow(realm.NewTypeError("Invalid hint: " + (hint ?? JsValue.ToStringValue(hintV))));
+            }
+
+            return OrdinaryToPrimitive(realm, thisV.AsObject, stringFirst);
         }, isConstructor: false);
         proto.DefineOwnProperty(SymbolCtor.ToPrimitive,
             PropertyDescriptor.Data(JsValue.Object(toPrimitive), writable: false, enumerable: false, configurable: true));
@@ -262,10 +272,251 @@ public static class DateCtor
     }
 
     // ------------------------------------------------------------------
-    //                          Time helpers
+    //                          Coercion helpers
+    // ------------------------------------------------------------------
+
+    /// <summary>§7.1.4 ToNumber with observable ToPrimitive dispatch (user
+    /// valueOf/toString/@@toPrimitive run through the active VM).</summary>
+    private static double ToNumberArg(JsRealm realm, JsValue v)
+    {
+        if (v.IsObject)
+        {
+            v = AbstractOperations.ToPrimitive(realm.ActiveVm, v, "number");
+        }
+
+        return ToNumberPrim(realm, v);
+    }
+
+    private static double ToNumberPrim(JsRealm realm, JsValue prim)
+    {
+        if (prim.IsSymbol)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
+        }
+
+        if (prim.IsBigInt)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a BigInt value to a number"));
+        }
+
+        return NumberCtor.ToNumber(prim);
+    }
+
+    /// <summary>§7.1.1.1 OrdinaryToPrimitive — the toString/valueOf probe
+    /// without the @@toPrimitive lookup (this IS the @@toPrimitive body).</summary>
+    private static JsValue OrdinaryToPrimitive(JsRealm realm, JsObject obj, bool stringFirst)
+    {
+        var vm = realm.ActiveVm;
+        var first = stringFirst ? "toString" : "valueOf";
+        var second = stringFirst ? "valueOf" : "toString";
+        var m1 = AbstractOperations.Get(vm, obj, first);
+        if (AbstractOperations.IsCallable(m1))
+        {
+            var r = AbstractOperations.Call(vm, m1, JsValue.Object(obj), Array.Empty<JsValue>());
+            if (!r.IsObject)
+            {
+                return r;
+            }
+        }
+
+        var m2 = AbstractOperations.Get(vm, obj, second);
+        if (AbstractOperations.IsCallable(m2))
+        {
+            var r = AbstractOperations.Call(vm, m2, JsValue.Object(obj), Array.Empty<JsValue>());
+            if (!r.IsObject)
+            {
+                return r;
+            }
+        }
+
+        throw new JsThrow(realm.NewTypeError("Cannot convert object to primitive value"));
+    }
+
+    /// <summary>§10.1.13 GetPrototypeFromConstructor — new.target's "prototype"
+    /// when it is an object, else the %Date.prototype% of new.target's own
+    /// function realm (cross-realm Reflect.construct), else our default.</summary>
+    private static JsObject PrototypeFromNewTarget(JsRealm realm, JsValue newTarget, JsObject defaultProto)
+    {
+        if (!newTarget.IsObject || !AbstractOperations.IsConstructor(newTarget))
+        {
+            return defaultProto;
+        }
+
+        var p = AbstractOperations.Get(realm.ActiveVm, newTarget.AsObject, "prototype");
+        if (p.IsObject)
+        {
+            return p.AsObject;
+        }
+
+        var funcRealm = FunctionRealmOf(newTarget.AsObject);
+        return funcRealm?.DatePrototype ?? defaultProto;
+    }
+
+    private static JsRealm? FunctionRealmOf(JsObject fn) => fn switch
+    {
+        JsFunction f => f.Realm,
+        JsBoundFunction bf => FunctionRealmOf(bf.Target),
+        _ => null,
+    };
+
+    // ------------------------------------------------------------------
+    //                          Spec time arithmetic (§21.4.1)
     // ------------------------------------------------------------------
 
     private static double NowMs() => System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    /// <summary>§21.4.1.31 TimeClip — NaN outside ±8.64e15, integer ms inside,
+    /// with −0 normalized to +0.</summary>
+    internal static double TimeClip(double t)
+    {
+        if (!double.IsFinite(t) || Math.Abs(t) > MaxTimeValue)
+        {
+            return double.NaN;
+        }
+
+        var clipped = Math.Truncate(t);
+        return clipped == 0 ? 0 : clipped;
+    }
+
+    /// <summary>§21.4.1.27 MakeTime, IEEE-754 double arithmetic in spec
+    /// operation order.</summary>
+    private static double MakeTime(double hour, double min, double sec, double ms)
+    {
+        if (!double.IsFinite(hour) || !double.IsFinite(min) || !double.IsFinite(sec) || !double.IsFinite(ms))
+        {
+            return double.NaN;
+        }
+
+        var h = Math.Truncate(hour);
+        var m = Math.Truncate(min);
+        var s = Math.Truncate(sec);
+        var milli = Math.Truncate(ms);
+        return ((h * MsPerHour + m * MsPerMinute) + s * MsPerSecond) + milli;
+    }
+
+    /// <summary>§21.4.1.28 MakeDay — day number for (year, month, 1) plus the
+    /// date offset, all as doubles so huge inputs overflow to values TimeClip
+    /// later rejects instead of wrapping.</summary>
+    private static double MakeDay(double year, double month, double date)
+    {
+        if (!double.IsFinite(year) || !double.IsFinite(month) || !double.IsFinite(date))
+        {
+            return double.NaN;
+        }
+
+        var y = Math.Truncate(year);
+        var m = Math.Truncate(month);
+        var dt = Math.Truncate(date);
+        var ym = y + Math.Floor(m / 12);
+        if (!double.IsFinite(ym) || Math.Abs(ym) > 1_000_000d)
+        {
+            // No finite time value has a year this large (the valid range ends
+            // at ±275760); spec step 8 returns NaN when t cannot be found.
+            return double.NaN;
+        }
+
+        var mn = (int)(m - 12 * Math.Floor(m / 12));
+        var day = DaysFromCivil((long)ym, mn + 1, 1);
+        return (day + dt) - 1;
+    }
+
+    /// <summary>§21.4.1.29 MakeDate.</summary>
+    private static double MakeDate(double day, double time)
+    {
+        if (!double.IsFinite(day) || !double.IsFinite(time))
+        {
+            return double.NaN;
+        }
+
+        return day * MsPerDay + time;
+    }
+
+    /// <summary>The shared §21.4.2.1 / §21.4.3.4 field path: ToNumber every
+    /// supplied argument left-to-right (all coercions are observable and happen
+    /// before any NaN check), apply the 0–99 → 1900-relative year rule, then
+    /// combine. Caller wraps in TimeClip.</summary>
+    private static double MakeFromFields(JsRealm realm, JsValue[] args)
+    {
+        var y = args.Length > 0 ? ToNumberArg(realm, args[0]) : double.NaN;
+        var m = args.Length > 1 ? ToNumberArg(realm, args[1]) : 0;
+        var dt = args.Length > 2 ? ToNumberArg(realm, args[2]) : 1;
+        var h = args.Length > 3 ? ToNumberArg(realm, args[3]) : 0;
+        var min = args.Length > 4 ? ToNumberArg(realm, args[4]) : 0;
+        var s = args.Length > 5 ? ToNumberArg(realm, args[5]) : 0;
+        var milli = args.Length > 6 ? ToNumberArg(realm, args[6]) : 0;
+
+        var yr = y;
+        if (!double.IsNaN(y))
+        {
+            var yi = Math.Truncate(y);
+            if (yi >= 0 && yi <= 99)
+            {
+                yr = 1900 + yi;
+            }
+        }
+
+        return MakeDate(MakeDay(yr, m, dt), MakeTime(h, min, s, milli));
+    }
+
+    /// <summary>Days since the epoch for a proleptic Gregorian civil date
+    /// (month 1-12). Exact for |year| ≤ 1e6.</summary>
+    private static long DaysFromCivil(long y, int m, int d)
+    {
+        y -= m <= 2 ? 1 : 0;
+        var era = (y >= 0 ? y : y - 399) / 400;
+        var yoe = y - era * 400;
+        var doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        var doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + doe - 719468;
+    }
+
+    /// <summary>Inverse of <see cref="DaysFromCivil"/>.</summary>
+    private static (long Year, int Month, int Day) CivilFromDays(long z)
+    {
+        z += 719468;
+        var era = (z >= 0 ? z : z - 146096) / 146097;
+        var doe = z - era * 146097;
+        var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        var y = yoe + era * 400;
+        var doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        var mp = (5 * doy + 2) / 153;
+        var d = (int)(doy - (153 * mp + 2) / 5 + 1);
+        var m = (int)(mp < 10 ? mp + 3 : mp - 9);
+        return (y + (m <= 2 ? 1 : 0), m, d);
+    }
+
+    private static long FloorDiv(long a, long b) => a >= 0 ? a / b : ~(~a / b);
+
+    private static long FloorMod(long a, long b)
+    {
+        var r = a % b;
+        return r < 0 ? r + b : r;
+    }
+
+    /// <summary>Split a valid (TimeClip'd) time value into calendar fields.
+    /// The whole range fits a long exactly, so this is pure integer math.</summary>
+    private readonly record struct DateFields(long Year, int Month, int Day, int Weekday, int Hours, int Minutes, int Seconds, int Milliseconds);
+
+    private static DateFields FieldsFromTime(double t)
+    {
+        var tl = (long)t;
+        var day = FloorDiv(tl, 86_400_000L);
+        var msInDay = FloorMod(tl, 86_400_000L);
+        var (year, month, dayOfMonth) = CivilFromDays(day);
+        return new DateFields(
+            year,
+            month - 1,
+            dayOfMonth,
+            (int)FloorMod(day + 4, 7),
+            (int)(msInDay / 3_600_000L),
+            (int)(msInDay / 60_000L % 60),
+            (int)(msInDay / 1_000L % 60),
+            (int)(msInDay % 1_000L));
+    }
+
+    // ------------------------------------------------------------------
+    //                          Getters
+    // ------------------------------------------------------------------
 
     private static JsDate RequireDate(JsRealm realm, JsValue thisV)
     {
@@ -283,86 +534,28 @@ public static class DateCtor
         return d.IsValid ? JsValue.Number(d.TimeValueMs) : JsValue.NaN;
     }
 
-    private static JsValue GetField(JsRealm realm, JsValue thisV, Func<System.DateTimeOffset, int> selector)
+    private enum DateField { Year, Month, Day, Weekday, Hours, Minutes, Seconds, Milliseconds }
+
+    private static JsValue GetField(JsRealm realm, JsValue thisV, DateField field)
     {
         var d = RequireDate(realm, thisV);
-        var dto = d.ToDto();
-        if (dto is null)
+        if (!d.IsValid)
         {
             return JsValue.NaN;
         }
 
-        return JsValue.Number(selector(dto.Value));
-    }
-
-    // ------------------------------------------------------------------
-    //                          new Date(y, m, ...) construction
-    // ------------------------------------------------------------------
-
-    // For invariant-UTC locale, the local-form constructor matches Date.UTC.
-    private static double MakeLocalMs(JsValue[] args) => MakeUtcMs(args);
-
-    private static double MakeUtcMs(JsValue[] args)
-    {
-        if (args.Length == 0)
+        var f = FieldsFromTime(d.TimeValueMs);
+        return JsValue.Number(field switch
         {
-            return double.NaN;
-        }
-
-        var year = JsValue.ToNumber(args[0]);
-        if (double.IsNaN(year))
-        {
-            return double.NaN;
-        }
-        // §21.4.1.16 — 0..99 maps to 1900..1999.
-        if (year >= 0 && year <= 99)
-        {
-            year += 1900;
-        }
-
-        var month = args.Length > 1 ? JsValue.ToNumber(args[1]) : 0;
-        var day = args.Length > 2 ? JsValue.ToNumber(args[2]) : 1;
-        var hours = args.Length > 3 ? JsValue.ToNumber(args[3]) : 0;
-        var minutes = args.Length > 4 ? JsValue.ToNumber(args[4]) : 0;
-        var seconds = args.Length > 5 ? JsValue.ToNumber(args[5]) : 0;
-        var ms = args.Length > 6 ? JsValue.ToNumber(args[6]) : 0;
-
-        if (double.IsNaN(month) || double.IsNaN(day) || double.IsNaN(hours)
-            || double.IsNaN(minutes) || double.IsNaN(seconds) || double.IsNaN(ms))
-        {
-            return double.NaN;
-        }
-
-        return MakeMs((int)year, (int)month, (int)day, (int)hours, (int)minutes, (int)seconds, (int)ms);
-    }
-
-    private static double MakeMs(int year, int month, int day, int hours, int minutes, int seconds, int ms)
-    {
-        try
-        {
-            // Normalize month overflow/underflow per §21.4.1.13 MakeDay.
-            var totalMonths = year * 12L + month;
-            var yy = (int)(totalMonths / 12);
-            var mm = (int)(totalMonths % 12);
-            if (mm < 0) { mm += 12; yy -= 1; }
-            // Build a UTC DateTime then add day/time deltas as TimeSpans so
-            // out-of-range day/hour values normalize per spec.
-            if (yy < 1 || yy > 9999)
-            {
-                return double.NaN;
-            }
-
-            var baseDate = new System.DateTime(yy, mm + 1, 1, 0, 0, 0, System.DateTimeKind.Utc);
-            var delta = System.TimeSpan.FromDays(day - 1)
-                + System.TimeSpan.FromHours(hours)
-                + System.TimeSpan.FromMinutes(minutes)
-                + System.TimeSpan.FromSeconds(seconds)
-                + System.TimeSpan.FromMilliseconds(ms);
-            var dto = new System.DateTimeOffset(baseDate, System.TimeSpan.Zero).Add(delta);
-            return dto.ToUnixTimeMilliseconds();
-        }
-        catch (System.ArgumentOutOfRangeException) { return double.NaN; }
-        catch (System.OverflowException) { return double.NaN; }
+            DateField.Year => f.Year,
+            DateField.Month => f.Month,
+            DateField.Day => f.Day,
+            DateField.Weekday => f.Weekday,
+            DateField.Hours => f.Hours,
+            DateField.Minutes => f.Minutes,
+            DateField.Seconds => f.Seconds,
+            _ => f.Milliseconds,
+        });
     }
 
     // ------------------------------------------------------------------
@@ -374,101 +567,66 @@ public static class DateCtor
     private static JsValue SetParts(JsRealm realm, JsValue thisV, JsValue[] args, DatePart kind)
     {
         var d = RequireDate(realm, thisV);
-        // setFullYear is the only setter that operates even on an invalid
-        // Date (§21.4.4.21). Every other setter on an invalid Date stays NaN.
-        var dto = d.ToDto();
-        int year, month, day, hours, minutes, seconds, ms;
-        if (dto is null)
-        {
-            if (kind != DatePart.Year) { d.SetTimeMs(double.NaN); return JsValue.NaN; }
-            year = 1970; month = 0; day = 1; hours = 0; minutes = 0; seconds = 0; ms = 0;
-        }
-        else
-        {
-            var v = dto.Value;
-            year = v.Year; month = v.Month - 1; day = v.Day;
-            hours = v.Hour; minutes = v.Minute; seconds = v.Second; ms = v.Millisecond;
-        }
+        // [[DateValue]] is read before any argument coercion (observable when a
+        // poisoned valueOf mutates the receiver).
+        var t = d.TimeValueMs;
+        // setFullYear treats an invalid date as time +0 (§21.4.4.21); every
+        // other setter leaves it invalid — but ALL argument coercions still run.
+        var invalid = double.IsNaN(t);
+        var f = FieldsFromTime(invalid ? 0 : t);
+        double year = f.Year, month = f.Month, day = f.Day;
+        double hours = f.Hours, minutes = f.Minutes, seconds = f.Seconds, ms = f.Milliseconds;
 
-        if (args.Length == 0) { d.SetTimeMs(double.NaN); return JsValue.NaN; }
+        double Take(int i) => i < args.Length ? ToNumberArg(realm, args[i]) : double.NaN;
+        double TakeOr(int i, double fallback) => i < args.Length ? ToNumberArg(realm, args[i]) : fallback;
 
-        double TakeOr(int i, double fallback)
-        {
-            if (i >= args.Length)
-            {
-                return fallback;
-            }
-
-            var n = JsValue.ToNumber(args[i]);
-            return n;
-        }
-
-        double nYear = year, nMonth = month, nDay = day, nHours = hours, nMinutes = minutes, nSeconds = seconds, nMs = ms;
         switch (kind)
         {
             case DatePart.Year:
-                nYear = JsValue.ToNumber(args[0]);
-                nMonth = TakeOr(1, month);
-                nDay = TakeOr(2, day);
+                year = Take(0);
+                month = TakeOr(1, month);
+                day = TakeOr(2, day);
                 break;
             case DatePart.Month:
-                nMonth = JsValue.ToNumber(args[0]);
-                nDay = TakeOr(1, day);
+                month = Take(0);
+                day = TakeOr(1, day);
                 break;
             case DatePart.Day:
-                nDay = JsValue.ToNumber(args[0]);
+                day = Take(0);
                 break;
             case DatePart.Hours:
-                nHours = JsValue.ToNumber(args[0]);
-                nMinutes = TakeOr(1, minutes);
-                nSeconds = TakeOr(2, seconds);
-                nMs = TakeOr(3, ms);
+                hours = Take(0);
+                minutes = TakeOr(1, minutes);
+                seconds = TakeOr(2, seconds);
+                ms = TakeOr(3, ms);
                 break;
             case DatePart.Minutes:
-                nMinutes = JsValue.ToNumber(args[0]);
-                nSeconds = TakeOr(1, seconds);
-                nMs = TakeOr(2, ms);
+                minutes = Take(0);
+                seconds = TakeOr(1, seconds);
+                ms = TakeOr(2, ms);
                 break;
             case DatePart.Seconds:
-                nSeconds = JsValue.ToNumber(args[0]);
-                nMs = TakeOr(1, ms);
+                seconds = Take(0);
+                ms = TakeOr(1, ms);
                 break;
             case DatePart.Milliseconds:
-                nMs = JsValue.ToNumber(args[0]);
+                ms = Take(0);
                 break;
         }
 
-        if (double.IsNaN(nYear) || double.IsNaN(nMonth) || double.IsNaN(nDay)
-            || double.IsNaN(nHours) || double.IsNaN(nMinutes) || double.IsNaN(nSeconds) || double.IsNaN(nMs))
+        if (invalid && kind != DatePart.Year)
         {
-            d.SetTimeMs(double.NaN);
             return JsValue.NaN;
         }
 
-        var newMs = MakeMs((int)nYear, (int)nMonth, (int)nDay, (int)nHours, (int)nMinutes, (int)nSeconds, (int)nMs);
-        d.SetTimeMs(newMs);
-        return JsValue.Number(newMs);
+        var u = TimeClip(MakeDate(MakeDay(year, month, day), MakeTime(hours, minutes, seconds, ms)));
+        d.SetTimeMs(u);
+        return JsValue.Number(u);
     }
 
     // ------------------------------------------------------------------
-    //                       Parsing (ISO-leaning lenient)
+    //                       Parsing (§21.4.1.15 + lenient legacy)
     // ------------------------------------------------------------------
-
-    private static readonly string[] AcceptedFormats =
-    {
-        "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss.ff'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss.f'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss.fffzzz",
-        "yyyy-MM-dd'T'HH:mm:sszzz",
-        "yyyy-MM-dd'T'HH:mm:ss.fff",
-        "yyyy-MM-dd'T'HH:mm:ss",
-        "yyyy-MM-dd'T'HH:mm",
-        "yyyy-MM-dd",
-        "yyyy-MM",
-        "yyyy",
-    };
 
     internal static double ParseDate(string input)
     {
@@ -478,32 +636,234 @@ public static class DateCtor
         }
 
         var s = input.Trim();
-
-        // Fast path: ISO 8601 with optional fractional seconds + offset.
-        if (System.DateTimeOffset.TryParseExact(s, AcceptedFormats, CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var exact))
+        if (TryParseIso(s, out var iso))
         {
-            return exact.ToUnixTimeMilliseconds();
+            return iso;
         }
 
-        // Fall back to lenient round-trip parser for edge formats.
+        // Non-ISO strings are implementation-defined (§21.4.3.2); accept the
+        // formats the web depends on. First the host's lenient parser for
+        // human-readable forms ("December 17, 1995 03:24:00"), then a token
+        // scanner for the toString round-trip family.
         if (System.DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var any))
         {
             return any.ToUnixTimeMilliseconds();
         }
 
-        // Legacy "loose" formats every browser accepts (§21.4.3.2 leaves
-        // non-ISO strings implementation-defined, but the web depends on
-        // these): "Tue Jun 09 20:00:00 +0000 2026" (Twitter's created_at),
-        // "Tue Jun 09 2026 20:00:00 GMT+0000 (Coordinated Universal Time)"
-        // (Date.prototype.toString round-trip), "Jun 9, 2026" and friends.
         if (TryParseLegacy(s, out var legacy))
         {
             return legacy;
         }
 
         return double.NaN;
+    }
+
+    /// <summary>The §21.4.1.15 Date Time String Format: YYYY or ±YYYYYY, then
+    /// optional -MM[-DD], then optional THH:mm[:ss[.fff]] with optional Z or
+    /// ±HH:mm offset. Returns false when the string is not an instance of the
+    /// grammar at all (caller may try legacy forms); returns true with NaN when
+    /// it matches the shape but has out-of-range fields.</summary>
+    private static bool TryParseIso(string s, out double ms)
+    {
+        ms = double.NaN;
+        var i = 0;
+        var n = s.Length;
+
+        static bool Digits(string str, ref int pos, int count, out int value)
+        {
+            value = 0;
+            if (pos + count > str.Length)
+            {
+                return false;
+            }
+
+            for (var k = 0; k < count; k++)
+            {
+                var c = str[pos + k];
+                if (!char.IsAsciiDigit(c))
+                {
+                    return false;
+                }
+
+                value = value * 10 + (c - '0');
+            }
+
+            pos += count;
+            return true;
+        }
+
+        long year;
+        if (i < n && (s[i] == '+' || s[i] == '-'))
+        {
+            var sign = s[i] == '-' ? -1 : 1;
+            i++;
+            if (!Digits(s, ref i, 6, out var y6))
+            {
+                return false;
+            }
+
+            if (sign == -1 && y6 == 0)
+            {
+                // "-000000" is explicitly invalid.
+                return true;
+            }
+
+            year = sign * (long)y6;
+        }
+        else
+        {
+            if (!Digits(s, ref i, 4, out var y4))
+            {
+                return false;
+            }
+
+            year = y4;
+        }
+
+        var month = 1;
+        var day = 1;
+        var dateOnly = true;
+        if (i < n && s[i] == '-')
+        {
+            i++;
+            if (!Digits(s, ref i, 2, out month))
+            {
+                return false;
+            }
+
+            if (i < n && s[i] == '-')
+            {
+                i++;
+                if (!Digits(s, ref i, 2, out day))
+                {
+                    return false;
+                }
+            }
+        }
+
+        int hour = 0, minute = 0, second = 0, milli = 0;
+        var haveOffset = false;
+        var offsetMinutes = 0L;
+        if (i < n && (s[i] == 'T' || s[i] == 't'))
+        {
+            dateOnly = false;
+            i++;
+            if (!Digits(s, ref i, 2, out hour) || i >= n || s[i] != ':')
+            {
+                return false;
+            }
+
+            i++;
+            if (!Digits(s, ref i, 2, out minute))
+            {
+                return false;
+            }
+
+            if (i < n && s[i] == ':')
+            {
+                i++;
+                if (!Digits(s, ref i, 2, out second))
+                {
+                    return false;
+                }
+
+                if (i < n && s[i] == '.')
+                {
+                    i++;
+                    var start = i;
+                    while (i < n && char.IsAsciiDigit(s[i]))
+                    {
+                        i++;
+                    }
+
+                    if (i == start)
+                    {
+                        return false;
+                    }
+
+                    // Use millisecond precision; extra digits are ignored.
+                    var fracLen = Math.Min(3, i - start);
+                    milli = int.Parse(s.AsSpan(start, fracLen), CultureInfo.InvariantCulture);
+                    for (var k = fracLen; k < 3; k++)
+                    {
+                        milli *= 10;
+                    }
+                }
+            }
+
+            if (i < n)
+            {
+                if (s[i] == 'Z' || s[i] == 'z')
+                {
+                    i++;
+                    haveOffset = true;
+                }
+                else if (s[i] == '+' || s[i] == '-')
+                {
+                    var osign = s[i] == '-' ? -1 : 1;
+                    i++;
+                    if (!Digits(s, ref i, 2, out var oh))
+                    {
+                        return false;
+                    }
+
+                    if (i < n && s[i] == ':')
+                    {
+                        i++;
+                    }
+
+                    if (!Digits(s, ref i, 2, out var om))
+                    {
+                        return false;
+                    }
+
+                    if (oh > 23 || om > 59)
+                    {
+                        return true;
+                    }
+
+                    offsetMinutes = osign * (oh * 60L + om);
+                    haveOffset = true;
+                }
+            }
+        }
+
+        if (i != n)
+        {
+            return false;
+        }
+
+        // Out-of-range fields: the shape matched, so this is a recognized but
+        // invalid date → NaN (already set). A date-only or offset-less string
+        // is interpreted as UTC (this engine's local time IS UTC).
+        _ = dateOnly;
+        _ = haveOffset;
+        if (month < 1 || month > 12 || day < 1 || day > DaysInMonth(year, month))
+        {
+            return true;
+        }
+
+        if (hour > 24 || minute > 59 || second > 59 || (hour == 24 && (minute != 0 || second != 0 || milli != 0)))
+        {
+            return true;
+        }
+
+        var t = MakeDate(MakeDay(year, month - 1, day), MakeTime(hour, minute, second, milli))
+            - offsetMinutes * MsPerMinute;
+        ms = TimeClip(t);
+        return true;
+    }
+
+    private static int DaysInMonth(long year, int month)
+    {
+        if (month == 2)
+        {
+            var leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            return leap ? 29 : 28;
+        }
+
+        return month is 4 or 6 or 9 or 11 ? 30 : 31;
     }
 
     /// <summary>Token-based parser for the loose date forms: any order of
@@ -659,91 +1019,75 @@ public static class DateCtor
             return false;
         }
 
-        try
-        {
-            var dto = new System.DateTimeOffset(year, month, day, 0, 0, 0, System.TimeSpan.Zero);
-            ms = dto.ToUnixTimeMilliseconds()
-                + hour * 3_600_000L + minute * 60_000L + second * 1_000L + milli
-                - offsetMinutes * 60_000L;
-            return true;
-        }
-        catch (System.ArgumentOutOfRangeException)
-        {
-            return false;
-        }
+        var dayNum = DaysFromCivil(year, month, day);
+        ms = dayNum * MsPerDay
+            + hour * 3_600_000L + minute * 60_000L + second * 1_000L + milli
+            - offsetMinutes * 60_000L;
+        ms = TimeClip(ms);
+        return !double.IsNaN(ms);
     }
 
     // ------------------------------------------------------------------
     //                       Formatting (invariant)
     // ------------------------------------------------------------------
 
+    /// <summary>§21.4.4.41.2 year text: at least four digits, "-" prefix for
+    /// negative years.</summary>
+    private static string YearString(long year) =>
+        year < 0
+            ? "-" + (-year).ToString("D4", CultureInfo.InvariantCulture)
+            : year.ToString("D4", CultureInfo.InvariantCulture);
+
     private static string FormatToString(double ms)
     {
-        var dto = SafeFromMs(ms);
-        if (dto is null)
-        {
-            return "Invalid Date";
-        }
-
-        var v = dto.Value.UtcDateTime;
+        var f = FieldsFromTime(ms);
         return string.Format(CultureInfo.InvariantCulture,
-            "{0} {1} {2:D2} {3:D4} {4:D2}:{5:D2}:{6:D2} GMT+0000 (Coordinated Universal Time)",
-            WeekdayShort[(int)v.DayOfWeek], MonthShort[v.Month - 1], v.Day, v.Year, v.Hour, v.Minute, v.Second);
+            "{0} {1} {2:D2} {3} {4:D2}:{5:D2}:{6:D2} GMT+0000 (Coordinated Universal Time)",
+            WeekdayShort[f.Weekday], MonthShort[f.Month], f.Day, YearString(f.Year), f.Hours, f.Minutes, f.Seconds);
     }
 
     private static string FormatDateString(double ms)
     {
-        var dto = SafeFromMs(ms);
-        if (dto is null)
-        {
-            return "Invalid Date";
-        }
-
-        var v = dto.Value.UtcDateTime;
-        return string.Format(CultureInfo.InvariantCulture, "{0} {1} {2:D2} {3:D4}",
-            WeekdayShort[(int)v.DayOfWeek], MonthShort[v.Month - 1], v.Day, v.Year);
+        var f = FieldsFromTime(ms);
+        return string.Format(CultureInfo.InvariantCulture, "{0} {1} {2:D2} {3}",
+            WeekdayShort[f.Weekday], MonthShort[f.Month], f.Day, YearString(f.Year));
     }
 
     private static string FormatTimeString(double ms)
     {
-        var dto = SafeFromMs(ms);
-        if (dto is null)
-        {
-            return "Invalid Date";
-        }
-
-        var v = dto.Value.UtcDateTime;
+        var f = FieldsFromTime(ms);
         return string.Format(CultureInfo.InvariantCulture,
-            "{0:D2}:{1:D2}:{2:D2} GMT+0000 (Coordinated Universal Time)", v.Hour, v.Minute, v.Second);
+            "{0:D2}:{1:D2}:{2:D2} GMT+0000 (Coordinated Universal Time)", f.Hours, f.Minutes, f.Seconds);
     }
 
     private static string FormatUtcString(double ms)
     {
-        var dto = SafeFromMs(ms);
-        if (dto is null)
-        {
-            return "Invalid Date";
-        }
-
-        var v = dto.Value.UtcDateTime;
+        var f = FieldsFromTime(ms);
         return string.Format(CultureInfo.InvariantCulture,
-            "{0}, {1:D2} {2} {3:D4} {4:D2}:{5:D2}:{6:D2} GMT",
-            WeekdayShort[(int)v.DayOfWeek], v.Day, MonthShort[v.Month - 1], v.Year, v.Hour, v.Minute, v.Second);
+            "{0}, {1:D2} {2} {3} {4:D2}:{5:D2}:{6:D2} GMT",
+            WeekdayShort[f.Weekday], f.Day, MonthShort[f.Month], YearString(f.Year), f.Hours, f.Minutes, f.Seconds);
     }
 
-    private static System.DateTimeOffset? SafeFromMs(double ms)
+    /// <summary>§21.4.4.36 — expanded ±YYYYYY year outside 0000-9999.</summary>
+    private static string FormatIsoString(double ms)
     {
-        if (double.IsNaN(ms) || double.IsInfinity(ms))
+        var f = FieldsFromTime(ms);
+        string year;
+        if (f.Year is >= 0 and <= 9999)
         {
-            return null;
+            year = f.Year.ToString("D4", CultureInfo.InvariantCulture);
+        }
+        else if (f.Year < 0)
+        {
+            year = "-" + (-f.Year).ToString("D6", CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            year = "+" + f.Year.ToString("D6", CultureInfo.InvariantCulture);
         }
 
-        if (ms < -62135596800000d || ms > 253402300799999d)
-        {
-            return null;
-        }
-
-        try { return System.DateTimeOffset.FromUnixTimeMilliseconds((long)ms); }
-        catch (System.ArgumentOutOfRangeException) { return null; }
+        return string.Format(CultureInfo.InvariantCulture,
+            "{0}-{1:D2}-{2:D2}T{3:D2}:{4:D2}:{5:D2}.{6:D3}Z",
+            year, f.Month + 1, f.Day, f.Hours, f.Minutes, f.Seconds, f.Milliseconds);
     }
 }

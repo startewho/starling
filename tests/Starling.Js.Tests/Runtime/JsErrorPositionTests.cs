@@ -39,6 +39,8 @@ public class JsErrorPositionTests
     [TestMethod]
     public void New_on_undefined_carries_position()
     {
+        // `new` on a non-object throws a real TypeError object; the position
+        // rides in its message.
         var act = () => Eval("new undefined();");
         act.Should().Throw<JsThrow>()
             .Which.Value.Should().Match<JsValue>(v => ThrownMessage(v).Contains("(at 1:1)"));

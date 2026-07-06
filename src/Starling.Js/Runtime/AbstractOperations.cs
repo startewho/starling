@@ -489,12 +489,18 @@ public static class AbstractOperations
             ? new JsThrow(vm.Realm.NewTypeError($"not a function: {detail}"))
             : new JsThrow(JsValue.String($"not a function: {detail}"));
 
+    /// <summary>Same realm-aware TypeError shaping for [[Construct]] misuse.</summary>
+    private static JsThrow NotAConstructor(JsVm? vm, string detail) =>
+        vm is not null
+            ? new JsThrow(vm.Realm.NewTypeError($"not a constructor: {detail}"))
+            : new JsThrow(JsValue.String($"not a constructor: {detail}"));
+
     /// <summary>§7.3.15 Construct — analogous for <c>new</c>.</summary>
     public static JsValue Construct(JsVm? vm, JsValue ctor, JsValue[] args, JsObject? newTarget = null)
     {
         if (!IsConstructor(ctor))
         {
-            throw NotAConstructor(vm, JsValue.ToStringValue(ctor));
+            throw NotAConstructor(vm, ctor.IsObject ? ctor.AsObject.ToString() ?? "object" : JsValue.ToStringValue(ctor));
         }
 
         newTarget ??= ctor.AsObject;
