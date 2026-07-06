@@ -868,7 +868,7 @@ public sealed class ModuleLoader
         // from re-exported stars), each bound to its live cell. A name that fails
         // to resolve to a cell is dropped (it is not a usable binding).
         var exports = new Dictionary<string, Cell>(StringComparer.Ordinal);
-        var ns = new JsModuleNamespace(exports);
+        var ns = new JsModuleNamespace(exports, _runtime.Realm);
         module.Namespace = ns;
 
         foreach (var name in ExportedNames(module, new HashSet<string>(StringComparer.Ordinal)))
