@@ -3022,6 +3022,14 @@ public sealed partial class JsCompiler
             // script-top the binding is loop-local (not a global), per spec.
             var slot = _b.ReserveLocal();
             _scopes[^1][id.Name] = slot;
+            // The head binding IS lexical — without the marks, `i++` on a
+            // `for (const i…)` head skipped the const TypeError entirely.
+            MarkLexical(id.Name);
+            if (vd.Kind == "const")
+            {
+                MarkConst(id.Name);
+            }
+
             _b.MarkCaptured(slot);
             _b.EmitSlot(Opcode.InitCellLocal, slot);
             slots.Add(slot);
@@ -4322,6 +4330,20 @@ public sealed partial class JsCompiler
                 EmitIdStore(id.Name, needsTdzCheck: false);
                 return;
             }
+            // §13.4.2.1 — ++/-- on a const binding is a runtime TypeError
+            // (after the old value is read and coerced, per evaluation order,
+            // but compile-time emission of the throw matches the observable
+            // behavior for a resolvable const local).
+            if (IsConstLocal(id.Name) && !_inLexicalDeclInit)
+            {
+                // Evaluate the read (for its TDZ check), coerce, then throw.
+                EmitIdLoad(id.Name);
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(0.0));
+                _b.Emit(Opcode.Add);
+                _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(id.Name));
+                return;
+            }
+
             // Try local first, then upvalue, then global.
             if (TryResolveLocal(id.Name, out var slot))
             {
