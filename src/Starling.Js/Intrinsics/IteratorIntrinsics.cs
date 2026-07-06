@@ -183,6 +183,11 @@ public sealed class JsArrayIterator : JsObject
             return arr.Length;
         }
 
+        if (obj is JsTypedArray ta)
+        {
+            return ta.Length;
+        }
+
         var v = obj.Get("length");
         var n = JsValue.ToNumber(v);
         if (double.IsNaN(n) || n <= 0)

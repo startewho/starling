@@ -129,6 +129,14 @@ internal static class IntrinsicHelpers
     /// `class X extends Builtin {}` produce instances whose [[Prototype]] is
     /// <c>X.prototype</c> while still carrying the builtin's internal slots.</summary>
     public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto)
+        => NewTargetPrototype(vm, thisV, defaultProto, intrinsicSelector: null);
+
+    /// <summary>§10.1.13 GetPrototypeFromConstructor. When new.target's
+    /// <c>prototype</c> is not an object, <paramref name="intrinsicSelector"/>
+    /// picks the named intrinsic from the constructor function's realm
+    /// (§7.3.25 GetFunctionRealm) so cross-realm construction lands on the
+    /// foreign realm's prototype.</summary>
+    public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto, Func<JsRealm, JsObject?>? intrinsicSelector)
     {
         if (thisV.IsObject && AbstractOperations.IsConstructor(thisV))
         {
@@ -136,6 +144,20 @@ internal static class IntrinsicHelpers
             if (proto.IsObject)
             {
                 return proto.AsObject;
+            }
+
+            if (intrinsicSelector is not null)
+            {
+                var target = thisV.AsObject;
+                while (target is JsBoundFunction bound)
+                {
+                    target = bound.Target;
+                }
+
+                if (target is JsFunction fn && fn.Realm is { } fnRealm && intrinsicSelector(fnRealm) is { } intrinsic)
+                {
+                    return intrinsic;
+                }
             }
         }
         return defaultProto;

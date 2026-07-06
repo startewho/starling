@@ -19,28 +19,71 @@ public enum JsTypedArrayKind
     BigUint64,
 }
 
-/// <summary>ECMA-262 §25.2 TypedArray exotic object backed by an ArrayBuffer.</summary>
+/// <summary>ECMA-262 §10.4.5 TypedArray (integer-indexed) exotic object backed
+/// by an ArrayBuffer. Canonical numeric index keys resolve against the element
+/// storage and never fall back to ordinary properties.</summary>
 public sealed class JsTypedArray : JsObject
 {
-    public JsTypedArray(JsObject? prototype, JsTypedArrayKind kind, JsArrayBuffer buffer, int byteOffset, int length) : base(prototype)
+    private readonly int _fixedLength;
+
+    public JsTypedArray(JsObject? prototype, JsTypedArrayKind kind, JsArrayBuffer buffer, int byteOffset, int length,
+        bool lengthTracking = false, JsRealm? realm = null) : base(prototype)
     {
         DisableInlineCache();
         Kind = kind;
         Buffer = buffer;
         ByteOffset = byteOffset;
-        Length = length;
-        DefineOwnProperty("buffer", PropertyDescriptor.Data(JsValue.Object(buffer), false, false, true));
-        DefineOwnProperty("byteOffset", PropertyDescriptor.Data(JsValue.Number(byteOffset), false, false, true));
-        DefineOwnProperty("byteLength", PropertyDescriptor.Data(JsValue.Number(length * BytesPerElement), false, false, true));
-        DefineOwnProperty("length", PropertyDescriptor.Data(JsValue.Number(length), false, false, true));
-        DefineOwnProperty("BYTES_PER_ELEMENT", PropertyDescriptor.Data(JsValue.Number(BytesPerElement), false, false, true));
+        _fixedLength = length;
+        IsLengthTracking = lengthTracking;
+        Realm = realm;
     }
 
     public JsTypedArrayKind Kind { get; }
     public JsArrayBuffer Buffer { get; }
     public int ByteOffset { get; }
-    public int Length { get; }
+    public bool IsLengthTracking { get; }
+
+    /// <summary>Creation realm, when known — lets coercions inside the exotic
+    /// [[Set]] surface JS TypeErrors instead of host exceptions.</summary>
+    public JsRealm? Realm { get; set; }
+
     public int BytesPerElement => BytesPerElementOf(Kind);
+
+    public bool IsBigIntKind => Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64;
+
+    /// <summary>§10.4.5.13 IsTypedArrayOutOfBounds (with the detached case folded in).</summary>
+    public bool IsOutOfBounds
+    {
+        get
+        {
+            if (Buffer.IsDetached)
+            {
+                return true;
+            }
+
+            if (ByteOffset > Buffer.ByteLength)
+            {
+                return true;
+            }
+
+            return !IsLengthTracking && ByteOffset + (long)_fixedLength * BytesPerElement > Buffer.ByteLength;
+        }
+    }
+
+    /// <summary>§10.4.5.12 TypedArrayLength — 0 when detached or out of bounds.</summary>
+    public int Length
+    {
+        get
+        {
+            if (IsOutOfBounds)
+            {
+                return 0;
+            }
+
+            return IsLengthTracking ? (Buffer.ByteLength - ByteOffset) / BytesPerElement : _fixedLength;
+        }
+    }
+
     public int ByteLength => Length * BytesPerElement;
 
     public static int BytesPerElementOf(JsTypedArrayKind kind) => kind switch
@@ -70,11 +113,88 @@ public sealed class JsTypedArray : JsObject
         _ => throw new InvalidOperationException(),
     };
 
+    /// <summary>§7.1.21 CanonicalNumericIndexString — true when <paramref name="name"/>
+    /// is "-0" or round-trips through ToNumber/ToString.</summary>
+    internal static bool TryCanonicalNumericIndex(string name, out double index)
+    {
+        if (name.Length == 0)
+        {
+            index = 0;
+            return false;
+        }
+
+        // Fast path: plain decimal integers without a leading zero.
+        var allDigits = true;
+        for (var i = 0; i < name.Length; i++)
+        {
+            if (name[i] is < '0' or > '9')
+            {
+                allDigits = false;
+                break;
+            }
+        }
+
+        if (allDigits)
+        {
+            if (name.Length > 1 && name[0] == '0')
+            {
+                index = 0;
+                return false;
+            }
+
+            if (name.Length <= 15)
+            {
+                index = double.Parse(name, NumberStyles.None, CultureInfo.InvariantCulture);
+                return true;
+            }
+        }
+
+        if (name == "-0")
+        {
+            index = -0.0;
+            return true;
+        }
+
+        var first = name[0];
+        if (first != '-' && first != '.' && (first < '0' || first > '9')
+            && name != "NaN" && name != "Infinity" && name != "-Infinity")
+        {
+            index = 0;
+            return false;
+        }
+
+        var n = JsValue.ToNumber(JsValue.String(name));
+        if (JsValue.ToStringValue(JsValue.Number(n)) == name)
+        {
+            index = n;
+            return true;
+        }
+
+        index = 0;
+        return false;
+    }
+
+    /// <summary>§10.4.5.14 IsValidIntegerIndex.</summary>
+    public bool IsValidIndex(double index)
+    {
+        if (double.IsNaN(index) || double.IsInfinity(index) || Math.Truncate(index) != index)
+        {
+            return false;
+        }
+
+        if (index == 0 && double.IsNegative(index))
+        {
+            return false;
+        }
+
+        return index >= 0 && index < Length;
+    }
+
     public override JsValue Get(string name)
     {
-        if (TryIndex(name, out var index))
+        if (TryCanonicalNumericIndex(name, out var index))
         {
-            return index >= 0 && index < Length ? GetElement(index) : JsValue.Undefined;
+            return IsValidIndex(index) ? GetElement((int)index) : JsValue.Undefined;
         }
 
         return base.Get(name);
@@ -82,17 +202,165 @@ public sealed class JsTypedArray : JsObject
 
     public override void Set(string name, JsValue value)
     {
-        if (TryIndex(name, out var index))
+        if (TryCanonicalNumericIndex(name, out var index))
         {
-            if (index >= 0 && index < Length)
-            {
-                SetElement(index, value);
-            }
-
+            SetIntegerIndexed(index, value, Realm);
             return;
         }
         base.Set(name, value);
     }
+
+    public override bool Has(string name)
+    {
+        if (TryCanonicalNumericIndex(name, out var index))
+        {
+            return IsValidIndex(index);
+        }
+
+        return base.Has(name);
+    }
+
+    public override bool HasOwn(string name)
+    {
+        if (TryCanonicalNumericIndex(name, out var index))
+        {
+            return IsValidIndex(index);
+        }
+
+        return base.HasOwn(name);
+    }
+
+    public override PropertyDescriptor? GetOwnPropertyDescriptor(string name)
+    {
+        if (TryCanonicalNumericIndex(name, out var index))
+        {
+            if (!IsValidIndex(index))
+            {
+                return null;
+            }
+
+            return PropertyDescriptor.Data(GetElement((int)index), writable: true, enumerable: true, configurable: true);
+        }
+
+        return base.GetOwnPropertyDescriptor(name);
+    }
+
+    public override bool DefineOwnProperty(string name, PropertyDescriptor desc)
+    {
+        if (TryCanonicalNumericIndex(name, out var index))
+        {
+            return DefineIntegerIndexed(index, desc,
+                DescriptorFields.Build(value: desc.IsData, writable: desc.IsData, enumerable: true, configurable: true, get: desc.IsAccessor, set: desc.IsAccessor));
+        }
+
+        return base.DefineOwnProperty(name, desc);
+    }
+
+    internal override bool DefineOwnPropertyPartial(JsPropertyKey key, PropertyDescriptor desc, DescriptorFields present)
+    {
+        if (key.IsString && TryCanonicalNumericIndex(key.AsString, out var index))
+        {
+            return DefineIntegerIndexed(index, desc, present);
+        }
+
+        return base.DefineOwnPropertyPartial(key, desc, present);
+    }
+
+    /// <summary>§10.4.5.3 [[DefineOwnProperty]] for a canonical numeric index.</summary>
+    private bool DefineIntegerIndexed(double index, PropertyDescriptor desc, DescriptorFields present)
+    {
+        if (!IsValidIndex(index))
+        {
+            return false;
+        }
+
+        if (present.HasGet || present.HasSet || desc.IsAccessor)
+        {
+            return false;
+        }
+
+        if (present.HasConfigurable && !desc.Configurable)
+        {
+            return false;
+        }
+
+        if (present.HasEnumerable && !desc.Enumerable)
+        {
+            return false;
+        }
+
+        if (present.HasWritable && !desc.Writable)
+        {
+            return false;
+        }
+
+        if (present.HasValue)
+        {
+            SetIntegerIndexed(index, desc.Value, Realm);
+        }
+
+        return true;
+    }
+
+    public override bool Delete(string name)
+    {
+        if (TryCanonicalNumericIndex(name, out var index))
+        {
+            return !IsValidIndex(index);
+        }
+
+        return base.Delete(name);
+    }
+
+    public override IEnumerable<string> Keys
+    {
+        get
+        {
+            var len = Length;
+            for (var i = 0; i < len; i++)
+            {
+                yield return IndexToString(i);
+            }
+
+            foreach (var key in base.Keys)
+            {
+                yield return key;
+            }
+        }
+    }
+
+    public override IEnumerable<JsPropertyKey> OwnPropertyKeys
+    {
+        get
+        {
+            var len = Length;
+            for (var i = 0; i < len; i++)
+            {
+                yield return JsPropertyKey.String(IndexToString(i));
+            }
+
+            foreach (var key in base.OwnPropertyKeys)
+            {
+                yield return key;
+            }
+        }
+    }
+
+    public override IEnumerable<string> EnumerableKeys()
+    {
+        var len = Length;
+        for (var i = 0; i < len; i++)
+        {
+            yield return IndexToString(i);
+        }
+
+        foreach (var key in base.EnumerableKeys())
+        {
+            yield return key;
+        }
+    }
+
+    private static string IndexToString(int i) => i.ToString(CultureInfo.InvariantCulture);
 
     public JsValue GetElement(int index)
     {
@@ -115,12 +383,50 @@ public sealed class JsTypedArray : JsObject
         };
     }
 
+    /// <summary>§10.4.5.16 TypedArraySetElement — coerce first (observable side
+    /// effects), then re-check validity and drop the write when out of bounds,
+    /// detached, or immutable.</summary>
+    public void SetIntegerIndexed(double index, JsValue value, JsRealm? realm)
+    {
+        if (IsBigIntKind)
+        {
+            var b = ToBigInt(value, realm);
+            if (IsValidIndex(index) && !Buffer.IsImmutable)
+            {
+                WriteBigInt((int)index, b);
+            }
+
+            return;
+        }
+
+        var n = ToNumber(value, realm);
+        if (IsValidIndex(index) && !Buffer.IsImmutable)
+        {
+            WriteNumber((int)index, n);
+        }
+    }
+
     public void SetElement(int index, JsValue value, JsRealm? realm = null)
+        => SetIntegerIndexed(index, value, realm ?? Realm);
+
+    private void WriteBigInt(int index, BigInteger b)
+    {
+        var span = Buffer.GetSpan()[CheckedOffset(index)..];
+        if (Kind == JsTypedArrayKind.BigInt64)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(span, (long)AsIntN(64, b));
+        }
+        else
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(span, (ulong)AsUintN(64, b));
+        }
+    }
+
+    private void WriteNumber(int index, double n)
     {
         var offset = CheckedOffset(index);
         var bytes = Buffer.GetSpan();
         var span = bytes[offset..];
-        var n = Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64 ? 0 : ToNumber(value, realm);
         switch (Kind)
         {
             case JsTypedArrayKind.Int8:
@@ -150,17 +456,11 @@ public sealed class JsTypedArray : JsObject
             case JsTypedArrayKind.Float64:
                 BinaryPrimitives.WriteDoubleLittleEndian(span, n);
                 break;
-            case JsTypedArrayKind.BigInt64:
-                BinaryPrimitives.WriteInt64LittleEndian(span, (long)AsIntN(64, ToBigInt(value, realm)));
-                break;
-            case JsTypedArrayKind.BigUint64:
-                BinaryPrimitives.WriteUInt64LittleEndian(span, (ulong)AsUintN(64, ToBigInt(value, realm)));
-                break;
         }
     }
 
     public JsTypedArray CreateSameKind(JsObject? prototype, JsArrayBuffer buffer, int byteOffset, int length)
-        => new(prototype, Kind, buffer, byteOffset, length);
+        => new(prototype, Kind, buffer, byteOffset, length, lengthTracking: false, Realm);
 
     private int CheckedOffset(int index)
     {
@@ -172,16 +472,6 @@ public sealed class JsTypedArray : JsObject
         return ByteOffset + index * BytesPerElement;
     }
 
-    private static bool TryIndex(string name, out int index)
-    {
-        if (name.Length == 0 || name[0] == '-' || name.Contains('.', StringComparison.Ordinal))
-        {
-            index = -1;
-            return false;
-        }
-        return int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out index);
-    }
-
     private static double ToNumber(JsValue value, JsRealm? realm)
     {
         try
@@ -191,7 +481,7 @@ public sealed class JsTypedArray : JsObject
                 return JsValue.ToNumber(value);
             }
 
-            return JsValue.ToNumber(AbstractOperations.ToPrimitive(value, "number"));
+            return JsValue.ToNumber(AbstractOperations.ToPrimitive(realm?.ActiveVm, value, "number"));
         }
         catch (InvalidOperationException ex) when (realm is not null)
         {
@@ -203,7 +493,7 @@ public sealed class JsTypedArray : JsObject
     {
         if (value.IsObject)
         {
-            value = AbstractOperations.ToPrimitive(value, "number");
+            value = AbstractOperations.ToPrimitive(realm?.ActiveVm, value, "number");
         }
 
         return value.Kind switch
@@ -233,18 +523,7 @@ public sealed class JsTypedArray : JsObject
     }
 
     // ECMA-262 §7.1.6 ToInt32: truncate, modulo 2^32, reinterpret signed.
-    private static int ToInt32(double n)
-    {
-        if (double.IsNaN(n) || double.IsInfinity(n) || n == 0)
-        {
-            return 0;
-        }
-
-        var int32bit = n < 0
-            ? 4294967296d - (Math.Abs(Math.Truncate(n)) % 4294967296d)
-            : Math.Truncate(n) % 4294967296d;
-        return unchecked((int)(uint)int32bit);
-    }
+    private static int ToInt32(double n) => unchecked((int)ToUint32(n));
 
     // ECMA-262 §7.1.7 ToUint32: truncate and wrap modulo 2^32.
     private static uint ToUint32(double n)
@@ -254,10 +533,13 @@ public sealed class JsTypedArray : JsObject
             return 0;
         }
 
-        var int32bit = n < 0
-            ? 4294967296d - (Math.Abs(Math.Truncate(n)) % 4294967296d)
-            : Math.Truncate(n) % 4294967296d;
-        return (uint)int32bit;
+        var m = Math.Truncate(n) % 4294967296d;
+        if (m < 0)
+        {
+            m += 4294967296d;
+        }
+
+        return m >= 4294967296d ? 0u : (uint)m;
     }
 
     // ECMA-262 §7.1.12 ToUint8Clamp: clamp, then round half to even.

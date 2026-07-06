@@ -496,28 +496,24 @@ public class JsObject
     /// JsTypedArray elements) participate in the walk.</summary>
     public virtual bool Has(string name)
     {
-        for (var o = this; o is not null; o = o.Prototype)
+        // Recursive virtual dispatch per §10.1.7.1 step 3.a: an exotic parent
+        // (Proxy `has` trap, typed-array element check) must see the lookup.
+        if (HasOwn(name))
         {
-            if (o.HasOwn(name))
-            {
-                return true;
-            }
+            return true;
         }
 
-        return false;
+        return Prototype?.Has(name) ?? false;
     }
 
     public virtual bool Has(JsSymbol symbol)
     {
-        for (var o = this; o is not null; o = o.Prototype)
+        if (HasOwn(symbol))
         {
-            if (o.HasOwn(symbol))
-            {
-                return true;
-            }
+            return true;
         }
 
-        return false;
+        return Prototype?.Has(symbol) ?? false;
     }
 
     public bool Has(JsPropertyKey key) => key.IsSymbol ? Has(key.AsSymbol) : Has(key.AsString);

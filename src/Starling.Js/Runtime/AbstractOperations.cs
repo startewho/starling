@@ -254,11 +254,12 @@ public static class AbstractOperations
         {
             return key.IsSymbol ? ns.Get(key.AsSymbol) : ns.Get(key.AsString);
         }
-        // ECMA-262 §25.2.5: integer-indexed exotic element access is handled
-        // by the typed-array object before ordinary descriptor lookup.
-        if (obj is JsTypedArray ta && key.IsString && IsCanonicalArrayIndex(key.AsString))
+        // §10.4.5.4 [[Get]]: a canonical numeric index resolves against the
+        // element storage only — invalid indices are undefined with NO
+        // prototype-chain walk.
+        if (obj is JsTypedArray ta && key.IsString && JsTypedArray.TryCanonicalNumericIndex(key.AsString, out var taIndex))
         {
-            return ta.Get(key.AsString);
+            return ta.IsValidIndex(taIndex) ? ta.GetElement((int)taIndex) : JsValue.Undefined;
         }
 
         for (var o = obj; o is not null; o = o.Prototype)
@@ -332,21 +333,31 @@ public static class AbstractOperations
         {
             return false;
         }
-        // ECMA-262 §25.2.5 integer-indexed exotic writes go to the backing
-        // ArrayBuffer instead of creating ordinary own properties.
-        if (obj is JsTypedArray ta && key.IsString && IsCanonicalArrayIndex(key.AsString))
-        {
-            if (int.TryParse(key.AsString, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var index)
-                && index >= 0 && index < ta.Length)
-            {
-                ta.SetElement(index, value, vm?.Realm);
-            }
-
-            return true;
-        }
         // Find existing descriptor anywhere on the chain.
         for (var o = obj; o is not null; o = o.Prototype)
         {
+            // §10.4.5.5 [[Set]]: when the lookup reaches a typed array (as the
+            // target itself or as a prototype) a canonical numeric index writes
+            // the element storage when the receiver is that view; an invalid
+            // index is a successful no-op with NO further chain walk. Only a
+            // valid index with a different receiver falls through to
+            // OrdinarySet's create-on-receiver.
+            if (o is JsTypedArray ta && key.IsString && JsTypedArray.TryCanonicalNumericIndex(key.AsString, out var taIndex))
+            {
+                if (receiver.IsObject && ReferenceEquals(receiver.AsObject, ta))
+                {
+                    ta.SetIntegerIndexed(taIndex, value, vm?.Realm ?? ta.Realm);
+                    return true;
+                }
+
+                if (!ta.IsValidIndex(taIndex))
+                {
+                    return true;
+                }
+
+                break;
+            }
+
             var desc = o.GetOwnPropertyDescriptor(key);
             if (desc is null)
             {
@@ -459,12 +470,17 @@ public static class AbstractOperations
             ? new JsThrow(vm.Realm.NewTypeError($"not a function: {detail}"))
             : new JsThrow(JsValue.String($"not a function: {detail}"));
 
+    private static JsThrow NotAConstructor(JsVm? vm, string detail) =>
+        vm is not null
+            ? new JsThrow(vm.Realm.NewTypeError($"not a constructor: {detail}"))
+            : new JsThrow(JsValue.String($"not a constructor: {detail}"));
+
     /// <summary>§7.3.15 Construct — analogous for <c>new</c>.</summary>
     public static JsValue Construct(JsVm? vm, JsValue ctor, JsValue[] args, JsObject? newTarget = null)
     {
         if (!IsConstructor(ctor))
         {
-            throw new JsThrow(JsValue.String($"not a constructor: {JsValue.ToStringValue(ctor)}"));
+            throw NotAConstructor(vm, JsValue.ToStringValue(ctor));
         }
 
         newTarget ??= ctor.AsObject;
@@ -477,7 +493,7 @@ public static class AbstractOperations
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
                 ConcatBoundArgs(bf.BoundArgs, args), newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
-            _ => throw new JsThrow(JsValue.String($"not a constructor: {ctor.AsObject}")),
+            _ => throw NotAConstructor(vm, ctor.AsObject.ToString() ?? "object"),
         };
     }
 

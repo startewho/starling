@@ -19,7 +19,9 @@ public static class NumberCtor
         JsNativeFunction? ctor = null;
         ctor = new JsNativeFunction(realm, "Number", length: 1, (newTarget, args) =>
         {
-            var n = args.Length == 0 ? 0 : ToNumber(args[0]);
+            // §21.1.1.1 step 1.a: Number(value) converts a BigInt numerically
+            // (the only ToNumber-adjacent path that does).
+            var n = args.Length == 0 ? 0 : ToNumberAllowBigInt(realm, args[0]);
             // §21.1.1.1: constructed → wrapper prototyped from new.target.
             if (IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
@@ -83,6 +85,21 @@ public static class NumberCtor
     {
         var input = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined).TrimStart();
         return JsValue.Number(ParseFloatString(input));
+    }
+
+    private static double ToNumberAllowBigInt(JsRealm realm, JsValue value)
+    {
+        if (value.IsObject)
+        {
+            value = AbstractOperations.ToPrimitive(realm.ActiveVm, value, "number");
+        }
+
+        if (value.Kind == JsValueKind.BigInt)
+        {
+            return (double)value.AsBigInt;
+        }
+
+        return value.IsString ? StringToNumber(value.AsString) : JsValue.ToNumber(value);
     }
 
     internal static double ToNumber(JsValue value)

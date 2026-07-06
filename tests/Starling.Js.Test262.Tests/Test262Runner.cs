@@ -352,10 +352,8 @@ public sealed class Test262Runner
     ///   classic (sloppy) script in <em>this</em> realm and returns the
     ///   completion value.</item>
     /// </list>
-    /// <c>detachArrayBuffer</c> stays a no-op stub: the engine has no
-    /// ArrayBuffer-detach machinery (that is engine work, not harness wiring), so
-    /// tests that observe detachment still fail — but the common cluster that only
-    /// needs the function to <em>exist</em> (and createRealm/evalScript) runs.</summary>
+    /// <c>detachArrayBuffer</c> calls the engine's real detach so tests can
+    /// observe detachment.</summary>
     private static void InstallHost262(JsRuntime runtime, JsVm vm)
     {
         var realm = runtime.Realm;
@@ -393,9 +391,21 @@ public sealed class Test262Runner
                 return child.GetGlobal("$262");
             }, isConstructor: false)));
 
-        // No-op stubs (engine has no detach/gc hooks).
         host.Set("detachArrayBuffer", JsValue.Object(new JsNativeFunction(realm, "detachArrayBuffer", length: 1,
-            (_, _) => JsValue.Undefined, isConstructor: false)));
+            (_, args) =>
+            {
+                if (args.Length > 0 && args[0].IsObject && args[0].AsObject is JsArrayBuffer buffer)
+                {
+                    if (buffer.IsImmutable)
+                    {
+                        throw new JsThrow(realm.NewTypeError("Cannot detach an immutable ArrayBuffer"));
+                    }
+
+                    buffer.Detach();
+                }
+
+                return JsValue.Undefined;
+            }, isConstructor: false)));
         host.Set("gc", JsValue.Object(new JsNativeFunction(realm, "gc", length: 0,
             (_, _) => JsValue.Undefined, isConstructor: false)));
 

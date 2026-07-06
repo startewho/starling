@@ -21,7 +21,7 @@ public class JsErrorPositionTests
         // `o.missing()` — missing is undefined, CallMethod throws.
         var act = () => Eval("var o={}; o.missing();");
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("(at 1:");
+            .Which.Value.AsObject.Get("message").AsString.Should().Contain("(at 1:");
     }
 
     [TestMethod]
@@ -32,7 +32,7 @@ public class JsErrorPositionTests
         // carry position. (A *bare undeclared* call now throws ReferenceError
         // before the call — see the unresolved-global-read tests.)
         var act = () => Eval("var nope;\nnope();");
-        var msg = act.Should().Throw<JsThrow>().Which.Value.AsString;
+        var msg = act.Should().Throw<JsThrow>().Which.Value.AsObject.Get("message").AsString;
         msg.Should().Contain("(at 2:1)");
     }
 
@@ -41,7 +41,7 @@ public class JsErrorPositionTests
     {
         var act = () => Eval("new undefined();");
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("(at 1:1)");
+            .Which.Value.AsObject.Get("message").AsString.Should().Contain("(at 1:1)");
     }
 
     [TestMethod]
@@ -59,7 +59,7 @@ public class JsErrorPositionTests
             """;
         var act = () => Eval(src);
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("(at 3:");
+            .Which.Value.AsObject.Get("message").AsString.Should().Contain("(at 3:");
     }
 
     [TestMethod]
@@ -69,7 +69,7 @@ public class JsErrorPositionTests
         // must be reported, not the first call's.
         const string src = "var o={f:function(){}}; o.f(); o.g();";
         var act = () => Eval(src);
-        var msg = act.Should().Throw<JsThrow>().Which.Value.AsString;
+        var msg = act.Should().Throw<JsThrow>().Which.Value.AsObject.Get("message").AsString;
         msg.Should().Contain("g");
         // `o.g()` member expression starts at column 32 (1-based).
         msg.Should().Contain("(at 1:32)");

@@ -1431,7 +1431,7 @@ public sealed class JsVm
                             var callee = Pop(stack, ref sp);
                             if (!IsCallableValue(callee))
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: '{_lastLoadName}')")));
+                                throw new JsThrow(Realm.NewTypeError(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: '{_lastLoadName}')")));
                             }
                             // wp:M3-84 Stage B — ordinary same-realm JsFunction:
                             // push a trampolined frame, no native recursion.
@@ -1459,7 +1459,7 @@ public sealed class JsVm
                             var receiver = Pop(stack, ref sp);
                             if (!IsCallableValue(callee))
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (method hint: '{_lastLoadName}')")));
+                                throw new JsThrow(Realm.NewTypeError(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (method hint: '{_lastLoadName}')")));
                             }
 
                             if (TryPushCall(callee, receiver, callArgs, frame, ip, sp, maxSp, out var pushed))
@@ -1618,7 +1618,7 @@ public sealed class JsVm
                             var ctor = Pop(stack, ref sp);
                             if (!ctor.IsObject)
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
+                                throw new JsThrow(Realm.NewTypeError(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
                             }
 
                             if (TryPushConstruct(ctor, newArgs, newTarget: null, frame, ip, sp, maxSp,
@@ -2459,7 +2459,7 @@ public sealed class JsVm
                     }
                     if (!IsCallableValue(callee))
                     {
-                        throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: 'eval')")));
+                        throw new JsThrow(Realm.NewTypeError(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: 'eval')")));
                     }
 
                     Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs));
