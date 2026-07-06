@@ -11,37 +11,51 @@ public static partial class IntlObj
     //                          Intl.Segmenter
     // =====================================================================
 
-    private sealed class IntlSegmenterObject(JsObject prototype, string granularity) : JsObject(prototype)
+    private sealed class IntlSegmenterObject(JsObject prototype, string locale, string granularity) : JsObject(prototype)
+    {
+        public string Locale { get; } = locale;
+        public string Granularity { get; } = granularity;
+    }
+
+    private sealed class IntlSegmentsObject(JsObject prototype, string granularity, string input) : JsObject(prototype)
     {
         public string Granularity { get; } = granularity;
+        public string Input { get; } = input;
     }
 
     private static void InstallSegmenter(JsRealm realm, JsObject intl)
     {
         var proto = new JsObject(realm.ObjectPrototype);
-        JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction(realm, "Segmenter", 0, (newTarget, args) =>
+        var ctor = new JsNativeFunction(realm, "Segmenter", 0, (newTarget, args) =>
         {
             if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.Segmenter requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
-            var granularity = GetStringOption(realm, options, "granularity", "grapheme", "word", "sentence") ?? "grapheme";
+            var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var options = GetOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var granularity = GetOptionEnum(realm, options, "granularity", ["grapheme", "word", "sentence"], "grapheme")!;
             var instProto = IntlPrototypeFor(realm, newTarget, "Segmenter", proto);
-            return JsValue.Object(new IntlSegmenterObject(instProto, granularity));
+            return JsValue.Object(new IntlSegmenterObject(instProto, StripExtensions(locale.Name), granularity));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "Segmenter", "Intl.Segmenter");
 
+        var segmentsProto = MakeSegmentsPrototype(realm);
         IntrinsicHelpers.DefineMethod(realm, proto, "segment", 1, (thisV, args) =>
         {
             var seg = thisV.IsObject && thisV.AsObject is IntlSegmenterObject so
                 ? so
                 : throw new JsThrow(realm.NewTypeError("Intl.Segmenter.prototype.segment called on incompatible receiver"));
-            var input = AbstractOperations.ToStringJs(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            return JsValue.Object(MakeSegments(realm, seg.Granularity, input));
+            var arg = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (arg.IsSymbol)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a string"));
+            }
+
+            var input = AbstractOperations.ToStringJs(realm.ActiveVm, arg);
+            return JsValue.Object(new IntlSegmentsObject(segmentsProto, seg.Granularity, input));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0, (thisV, _) =>
         {
@@ -49,13 +63,100 @@ public static partial class IntlObj
                 ? so
                 : throw new JsThrow(realm.NewTypeError("Intl.Segmenter.prototype.resolvedOptions called on incompatible receiver"));
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
+            o.Set("locale", JsValue.String(seg.Locale));
             o.Set("granularity", JsValue.String(seg.Granularity));
             return JsValue.Object(o);
         });
     }
 
+    private static IntlSegmentsObject RequireSegments(JsRealm realm, JsValue thisV)
+        => thisV.IsObject && thisV.AsObject is IntlSegmentsObject so
+            ? so
+            : throw new JsThrow(realm.NewTypeError("%Segments.prototype% method called on incompatible receiver"));
+
+    private static JsObject MakeSegmentsPrototype(JsRealm realm)
+    {
+        var segmentsProto = new JsObject(realm.ObjectPrototype);
+        IntrinsicHelpers.DefineMethod(realm, segmentsProto, "containing", 1, (thisV, cargs) =>
+        {
+            var segments = RequireSegments(realm, thisV);
+            var arg = cargs.Length > 0 ? cargs[0] : JsValue.Undefined;
+            var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, arg, "number");
+            if (prim.IsSymbol || prim.IsBigInt)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot convert this value to a number"));
+            }
+
+            var n = JsValue.ToNumber(prim);
+            var idx = double.IsNaN(n) ? 0 : (int)Math.Truncate(n);
+            var input = segments.Input;
+            if (idx < 0 || idx >= input.Length)
+            {
+                return JsValue.Undefined;
+            }
+
+            foreach (var s in Segment(segments.Granularity, input))
+            {
+                if (idx >= s.Start && idx < s.End)
+                {
+                    return MakeSegmentData(realm, segments.Granularity, input, s);
+                }
+            }
+
+            return JsValue.Undefined;
+        });
+        var iterFn = new JsNativeFunction(realm, "[Symbol.iterator]", 0, (thisV, _) =>
+        {
+            var segments = RequireSegments(realm, thisV);
+            var spans = Segment(segments.Granularity, segments.Input);
+            var i = 0;
+            var iter = realm.NewOrdinaryObject();
+            IntrinsicHelpers.DefineMethod(realm, iter, "next", 0, (_, _) =>
+            {
+                var res = realm.NewOrdinaryObject();
+                if (i < spans.Count)
+                {
+                    res.Set("value", MakeSegmentData(realm, segments.Granularity, segments.Input, spans[i]));
+                    res.Set("done", JsValue.False);
+                    i++;
+                }
+                else
+                {
+                    res.Set("value", JsValue.Undefined);
+                    res.Set("done", JsValue.True);
+                }
+
+                return JsValue.Object(res);
+            });
+            return JsValue.Object(iter);
+        }, isConstructor: false);
+        segmentsProto.DefineOwnProperty(SymbolCtor.Iterator,
+            PropertyDescriptor.Data(JsValue.Object(iterFn), writable: true, enumerable: false, configurable: true));
+        segmentsProto.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("Intl.Segments"), writable: false, enumerable: false, configurable: true));
+        return segmentsProto;
+    }
+
     private readonly record struct SegmentSpan(int Start, int End, bool IsWordLike);
+
+    /// <summary>Grapheme-cluster boundaries via UAX #29 text elements; lone
+    /// surrogates fall out as single-unit clusters.</summary>
+    private static List<int> GraphemeStarts(string input)
+    {
+        var starts = new List<int>(input.Length);
+        var e = System.Globalization.StringInfo.GetTextElementEnumerator(input);
+        while (e.MoveNext())
+        {
+            starts.Add(e.ElementIndex);
+        }
+
+        if (starts.Count == 0 && input.Length > 0)
+        {
+            starts.Add(0);
+        }
+
+        return starts;
+    }
 
     private static List<SegmentSpan> Segment(string granularity, string input)
     {
@@ -65,40 +166,87 @@ public static partial class IntlObj
             return spans;
         }
 
+        var starts = GraphemeStarts(input);
+
+        static bool IsWordLikeAt(string text, int index)
+        {
+            var c = text[index];
+            if (char.IsHighSurrogate(c) && index + 1 < text.Length && char.IsLowSurrogate(text[index + 1]))
+            {
+                return System.Text.Rune.IsLetterOrDigit(new System.Text.Rune(c, text[index + 1]));
+            }
+
+            return !char.IsSurrogate(c) && char.IsLetterOrDigit(c);
+        }
+
+        static bool IsWhiteSpaceAt(string text, int index)
+        {
+            var c = text[index];
+            return !char.IsSurrogate(c) && char.IsWhiteSpace(c);
+        }
+
         switch (granularity)
         {
             case "word":
             {
                 var i = 0;
-                while (i < input.Length)
+                while (i < starts.Count)
                 {
-                    var start = i;
-                    var wordLike = char.IsLetterOrDigit(input[i]);
-                    while (i < input.Length && char.IsLetterOrDigit(input[i]) == wordLike
-                           && (wordLike || !char.IsLetterOrDigit(input[i])))
+                    var startUnit = starts[i];
+                    if (IsWordLikeAt(input, startUnit))
                     {
-                        if (!wordLike && i > start && !char.IsWhiteSpace(input[i]) != !char.IsWhiteSpace(input[start]))
+                        var j = i + 1;
+                        while (j < starts.Count)
                         {
+                            if (IsWordLikeAt(input, starts[j]))
+                            {
+                                j++;
+                                continue;
+                            }
+
+                            // UAX #29 MidNum: "." or "," between digits stays
+                            // inside the word ("1.23").
+                            var chEnd = j + 1 < starts.Count ? starts[j + 1] : input.Length;
+                            var cluster = input[starts[j]..chEnd];
+                            if ((cluster == "." || cluster == ",")
+                                && j + 1 < starts.Count
+                                && char.IsAsciiDigit(input[starts[j] - 1])
+                                && char.IsAsciiDigit(input[starts[j + 1]]))
+                            {
+                                j += 2;
+                                continue;
+                            }
+
                             break;
                         }
 
-                        i++;
-                        if (wordLike && i < input.Length && !char.IsLetterOrDigit(input[i]))
-                        {
-                            break;
-                        }
+                        var endUnit = j < starts.Count ? starts[j] : input.Length;
+                        spans.Add(new SegmentSpan(startUnit, endUnit, true));
+                        i = j;
                     }
-
-                    if (i == start)
+                    else if (IsWhiteSpaceAt(input, startUnit))
                     {
+                        var j = i + 1;
+                        while (j < starts.Count && IsWhiteSpaceAt(input, starts[j]))
+                        {
+                            j++;
+                        }
+
+                        var endUnit = j < starts.Count ? starts[j] : input.Length;
+                        spans.Add(new SegmentSpan(startUnit, endUnit, false));
+                        i = j;
+                    }
+                    else
+                    {
+                        var endUnit = i + 1 < starts.Count ? starts[i + 1] : input.Length;
+                        spans.Add(new SegmentSpan(startUnit, endUnit, false));
                         i++;
                     }
-
-                    spans.Add(new SegmentSpan(start, i, wordLike));
                 }
 
                 break;
             }
+
             case "sentence":
             {
                 var start = 0;
@@ -125,22 +273,15 @@ public static partial class IntlObj
 
                 break;
             }
+
             default: // grapheme
             {
-                var e = StringInfo.GetTextElementEnumerator(input);
-                var prev = 0;
-                while (e.MoveNext())
+                for (var i = 0; i < starts.Count; i++)
                 {
-                    var idx = e.ElementIndex;
-                    if (idx > prev)
-                    {
-                        spans.Add(new SegmentSpan(prev, idx, false));
-                    }
-
-                    prev = idx;
+                    var end = i + 1 < starts.Count ? starts[i + 1] : input.Length;
+                    spans.Add(new SegmentSpan(starts[i], end, false));
                 }
 
-                spans.Add(new SegmentSpan(prev, input.Length, false));
                 break;
             }
         }
@@ -160,58 +301,6 @@ public static partial class IntlObj
         }
 
         return JsValue.Object(d);
-    }
-
-    private static JsObject MakeSegments(JsRealm realm, string granularity, string input)
-    {
-        var segments = realm.NewOrdinaryObject();
-        IntrinsicHelpers.DefineMethod(realm, segments, "containing", 1, (_, cargs) =>
-        {
-            var n = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm,
-                cargs.Length > 0 ? cargs[0] : JsValue.Undefined, "number"));
-            var idx = double.IsNaN(n) ? 0 : (int)Math.Truncate(n);
-            if (idx < 0 || idx >= input.Length)
-            {
-                return JsValue.Undefined;
-            }
-
-            foreach (var s in Segment(granularity, input))
-            {
-                if (idx >= s.Start && idx < s.End)
-                {
-                    return MakeSegmentData(realm, granularity, input, s);
-                }
-            }
-
-            return JsValue.Undefined;
-        });
-        var iterFn = new JsNativeFunction(realm, "[Symbol.iterator]", 0, (_, _) =>
-        {
-            var spans = Segment(granularity, input);
-            var i = 0;
-            var iter = realm.NewOrdinaryObject();
-            IntrinsicHelpers.DefineMethod(realm, iter, "next", 0, (_, _) =>
-            {
-                var res = realm.NewOrdinaryObject();
-                if (i < spans.Count)
-                {
-                    res.Set("value", MakeSegmentData(realm, granularity, input, spans[i]));
-                    res.Set("done", JsValue.False);
-                    i++;
-                }
-                else
-                {
-                    res.Set("value", JsValue.Undefined);
-                    res.Set("done", JsValue.True);
-                }
-
-                return JsValue.Object(res);
-            });
-            return JsValue.Object(iter);
-        }, isConstructor: false);
-        segments.DefineOwnProperty(SymbolCtor.Iterator,
-            PropertyDescriptor.Data(JsValue.Object(iterFn), writable: true, enumerable: false, configurable: true));
-        return segments;
     }
 
     // =====================================================================

@@ -24,6 +24,11 @@ public static partial class IntlObj
             return "de";
         }
 
+        if (n.StartsWith("pl", StringComparison.OrdinalIgnoreCase))
+        {
+            return "pl";
+        }
+
         if (n.StartsWith("ja", StringComparison.OrdinalIgnoreCase))
         {
             return "ja";
@@ -72,6 +77,7 @@ public static partial class IntlObj
             case "de":
                 return (",", ".", GroupSize3);
             case "pt":
+            case "pl":
                 return (",", " ", GroupSize3);
             default:
             {

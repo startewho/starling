@@ -263,12 +263,21 @@ public static partial class IntlObj
         }
         catch (CultureNotFoundException)
         {
-            if (!IsKnownFallbackLocale(normalized))
+            // Lookup matcher fallback chain: strip subtags until an available
+            // locale matches ("sr-Thai-RS" -> "sr-Thai" -> "sr").
+            var candidate = normalized;
+            while (!IsKnownFallbackLocale(candidate))
             {
-                return false;
+                var cut = candidate.LastIndexOf('-');
+                if (cut < 0)
+                {
+                    return false;
+                }
+
+                candidate = candidate[..cut];
             }
 
-            result = new IntlLocale(normalized, CultureInfo.InvariantCulture, nu);
+            result = new IntlLocale(candidate, CultureInfo.InvariantCulture, nu);
             return true;
         }
     }
@@ -312,7 +321,7 @@ public static partial class IntlObj
         "zh" or "zh-CN" or "zh-TW" or "zh-HK" or "zh-MO" or
         "pt" or "pt-BR" or "pt-PT" or "nl" or "nl-NL" or
         "ar" or "ar-SA" or "th" or "th-TH" or "ru" or "ru-RU" or
-        "tr" or "tr-TR" or "pl" or "pl-PL" or "sv" or "sv-SE";
+        "tr" or "tr-TR" or "pl" or "pl-PL" or "sv" or "sv-SE" or "sr" or "sr-RS";
 
     private static bool IsRegionSubtag(string value)
         => value.Length == 2 && IsAsciiLetters(value) || value.Length == 3 && IsAsciiDigits(value);
