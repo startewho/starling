@@ -1361,6 +1361,14 @@ public ref partial struct JsParser
                 Advance();
                 return new ThisExpression(t.Start, t.End);
             case JsTokenKind.Identifier:
+                // §12.7.1 — `let` is reserved in strict code: it may not be an
+                // IdentifierReference (`for (let in o)`, `strict; let;`).
+                if (_strict && t.TextEquals("let"))
+                {
+                    throw new JsParseException(
+                        "'let' may not be used as an identifier reference in strict code", t.Start);
+                }
+
                 // §16.2.1.6.2 / §13.3.10.1 — `await` is reserved in module code
                 // and in any async context: it may not be an IdentifierReference
                 // there (e.g. `new await`, `void await`). The AwaitExpression form
