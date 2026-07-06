@@ -65,6 +65,14 @@ public sealed class JsVm
     /// interleave safely — every barrier saves and restores the head.</summary>
     [ThreadStatic] private static CallFrame? t_current;
 
+    /// <summary>The VM whose barrier frame is currently executing on this
+    /// thread — the RUNNING execution context for abrupt completions that must
+    /// use the current realm's intrinsics (e.g. §10.4.2.1 ArraySetLength's
+    /// RangeError on a foreign-realm array).</summary>
+    [ThreadStatic] private static JsVm? t_activeOnThread;
+
+    internal static JsVm? ActiveOnThread => t_activeOnThread;
+
     /// <summary>Number of live JS frames on this thread's chain (trampolined
     /// frames and barrier frames both count).</summary>
     [ThreadStatic] private static int t_frameDepth;
@@ -577,6 +585,8 @@ public sealed class JsVm
         // construction, so only barriers touch ActiveVm.
         var prevVm = _runtime.Realm.ActiveVm;
         _runtime.Realm.ActiveVm = this;
+        var prevActiveOnThread = t_activeOnThread;
+        t_activeOnThread = this;
         var prevCurrent = t_current;
         var prevFrameDepth = t_frameDepth;
         t_barrierDepth++;
@@ -618,6 +628,7 @@ public sealed class JsVm
             t_barrierDepth--;
             t_frameDepth = prevFrameDepth;
             t_current = prevCurrent;
+            t_activeOnThread = prevActiveOnThread;
             _runtime.Realm.ActiveVm = prevVm;
         }
     }

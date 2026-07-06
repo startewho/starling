@@ -255,6 +255,10 @@ public class JsObject
     /// <see cref="PreventExtensions"/> on ordinary objects.</summary>
     private bool _extensible = true;
 
+    /// <summary>§10.4.7 immutable-prototype exotic (%Object.prototype%):
+    /// [[SetPrototypeOf]] only succeeds when the value is unchanged.</summary>
+    internal bool IsImmutablePrototype { get; set; }
+
     /// <summary>Models the spec's <c>[[ParameterMap]]</c> internal slot: true for
     /// an <c>arguments</c> exotic object. Read by §20.1.3.6 step 5 so
     /// <c>Object.prototype.toString</c> reports <c>"[object Arguments]"</c>
@@ -308,7 +312,7 @@ public class JsObject
             return true; // §10.1.2 — same prototype is a no-op success
         }
 
-        if (!Extensible)
+        if (IsImmutablePrototype || !Extensible)
         {
             return false;
         }
@@ -719,7 +723,7 @@ public class JsObject
                         return false;
                     }
 
-                    if (present.HasValue && !desc.Value.Equals(cur.Value))
+                    if (present.HasValue && !AbstractOperations.SameValue(desc.Value, cur.Value))
                     {
                         return false;
                     }
@@ -798,12 +802,7 @@ public class JsObject
             return true;
         }
 
-        if (existing.IsAccessor != desc.IsAccessor)
-        {
-            return false;
-        }
-
-        if (existing.Configurable != desc.Configurable)
+        if (desc.Configurable)
         {
             return false;
         }
@@ -813,9 +812,27 @@ public class JsObject
             return false;
         }
 
-        if (!existing.IsAccessor && existing.Writable != desc.Writable)
+        if (existing.IsAccessor != desc.IsAccessor)
         {
             return false;
+        }
+
+        if (existing.IsAccessor)
+        {
+            return ReferenceEquals(existing.Getter, desc.Getter)
+                && ReferenceEquals(existing.Setter, desc.Setter);
+        }
+
+        // Data: writable may transition true→false; a non-writable slot pins
+        // both the flag and (per SameValue) the value.
+        if (!existing.Writable)
+        {
+            if (desc.Writable)
+            {
+                return false;
+            }
+
+            return AbstractOperations.SameValue(existing.Value, desc.Value);
         }
 
         return true;
@@ -919,7 +936,10 @@ public class JsObject
     {
         get
         {
-            foreach (var key in OrderedStringKeys())
+            // Route through the VIRTUAL Keys so host objects that only
+            // override Keys (storage, DOM collections) surface their exotic
+            // own keys to [[OwnPropertyKeys]] consumers (Object.keys, spread).
+            foreach (var key in Keys)
             {
                 yield return JsPropertyKey.String(key);
             }
@@ -995,6 +1015,10 @@ public sealed class JsNativeFunction : JsObject
     public Func<JsValue, JsValue[], JsValue> Body { get; }
     public bool IsConstructor { get; }
 
+    /// <summary>§7.3.25 GetFunctionRealm — populated by the realm-aware
+    /// constructor; null for realm-less host functions.</summary>
+    internal JsRealm? Realm { get; }
+
     /// <summary>Declared <c>length</c> (declared positional arity). Mirrored
     /// as an own non-enumerable property when set via the realm-aware
     /// constructor; intrinsics that build descriptors by hand may also stamp
@@ -1030,6 +1054,7 @@ public sealed class JsNativeFunction : JsObject
         : base(realm?.FunctionPrototype)
     {
         ArgumentNullException.ThrowIfNull(realm);
+        Realm = realm;
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Body = body ?? throw new ArgumentNullException(nameof(body));
         IsConstructor = isConstructor;

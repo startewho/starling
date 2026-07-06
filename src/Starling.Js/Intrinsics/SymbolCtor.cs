@@ -117,10 +117,9 @@ public static class SymbolCtor
 
         if (thisV.IsObject)
         {
-            var slot = thisV.AsObject.GetOwnPropertyDescriptor("__primitiveValue");
-            if (slot is { } d && d.Value.IsSymbol)
+            if (thisV.AsObject is JsPrimitiveBox box && box.Primitive.IsSymbol)
             {
-                return d.Value.AsSymbol;
+                return box.Primitive.AsSymbol;
             }
         }
         throw new JsThrow(realm.NewTypeError("Symbol.prototype method called on incompatible receiver"));

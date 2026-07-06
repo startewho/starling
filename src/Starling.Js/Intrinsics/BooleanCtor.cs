@@ -55,10 +55,9 @@ public static class BooleanCtor
 
         if (thisV.IsObject)
         {
-            var slot = thisV.AsObject.GetOwnPropertyDescriptor("__primitiveValue");
-            if (slot is { } d && d.Value.IsBoolean)
+            if (thisV.AsObject is JsPrimitiveBox box && box.Primitive.IsBoolean)
             {
-                return d.Value.AsBool;
+                return box.Primitive.AsBool;
             }
         }
         throw new JsThrow(realm.NewTypeError("Boolean.prototype method called on incompatible receiver"));

@@ -156,7 +156,7 @@ internal static class IntrinsicHelpers
         return defaultProto;
     }
 
-    private static JsRealm? FunctionRealm(JsObject fn)
+    internal static JsRealm? FunctionRealm(JsObject fn)
     {
         while (true)
         {
@@ -164,6 +164,8 @@ internal static class IntrinsicHelpers
             {
                 case JsFunction f:
                     return f.Realm;
+                case JsNativeFunction n:
+                    return n.Realm;
                 case JsBoundFunction bf:
                     fn = bf.Target;
                     continue;

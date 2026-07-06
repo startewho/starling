@@ -184,11 +184,31 @@ public sealed class JsStringObject : JsObject
 
     private IEnumerable<string> OrderedOwnStringKeys()
     {
-        // §10.1.11.1: array-index keys ascending first, then "length" and any
-        // other strings added via DefineOwnProperty in creation order.
+        // §10.1.11.1: array-index keys ascending first (string-data indices
+        // are contiguous from 0; bag-resident indices — e.g. str[5] = ... on
+        // a 3-char wrapper — sort after them), then "length" and any other
+        // strings added via DefineOwnProperty in creation order.
         for (var i = 0; i < Text.Length; i++)
         {
             yield return i.ToString(CultureInfo.InvariantCulture);
+        }
+
+        List<uint>? bagIndices = null;
+        foreach (var s in base.Keys)
+        {
+            if (JsArray.IsArrayIndex(s, out var bi) && bi >= (uint)Text.Length)
+            {
+                (bagIndices ??= new List<uint>()).Add(bi);
+            }
+        }
+
+        if (bagIndices is not null)
+        {
+            bagIndices.Sort();
+            foreach (var bi in bagIndices)
+            {
+                yield return bi.ToString(CultureInfo.InvariantCulture);
+            }
         }
 
         yield return "length";
@@ -199,7 +219,7 @@ public sealed class JsStringObject : JsObject
                 continue;
             }
 
-            if (TryIndex(s, out _))
+            if (JsArray.IsArrayIndex(s, out _))
             {
                 continue;
             }
