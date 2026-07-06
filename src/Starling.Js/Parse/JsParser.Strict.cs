@@ -101,10 +101,10 @@ public ref partial struct JsParser
         // §15.7.1 — in an async context (e.g. a class static initialization
         // block) `await` is the AwaitExpression keyword and may not be a class
         // BindingIdentifier (`static { class await {} }`).
-        if (_inAsync && name.Name == "await")
+        if ((_inAsync || _module) && name.Name == "await")
         {
             throw new JsParseException(
-                "'await' may not be used as a class name in an async context", name.Start);
+                "'await' may not be used as a class name in an await context", name.Start);
         }
     }
 
