@@ -67,7 +67,7 @@ public static class NumberCtor
             new IntrinsicHelpers.BulkMember("toPrecision", 1, (thisV, args) => ToPrecision(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)),
             new IntrinsicHelpers.BulkMember("toExponential", 1, (thisV, args) => JsValue.String(ToExponential(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm))),
             new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, _) => JsValue.Number(ThisNumber(realm, thisV))),
-            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, _) => JsValue.String(JsValue.ToStringValue(JsValue.Number(ThisNumber(realm, thisV))))),
+            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, args) => JsValue.String(IntlObj.FormatNumberToLocaleString(realm, ThisNumber(realm, thisV), args))),
         });
 
         realm.NumberConstructor = ctor;

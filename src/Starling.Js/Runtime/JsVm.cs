@@ -1905,11 +1905,12 @@ public sealed class JsVm
 
                     case Opcode.IteratorStep:
                         {
-                            // Peek (don't pop) so the surrounding loop keeps the handle
-                            // across iterations. The dispatch arm pushes either the
-                            // iterator-result object (done=false) or undefined (done=true)
-                            // as the loop sentinel.
-                            var top = stack[sp - 1];
+                            // Pop the handle: the for-of loop reloads it from a local
+                            // every iteration, so leaving it on the operand stack would
+                            // leak one slot per step. Pushes either the iterator-result
+                            // object (done=false) or undefined (done=true) as the loop
+                            // sentinel.
+                            var top = Pop(stack, ref sp);
                             if (!top.IsObject || top.AsObject is not Starling.Js.Intrinsics.JsIteratorRecordHandle handle)
                             {
                                 throw new InvalidOperationException("IteratorStep expects an iterator-record handle on the stack");
