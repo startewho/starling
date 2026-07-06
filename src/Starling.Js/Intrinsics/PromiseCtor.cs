@@ -1,4 +1,3 @@
-using System.Globalization;
 using Starling.Js.Runtime;
 
 namespace Starling.Js.Intrinsics;
@@ -8,38 +7,15 @@ namespace Starling.Js.Intrinsics;
 /// reaction/resolution machinery (§27.2.1.*), prototype methods
 /// (<c>then</c>/<c>catch</c>/<c>finally</c>, §27.2.5.*) and the
 /// constructor-level statics (<c>resolve</c>/<c>reject</c>/<c>all</c>/
-/// <c>allSettled</c>/<c>any</c>/<c>race</c>/<c>withResolvers</c>,
-/// §27.2.4.*).
+/// <c>allSettled</c>/<c>any</c>/<c>race</c>/<c>withResolvers</c>/
+/// <c>allKeyed</c>/<c>allSettledKeyed</c>, §27.2.4.*).
 /// </summary>
 /// <remarks>
-/// <para>
 /// Reactions are scheduled onto <see cref="JsRealm.Microtasks"/>; the VM
 /// drains the queue at the bottom of every top-level <c>Run</c>, so unit
 /// tests see settlement without manual pumping. When a host installs a
 /// scheduler via <see cref="JsRuntime.SetMicrotaskScheduler"/>, jobs are
 /// handed off to the host loop instead.
-/// </para>
-/// <para>
-/// Simplifications relative to the spec:
-/// </para>
-/// <list type="bullet">
-///   <item><description>
-///     Iterable-accepting statics (<c>all</c>, <c>allSettled</c>, <c>any</c>,
-///     <c>race</c>) take array-likes (length + indexed access) rather than
-///     general iterables.
-///   </description></item>
-///   <item><description>
-///     <c>Promise.any</c>'s aggregate rejection is a real
-///     <c>AggregateError</c> instance built via
-///     <c>realm.NewAggregateError</c> with an own <c>errors</c> JsArray
-///     of the rejection reasons.
-///   </description></item>
-///   <item><description>
-///     Uncaught microtask exceptions surface through the realm's console
-///     sink. <c>PromiseRejectionEvent</c> dispatch on <c>Window</c> is not wired
-///     yet.
-///   </description></item>
-/// </list>
 /// </remarks>
 public static class PromiseCtor
 {
@@ -71,7 +47,8 @@ public static class PromiseCtor
             // §27.2.3.1 step 3: OrdinaryCreateFromConstructor — prototype from
             // new.target so `class P extends Promise {}` produces a P-prototyped
             // promise carrying the [[PromiseState]] slots.
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto,
+                static r => r.PromisePrototype);
             var promise = new JsPromise(instProto);
             var (resolve, reject) = CreateResolvingFunctions(realm, promise);
             try
@@ -81,20 +58,21 @@ public static class PromiseCtor
             }
             catch (JsThrow ex)
             {
-                // §27.2.3.1 step 12 — IfAbruptRejectPromise. Note: if the
-                // executor already called resolve/reject, this is a no-op
-                // (the resolving functions are one-shot).
-                RejectPromise(realm, promise, ex.Value);
+                // §27.2.3.1 step 10 — the abrupt executor completion goes
+                // through the REJECT RESOLVING FUNCTION, not [[Reject]]
+                // directly: if the executor already called resolve/reject the
+                // shared [[AlreadyResolved]] flag makes this a no-op.
+                AbstractOperations.Call(realm.ActiveVm, reject, JsValue.Undefined, new[] { ex.Value });
             }
             return JsValue.Object(promise);
         }, isConstructor: true);
         ctor.SetPrototypeOf(realm.FunctionPrototype);
         ctor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
-        ctor.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String("Promise"), writable: false, enumerable: false, configurable: true));
         ctor.DefineOwnProperty("length",
             PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
+        ctor.DefineOwnProperty("name",
+            PropertyDescriptor.Data(JsValue.String("Promise"), writable: false, enumerable: false, configurable: true));
 
         var speciesGetter = new JsNativeFunction(realm, "get [Symbol.species]", 0,
             (thisV, _) => thisV, isConstructor: false);
@@ -109,8 +87,7 @@ public static class PromiseCtor
         // --------------------------------------------------------- Statics
         // §27.2.4 step 1 (every static): the receiver C must be an Object —
         // `Promise.all.call(undefined, …)` is a TypeError, thrown BEFORE the
-        // iterable is touched. (Species-generic construction through a
-        // subclass C is a separate, deeper contract.)
+        // iterable is touched.
         void RequireObjectReceiver(JsValue thisV, string name)
         {
             if (!thisV.IsObject)
@@ -118,61 +95,83 @@ public static class PromiseCtor
                 throw new JsThrow(realm.NewTypeError($"Promise.{name} called on non-object"));
             }
         }
-        DefineMethod(realm, ctor, "resolve", (thisV, args) =>
-        {
-            RequireObjectReceiver(thisV, "resolve");
-            return ResolveStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        }, length: 1);
-        DefineMethod(realm, ctor, "reject", (thisV, args) =>
-        {
-            RequireObjectReceiver(thisV, "reject");
-            return RejectStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        }, length: 1);
-        DefineMethod(realm, ctor, "all", (thisV, args) =>
+        IntrinsicHelpers.DefineMethod(realm, ctor, "all", 1, (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "all");
-            return All(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
-        }, length: 1);
-        DefineMethod(realm, ctor, "allSettled", (thisV, args) =>
+            return Combinator(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined, CombinatorKind.All);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "allKeyed", 1, (thisV, args) =>
+        {
+            RequireObjectReceiver(thisV, "allKeyed");
+            return KeyedCombinator(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined, settled: false);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "allSettled", 1, (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "allSettled");
-            return AllSettled(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
-        }, length: 1);
-        DefineMethod(realm, ctor, "any", (thisV, args) =>
+            return Combinator(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined, CombinatorKind.AllSettled);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "allSettledKeyed", 1, (thisV, args) =>
+        {
+            RequireObjectReceiver(thisV, "allSettledKeyed");
+            return KeyedCombinator(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined, settled: true);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "any", 1, (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "any");
-            return Any(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
-        }, length: 1);
-        DefineMethod(realm, ctor, "race", (thisV, args) =>
+            return Combinator(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined, CombinatorKind.Any);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "race", 1, (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "race");
-            return Race(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
-        }, length: 1);
-        DefineMethod(realm, ctor, "withResolvers", (thisV, args) =>
+            return Combinator(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined, CombinatorKind.Race);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "reject", 1, (thisV, args) =>
+        {
+            RequireObjectReceiver(thisV, "reject");
+            var capability = NewPromiseCapability(realm, thisV);
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined,
+                new[] { args.Length > 0 ? args[0] : JsValue.Undefined });
+            return JsValue.Object(capability.Promise);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "resolve", 1, (thisV, args) =>
+        {
+            RequireObjectReceiver(thisV, "resolve");
+            return PromiseResolve(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
+        });
+        IntrinsicHelpers.DefineMethod(realm, ctor, "withResolvers", 0, (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "withResolvers");
-            return WithResolvers(realm);
-        }, length: 0);
+            var capability = NewPromiseCapability(realm, thisV);
+            var obj = realm.NewOrdinaryObject();
+            obj.DefineOwnProperty("promise",
+                PropertyDescriptor.Data(JsValue.Object(capability.Promise), writable: true, enumerable: true, configurable: true));
+            obj.DefineOwnProperty("resolve",
+                PropertyDescriptor.Data(capability.Resolve, writable: true, enumerable: true, configurable: true));
+            obj.DefineOwnProperty("reject",
+                PropertyDescriptor.Data(capability.Reject, writable: true, enumerable: true, configurable: true));
+            return JsValue.Object(obj);
+        });
 
         // --------------------------------------------------------- Prototype
-        DefineMethod(realm, proto, "then", (thisV, args) =>
+        IntrinsicHelpers.DefineMethod(realm, proto, "then", 2, (thisV, args) =>
         {
             var onFulfilled = args.Length > 0 ? args[0] : JsValue.Undefined;
             var onRejected = args.Length > 1 ? args[1] : JsValue.Undefined;
             return Then(realm, thisV, onFulfilled, onRejected);
-        }, length: 2);
+        });
 
-        DefineMethod(realm, proto, "catch", (thisV, args) =>
+        IntrinsicHelpers.DefineMethod(realm, proto, "catch", 1, (thisV, args) =>
         {
+            // §27.2.5.1 — return ? Invoke(this, "then", « undefined, onRejected »).
             var onRejected = args.Length > 0 ? args[0] : JsValue.Undefined;
-            return Then(realm, thisV, JsValue.Undefined, onRejected);
-        }, length: 1);
+            return Invoke(realm, thisV, "then", new[] { JsValue.Undefined, onRejected });
+        });
 
-        DefineMethod(realm, proto, "finally", (thisV, args) =>
+        IntrinsicHelpers.DefineMethod(realm, proto, "finally", 1, (thisV, args) =>
         {
             var onFinally = args.Length > 0 ? args[0] : JsValue.Undefined;
             return Finally(realm, thisV, onFinally);
-        }, length: 1);
+        });
 
         realm.PromiseConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Promise",
@@ -192,7 +191,7 @@ public static class PromiseCtor
     {
         var alreadyResolved = new bool[1]; // boxed flag shared by closures
 
-        var resolve = new JsNativeFunction("", (thisV, args) =>
+        var resolve = new JsNativeFunction(realm, "", 1, (thisV, args) =>
         {
             if (alreadyResolved[0])
             {
@@ -205,7 +204,7 @@ public static class PromiseCtor
             return JsValue.Undefined;
         }, isConstructor: false);
 
-        var reject = new JsNativeFunction("", (thisV, args) =>
+        var reject = new JsNativeFunction(realm, "", 1, (thisV, args) =>
         {
             if (alreadyResolved[0])
             {
@@ -248,10 +247,7 @@ public static class PromiseCtor
             return;
         }
 
-        // Thenable adoption — Promise instances take a shortcut (we don't
-        // re-walk .then for own-realm promises in §27.2.7 terms, but
-        // observationally this is fine because the chained-promise's
-        // settlement still pumps via microtask).
+        // Thenable adoption.
         JsValue then;
         try
         {
@@ -376,27 +372,63 @@ public static class PromiseCtor
     }
 
     // ====================================================================
-    //                              .then
+    //                        .then / .catch / .finally
     // ====================================================================
 
-    /// <summary>§27.2.5.4 Promise.prototype.then.</summary>
-    /// <summary>Observable `then` invocation (§27.2.4.1.1 step 4.i) — reads
-    /// `then` off the adopted promise so subclass overrides participate.</summary>
-    private static void InvokeThen(JsRealm realm, JsValue promise, JsValue onFulfilled, JsValue onRejected)
+    /// <summary>§7.3.21 Invoke(V, P, args) — observable method call; a
+    /// primitive receiver walks its wrapper prototype.</summary>
+    private static JsValue Invoke(JsRealm realm, JsValue target, string name, JsValue[] args)
     {
-        if (!promise.IsObject)
-        {
-            throw new JsThrow(realm.NewTypeError("Promise resolve returned a non-object"));
-        }
-
         var vm = realm.ActiveVm;
-        var then = AbstractOperations.Get(vm, promise.AsObject, "then");
-        if (!AbstractOperations.IsCallable(then))
+        JsValue method;
+        if (target.IsObject)
         {
-            throw new JsThrow(realm.NewTypeError("Adopted promise has no callable then"));
+            method = AbstractOperations.Get(vm, target.AsObject, name);
+        }
+        else if (target.IsNullish)
+        {
+            throw new JsThrow(realm.NewTypeError($"Cannot read '{name}' of {(target.IsNull ? "null" : "undefined")}"));
+        }
+        else
+        {
+            method = AbstractOperations.Get(vm, AbstractOperations.ToObject(realm, target), name);
         }
 
-        AbstractOperations.Call(vm, then, promise, new[] { onFulfilled, onRejected });
+        if (!AbstractOperations.IsCallable(method))
+        {
+            throw new JsThrow(realm.NewTypeError($"'{name}' is not a function"));
+        }
+
+        return AbstractOperations.Call(vm, method, target, args);
+    }
+
+    /// <summary>§7.3.24 SpeciesConstructor(O, defaultConstructor).</summary>
+    private static JsValue SpeciesConstructor(JsRealm realm, JsObject obj, JsObject defaultCtor)
+    {
+        var vm = realm.ActiveVm;
+        var c = AbstractOperations.Get(vm, obj, "constructor");
+        if (c.IsUndefined)
+        {
+            return JsValue.Object(defaultCtor);
+        }
+
+        if (!c.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("constructor value is not an object"));
+        }
+
+        var species = AbstractOperations.Get(vm, c.AsObject, JsPropertyKey.Symbol(SymbolCtor.Species));
+        if (species.IsNullish)
+        {
+            return JsValue.Object(defaultCtor);
+        }
+
+        if (AbstractOperations.IsConstructor(species))
+        {
+            return species;
+        }
+
+        throw new JsThrow(realm.NewTypeError("@@species is not a constructor"));
     }
 
     private static JsValue Then(JsRealm realm, JsValue thisV, JsValue onFulfilled, JsValue onRejected)
@@ -406,7 +438,17 @@ public static class PromiseCtor
             throw new JsThrow(realm.NewTypeError("Promise.prototype.then called on non-Promise"));
         }
 
-        var capability = NewPromiseCapability(realm);
+        // §27.2.5.4 step 3–4: the chained promise comes from the species
+        // constructor, so subclass `then` yields subclass instances.
+        var speciesC = SpeciesConstructor(realm, self, realm.PromiseConstructor!);
+        var capability = NewPromiseCapability(realm, speciesC);
+        return PerformPromiseThen(realm, self, onFulfilled, onRejected, capability);
+    }
+
+    /// <summary>§27.2.5.4.1 PerformPromiseThen.</summary>
+    private static JsValue PerformPromiseThen(JsRealm realm, JsPromise self,
+        JsValue onFulfilled, JsValue onRejected, PromiseCapability capability)
+    {
         var fulfillHandler = AbstractOperations.IsCallable(onFulfilled) ? onFulfilled : JsValue.Undefined;
         var rejectHandler = AbstractOperations.IsCallable(onRejected) ? onRejected : JsValue.Undefined;
 
@@ -434,332 +476,384 @@ public static class PromiseCtor
                 break;
         }
 
-        // §27.2.5.4.1 PerformPromiseThen step 12 — the promise now has a
-        // handler regardless of which callbacks were supplied (omitted ones
-        // become pass-through identity/thrower on the chained promise).
+        // §27.2.5.4.1 step 12 — the promise now has a handler regardless of
+        // which callbacks were supplied.
         self.IsHandled = true;
 
         return JsValue.Object(capability.Promise);
     }
 
-    // ====================================================================
-    //                              .finally
-    // ====================================================================
-
-    /// <summary>§27.2.5.3 Promise.prototype.finally — wraps the user-supplied
-    /// handler so it runs on both branches, then forwards the original
-    /// value/reason unless the handler itself throws or returns a rejected
-    /// thenable.</summary>
+    /// <summary>§27.2.5.3 Promise.prototype.finally — generic over any
+    /// object receiver with a callable <c>then</c>; wraps the user handler so
+    /// it runs on both branches, then forwards the original outcome via a
+    /// species-resolved inner promise.</summary>
     private static JsValue Finally(JsRealm realm, JsValue thisV, JsValue onFinally)
     {
-        if (!thisV.IsObject || thisV.AsObject is not JsPromise)
+        if (!thisV.IsObject)
         {
-            throw new JsThrow(realm.NewTypeError("Promise.prototype.finally called on non-Promise"));
+            throw new JsThrow(realm.NewTypeError("Promise.prototype.finally called on non-object"));
         }
 
+        var speciesC = SpeciesConstructor(realm, thisV.AsObject, realm.PromiseConstructor!);
+
+        JsValue thenFinally;
+        JsValue catchFinally;
         if (!AbstractOperations.IsCallable(onFinally))
         {
-            return Then(realm, thisV, onFinally, onFinally);
+            thenFinally = onFinally;
+            catchFinally = onFinally;
+        }
+        else
+        {
+            thenFinally = JsValue.Object(new JsNativeFunction(realm, "", 1, (selfThis, args) =>
+            {
+                var value = args.Length > 0 ? args[0] : JsValue.Undefined;
+                var result = AbstractOperations.Call(realm.ActiveVm, onFinally, JsValue.Undefined, Array.Empty<JsValue>());
+                var followed = PromiseResolve(realm, speciesC, result);
+                var valueThunk = new JsNativeFunction(realm, "", 0, (_, _) => value, isConstructor: false);
+                return Invoke(realm, followed, "then", new[] { JsValue.Object(valueThunk) });
+            }, isConstructor: false));
+
+            catchFinally = JsValue.Object(new JsNativeFunction(realm, "", 1, (selfThis, args) =>
+            {
+                var reason = args.Length > 0 ? args[0] : JsValue.Undefined;
+                var result = AbstractOperations.Call(realm.ActiveVm, onFinally, JsValue.Undefined, Array.Empty<JsValue>());
+                var followed = PromiseResolve(realm, speciesC, result);
+                var thrower = new JsNativeFunction(realm, "", 0, (JsValue _, JsValue[] _) => throw new JsThrow(reason), isConstructor: false);
+                return Invoke(realm, followed, "then", new[] { JsValue.Object(thrower) });
+            }, isConstructor: false));
         }
 
-        // Build the two thunks the spec uses. Each invokes onFinally, then
-        // adopts a then-chained promise that forwards the original outcome.
-        var thenFinally = new JsNativeFunction("", (selfThis, args) =>
-        {
-            var value = args.Length > 0 ? args[0] : JsValue.Undefined;
-            var followed = AbstractOperations.Call(realm.ActiveVm, onFinally, JsValue.Undefined, Array.Empty<JsValue>());
-            var followedPromise = AdoptAsPromise(realm, followed);
-            // Forward the original value once the inner settlement completes.
-            var forwarder = new JsNativeFunction("", (_, _) => value, isConstructor: false);
-            return Then(realm, JsValue.Object(followedPromise), JsValue.Object(forwarder), JsValue.Undefined);
-        }, isConstructor: false);
-
-        var catchFinally = new JsNativeFunction("", (selfThis, args) =>
-        {
-            var reason = args.Length > 0 ? args[0] : JsValue.Undefined;
-            var followed = AbstractOperations.Call(realm.ActiveVm, onFinally, JsValue.Undefined, Array.Empty<JsValue>());
-            var followedPromise = AdoptAsPromise(realm, followed);
-            // Rethrow the original reason once the inner settlement completes.
-            var thrower = new JsNativeFunction("", (_, _) => throw new JsThrow(reason), isConstructor: false);
-            return Then(realm, JsValue.Object(followedPromise), JsValue.Object(thrower), JsValue.Undefined);
-        }, isConstructor: false);
-
-        return Then(realm, thisV, JsValue.Object(thenFinally), JsValue.Object(catchFinally));
+        return Invoke(realm, thisV, "then", new[] { thenFinally, catchFinally });
     }
 
     // ====================================================================
     //                              Statics
     // ====================================================================
 
-    /// <summary>§27.2.4.7 Promise.resolve. Returns the input verbatim if it's
-    /// already a <see cref="JsPromise"/>; otherwise builds a fresh promise
-    /// and resolves it with the value (including thenable adoption).</summary>
-    private static JsValue ResolveStatic(JsRealm realm, JsValue value)
+    /// <summary>§27.2.4.7.1 PromiseResolve(C, x) — returns x verbatim when it
+    /// is a promise whose observable <c>constructor</c> is C; otherwise
+    /// builds a C-capability promise and resolves it with x.</summary>
+    private static JsValue PromiseResolve(JsRealm realm, JsValue c, JsValue x)
     {
-        if (value.IsObject && value.AsObject is JsPromise existing)
+        if (x.IsObject && x.AsObject is JsPromise)
         {
-            return JsValue.Object(existing);
+            var xConstructor = AbstractOperations.Get(realm.ActiveVm, x.AsObject, "constructor");
+            if (AbstractOperations.SameValue(xConstructor, c))
+            {
+                return x;
+            }
         }
 
-        var p = new JsPromise(realm.PromisePrototype);
-        ResolvePromise(realm, p, value);
-        return JsValue.Object(p);
+        var capability = NewPromiseCapability(realm, c);
+        AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined, new[] { x });
+        return JsValue.Object(capability.Promise);
     }
 
-    /// <summary>§27.2.4.6 Promise.reject.</summary>
-    private static JsValue RejectStatic(JsRealm realm, JsValue reason)
+    private enum CombinatorKind : byte
     {
-        var p = new JsPromise(realm.PromisePrototype);
-        RejectPromise(realm, p, reason);
-        return JsValue.Object(p);
+        All = 0,
+        AllSettled = 1,
+        Any = 2,
+        Race = 3,
     }
 
-    /// <summary>§27.2.4.1 Promise.all (array-like simplification). Resolves
-    /// to an array-like of values in source order; rejects with the first
-    /// rejection reason.</summary>
-    private static JsValue All(JsRealm realm, JsValue thisV, JsValue iterable)
+    /// <summary>Shared driver for §27.2.4.{1,2,3,5} — NewPromiseCapability(C),
+    /// GetPromiseResolve, GetIterator, then the per-kind element loop. Abrupt
+    /// completions after the capability exists close the iterator (when not
+    /// exhausted) and reject the capability (IfAbruptRejectPromise).</summary>
+    private static JsValue Combinator(JsRealm realm, JsValue thisV, JsValue iterable, CombinatorKind kind)
     {
+        var vm = realm.ActiveVm;
         var capability = NewPromiseCapability(realm, thisV);
-        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
-        // before the iteration; a non-callable value rejects via TypeError.
-        JsValue promiseResolve;
+        var record = default(IteratorRecord);
+        var haveIterator = false;
         try
         {
-            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
-            if (!AbstractOperations.IsCallable(promiseResolve))
-            {
-                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
-            }
+            var promiseResolve = GetPromiseResolve(realm, thisV);
+            record = AbstractOperations.GetIterator(realm, vm, iterable);
+            haveIterator = true;
+            return PerformCombinator(realm, thisV, capability, promiseResolve, ref record, kind);
         }
         catch (JsThrow ex)
         {
-            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
-            return JsValue.Object(capability.Promise);
-        }
-
-        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
-        {
-            return JsValue.Object(capability.Promise);
-        }
-
-        if (items.Count == 0)
-        {
-            var emptyArr = MakeArrayLike(realm, Array.Empty<JsValue>());
-            AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined, new[] { emptyArr });
-            return JsValue.Object(capability.Promise);
-        }
-
-        var results = new JsValue[items.Count];
-        var remaining = new int[1] { items.Count };
-        for (var i = 0; i < items.Count; i++)
-        {
-            var idx = i;
-            results[idx] = JsValue.Undefined;
-            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[idx] });
-            var onFulfilled = new JsNativeFunction("", (_, args) =>
+            if (haveIterator && !record.Done)
             {
-                results[idx] = args.Length > 0 ? args[0] : JsValue.Undefined;
-                if (--remaining[0] == 0)
+                AbstractOperations.IteratorClose(vm, record, isThrowing: true);
+            }
+
+            AbstractOperations.Call(vm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            return JsValue.Object(capability.Promise);
+        }
+    }
+
+    private static JsValue PerformCombinator(JsRealm realm, JsValue c, PromiseCapability capability,
+        JsValue promiseResolve, ref IteratorRecord record, CombinatorKind kind)
+    {
+        var vm = realm.ActiveVm;
+        var values = new List<JsValue>();
+        var remaining = new int[1] { 1 };
+        var index = 0;
+        while (true)
+        {
+            var step = AbstractOperations.IteratorStep(realm, vm, ref record);
+            if (step is null)
+            {
+                if (kind != CombinatorKind.Race && --remaining[0] == 0)
                 {
-                    var arr = MakeArrayLike(realm, results);
-                    AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined, new[] { arr });
+                    FinishCombinator(realm, capability, values, kind);
                 }
-                return JsValue.Undefined;
-            }, isConstructor: false);
-            InvokeThen(realm, item, JsValue.Object(onFulfilled), capability.Reject);
-        }
-        return JsValue.Object(capability.Promise);
-    }
 
-    /// <summary>§27.2.4.2 Promise.allSettled.</summary>
-    private static JsValue AllSettled(JsRealm realm, JsValue thisV, JsValue iterable)
-    {
-        var capability = NewPromiseCapability(realm, thisV);
-        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
-        // before the iteration; a non-callable value rejects via TypeError.
-        JsValue promiseResolve;
-        try
-        {
-            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
-            if (!AbstractOperations.IsCallable(promiseResolve))
-            {
-                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
-            }
-        }
-        catch (JsThrow ex)
-        {
-            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
-            return JsValue.Object(capability.Promise);
-        }
-
-        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
-        {
-            return JsValue.Object(capability.Promise);
-        }
-
-        if (items.Count == 0)
-        {
-            var emptyArr = MakeArrayLike(realm, Array.Empty<JsValue>());
-            AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined, new[] { emptyArr });
-            return JsValue.Object(capability.Promise);
-        }
-
-        var results = new JsValue[items.Count];
-        var remaining = new int[1] { items.Count };
-
-        void TryFinalize()
-        {
-            if (--remaining[0] != 0)
-            {
-                return;
+                return JsValue.Object(capability.Promise);
             }
 
-            var arr = MakeArrayLike(realm, results);
-            AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined, new[] { arr });
-        }
-
-        for (var i = 0; i < items.Count; i++)
-        {
-            var idx = i;
-            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[idx] });
-            var onFulfilled = new JsNativeFunction("", (_, args) =>
+            JsValue nextValue;
+            try
             {
-                var entry = realm.NewOrdinaryObject();
-                entry.DefineOwnProperty("status",
-                    PropertyDescriptor.Data(JsValue.String("fulfilled"), writable: true, enumerable: true, configurable: true));
-                entry.DefineOwnProperty("value",
-                    PropertyDescriptor.Data(args.Length > 0 ? args[0] : JsValue.Undefined, writable: true, enumerable: true, configurable: true));
-                results[idx] = JsValue.Object(entry);
-                TryFinalize();
-                return JsValue.Undefined;
-            }, isConstructor: false);
-            var onRejected = new JsNativeFunction("", (_, args) =>
-            {
-                var entry = realm.NewOrdinaryObject();
-                entry.DefineOwnProperty("status",
-                    PropertyDescriptor.Data(JsValue.String("rejected"), writable: true, enumerable: true, configurable: true));
-                entry.DefineOwnProperty("reason",
-                    PropertyDescriptor.Data(args.Length > 0 ? args[0] : JsValue.Undefined, writable: true, enumerable: true, configurable: true));
-                results[idx] = JsValue.Object(entry);
-                TryFinalize();
-                return JsValue.Undefined;
-            }, isConstructor: false);
-            InvokeThen(realm, item, JsValue.Object(onFulfilled), JsValue.Object(onRejected));
-        }
-        return JsValue.Object(capability.Promise);
-    }
-
-    /// <summary>§27.2.4.3 Promise.any. Resolves with the first fulfillment;
-    /// if every input rejects, rejects with an <c>AggregateError</c> whose
-    /// <c>errors</c> own property is a JsArray of the rejection reasons.</summary>
-    private static JsValue Any(JsRealm realm, JsValue thisV, JsValue iterable)
-    {
-        var capability = NewPromiseCapability(realm, thisV);
-        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
-        // before the iteration; a non-callable value rejects via TypeError.
-        JsValue promiseResolve;
-        try
-        {
-            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
-            if (!AbstractOperations.IsCallable(promiseResolve))
-            {
-                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+                nextValue = AbstractOperations.IteratorValue(vm, step.Value);
             }
-        }
-        catch (JsThrow ex)
-        {
-            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
-            return JsValue.Object(capability.Promise);
-        }
-
-        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
-        {
-            return JsValue.Object(capability.Promise);
-        }
-
-        if (items.Count == 0)
-        {
-            // Empty iterable → immediate AggregateError, per §27.2.4.3.
-            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined,
-                new[] { MakeAggregateError(realm, Array.Empty<JsValue>(), "All promises were rejected") });
-            return JsValue.Object(capability.Promise);
-        }
-
-        var errors = new JsValue[items.Count];
-        var remaining = new int[1] { items.Count };
-        for (var i = 0; i < items.Count; i++)
-        {
-            var idx = i;
-            errors[idx] = JsValue.Undefined;
-            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[idx] });
-            var onRejected = new JsNativeFunction("", (_, args) =>
+            catch
             {
-                errors[idx] = args.Length > 0 ? args[0] : JsValue.Undefined;
-                if (--remaining[0] == 0)
+                record = record with { Done = true };
+                throw;
+            }
+
+            var nextPromise = AbstractOperations.Call(vm, promiseResolve, c, new[] { nextValue });
+            JsValue onFulfilled;
+            JsValue onRejected;
+            switch (kind)
+            {
+                case CombinatorKind.All:
+                    values.Add(JsValue.Undefined);
+                    onFulfilled = MakeElementFunction(realm, values, index, remaining, capability, ElementKind.AllFulfill, new bool[1]);
+                    onRejected = capability.Reject;
+                    break;
+                case CombinatorKind.AllSettled:
                 {
-                    AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined,
-                        new[] { MakeAggregateError(realm, errors, "All promises were rejected") });
+                    values.Add(JsValue.Undefined);
+                    var alreadyCalled = new bool[1];
+                    onFulfilled = MakeElementFunction(realm, values, index, remaining, capability, ElementKind.SettledFulfill, alreadyCalled);
+                    onRejected = MakeElementFunction(realm, values, index, remaining, capability, ElementKind.SettledReject, alreadyCalled);
+                    break;
                 }
-                return JsValue.Undefined;
-            }, isConstructor: false);
-            InvokeThen(realm, item, capability.Resolve, JsValue.Object(onRejected));
+                case CombinatorKind.Any:
+                    values.Add(JsValue.Undefined);
+                    onFulfilled = capability.Resolve;
+                    onRejected = MakeElementFunction(realm, values, index, remaining, capability, ElementKind.AnyReject, new bool[1]);
+                    break;
+                default:
+                    onFulfilled = capability.Resolve;
+                    onRejected = capability.Reject;
+                    break;
+            }
+            if (kind != CombinatorKind.Race)
+            {
+                remaining[0]++;
+            }
+
+            Invoke(realm, nextPromise, "then", new[] { onFulfilled, onRejected });
+            index++;
         }
-        return JsValue.Object(capability.Promise);
     }
 
-    /// <summary>§27.2.4.5 Promise.race.</summary>
-    private static JsValue Race(JsRealm realm, JsValue thisV, JsValue iterable)
+    private enum ElementKind : byte
     {
+        AllFulfill = 0,
+        SettledFulfill = 1,
+        SettledReject = 2,
+        AnyReject = 3,
+    }
+
+    /// <summary>The resolve/reject-element functions of §27.2.4.1.3,
+    /// §27.2.4.2.2/.3 and §27.2.4.3.2 — non-constructor, name "", length 1,
+    /// one-shot via [[AlreadyCalled]] (shared per element for allSettled).</summary>
+    private static JsValue MakeElementFunction(JsRealm realm, List<JsValue> values, int index,
+        int[] remaining, PromiseCapability capability, ElementKind kind, bool[] alreadyCalled)
+    {
+        var fn = new JsNativeFunction(realm, "", 1, (_, args) =>
+        {
+            if (alreadyCalled[0])
+            {
+                return JsValue.Undefined;
+            }
+
+            alreadyCalled[0] = true;
+            var arg = args.Length > 0 ? args[0] : JsValue.Undefined;
+            values[index] = kind switch
+            {
+                ElementKind.AllFulfill or ElementKind.AnyReject => arg,
+                ElementKind.SettledFulfill => MakeSettledEntry(realm, "fulfilled", "value", arg),
+                _ => MakeSettledEntry(realm, "rejected", "reason", arg),
+            };
+            if (--remaining[0] == 0)
+            {
+                var settleKind = kind == ElementKind.AnyReject ? CombinatorKind.Any : CombinatorKind.All;
+                FinishCombinator(realm, capability, values, settleKind);
+            }
+
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        return JsValue.Object(fn);
+    }
+
+    private static JsValue MakeSettledEntry(JsRealm realm, string status, string slot, JsValue value)
+    {
+        var entry = realm.NewOrdinaryObject();
+        entry.DefineOwnProperty("status",
+            PropertyDescriptor.Data(JsValue.String(status), writable: true, enumerable: true, configurable: true));
+        entry.DefineOwnProperty(slot,
+            PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+        return JsValue.Object(entry);
+    }
+
+    private static void FinishCombinator(JsRealm realm, PromiseCapability capability,
+        List<JsValue> values, CombinatorKind kind)
+    {
+        if (kind == CombinatorKind.Any)
+        {
+            var error = MakeAggregateError(realm, values, "All promises were rejected");
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { error });
+            return;
+        }
+
+        var arr = new JsArray(realm, values);
+        AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined,
+            new[] { JsValue.Object(arr) });
+    }
+
+    /// <summary>Promise.allKeyed / Promise.allSettledKeyed (await-dictionary
+    /// proposal): combine the values of an object's own enumerable properties;
+    /// the result is a null-prototype object keyed like the input.</summary>
+    private static JsValue KeyedCombinator(JsRealm realm, JsValue thisV, JsValue promises, bool settled)
+    {
+        var vm = realm.ActiveVm;
         var capability = NewPromiseCapability(realm, thisV);
-        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
-        // before the iteration; a non-callable value rejects via TypeError.
-        JsValue promiseResolve;
         try
         {
-            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
-            if (!AbstractOperations.IsCallable(promiseResolve))
+            var promiseResolve = GetPromiseResolve(realm, thisV);
+            if (!promises.IsObject)
             {
-                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+                throw new JsThrow(realm.NewTypeError(
+                    $"Promise.{(settled ? "allSettledKeyed" : "allKeyed")} argument must be an object"));
             }
+
+            var source = promises.AsObject;
+            var allKeys = new List<JsPropertyKey>(source.OwnPropertyKeys);
+            var keys = new List<JsPropertyKey>();
+            var values = new List<JsValue>();
+            var remaining = new int[1] { 1 };
+            var index = 0;
+            foreach (var key in allKeys)
+            {
+                var desc = key.IsSymbol
+                    ? source.GetOwnPropertyDescriptor(key.AsSymbol)
+                    : source.GetOwnPropertyDescriptor(key.AsString);
+                if (desc is not { } dv || !dv.Enumerable)
+                {
+                    continue;
+                }
+
+                keys.Add(key);
+                values.Add(JsValue.Undefined);
+                var nextValue = AbstractOperations.Get(vm, source, key);
+                var nextPromise = AbstractOperations.Call(vm, promiseResolve, thisV, new[] { nextValue });
+                JsValue onFulfilled;
+                JsValue onRejected;
+                if (settled)
+                {
+                    var alreadyCalled = new bool[1];
+                    onFulfilled = MakeKeyedElementFunction(realm, keys, values, index, remaining, capability, ElementKind.SettledFulfill, alreadyCalled);
+                    onRejected = MakeKeyedElementFunction(realm, keys, values, index, remaining, capability, ElementKind.SettledReject, alreadyCalled);
+                }
+                else
+                {
+                    onFulfilled = MakeKeyedElementFunction(realm, keys, values, index, remaining, capability, ElementKind.AllFulfill, new bool[1]);
+                    onRejected = capability.Reject;
+                }
+                remaining[0]++;
+                Invoke(realm, nextPromise, "then", new[] { onFulfilled, onRejected });
+                index++;
+            }
+            if (--remaining[0] == 0)
+            {
+                var result = MakeKeyedResult(keys, values);
+                AbstractOperations.Call(vm, capability.Resolve, JsValue.Undefined, new[] { result });
+            }
+
+            return JsValue.Object(capability.Promise);
         }
         catch (JsThrow ex)
         {
-            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            AbstractOperations.Call(vm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
             return JsValue.Object(capability.Promise);
         }
-
-        if (!TryArrayLikeToList(realm, iterable, capability, out var items))
-        {
-            return JsValue.Object(capability.Promise);
-        }
-
-        for (var i = 0; i < items.Count; i++)
-        {
-            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[i] });
-            InvokeThen(realm, item, capability.Resolve, capability.Reject);
-        }
-        // Empty race never settles, matching spec (§27.2.4.5 step 8).
-        return JsValue.Object(capability.Promise);
     }
 
-    /// <summary>§27.2.4.8 Promise.withResolvers — Stage 4 sugar that returns
-    /// the capability fields as a plain object.</summary>
-    private static JsValue WithResolvers(JsRealm realm)
+    private static JsValue MakeKeyedElementFunction(JsRealm realm, List<JsPropertyKey> keys,
+        List<JsValue> values, int index, int[] remaining, PromiseCapability capability,
+        ElementKind kind, bool[] alreadyCalled)
     {
-        var capability = NewPromiseCapability(realm);
-        var obj = realm.NewOrdinaryObject();
-        obj.DefineOwnProperty("promise",
-            PropertyDescriptor.Data(JsValue.Object(capability.Promise), writable: true, enumerable: true, configurable: true));
-        obj.DefineOwnProperty("resolve",
-            PropertyDescriptor.Data(capability.Resolve, writable: true, enumerable: true, configurable: true));
-        obj.DefineOwnProperty("reject",
-            PropertyDescriptor.Data(capability.Reject, writable: true, enumerable: true, configurable: true));
-        return JsValue.Object(obj);
+        var fn = new JsNativeFunction(realm, "", 1, (_, args) =>
+        {
+            if (alreadyCalled[0])
+            {
+                return JsValue.Undefined;
+            }
+
+            alreadyCalled[0] = true;
+            var arg = args.Length > 0 ? args[0] : JsValue.Undefined;
+            values[index] = kind switch
+            {
+                ElementKind.AllFulfill => arg,
+                ElementKind.SettledFulfill => MakeSettledEntry(realm, "fulfilled", "value", arg),
+                _ => MakeSettledEntry(realm, "rejected", "reason", arg),
+            };
+            if (--remaining[0] == 0)
+            {
+                var result = MakeKeyedResult(keys, values);
+                AbstractOperations.Call(realm.ActiveVm, capability.Resolve, JsValue.Undefined, new[] { result });
+            }
+
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        return JsValue.Object(fn);
+    }
+
+    private static JsValue MakeKeyedResult(List<JsPropertyKey> keys, List<JsValue> values)
+    {
+        var result = new JsObject(prototype: null);
+        for (var i = 0; i < keys.Count; i++)
+        {
+            var key = keys[i];
+            var desc = PropertyDescriptor.Data(values[i], writable: true, enumerable: true, configurable: true);
+            if (key.IsSymbol)
+            {
+                result.DefineOwnProperty(key.AsSymbol, desc);
+            }
+            else
+            {
+                result.DefineOwnProperty(key.AsString, desc);
+            }
+        }
+        return JsValue.Object(result);
     }
 
     // ====================================================================
     //                              Helpers
     // ====================================================================
+
+    /// <summary>§27.2.4.1.1 step 1 GetPromiseResolve — read `resolve` from C
+    /// once, observably; non-callable is a TypeError.</summary>
+    private static JsValue GetPromiseResolve(JsRealm realm, JsValue c)
+    {
+        var resolve = AbstractOperations.Get(realm.ActiveVm, c.AsObject, "resolve");
+        if (!AbstractOperations.IsCallable(resolve))
+        {
+            throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+        }
+
+        return resolve;
+    }
 
     /// <summary>§27.2.1.5 NewPromiseCapability, specialized for the
     /// built-in Promise constructor.</summary>
@@ -788,23 +882,23 @@ public static class PromiseCtor
         }
 
         var vm = realm.ActiveVm;
-        var resolveFn = JsValue.Undefined;
-        var rejectFn = JsValue.Undefined;
-        var seen = false;
-        var executor = new JsNativeFunction("", (_, eargs) =>
+        // slots[0] = resolve, slots[1] = reject — the GetCapabilitiesExecutor
+        // records. A repeat call is a TypeError only once either slot holds a
+        // non-undefined value (§27.2.1.5.1 steps 1–2).
+        var slots = new JsValue[2] { JsValue.Undefined, JsValue.Undefined };
+        var executor = new JsNativeFunction(realm, "", 2, (_, eargs) =>
         {
-            if (seen)
+            if (!slots[0].IsUndefined || !slots[1].IsUndefined)
             {
-                throw new JsThrow(realm.NewTypeError("Promise executor called twice"));
+                throw new JsThrow(realm.NewTypeError("Promise executor already invoked with non-undefined fields"));
             }
 
-            seen = true;
-            resolveFn = eargs.Length > 0 ? eargs[0] : JsValue.Undefined;
-            rejectFn = eargs.Length > 1 ? eargs[1] : JsValue.Undefined;
+            slots[0] = eargs.Length > 0 ? eargs[0] : JsValue.Undefined;
+            slots[1] = eargs.Length > 1 ? eargs[1] : JsValue.Undefined;
             return JsValue.Undefined;
         }, isConstructor: false);
         var promiseV = AbstractOperations.Construct(vm, c, new[] { JsValue.Object(executor) });
-        if (!AbstractOperations.IsCallable(resolveFn) || !AbstractOperations.IsCallable(rejectFn))
+        if (!AbstractOperations.IsCallable(slots[0]) || !AbstractOperations.IsCallable(slots[1]))
         {
             throw new JsThrow(realm.NewTypeError("Promise executor did not receive callable resolving functions"));
         }
@@ -814,86 +908,12 @@ public static class PromiseCtor
             throw new JsThrow(realm.NewTypeError("Promise constructor did not return an object"));
         }
 
-        return new PromiseCapability(promiseV.AsObject, resolveFn, rejectFn);
-    }
-
-    /// <summary>If <paramref name="value"/> is already a JsPromise, return it;
-    /// otherwise wrap it in a fresh promise resolved with the value (handles
-    /// thenable adoption via <see cref="ResolvePromise"/>).</summary>
-    private static JsPromise AdoptAsPromise(JsRealm realm, JsValue value)
-    {
-        if (value.IsObject && value.AsObject is JsPromise p)
-        {
-            return p;
-        }
-
-        var fresh = new JsPromise(realm.PromisePrototype);
-        ResolvePromise(realm, fresh, value);
-        return fresh;
-    }
-
-    /// <summary>Pull items out of an array-like (length + index access). Promise
-    /// statics do not consume general iterables yet.</summary>
-    private static bool TryArrayLikeToList(
-        JsRealm realm,
-        JsValue iterable,
-        PromiseCapability capability,
-        out List<JsValue> items)
-    {
-        try
-        {
-            items = ArrayLikeToList(realm, iterable);
-            return true;
-        }
-        catch (JsThrow ex)
-        {
-            items = new List<JsValue>();
-            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
-            return false;
-        }
-    }
-
-    private static List<JsValue> ArrayLikeToList(JsRealm realm, JsValue iterable)
-    {
-        // §27.2.4.1 step 3 — GetIterator(iterable): the ITERATOR protocol, not
-        // an array-like read. A throwing @@iterator / next() / value getter
-        // propagates as a JsThrow, which the caller turns into a rejection.
-        var vm = realm.ActiveVm;
-        var items = new List<JsValue>();
-        var record = AbstractOperations.GetIterator(realm, vm, iterable);
-        while (true)
-        {
-            var step = AbstractOperations.IteratorNext(realm, vm, record);
-            if (AbstractOperations.IteratorComplete(vm, step))
-            {
-                break;
-            }
-
-            items.Add(AbstractOperations.IteratorValue(vm, step));
-        }
-
-        return items;
-    }
-
-    /// <summary>Build the array-like return object for <c>Promise.all</c> and
-    /// <c>allSettled</c>. This is still a plain object with
-    /// <c>Array.prototype</c>, not a <see cref="JsArray"/>.</summary>
-    private static JsValue MakeArrayLike(JsRealm realm, JsValue[] items)
-    {
-        var arr = realm.NewObjectWithProto(realm.ArrayPrototype);
-        for (var i = 0; i < items.Length; i++)
-        {
-            arr.DefineOwnProperty(i.ToString(CultureInfo.InvariantCulture),
-                PropertyDescriptor.Data(items[i], writable: true, enumerable: true, configurable: true));
-        }
-        arr.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(items.Length), writable: true, enumerable: false, configurable: false));
-        return JsValue.Object(arr);
+        return new PromiseCapability(promiseV.AsObject, slots[0], slots[1]);
     }
 
     /// <summary>Build a real AggregateError instance via
-    /// <c>realm.NewAggregateError</c> (B2-3) and attach the rejection reasons
-    /// as an own <c>errors</c> array (B2-4 JsArray). Used by §27.2.4.3
+    /// <c>realm.NewAggregateError</c> and attach the rejection reasons
+    /// as an own <c>errors</c> array. Used by §27.2.4.3
     /// Promise.any when every input rejects.</summary>
     private static JsValue MakeAggregateError(JsRealm realm, IReadOnlyList<JsValue> errors, string message)
     {
@@ -902,22 +922,5 @@ public static class PromiseCtor
         errValue.AsObject.DefineOwnProperty("errors",
             PropertyDescriptor.Data(JsValue.Object(errorsArray), writable: true, enumerable: false, configurable: true));
         return errValue;
-    }
-
-    /// <summary>Install a builtin method descriptor (W=true, E=false, C=true)
-    /// per §17 default attributes.</summary>
-    private static void DefineMethod(JsRealm realm, JsObject target, string name,
-        Func<JsValue, JsValue[], JsValue> body, int length)
-    {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        // §10.3 — built-in functions inherit from %Function.prototype% so
-        // call/apply/bind work on them (`Promise.resolve.bind(Promise)` is a
-        // common bundle idiom).
-        fn.SetPrototypeOf(realm.FunctionPrototype);
-        fn.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String(name), writable: false, enumerable: false, configurable: true));
-        fn.DefineOwnProperty("length",
-            PropertyDescriptor.Data(JsValue.Number(length), writable: false, enumerable: false, configurable: true));
-        target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 }
