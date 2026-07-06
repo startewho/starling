@@ -30,8 +30,15 @@ public static class RegExpCtor
 
         realm.RegExpBuiltinExec = IntrinsicHelpers.DefineMethod(realm, proto, "exec", 1, (thisV, args) => Exec(realm, thisV, args));
         IntrinsicHelpers.DefineMethod(realm, proto, "test", 1, (thisV, args) => Test(realm, thisV, args));
+        IntrinsicHelpers.DefineMethod(realm, proto, "compile", 2, (thisV, args) => Compile(realm, thisV, args));
         IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0,
             (thisV, _) => RegExpToString(realm, thisV));
+
+        // Annex B / legacy-RegExp-features: static accessors on %RegExp%
+        // reflecting the most recent successful BUILTIN match in this realm.
+        // Getters throw TypeError when the receiver is not %RegExp% itself;
+        // `input`/`$_` also has a setter.
+        InstallLegacyStatics(realm, ctor);
 
         // Flag getters
         realm.RegExpGlobalGetter = DefineFlagGetter(realm, proto, "global", RegexFlags.Global);
@@ -50,8 +57,33 @@ public static class RegExpCtor
         });
         DefineGetter(realm, proto, "flags", (thisV) =>
         {
-            var re = RequireRegExp(realm, thisV);
-            return JsValue.String(RegexFlagParser.ToFlagString(re.Flags));
+            // §22.2.6.4 — GENERIC: reads each flag property off the receiver
+            // via [[Get]] (observable; works on any object), not the internal
+            // slots, so a plain object with getters builds a flag string too.
+            if (!thisV.IsObject)
+            {
+                throw new JsThrow(realm.NewTypeError("get RegExp.prototype.flags called on non-object"));
+            }
+
+            var obj = thisV.AsObject;
+            var vm = realm.ActiveVm;
+            var sb = new StringBuilder(8);
+            void Add(string prop, char ch)
+            {
+                if (JsValue.ToBoolean(AbstractOperations.Get(vm, obj, prop)))
+                {
+                    sb.Append(ch);
+                }
+            }
+            Add("hasIndices", 'd');
+            Add("global", 'g');
+            Add("ignoreCase", 'i');
+            Add("multiline", 'm');
+            Add("dotAll", 's');
+            Add("unicode", 'u');
+            Add("unicodeSets", 'v');
+            Add("sticky", 'y');
+            return JsValue.String(sb.ToString());
         });
 
         // Symbol.match / Symbol.replace / Symbol.search / Symbol.split / Symbol.matchAll
@@ -126,6 +158,56 @@ public static class RegExpCtor
         return JsValue.Object(re);
     }
 
+    // Annex B §B.2.3.1 RegExp.prototype.compile(pattern, flags) — re-initialize
+    // the receiver in place (legacy web API). The receiver must be a real
+    // RegExp object; a RegExp pattern argument may not be paired with explicit
+    // flags.
+    private static JsValue Compile(JsRealm realm, JsValue thisV, JsValue[] args)
+    {
+        if (!thisV.IsObject || thisV.AsObject is not JsRegExp re)
+        {
+            throw new JsThrow(realm.NewTypeError("RegExp.prototype.compile called on incompatible receiver"));
+        }
+
+        var patternArg = args.Length > 0 ? args[0] : JsValue.Undefined;
+        var flagsArg = args.Length > 1 ? args[1] : JsValue.Undefined;
+        string source;
+        RegexFlags flags;
+        if (patternArg.IsObject && patternArg.AsObject is JsRegExp existing)
+        {
+            if (!flagsArg.IsUndefined)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot supply flags when constructing one RegExp from another"));
+            }
+
+            source = existing.Source;
+            flags = existing.Flags;
+        }
+        else
+        {
+            source = patternArg.IsUndefined ? string.Empty : JsValue.ToStringValue(patternArg);
+            var flagsStr = flagsArg.IsUndefined ? string.Empty : JsValue.ToStringValue(flagsArg);
+            if (!RegexFlagParser.TryParse(flagsStr, out flags, out var err))
+            {
+                throw new JsThrow(realm.NewSyntaxError(err!));
+            }
+        }
+
+        IRegexMatcher compiled;
+        try
+        {
+            compiled = RegexBackendSelector.Compile(source, flags);
+        }
+        catch (RegexSyntaxException ex)
+        {
+            throw new JsThrow(realm.NewSyntaxError($"Invalid regular expression: /{source}/: {ex.Message}"));
+        }
+
+        re.Recompile(compiled);
+        AbstractOperations.Set(realm.ActiveVm, re, "lastIndex", JsValue.Number(0));
+        return thisV;
+    }
+
     // ------------------------------------------------------------------
     //                       prototype.exec / test
     // ------------------------------------------------------------------
@@ -175,6 +257,7 @@ public static class RegExpCtor
                 re.LastIndex = matchEnd;
             }
 
+            RecordLegacyMatch(realm, re, input, spanBuffer);
             return JsValue.Object(BuildMatchArrayFromSpans(realm, re, input, spanBuffer));
         }
         finally
@@ -1088,5 +1171,93 @@ public static class RegExpCtor
     {
         var fn = new JsNativeFunction(realm, name, length, body, isConstructor: false);
         target.DefineOwnProperty(key, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
+    }
+
+    // ------------------------------------------------------------------
+    //        Annex B legacy static accessors (RegExp.$1, lastMatch, …)
+    // ------------------------------------------------------------------
+
+    private static void RecordLegacyMatch(JsRealm realm, JsRegExp re, string input, int[] spanBuffer)
+    {
+        var captures = new string?[re.Compiled.CaptureCount];
+        for (var i = 1; i <= re.Compiled.CaptureCount; i++)
+        {
+            var cs = spanBuffer[2 * i];
+            var ce = spanBuffer[(2 * i) + 1];
+            captures[i - 1] = cs >= 0 && ce >= cs ? input[cs..ce] : null;
+        }
+
+        realm.LegacyRegExpMatch = new JsRealm.LegacyMatchState(
+            input, spanBuffer[0], spanBuffer[1], captures);
+    }
+
+    private static void InstallLegacyStatics(JsRealm realm, JsNativeFunction ctor)
+    {
+        JsRealm.LegacyMatchState Require(JsValue thisV)
+        {
+            // Legacy semantics: the receiver must be %RegExp% of THIS realm.
+            if (!thisV.IsObject || !ReferenceEquals(thisV.AsObject, ctor))
+            {
+                throw new JsThrow(realm.NewTypeError("RegExp legacy static accessed on incompatible receiver"));
+            }
+
+            return realm.LegacyRegExpMatch ?? JsRealm.LegacyMatchState.Empty;
+        }
+
+        void Getter(string name, Func<JsRealm.LegacyMatchState, string> read, string? alias = null)
+        {
+            var get = new JsNativeFunction(realm, "get " + name, 0, (thisV, _) => JsValue.String(read(Require(thisV))));
+            var desc = PropertyDescriptor.Accessor(get, null);
+            ctor.DefineOwnProperty(name, desc);
+            if (alias is not null)
+            {
+                ctor.DefineOwnProperty(alias, desc);
+            }
+        }
+
+        // input / $_ — read-write.
+        var inputGet = new JsNativeFunction(realm, "get input", 0, (thisV, _) => JsValue.String(Require(thisV).Input));
+        var inputSet = new JsNativeFunction(realm, "set input", 1, (thisV, args) =>
+        {
+            var st = Require(thisV);
+            var v = JsValue.ToStringValue(args.Length > 0 ? args[0] : JsValue.Undefined);
+            realm.LegacyRegExpMatch = st with { Input = v };
+            return JsValue.Undefined;
+        });
+        var inputDesc = PropertyDescriptor.Accessor(inputGet, inputSet);
+        ctor.DefineOwnProperty("input", inputDesc);
+        ctor.DefineOwnProperty("$_", inputDesc);
+
+        Getter("lastMatch", st => SafeSlice(st.Input, st.MatchStart, st.MatchEnd), "$&");
+        Getter("lastParen", st =>
+        {
+            for (var i = st.Captures.Length - 1; i >= 0; i--)
+            {
+                if (st.Captures[i] is { } c)
+                {
+                    return c;
+                }
+            }
+
+            return "";
+        }, "$+");
+        Getter("leftContext", st => SafeSlice(st.Input, 0, st.MatchStart), "$`");
+        Getter("rightContext", st => SafeSlice(st.Input, st.MatchEnd, st.Input.Length), "$'");
+        for (var n = 1; n <= 9; n++)
+        {
+            var idx = n - 1;
+            Getter("$" + n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                st => idx < st.Captures.Length ? st.Captures[idx] ?? "" : "");
+        }
+
+        static string SafeSlice(string input, int start, int end)
+        {
+            if (start < 0 || end < start || end > input.Length)
+            {
+                return "";
+            }
+
+            return input[start..end];
+        }
     }
 }

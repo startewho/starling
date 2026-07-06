@@ -148,6 +148,14 @@ public sealed class ModuleLoader
             PromiseCtor.Reject(realm, result, ex.Value);
             return result;
         }
+        catch (Parse.JsParseException ex)
+        {
+            // A target module that fails to parse (including module-goal early
+            // errors, §16.2.1.6) rejects the import() promise with a
+            // SyntaxError — never a synchronous host throw.
+            PromiseCtor.Reject(realm, result, realm.NewSyntaxError(ex.Message));
+            return result;
+        }
 
         // Chain on the evaluation promise: fulfil with the namespace once the
         // subtree (incl. any top-level await) settles; reject with its error.

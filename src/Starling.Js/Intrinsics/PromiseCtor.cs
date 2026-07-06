@@ -102,19 +102,52 @@ public static class PromiseCtor
             PropertyDescriptor.Data(JsValue.String("Promise"), writable: false, enumerable: false, configurable: true));
 
         // --------------------------------------------------------- Statics
+        // §27.2.4 step 1 (every static): the receiver C must be an Object —
+        // `Promise.all.call(undefined, …)` is a TypeError, thrown BEFORE the
+        // iterable is touched. (Species-generic construction through a
+        // subclass C is a separate, deeper contract.)
+        void RequireObjectReceiver(JsValue thisV, string name)
+        {
+            if (!thisV.IsObject)
+            {
+                throw new JsThrow(realm.NewTypeError($"Promise.{name} called on non-object"));
+            }
+        }
         DefineMethod(realm, ctor, "resolve", (thisV, args) =>
-            ResolveStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
+        {
+            RequireObjectReceiver(thisV, "resolve");
+            return ResolveStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        }, length: 1);
         DefineMethod(realm, ctor, "reject", (thisV, args) =>
-            RejectStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
+        {
+            RequireObjectReceiver(thisV, "reject");
+            return RejectStatic(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        }, length: 1);
         DefineMethod(realm, ctor, "all", (thisV, args) =>
-            All(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
+        {
+            RequireObjectReceiver(thisV, "all");
+            return All(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        }, length: 1);
         DefineMethod(realm, ctor, "allSettled", (thisV, args) =>
-            AllSettled(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
+        {
+            RequireObjectReceiver(thisV, "allSettled");
+            return AllSettled(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        }, length: 1);
         DefineMethod(realm, ctor, "any", (thisV, args) =>
-            Any(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
+        {
+            RequireObjectReceiver(thisV, "any");
+            return Any(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        }, length: 1);
         DefineMethod(realm, ctor, "race", (thisV, args) =>
-            Race(realm, args.Length > 0 ? args[0] : JsValue.Undefined), length: 1);
-        DefineMethod(realm, ctor, "withResolvers", (thisV, args) => WithResolvers(realm), length: 0);
+        {
+            RequireObjectReceiver(thisV, "race");
+            return Race(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        }, length: 1);
+        DefineMethod(realm, ctor, "withResolvers", (thisV, args) =>
+        {
+            RequireObjectReceiver(thisV, "withResolvers");
+            return WithResolvers(realm);
+        }, length: 0);
 
         // --------------------------------------------------------- Prototype
         DefineMethod(realm, proto, "then", (thisV, args) =>
@@ -683,23 +716,21 @@ public static class PromiseCtor
 
     private static List<JsValue> ArrayLikeToList(JsRealm realm, JsValue iterable)
     {
-        if (!iterable.IsObject)
+        // §27.2.4.1 step 3 — GetIterator(iterable): the ITERATOR protocol, not
+        // an array-like read. A throwing @@iterator / next() / value getter
+        // propagates as a JsThrow, which the caller turns into a rejection.
+        var vm = realm.ActiveVm;
+        var items = new List<JsValue>();
+        var record = AbstractOperations.GetIterator(realm, vm, iterable);
+        while (true)
         {
-            throw new JsThrow(realm.NewTypeError("Promise iterable must be an object"));
-        }
+            var step = AbstractOperations.IteratorNext(realm, vm, record);
+            if (AbstractOperations.IteratorComplete(vm, step))
+            {
+                break;
+            }
 
-        var obj = iterable.AsObject;
-        var lengthV = obj.Get("length");
-        if (!lengthV.IsNumber)
-        {
-            throw new JsThrow(realm.NewTypeError("Promise iterable has no length"));
-        }
-
-        var len = (int)lengthV.AsNumber;
-        var items = new List<JsValue>(len);
-        for (var i = 0; i < len; i++)
-        {
-            items.Add(obj.Get(i.ToString(CultureInfo.InvariantCulture)));
+            items.Add(AbstractOperations.IteratorValue(vm, step));
         }
 
         return items;

@@ -23,7 +23,25 @@ public static class ArrayBufferCtor
 
             var length = ToIndex(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
-            return JsValue.Object(new JsArrayBuffer(instProto, length));
+            var ab = new JsArrayBuffer(instProto, length);
+            // ES2024 §25.1.4.1 — options.maxByteLength makes the buffer
+            // resizable (GetArrayBufferMaxByteLengthOption).
+            if (args.Length > 1 && args[1].IsObject)
+            {
+                var maxV = AbstractOperations.Get(realm.ActiveVm, args[1].AsObject, "maxByteLength");
+                if (!maxV.IsUndefined)
+                {
+                    var max = ToIndex(realm, maxV);
+                    if (length > max)
+                    {
+                        throw new JsThrow(realm.NewRangeError("ArrayBuffer length exceeds maxByteLength"));
+                    }
+
+                    ab.MaxByteLength = max;
+                }
+            }
+
+            return JsValue.Object(ab);
         }, isConstructor: true);
         ctor.SetPrototypeOf(realm.FunctionPrototype);
         DefineData(ctor, "prototype", JsValue.Object(proto), false, false, false);
@@ -36,6 +54,71 @@ public static class ArrayBufferCtor
             PropertyDescriptor.Data(JsValue.String("ArrayBuffer"), writable: false, enumerable: false, configurable: true));
 
         DefineMethod(proto, "slice", (thisV, args) => Slice(realm, thisV, args), 2);
+        // ES2024 resizable buffers: resize + the resizable/maxByteLength getters.
+        DefineMethod(proto, "resize", (thisV, args) =>
+        {
+            var buffer = thisV.IsObject && thisV.AsObject is JsArrayBuffer rb
+                ? rb
+                : throw new JsThrow(realm.NewTypeError("ArrayBuffer.prototype.resize called on incompatible receiver"));
+            if (!buffer.IsResizable)
+            {
+                throw new JsThrow(realm.NewTypeError("ArrayBuffer.prototype.resize called on a fixed-length ArrayBuffer"));
+            }
+
+            var newLen = ToIndex(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            if (newLen > buffer.MaxByteLength!.Value)
+            {
+                throw new JsThrow(realm.NewRangeError("ArrayBuffer.prototype.resize: new length exceeds maxByteLength"));
+            }
+
+            buffer.Resize(newLen);
+            return JsValue.Undefined;
+        }, 1);
+        // ES2024 §25.1.6.3/.6/.7 — detached getter + transfer family.
+        proto.DefineOwnProperty("detached", PropertyDescriptor.Accessor(
+            new JsNativeFunction(realm, "get detached", 0, (thisV, _) =>
+                thisV.IsObject && thisV.AsObject is JsArrayBuffer db
+                    ? JsValue.Boolean(db.IsDetached)
+                    : throw new JsThrow(realm.NewTypeError("get ArrayBuffer.prototype.detached called on incompatible receiver"))),
+            null));
+        JsValue Transfer(JsValue thisV, JsValue[] args, bool toFixed)
+        {
+            var buffer = thisV.IsObject && thisV.AsObject is JsArrayBuffer tb
+                ? tb
+                : throw new JsThrow(realm.NewTypeError("ArrayBuffer.prototype.transfer called on incompatible receiver"));
+            if (buffer.IsDetached)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot transfer a detached ArrayBuffer"));
+            }
+
+            var newLen = args.Length > 0 && !args[0].IsUndefined
+                ? ToIndex(realm, args[0])
+                : buffer.ByteLength;
+            var fresh = new JsArrayBuffer(realm.ArrayBufferPrototype, newLen);
+            if (!toFixed && buffer.IsResizable)
+            {
+                fresh.MaxByteLength = buffer.MaxByteLength;
+            }
+
+            var src = buffer.GetSpan();
+            src[..Math.Min(src.Length, newLen)].CopyTo(fresh.GetSpan());
+            buffer.Detach();
+            return JsValue.Object(fresh);
+        }
+        DefineMethod(proto, "transfer", (thisV, args) => Transfer(thisV, args, toFixed: false), 0);
+        DefineMethod(proto, "transferToFixedLength", (thisV, args) => Transfer(thisV, args, toFixed: true), 0);
+        proto.DefineOwnProperty("resizable", PropertyDescriptor.Accessor(
+            new JsNativeFunction(realm, "get resizable", 0, (thisV, _) =>
+                thisV.IsObject && thisV.AsObject is JsArrayBuffer gb
+                    ? JsValue.Boolean(gb.IsResizable)
+                    : throw new JsThrow(realm.NewTypeError("get ArrayBuffer.prototype.resizable called on incompatible receiver"))),
+            null));
+        proto.DefineOwnProperty("maxByteLength", PropertyDescriptor.Accessor(
+            new JsNativeFunction(realm, "get maxByteLength", 0, (thisV, _) =>
+                thisV.IsObject && thisV.AsObject is JsArrayBuffer mb
+                    ? JsValue.Number(mb.MaxByteLength ?? mb.ByteLength)
+                    : throw new JsThrow(realm.NewTypeError("get ArrayBuffer.prototype.maxByteLength called on incompatible receiver"))),
+            null));
         DefineMethod(ctor, "isView", (_, args) => JsValue.Boolean(args.Length > 0 && IsView(args[0])), 1);
 
         realm.GlobalObject.DefineOwnProperty("ArrayBuffer", PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));

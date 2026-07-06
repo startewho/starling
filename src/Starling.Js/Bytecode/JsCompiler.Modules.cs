@@ -531,8 +531,18 @@ public sealed partial class JsCompiler
                     }
 
                     break;
-                case ExportDefaultDeclaration:
-                    exports.Add(new ModuleExportEntry("default", null, null, DefaultBindingName));
+                case ExportDefaultDeclaration dflt:
+                    // §16.2.3.2 — a NAMED `export default function f…`/`class C…`
+                    // is a declaration whose OWN binding backs the "default"
+                    // export (a later `f = …` is visible through the namespace);
+                    // only anonymous forms use the synthetic *default* binding.
+                    var dfltLocal = dflt.Declaration switch
+                    {
+                        FunctionExpression { Name: { } fn } => fn.Name,
+                        ClassExpression { Name: { } cn } => cn.Name,
+                        _ => DefaultBindingName,
+                    };
+                    exports.Add(new ModuleExportEntry("default", null, null, dfltLocal));
                     break;
                 case ExportNamedDeclaration named:
                     if (named.Source is not null)
@@ -718,7 +728,21 @@ public sealed partial class JsCompiler
                 // the binding is only ever written by the body's own init, and an
                 // anonymous default has no name to reassign, so const-immutability
                 // adds nothing while risking the init store being rejected.
-                case ExportDefaultDeclaration: AddLex(DefaultBindingName); break;
+                case ExportDefaultDeclaration dfltDecl:
+                    switch (dfltDecl.Declaration)
+                    {
+                        case FunctionExpression { Name: { } dfn }:
+                            Add(dfn.Name); // hoisted function binding, not TDZ
+                            break;
+                        case ClassExpression { Name: { } dcn }:
+                            AddLex(dcn.Name);
+                            break;
+                        default:
+                            AddLex(DefaultBindingName);
+                            break;
+                    }
+
+                    break;
             }
         }
     }
@@ -739,6 +763,11 @@ public sealed partial class JsCompiler
             {
                 FunctionDeclaration f => f,
                 ExportLocalDeclaration { Declaration: FunctionDeclaration f } => f,
+                // `export default function fn…` — a HoistableDeclaration whose
+                // own binding backs the export (see the export-entry mapping).
+                ExportDefaultDeclaration { Declaration: FunctionExpression { Name: not null } dfe } =>
+                    new FunctionDeclaration(dfe.Name!, dfe.Params, dfe.Body, dfe.Generator,
+                        dfe.Start, dfe.End, dfe.Async, dfe.Strict, dfe.SourceText),
                 _ => null,
             };
             if (fd is null)
@@ -830,19 +859,36 @@ public sealed partial class JsCompiler
     {
         switch (def.Declaration)
         {
+            case FunctionExpression { Name: not null }:
+                // Named default function: hoisted with the module's other
+                // function declarations under its OWN binding; nothing to emit
+                // at the textual position.
+                return;
             case FunctionExpression fe:
                 EmitExpression(fe);
-                break;
+                // §16.2.3.7 — an ANONYMOUS default export is named "default".
+                _b.EmitU16(Opcode.SetFunctionName, _b.AddConstant("default"));
+                StoreModuleBinding(DefaultBindingName);
+                return;
+            case ClassExpression { Name: { } className } ce:
+                // Named default class: its own lexical binding backs the export.
+                EmitExpression(ce);
+                StoreModuleBinding(className.Name);
+                return;
             case ClassExpression ce:
                 EmitExpression(ce);
-                break;
+                _b.EmitU16(Opcode.SetFunctionName, _b.AddConstant("default"));
+                StoreModuleBinding(DefaultBindingName);
+                return;
             case Expression expr:
-                EmitExpression(expr);
-                break;
+                // `export default <AssignmentExpression>` — NamedEvaluation
+                // gives an anonymous function/class the name "default".
+                EmitNamedEvaluation(expr, "default");
+                StoreModuleBinding(DefaultBindingName);
+                return;
             default:
                 throw new InvalidOperationException("unsupported default export declaration");
         }
-        StoreModuleBinding(DefaultBindingName);
     }
 
     /// <summary>Module-scope variable declaration — initializers write through

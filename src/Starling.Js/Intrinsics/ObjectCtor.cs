@@ -57,7 +57,7 @@ public static class ObjectCtor
         ctor.DefineOwnProperty("length",
             PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
         // -------------------------------------------------------- Static methods
-        DefineMethod(realm, ctor, "assign", Assign, length: 2);
+        DefineMethod(realm, ctor, "assign", (thisV, args) => Assign(realm, thisV, args), length: 2);
         DefineMethod(realm, ctor, "create", (thisV, args) => Create(realm, args), length: 2);
         DefineMethod(realm, ctor, "defineProperty", (thisV, args) => DefineProperty(realm, args), length: 3);
         DefineMethod(realm, ctor, "defineProperties", (thisV, args) => DefineProperties(realm, args), length: 2);
@@ -253,17 +253,17 @@ public static class ObjectCtor
 
     /// <summary>§20.1.2.1 Object.assign — copy own enumerable string-keyed
     /// properties from each source to target.</summary>
-    private static JsValue Assign(JsValue thisV, JsValue[] args)
+    private static JsValue Assign(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         if (args.Length == 0)
         {
-            throw new JsThrow(JsValue.String("Object.assign requires a target"));
+            throw new JsThrow(realm.NewTypeError("Object.assign requires a target"));
         }
 
         var target = args[0];
         if (!target.IsObject)
         {
-            throw new JsThrow(JsValue.String("Object.assign target must be an object"));
+            throw new JsThrow(realm.NewTypeError("Object.assign target must be an object"));
         }
 
         var targetObj = target.AsObject;
@@ -902,13 +902,11 @@ public static class ObjectCtor
         {
             return "Function";
         }
-        // Error: any object with ErrorPrototype somewhere in its chain.
-        for (var p = o.Prototype; p is not null; p = p.Prototype)
+        // §20.1.3.6 step 8 — [[ErrorData]] (realm-independent, unlike a
+        // prototype-identity walk which misses cross-realm errors).
+        if (o.IsErrorExotic)
         {
-            if (ReferenceEquals(p, realm.ErrorPrototype))
-            {
-                return "Error";
-            }
+            return "Error";
         }
         // Boxed primitives (String / Number / Boolean) — detect via prototype.
         for (var p = o.Prototype; p is not null; p = p.Prototype)

@@ -43,6 +43,9 @@ public static class Disassembler
                 case Opcode.LoadGlobalChecked:
                 case Opcode.StoreGlobal:
                 case Opcode.DeclareGlobalVar:
+                case Opcode.GlobalDeclInstantiation:
+                case Opcode.InitGlobalLex:
+                case Opcode.AnnexBGlobalFnBind:
                 case Opcode.SetFunctionName:
                 case Opcode.DefineGetter:
                 case Opcode.DefineSetter:

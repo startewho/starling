@@ -22,24 +22,65 @@ public enum JsTypedArrayKind
 /// <summary>ECMA-262 §25.2 TypedArray exotic object backed by an ArrayBuffer.</summary>
 public sealed class JsTypedArray : JsObject
 {
-    public JsTypedArray(JsObject? prototype, JsTypedArrayKind kind, JsArrayBuffer buffer, int byteOffset, int length) : base(prototype)
+    /// <summary>Fixed view length in elements, or null for a LENGTH-TRACKING
+    /// view over a resizable buffer (ES2024 — the length follows the buffer).</summary>
+    private readonly int? _fixedLength;
+
+    public JsTypedArray(JsObject? prototype, JsTypedArrayKind kind, JsArrayBuffer buffer, int byteOffset, int? length) : base(prototype)
     {
         DisableInlineCache();
         Kind = kind;
         Buffer = buffer;
         ByteOffset = byteOffset;
-        Length = length;
-        DefineOwnProperty("buffer", PropertyDescriptor.Data(JsValue.Object(buffer), false, false, true));
-        DefineOwnProperty("byteOffset", PropertyDescriptor.Data(JsValue.Number(byteOffset), false, false, true));
-        DefineOwnProperty("byteLength", PropertyDescriptor.Data(JsValue.Number(length * BytesPerElement), false, false, true));
-        DefineOwnProperty("length", PropertyDescriptor.Data(JsValue.Number(length), false, false, true));
-        DefineOwnProperty("BYTES_PER_ELEMENT", PropertyDescriptor.Data(JsValue.Number(BytesPerElement), false, false, true));
+        _fixedLength = length;
+        // buffer/byteOffset/byteLength/length/BYTES_PER_ELEMENT are NOT own
+        // properties — they are accessors on %TypedArray%.prototype (§23.2.3)
+        // and a data property on the concrete prototype respectively, so a
+        // length-tracking view reports its CURRENT length on every read.
     }
 
     public JsTypedArrayKind Kind { get; }
     public JsArrayBuffer Buffer { get; }
     public int ByteOffset { get; }
-    public int Length { get; }
+
+    public bool IsLengthTracking => _fixedLength is null;
+
+    /// <summary>ES2024 IsTypedArrayOutOfBounds — a fixed view whose window no
+    /// longer fits the (shrunk) buffer, or whose offset is past the end.</summary>
+    public bool IsOutOfBounds
+    {
+        get
+        {
+            if (Buffer.IsDetached)
+            {
+                return true;
+            }
+
+            var bl = Buffer.ByteLength;
+            if (ByteOffset > bl)
+            {
+                return true;
+            }
+
+            return _fixedLength is { } f && ByteOffset + ((long)f * BytesPerElement) > bl;
+        }
+    }
+
+    /// <summary>Element count. Length-tracking views compute from the buffer's
+    /// CURRENT byteLength; an out-of-bounds view reports 0.</summary>
+    public int Length
+    {
+        get
+        {
+            if (IsOutOfBounds)
+            {
+                return 0;
+            }
+
+            return _fixedLength ?? (Buffer.ByteLength - ByteOffset) / BytesPerElement;
+        }
+    }
+
     public int BytesPerElement => BytesPerElementOf(Kind);
     public int ByteLength => Length * BytesPerElement;
 

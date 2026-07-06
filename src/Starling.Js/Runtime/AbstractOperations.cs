@@ -208,7 +208,9 @@ public static class AbstractOperations
 
         return value.AsObject switch
         {
-            JsFunction => true,
+            // §27.5/§27.6/§27.7 — generator and async functions have no
+            // [[Construct]]; `new` on them is a TypeError.
+            JsFunction fn => fn.Kind == JsFunctionKind.Normal,
             JsNativeFunction nat => nat.IsConstructor,
             JsBoundFunction bf => IsConstructor(JsValue.Object(bf.Target)),
             JsProxy proxy => !proxy.IsRevoked && proxy.TargetIsConstructor,
@@ -422,7 +424,7 @@ public static class AbstractOperations
 
         return callee.AsObject switch
         {
-            JsNativeFunction nat => CallNative(nat, thisValue, args),
+            JsNativeFunction nat => CallNative(vm, nat, thisValue, args),
             JsFunction fn => vm is not null
                 ? vm.CallFunction(fn, thisValue, args)
                 : CallForeignRealm(fn, thisValue, args),
@@ -433,8 +435,36 @@ public static class AbstractOperations
         };
     }
 
-    private static JsValue CallNative(JsNativeFunction nat, JsValue thisValue, JsValue[] args)
-        => nat.Body(thisValue, args);
+    /// <summary>Native-to-native recursion guard. Pure native call chains
+    /// (e.g. a builtin whose spec steps re-enter ToPrimitive, which calls
+    /// another builtin, …) never pass through the VM's barrier-depth guard, so
+    /// an unbounded loop would hit a NATIVE StackOverflowException — which .NET
+    /// cannot catch and which kills the whole process. Count native frames and
+    /// convert the runaway into a catchable RangeError first. The limit is
+    /// generous: legitimate native chains (proxy trap stacks, nested
+    /// ToPrimitive) stay in the tens.</summary>
+    private const int MaxNativeCallDepth = 2_000;
+    [ThreadStatic] private static int t_nativeCallDepth;
+
+    private static JsValue CallNative(JsVm? vm, JsNativeFunction nat, JsValue thisValue, JsValue[] args)
+    {
+        if (t_nativeCallDepth >= MaxNativeCallDepth)
+        {
+            throw vm is not null
+                ? new JsThrow(vm.Realm.NewRangeError("Maximum call stack size exceeded"))
+                : new JsThrow(JsValue.String("Maximum call stack size exceeded"));
+        }
+
+        t_nativeCallDepth++;
+        try
+        {
+            return nat.Body(thisValue, args);
+        }
+        finally
+        {
+            t_nativeCallDepth--;
+        }
+    }
 
     /// <summary>wp:M3-83 — host invokes a foreign-realm JS function with no
     /// ambient VM (e.g. Function.prototype.call on a foreign function, where
@@ -464,7 +494,7 @@ public static class AbstractOperations
     {
         if (!IsConstructor(ctor))
         {
-            throw new JsThrow(JsValue.String($"not a constructor: {JsValue.ToStringValue(ctor)}"));
+            throw NotAConstructor(vm, JsValue.ToStringValue(ctor));
         }
 
         newTarget ??= ctor.AsObject;
@@ -477,9 +507,18 @@ public static class AbstractOperations
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
                 ConcatBoundArgs(bf.BoundArgs, args), newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
-            _ => throw new JsThrow(JsValue.String($"not a constructor: {ctor.AsObject}")),
+            _ => throw NotAConstructor(vm, ctor.AsObject.ToString() ?? "object"),
         };
     }
+
+    /// <summary>Real <c>TypeError</c> when a VM is available (so
+    /// <c>assert.throws(TypeError, () => new fn())</c> observes an Error
+    /// object); string fallback only for the realm-less path — mirrors
+    /// <see cref="NotAFunction"/>.</summary>
+    private static JsThrow NotAConstructor(JsVm? vm, string detail) =>
+        vm is not null
+            ? new JsThrow(vm.Realm.NewTypeError($"not a constructor: {detail}"))
+            : new JsThrow(JsValue.String($"not a constructor: {detail}"));
 
     /// <summary>wp:M3-83 — mirror <see cref="CallForeignRealm"/> for
     /// [[Construct]]: a VM-less host construct of a foreign-realm function

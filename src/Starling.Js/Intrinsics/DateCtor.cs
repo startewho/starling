@@ -136,6 +136,32 @@ public static class DateCtor
         IntrinsicHelpers.DefineMethod(realm, proto, "setUTCSeconds", 2, (thisV, args) => SetParts(realm, thisV, args, DatePart.Seconds));
         IntrinsicHelpers.DefineMethod(realm, proto, "setUTCMilliseconds", 1, (thisV, args) => SetParts(realm, thisV, args, DatePart.Milliseconds));
 
+        // Annex B §B.2.4.1 getYear() — getFullYear() - 1900 (NaN passthrough).
+        IntrinsicHelpers.DefineMethod(realm, proto, "getYear", 0, (thisV, _) =>
+        {
+            var d = RequireDate(realm, thisV);
+            if (!d.IsValid)
+            {
+                return JsValue.NaN;
+            }
+
+            return JsValue.Number(GetField(realm, thisV, dto => dto.Year).AsNumber - 1900);
+        });
+        // Annex B §B.2.4.2 setYear(year) — 0 ≤ y ≤ 99 means 1900 + y; a NaN
+        // year invalidates the date.
+        IntrinsicHelpers.DefineMethod(realm, proto, "setYear", 1, (thisV, args) =>
+        {
+            var y = JsValue.ToNumber(args.Length > 0 ? args[0] : JsValue.Undefined);
+            if (double.IsNaN(y))
+            {
+                return SetParts(realm, thisV, new[] { JsValue.NaN }, DatePart.Year);
+            }
+
+            var yi = Math.Truncate(y);
+            var full = yi is >= 0 and <= 99 ? yi + 1900 : y;
+            return SetParts(realm, thisV, new[] { JsValue.Number(full) }, DatePart.Year);
+        });
+
         // String conversions.
         IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0, (thisV, _) =>
         {
@@ -192,6 +218,10 @@ public static class DateCtor
             var d = RequireDate(realm, thisV);
             return JsValue.String(d.IsValid ? FormatUtcString(d.TimeValueMs) : "Invalid Date");
         });
+        // Annex B §B.2.4.3 — toGMTString is the SAME function object as
+        // toUTCString (not a wrapper), mirroring the trimLeft/trimStart alias.
+        proto.DefineOwnProperty("toGMTString",
+            PropertyDescriptor.BuiltinMethod(proto.Get("toUTCString")));
         // Locale variants — invariant, so delegate to the non-locale form.
         IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, _) =>
         {

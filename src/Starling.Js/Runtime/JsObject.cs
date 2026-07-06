@@ -241,6 +241,11 @@ public class JsObject
     /// <see cref="SetPrototypeOf"/> so subclasses can override.</summary>
     public JsObject? Prototype { get; private set; }
 
+    /// <summary>[[ErrorData]] marker (§20.5.1.1) — true for objects created by
+    /// an Error constructor (any realm). Object.prototype.toString reports
+    /// "Error" for these regardless of prototype identity.</summary>
+    public bool IsErrorExotic { get; internal set; }
+
     /// <summary>The [[Extensible]] internal slot. When false, new own properties
     /// are rejected. Virtual so exotic objects (notably <see cref="JsProxy"/>)
     /// can route through the <c>isExtensible</c> trap.</summary>

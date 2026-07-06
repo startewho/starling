@@ -146,16 +146,20 @@ public class JsParserModuleTests
     [TestMethod]
     public void Export_named_list()
     {
-        var export = ParseSingle<ExportNamedDeclaration>("export { a, b as c, default as d };");
+        // §16.2.3.1 — every referenced binding of a from-less NamedExports must
+        // be declared in the module, so the fixture declares a and b.
+        var export = ParseProgram("var a, b; export { a, b as c };").Body[1]
+            .Should().BeOfType<ExportNamedDeclaration>().Subject;
         export.Source.Should().BeNull();
-        export.Specifiers.Should().HaveCount(3);
+        export.Specifiers.Should().HaveCount(2);
         ((Identifier)export.Specifiers[1].Exported).Name.Should().Be("c");
     }
 
     [TestMethod]
     public void Export_named_list_with_string_export_name()
     {
-        var spec = ParseSingle<ExportNamedDeclaration>("export { internal as 'public-name' };")
+        var spec = ParseProgram("var internal; export { internal as 'public-name' };").Body[1]
+            .Should().BeOfType<ExportNamedDeclaration>().Subject
             .Specifiers.Should().ContainSingle().Subject;
         ((Identifier)spec.Local).Name.Should().Be("internal");
         ((StringLiteral)spec.Exported).Value.Should().Be("public-name");
@@ -248,7 +252,9 @@ public class JsParserModuleTests
         return statement.Should().BeOfType<T>().Subject;
     }
 
-    private static Program ParseProgram(string source) => new JsParser(source).ParseProgram();
+    // Module goal: import/export declarations only match Module (§16.1); the
+    // Script goal rejects them at parse time.
+    private static Program ParseProgram(string source) => new JsParser(source).ParseModule();
 
     private static void Fails(string source)
     {

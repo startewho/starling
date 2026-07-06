@@ -19,9 +19,13 @@ public sealed class JsRegExp : JsObject
     // and flags), so inline caches and migration are unaffected.
     internal static readonly Shape LastIndexShape = Shape.Root.Transition("lastIndex", Shape.Writable);
 
-    public IRegexMatcher Compiled { get; }
+    public IRegexMatcher Compiled { get; private set; }
     public string Source => EscapeSource(Compiled.Source);
     public RegexFlags Flags => Compiled.Flags;
+
+    /// <summary>Annex B §B.2.3.1 <c>RegExp.prototype.compile</c> — re-initialize
+    /// this regexp in place with a freshly compiled matcher.</summary>
+    internal void Recompile(IRegexMatcher compiled) => Compiled = compiled;
 
     public JsRegExp(JsRealm realm, IRegexMatcher compiled) : base(realm.RegExpPrototype)
     {

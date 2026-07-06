@@ -285,7 +285,8 @@ public class JsVmTests
         // call now throws ReferenceError instead — see the unresolved-read tests.)
         var act = () => Eval("var nopeFn;\nnopeFn();");
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("nopeFn");
+            .Which.Value.Should().Match<JsValue>(v =>
+                JsValue.ToStringValue(v.AsObject.Get("message")).Contains("nopeFn"));
     }
 
     [TestMethod]
@@ -293,7 +294,8 @@ public class JsVmTests
     {
         var act = () => Eval("var o={}; o.missingMethod();");
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("missingMethod");
+            .Which.Value.Should().Match<JsValue>(v =>
+                JsValue.ToStringValue(v.AsObject.Get("message")).Contains("missingMethod"));
     }
 
     // ----- Helpers --------------------------------------------------------

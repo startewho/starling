@@ -44,7 +44,7 @@ public sealed partial class DotNetRegexMatcher : IRegexMatcher
 
     /// <summary>Delegate a literal whole-string replace to System.Text's
     /// single-pass <see cref="NetRegex.Replace(string,string)"/> — the same
-    /// optimized path Jint uses, avoiding a per-match <c>Match</c> allocation.
+    /// optimized split path, avoiding a per-match <c>Match</c> allocation.
     /// Disabled for sticky regexes (Replace scans forward rather than anchoring
     /// at lastIndex). The replacement is literal (no <c>$</c>), so .NET performs
     /// no substitution and matches JS semantics exactly.</summary>

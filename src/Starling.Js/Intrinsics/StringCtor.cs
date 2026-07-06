@@ -102,6 +102,21 @@ public static class StringCtor
             new IntrinsicHelpers.BulkMember("trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true))),
             new IntrinsicHelpers.BulkMember("toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
             new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
+            // Annex B §B.2.2.2–.14 — legacy HTML wrapper methods, all built on
+            // one CreateHTML(string, tag, attribute, value) helper.
+            new IntrinsicHelpers.BulkMember("anchor", 1, (thisV, args) => CreateHtml(realm, thisV, "a", "name", Arg(args, 0))),
+            new IntrinsicHelpers.BulkMember("big", 0, (thisV, args) => CreateHtml(realm, thisV, "big", null, default)),
+            new IntrinsicHelpers.BulkMember("blink", 0, (thisV, args) => CreateHtml(realm, thisV, "blink", null, default)),
+            new IntrinsicHelpers.BulkMember("bold", 0, (thisV, args) => CreateHtml(realm, thisV, "b", null, default)),
+            new IntrinsicHelpers.BulkMember("fixed", 0, (thisV, args) => CreateHtml(realm, thisV, "tt", null, default)),
+            new IntrinsicHelpers.BulkMember("fontcolor", 1, (thisV, args) => CreateHtml(realm, thisV, "font", "color", Arg(args, 0))),
+            new IntrinsicHelpers.BulkMember("fontsize", 1, (thisV, args) => CreateHtml(realm, thisV, "font", "size", Arg(args, 0))),
+            new IntrinsicHelpers.BulkMember("italics", 0, (thisV, args) => CreateHtml(realm, thisV, "i", null, default)),
+            new IntrinsicHelpers.BulkMember("link", 1, (thisV, args) => CreateHtml(realm, thisV, "a", "href", Arg(args, 0))),
+            new IntrinsicHelpers.BulkMember("small", 0, (thisV, args) => CreateHtml(realm, thisV, "small", null, default)),
+            new IntrinsicHelpers.BulkMember("strike", 0, (thisV, args) => CreateHtml(realm, thisV, "strike", null, default)),
+            new IntrinsicHelpers.BulkMember("sub", 0, (thisV, args) => CreateHtml(realm, thisV, "sub", null, default)),
+            new IntrinsicHelpers.BulkMember("sup", 0, (thisV, args) => CreateHtml(realm, thisV, "sup", null, default)),
         });
         stringProto.DefineOwnProperty("trimLeft",
             PropertyDescriptor.BuiltinMethod(stringProto.Get("trimStart")));
@@ -625,6 +640,28 @@ public static class StringCtor
         }
 
         return JsValue.String(s.Substring((int)start, (int)(end - start)));
+    }
+
+    private static JsValue Arg(JsValue[] args, int i) => args.Length > i ? args[i] : JsValue.Undefined;
+
+    // Annex B §B.2.2.2.1 CreateHTML(string, tag, attribute, value): wrap the
+    // this-string in <tag>…</tag>, optionally with one attribute whose value
+    // is the ToString of the argument with '"' escaped as &quot;.
+    private static JsValue CreateHtml(JsRealm realm, JsValue thisV, string tag, string? attribute, JsValue value)
+    {
+        var s = ThisStringValue(realm, thisV);
+        var sb = new System.Text.StringBuilder("<").Append(tag);
+        if (attribute is not null)
+        {
+            // ToString(value) is observable (a user toString may throw), so
+            // route through ToPrimitive rather than the raw converter.
+            var v = JsValue.ToStringValue(AbstractOperations.ToPrimitive(value, "string"))
+                .Replace("\"", "&quot;", StringComparison.Ordinal);
+            sb.Append(' ').Append(attribute).Append("=\"").Append(v).Append('"');
+        }
+
+        sb.Append('>').Append(s).Append("</").Append(tag).Append('>');
+        return JsValue.String(sb.ToString());
     }
 
     // Annex B §B.2.2.1 String.prototype.substr(start[, length]).

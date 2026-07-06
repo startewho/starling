@@ -15,6 +15,27 @@ public sealed class JsRealm
 {
     public JsObject GlobalObject { get; }
 
+    /// <summary>§9.1.1.4 Global Environment Record [[DeclarativeRecord]] — the
+    /// global lexical environment. Top-level script <c>let</c>/<c>const</c>/
+    /// <c>class</c> bindings live here, NOT on the global object. Realm-level
+    /// and persistent so successive scripts (and <c>$262.evalScript</c>) share
+    /// one record. Checked BEFORE the global object on every global name
+    /// resolution (§9.1.1.4.1 HasBinding order).</summary>
+    public Dictionary<string, GlobalLexicalBinding> GlobalLexicals { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Annex B legacy RegExp statics (%RegExp%.$1, lastMatch, …) —
+    /// the most recent successful BUILTIN regexp match in this realm. Null
+    /// until the first match. Updated by the builtin exec path only (a
+    /// user-overridden exec does not update legacy state, matching the
+    /// legacy-RegExp-features proposal).</summary>
+    public LegacyMatchState? LegacyRegExpMatch { get; set; }
+
+    /// <summary>Snapshot backing the legacy RegExp statics.</summary>
+    public sealed record LegacyMatchState(string Input, int MatchStart, int MatchEnd, string?[] Captures)
+    {
+        public static readonly LegacyMatchState Empty = new("", 0, 0, []);
+    }
+
     /// <summary>Host hook for WHATWG Console Standard §2.3 printer output.</summary>
     public ConsoleSink ConsoleSink { get; set; } = DefaultConsoleSink;
 
@@ -170,6 +191,10 @@ public sealed class JsRealm
     public JsObject ArrayBufferPrototype { get; internal set; }
     public JsObject DataViewPrototype { get; internal set; }
     public JsObject TypedArrayPrototype { get; internal set; }
+
+    /// <summary>§23.2.1 — the abstract %TypedArray% constructor every concrete
+    /// TypedArray constructor inherits from. Populated by TypedArrayCtors.Install.</summary>
+    public JsObject? TypedArrayAbstract { get; internal set; }
     public JsObject ProxyPrototype { get; internal set; }
     public JsObject GeneratorPrototype { get; internal set; }
     public JsObject AsyncFunctionPrototype { get; internal set; }
@@ -465,7 +490,7 @@ public sealed class JsRealm
     /// before the full Error intrinsic lands.</summary>
     public JsValue NewError(JsObject errorPrototype, string message)
     {
-        var err = new JsObject(errorPrototype);
+        var err = new JsObject(errorPrototype) { IsErrorExotic = true };
         err.DefineOwnProperty("message",
             PropertyDescriptor.Data(JsValue.String(message), writable: true, enumerable: false, configurable: true));
         return JsValue.Object(err);
@@ -484,7 +509,7 @@ public sealed class JsRealm
     /// wrapped exception or other JS value.</summary>
     public JsValue NewError(JsObject errorPrototype, string message, JsValue cause)
     {
-        var err = new JsObject(errorPrototype);
+        var err = new JsObject(errorPrototype) { IsErrorExotic = true };
         err.DefineOwnProperty("message",
             PropertyDescriptor.Data(JsValue.String(message), writable: true, enumerable: false, configurable: true));
         err.DefineOwnProperty("cause",
@@ -530,4 +555,15 @@ public sealed class JsRealm
         var writer = level is ConsoleLevel.Warn or ConsoleLevel.Error ? Console.Error : Console.Out;
         writer.WriteLine(message);
     }
+}
+
+/// <summary>One binding in the realm's global lexical environment
+/// (<see cref="JsRealm.GlobalLexicals"/>). Created uninitialized (TDZ) by
+/// GlobalDeclarationInstantiation; initialized by the declaration's own
+/// initializer. <see cref="Mutable"/> is false for <c>const</c>.</summary>
+public sealed class GlobalLexicalBinding
+{
+    public JsValue Value;
+    public bool Mutable;
+    public bool Initialized;
 }

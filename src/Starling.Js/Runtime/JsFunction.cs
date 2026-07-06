@@ -181,14 +181,47 @@ public sealed class JsFunction : JsObject
         fn.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(template.Name), writable: false, enumerable: false, configurable: true));
 
-        // §10.2.5 MakeConstructor — the function's own `prototype` slot holds the
-        // object that `new f()` uses as the new-target prototype. Spec descriptor
-        // is writable=true, enumerable=false, configurable=false.
-        var protoObj = new JsObject(realm.ObjectPrototype);
-        protoObj.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(fn), writable: true, enumerable: false, configurable: true));
-        fn.DefineOwnProperty("prototype",
-            PropertyDescriptor.Data(JsValue.Object(protoObj), writable: true, enumerable: false, configurable: false));
+        // §10.2.5 MakeConstructor / §27.5.1.1 / §27.6.1.1 — the `prototype`
+        // property depends on the function kind:
+        //   normal      — fresh object (proto %Object.prototype%) with a
+        //                 `constructor` back-link; `new f()` uses it.
+        //   generator   — fresh object whose proto is %GeneratorPrototype%,
+        //                 NO constructor back-link, and the descriptor is
+        //                 writable/non-configurable; generators made by calling
+        //                 the function inherit from it.
+        //   async gen   — same shape over %AsyncGeneratorPrototype%.
+        //   async       — NO prototype property at all.
+        // Generator/async functions are never constructors (the VM's construct
+        // path rejects them), so none of these get a constructor link.
+        switch (template.Kind)
+        {
+            case JsFunctionKind.Generator:
+            {
+                var genProto = new JsObject(realm.GeneratorPrototype);
+                fn.DefineOwnProperty("prototype",
+                    PropertyDescriptor.Data(JsValue.Object(genProto), writable: true, enumerable: false, configurable: false));
+                break;
+            }
+            case JsFunctionKind.AsyncGenerator:
+            {
+                var agenProto = new JsObject(realm.AsyncGeneratorPrototype);
+                fn.DefineOwnProperty("prototype",
+                    PropertyDescriptor.Data(JsValue.Object(agenProto), writable: true, enumerable: false, configurable: false));
+                break;
+            }
+            case JsFunctionKind.Async:
+                break; // no prototype property
+            default:
+            {
+                var protoObj = new JsObject(realm.ObjectPrototype);
+                protoObj.DefineOwnProperty("constructor",
+                    PropertyDescriptor.Data(JsValue.Object(fn), writable: true, enumerable: false, configurable: true));
+                fn.DefineOwnProperty("prototype",
+                    PropertyDescriptor.Data(JsValue.Object(protoObj), writable: true, enumerable: false, configurable: false));
+                break;
+            }
+        }
+
         return fn;
     }
 

@@ -183,6 +183,14 @@ public sealed class JsArrayIterator : JsObject
             return arr.Length;
         }
 
+        // Typed arrays report length via a PROTOTYPE ACCESSOR (§23.2.3) which
+        // the vm-less data-only Get below cannot invoke; read the exotic
+        // object's live length directly (also picks up length-tracking views).
+        if (obj is JsTypedArray ta)
+        {
+            return ta.Length;
+        }
+
         var v = obj.Get("length");
         var n = JsValue.ToNumber(v);
         if (double.IsNaN(n) || n <= 0)

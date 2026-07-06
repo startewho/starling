@@ -161,10 +161,17 @@ public static class ArrayCtor
         return thisV.IsObject ? thisV.AsObject : AbstractOperations.ToObject(realm, thisV);
     }
 
-    private static int ToLength(JsObject obj)
+    private static int ToLength(JsRealm realm, JsObject obj)
     {
-        var v = obj.Get("length");
-        var n = JsValue.ToNumber(v);
+        // §7.1.20 LengthOfArrayLike — [[Get]] may hit an accessor and the
+        // value may be an OBJECT whose toString/valueOf is observable, so both
+        // steps need the active VM.
+        var vm = realm.ActiveVm;
+        var v = AbstractOperations.Get(vm, obj, "length");
+        var prim = AbstractOperations.ToPrimitive(vm, v, "number");
+        var n = prim.IsBigInt
+            ? throw new JsThrow(realm.NewTypeError("Cannot convert a BigInt to array length"))
+            : JsValue.ToNumber(prim);
         if (double.IsNaN(n) || n <= 0)
         {
             return 0;
@@ -188,10 +195,54 @@ public static class ArrayCtor
         return AbstractOperations.Get((JsVm?)null, obj, JsArray.IndexToString((uint)i));
     }
 
+    /// <summary>VM-aware [[Get]] for an index — getters on array-likes fire.
+    /// Prefer this (or <see cref="TryGetElement"/> for HasProperty-protocol
+    /// methods) in prototype methods; the vm-less overload is for host-side
+    /// helpers with no active VM.</summary>
+    private static JsValue GetElement(JsRealm realm, JsObject obj, int i)
+    {
+        if (obj is JsArray ja)
+        {
+            return ja[i];
+        }
+
+        return AbstractOperations.Get(realm.ActiveVm, obj, JsArray.IndexToString((uint)i));
+    }
+
+    /// <summary>The §23.1.3 iteration protocol read: HasProperty(O, k) first
+    /// (a HOLE that the prototype chain fills IS visited; a true hole is
+    /// skipped), then a VM-aware [[Get]] so accessors fire. Returns false for
+    /// a skipped hole.</summary>
+    private static bool TryGetElement(JsRealm realm, JsObject obj, int i, out JsValue v)
+    {
+        var key = JsArray.IndexToString((uint)i);
+        if (obj is JsArray ja && ja.HasOwn(key))
+        {
+            v = ja[i];
+            return true;
+        }
+
+        if (!obj.Has(key))
+        {
+            v = JsValue.Undefined;
+            return false;
+        }
+
+        v = AbstractOperations.Get(realm.ActiveVm, obj, key);
+        return true;
+    }
+
     private static void SetElement(JsObject obj, int i, JsValue v)
     {
         if (obj is JsArray ja) { ja[i] = v; return; }
         AbstractOperations.Set(null, obj, JsArray.IndexToString((uint)i), v);
+    }
+
+    /// <summary>VM-aware [[Set]] for an index — setters on array-likes fire.</summary>
+    private static void SetElement(JsRealm realm, JsObject obj, int i, JsValue v)
+    {
+        if (obj is JsArray ja) { ja[i] = v; return; }
+        AbstractOperations.Set(realm.ActiveVm, obj, JsArray.IndexToString((uint)i), v);
     }
 
     private static int ClampStart(int relative, int len)
@@ -204,9 +255,23 @@ public static class ArrayCtor
         return Math.Min(relative, len);
     }
 
-    private static int ToInteger(JsValue v)
+    private static int ToInteger(JsRealm realm, JsValue v)
     {
-        var n = JsValue.ToNumber(v);
+        // §7.1.5 ToIntegerOrInfinity — ToNumber of a Symbol/BigInt is a
+        // TypeError (not a host crash), and an object argument's valueOf is
+        // observable, so coerce via the vm-aware ToPrimitive.
+        var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, v, "number");
+        if (prim.IsSymbol)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
+        }
+
+        if (prim.IsBigInt)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a BigInt value to a number"));
+        }
+
+        var n = JsValue.ToNumber(prim);
         if (double.IsNaN(n))
         {
             return 0;
@@ -280,10 +345,10 @@ public static class ArrayCtor
         }
 
         var obj = src.AsObject;
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         for (var i = 0; i < len; i++)
         {
-            var elem = GetElement(obj, i);
+            var elem = GetElement(realm, obj, i);
             if (hasMap)
             {
                 elem = AbstractOperations.Call(realm.ActiveVm, mapFn, thisArg, new[] { elem, JsValue.Number(i) });
@@ -321,77 +386,77 @@ public static class ArrayCtor
     private static JsValue Push(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         foreach (var v in args)
         {
-            SetElement(obj, len, v);
+            SetElement(realm, obj, len, v);
             len++;
         }
-        AbstractOperations.Set(null, obj, "length", JsValue.Number(len));
+        AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(len));
         return JsValue.Number(len);
     }
 
     private static JsValue Pop(JsRealm realm, JsValue thisV)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         if (len == 0)
         {
-            AbstractOperations.Set(null, obj, "length", JsValue.Number(0));
+            AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(0));
             return JsValue.Undefined;
         }
         var idx = len - 1;
-        var v = GetElement(obj, idx);
-        AbstractOperations.Set(null, obj, "length", JsValue.Number(idx));
+        var v = GetElement(realm, obj, idx);
+        AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(idx));
         return v;
     }
 
     private static JsValue Shift(JsRealm realm, JsValue thisV)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         if (len == 0)
         {
-            AbstractOperations.Set(null, obj, "length", JsValue.Number(0));
+            AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(0));
             return JsValue.Undefined;
         }
-        var first = GetElement(obj, 0);
+        var first = GetElement(realm, obj, 0);
         for (var i = 1; i < len; i++)
         {
-            SetElement(obj, i - 1, GetElement(obj, i));
+            SetElement(realm, obj, i - 1, GetElement(realm, obj, i));
         }
 
-        AbstractOperations.Set(null, obj, "length", JsValue.Number(len - 1));
+        AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(len - 1));
         return first;
     }
 
     private static JsValue Unshift(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var count = args.Length;
         if (count > 0)
         {
             for (var i = len - 1; i >= 0; i--)
             {
-                SetElement(obj, i + count, GetElement(obj, i));
+                SetElement(realm, obj, i + count, GetElement(realm, obj, i));
             }
 
             for (var i = 0; i < count; i++)
             {
-                SetElement(obj, i, args[i]);
+                SetElement(realm, obj, i, args[i]);
             }
         }
         var newLen = len + count;
-        AbstractOperations.Set(null, obj, "length", JsValue.Number(newLen));
+        AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(newLen));
         return JsValue.Number(newLen);
     }
 
     private static JsValue Splice(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
-        var start = args.Length > 0 ? ClampStart(ToInteger(args[0]), len) : 0;
+        var len = ToLength(realm, obj);
+        var start = args.Length > 0 ? ClampStart(ToInteger(realm, args[0]), len) : 0;
         int deleteCount;
         if (args.Length < 1)
         {
@@ -403,14 +468,14 @@ public static class ArrayCtor
         }
         else
         {
-            deleteCount = Math.Max(0, Math.Min(ToInteger(args[1]), len - start));
+            deleteCount = Math.Max(0, Math.Min(ToInteger(realm, args[1]), len - start));
         }
 
         var insertCount = Math.Max(0, args.Length - 2);
         var removed = new JsArray(realm);
         for (var i = 0; i < deleteCount; i++)
         {
-            removed.Push(GetElement(obj, start + i));
+            removed.Push(GetElement(realm, obj, start + i));
         }
 
         var newLen = len - deleteCount + insertCount;
@@ -418,7 +483,7 @@ public static class ArrayCtor
         {
             for (var i = start; i < len - deleteCount; i++)
             {
-                SetElement(obj, i + insertCount, GetElement(obj, i + deleteCount));
+                SetElement(realm, obj, i + insertCount, GetElement(realm, obj, i + deleteCount));
             }
             // Resulting length is shorter; rely on JsArray length truncation.
         }
@@ -426,29 +491,29 @@ public static class ArrayCtor
         {
             for (var i = len - deleteCount - 1; i >= start; i--)
             {
-                SetElement(obj, i + insertCount, GetElement(obj, i + deleteCount));
+                SetElement(realm, obj, i + insertCount, GetElement(realm, obj, i + deleteCount));
             }
         }
         for (var i = 0; i < insertCount; i++)
         {
-            SetElement(obj, start + i, args[2 + i]);
+            SetElement(realm, obj, start + i, args[2 + i]);
         }
 
-        AbstractOperations.Set(null, obj, "length", JsValue.Number(newLen));
+        AbstractOperations.Set(realm.ActiveVm, obj, "length", JsValue.Number(newLen));
         return JsValue.Object(removed);
     }
 
     private static JsValue Reverse(JsRealm realm, JsValue thisV)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         for (var i = 0; i < len / 2; i++)
         {
             var j = len - i - 1;
-            var a = GetElement(obj, i);
-            var b = GetElement(obj, j);
-            SetElement(obj, i, b);
-            SetElement(obj, j, a);
+            var a = GetElement(realm, obj, i);
+            var b = GetElement(realm, obj, j);
+            SetElement(realm, obj, i, b);
+            SetElement(realm, obj, j, a);
         }
         return JsValue.Object(obj);
     }
@@ -462,12 +527,12 @@ public static class ArrayCtor
             throw new JsThrow(realm.NewTypeError("Array.prototype.sort: comparator must be a function"));
         }
 
-        var len = ToLength(obj);
-        var items = CollectIndexedValues(obj, len);
+        var len = ToLength(realm, obj);
+        var items = CollectIndexedValues(realm, obj, len);
         StableSort(realm, items, cmpV);
         for (var i = 0; i < len; i++)
         {
-            SetElement(obj, i, items[i].Value);
+            SetElement(realm, obj, i, items[i].Value);
         }
 
         return JsValue.Object(obj);
@@ -516,12 +581,12 @@ public static class ArrayCtor
         return string.CompareOrdinal(JsValue.ToStringValue(a), JsValue.ToStringValue(b));
     }
 
-    private static List<IndexedValue> CollectIndexedValues(JsObject obj, int len)
+    private static List<IndexedValue> CollectIndexedValues(JsRealm realm, JsObject obj, int len)
     {
         var items = new List<IndexedValue>(len);
         for (var i = 0; i < len; i++)
         {
-            items.Add(new IndexedValue(GetElement(obj, i), i));
+            items.Add(new IndexedValue(GetElement(realm, obj, i), i));
         }
 
         return items;
@@ -551,13 +616,13 @@ public static class ArrayCtor
     private static JsValue Fill(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var value = args.Length > 0 ? args[0] : JsValue.Undefined;
-        var start = args.Length > 1 ? ClampStart(ToInteger(args[1]), len) : 0;
-        var end = args.Length > 2 ? ClampStart(ToInteger(args[2]), len) : len;
+        var start = args.Length > 1 ? ClampStart(ToInteger(realm, args[1]), len) : 0;
+        var end = args.Length > 2 ? ClampStart(ToInteger(realm, args[2]), len) : len;
         for (var i = start; i < end; i++)
         {
-            SetElement(obj, i, value);
+            SetElement(realm, obj, i, value);
         }
 
         return JsValue.Object(obj);
@@ -566,10 +631,10 @@ public static class ArrayCtor
     private static JsValue CopyWithin(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
-        var target = args.Length > 0 ? ClampStart(ToInteger(args[0]), len) : 0;
-        var start = args.Length > 1 ? ClampStart(ToInteger(args[1]), len) : 0;
-        var end = args.Length > 2 ? ClampStart(ToInteger(args[2]), len) : len;
+        var len = ToLength(realm, obj);
+        var target = args.Length > 0 ? ClampStart(ToInteger(realm, args[0]), len) : 0;
+        var start = args.Length > 1 ? ClampStart(ToInteger(realm, args[1]), len) : 0;
+        var end = args.Length > 2 ? ClampStart(ToInteger(realm, args[2]), len) : len;
         var count = Math.Min(end - start, len - target);
         if (count <= 0)
         {
@@ -579,12 +644,12 @@ public static class ArrayCtor
         var snap = new JsValue[count];
         for (var i = 0; i < count; i++)
         {
-            snap[i] = GetElement(obj, start + i);
+            snap[i] = GetElement(realm, obj, start + i);
         }
 
         for (var i = 0; i < count; i++)
         {
-            SetElement(obj, target + i, snap[i]);
+            SetElement(realm, obj, target + i, snap[i]);
         }
 
         return JsValue.Object(obj);
@@ -617,7 +682,7 @@ public static class ArrayCtor
         if (IsConcatSpreadable(realm, v))
         {
             var source = v.AsObject;
-            var len = ToLength(source);
+            var len = ToLength(realm, source);
             for (var i = 0; i < len; i++)
             {
                 target.Push(GetElement(source, i));
@@ -644,13 +709,13 @@ public static class ArrayCtor
     private static JsValue Slice(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
-        var start = args.Length > 0 ? ClampStart(ToInteger(args[0]), len) : 0;
-        var end = args.Length > 1 && !args[1].IsUndefined ? ClampStart(ToInteger(args[1]), len) : len;
+        var len = ToLength(realm, obj);
+        var start = args.Length > 0 ? ClampStart(ToInteger(realm, args[0]), len) : 0;
+        var end = args.Length > 1 && !args[1].IsUndefined ? ClampStart(ToInteger(realm, args[1]), len) : len;
         var result = new JsArray(realm);
         for (var i = start; i < end; i++)
         {
-            result.Push(GetElement(obj, i));
+            result.Push(GetElement(realm, obj, i));
         }
 
         return JsValue.Object(result);
@@ -660,7 +725,7 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var sep = args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : ",";
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var sb = new System.Text.StringBuilder();
         var stack = s_joinStack ??= new HashSet<JsObject>();
         if (!stack.Add(obj))
@@ -677,7 +742,7 @@ public static class ArrayCtor
                     sb.Append(sep);
                 }
 
-                var v = GetElement(obj, i);
+                var v = GetElement(realm, obj, i);
                 if (v.IsNullish)
                 {
                     continue;
@@ -714,7 +779,7 @@ public static class ArrayCtor
     private static JsValue IndexOf(JsRealm realm, JsValue thisV, JsValue[] args, bool fromEnd)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         if (len == 0)
         {
             return JsValue.Number(-1);
@@ -724,7 +789,7 @@ public static class ArrayCtor
         int from;
         if (args.Length > 1)
         {
-            var n = ToInteger(args[1]);
+            var n = ToInteger(realm, args[1]);
             if (fromEnd)
             {
                 from = n >= 0 ? Math.Min(n, len - 1) : len + n;
@@ -742,7 +807,7 @@ public static class ArrayCtor
         {
             for (var i = from; i >= 0; i--)
             {
-                if (JsValue.StrictEquals(GetElement(obj, i), target))
+                if (TryGetElement(realm, obj, i, out var el) && JsValue.StrictEquals(el, target))
                 {
                     return JsValue.Number(i);
                 }
@@ -752,7 +817,7 @@ public static class ArrayCtor
         {
             for (var i = from; i < len; i++)
             {
-                if (JsValue.StrictEquals(GetElement(obj, i), target))
+                if (TryGetElement(realm, obj, i, out var el) && JsValue.StrictEquals(el, target))
                 {
                     return JsValue.Number(i);
                 }
@@ -764,18 +829,18 @@ public static class ArrayCtor
     private static JsValue Includes(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         if (len == 0)
         {
             return JsValue.False;
         }
 
         var target = args.Length > 0 ? args[0] : JsValue.Undefined;
-        var n = args.Length > 1 ? ToInteger(args[1]) : 0;
+        var n = args.Length > 1 ? ToInteger(realm, args[1]) : 0;
         var from = n >= 0 ? n : Math.Max(0, len + n);
         for (var i = from; i < len; i++)
         {
-            if (AbstractOperations.SameValueZero(GetElement(obj, i), target))
+            if (AbstractOperations.SameValueZero(GetElement(realm, obj, i), target))
             {
                 return JsValue.True;
             }
@@ -798,10 +863,14 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "forEach");
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         for (var i = 0; i < len; i++)
         {
-            var v = GetElement(obj, i);
+            if (!TryGetElement(realm, obj, i, out var v))
+            {
+                continue; // true hole — skipped per §23.1.3.15 step 6.b
+            }
+
             AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
         }
         return JsValue.Undefined;
@@ -811,14 +880,21 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "map");
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var result = new JsArray(realm);
         for (var i = 0; i < len; i++)
         {
-            var v = GetElement(obj, i);
+            if (!TryGetElement(realm, obj, i, out var v))
+            {
+                continue; // hole stays a hole in the result
+            }
+
             var mapped = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
-            result.Push(mapped);
+            result[i] = mapped;
         }
+
+        // §23.1.3.21 — the result's length is len even when the tail is holes.
+        result.Set("length", JsValue.Number(len));
         return JsValue.Object(result);
     }
 
@@ -826,11 +902,15 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "filter");
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var result = new JsArray(realm);
         for (var i = 0; i < len; i++)
         {
-            var v = GetElement(obj, i);
+            if (!TryGetElement(realm, obj, i, out var v))
+            {
+                continue;
+            }
+
             var keep = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
             if (JsValue.ToBoolean(keep))
             {
@@ -849,7 +929,7 @@ public static class ArrayCtor
         }
 
         var fn = args[0];
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var hasInitial = args.Length > 1;
         JsValue acc;
         int i;
@@ -865,24 +945,52 @@ public static class ArrayCtor
                 throw new JsThrow(realm.NewTypeError("Reduce of empty array with no initial value"));
             }
 
+            // §23.1.3.24 step 8 — scan for the FIRST present element (holes
+            // don't count; all-holes throws).
             i = fromRight ? len - 1 : 0;
-            acc = GetElement(obj, i);
-            i += fromRight ? -1 : 1;
+            var found = false;
+            acc = JsValue.Undefined;
+            while (fromRight ? i >= 0 : i < len)
+            {
+                if (TryGetElement(realm, obj, i, out acc))
+                {
+                    found = true;
+                    i += fromRight ? -1 : 1;
+                    break;
+                }
+
+                i += fromRight ? -1 : 1;
+            }
+
+            if (!found)
+            {
+                throw new JsThrow(realm.NewTypeError("Reduce of empty array with no initial value"));
+            }
         }
         if (fromRight)
         {
             for (; i >= 0; i--)
             {
+                if (!TryGetElement(realm, obj, i, out var v))
+                {
+                    continue; // hole — not visited (§23.1.3.25 step 9.b)
+                }
+
                 acc = AbstractOperations.Call(realm.ActiveVm, fn, JsValue.Undefined,
-                    new[] { acc, GetElement(obj, i), JsValue.Number(i), JsValue.Object(obj) });
+                    new[] { acc, v, JsValue.Number(i), JsValue.Object(obj) });
             }
         }
         else
         {
             for (; i < len; i++)
             {
+                if (!TryGetElement(realm, obj, i, out var v))
+                {
+                    continue;
+                }
+
                 acc = AbstractOperations.Call(realm.ActiveVm, fn, JsValue.Undefined,
-                    new[] { acc, GetElement(obj, i), JsValue.Number(i), JsValue.Object(obj) });
+                    new[] { acc, v, JsValue.Number(i), JsValue.Object(obj) });
             }
         }
         return acc;
@@ -892,10 +1000,14 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "every");
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         for (var i = 0; i < len; i++)
         {
-            var v = GetElement(obj, i);
+            if (!TryGetElement(realm, obj, i, out var v))
+            {
+                continue;
+            }
+
             var r = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
             if (!JsValue.ToBoolean(r))
             {
@@ -909,10 +1021,14 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "some");
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         for (var i = 0; i < len; i++)
         {
-            var v = GetElement(obj, i);
+            if (!TryGetElement(realm, obj, i, out var v))
+            {
+                continue;
+            }
+
             var r = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
             if (JsValue.ToBoolean(r))
             {
@@ -927,12 +1043,12 @@ public static class ArrayCtor
         var obj = ThisObject(realm, thisV);
         var name = fromEnd ? (indexOnly ? "findLastIndex" : "findLast") : (indexOnly ? "findIndex" : "find");
         var (fn, thisArg) = ParseCallback(realm, args, name);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         if (fromEnd)
         {
             for (var i = len - 1; i >= 0; i--)
             {
-                var v = GetElement(obj, i);
+                var v = GetElement(realm, obj, i);
                 var r = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
                 if (JsValue.ToBoolean(r))
                 {
@@ -944,7 +1060,7 @@ public static class ArrayCtor
         {
             for (var i = 0; i < len; i++)
             {
-                var v = GetElement(obj, i);
+                var v = GetElement(realm, obj, i);
                 var r = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
                 if (JsValue.ToBoolean(r))
                 {
@@ -965,19 +1081,19 @@ public static class ArrayCtor
         }
 
         var result = new JsArray(realm);
-        FlattenInto(result, obj, depth);
+        FlattenInto(realm, result, obj, depth);
         return JsValue.Object(result);
     }
 
-    private static void FlattenInto(JsArray target, JsObject source, double depth)
+    private static void FlattenInto(JsRealm realm, JsArray target, JsObject source, double depth)
     {
-        var len = ToLength(source);
+        var len = ToLength(realm, source);
         for (var i = 0; i < len; i++)
         {
             var v = GetElement(source, i);
             if (depth > 0 && v.IsObject && v.AsObject is JsArray sub)
             {
-                FlattenInto(target, sub, depth - 1);
+                FlattenInto(realm, target, sub, depth - 1);
             }
             else
             {
@@ -990,11 +1106,11 @@ public static class ArrayCtor
     {
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "flatMap");
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var result = new JsArray(realm);
         for (var i = 0; i < len; i++)
         {
-            var v = GetElement(obj, i);
+            var v = GetElement(realm, obj, i);
             var mapped = AbstractOperations.Call(realm.ActiveVm, fn, thisArg,
                 new[] { v, JsValue.Number(i), JsValue.Object(obj) });
             if (mapped.IsObject && mapped.AsObject is JsArray sub)
@@ -1019,11 +1135,11 @@ public static class ArrayCtor
     private static JsValue ToReversed(JsRealm realm, JsValue thisV)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         var result = new JsArray(realm);
         for (var i = len - 1; i >= 0; i--)
         {
-            result.Push(GetElement(obj, i));
+            result.Push(GetElement(realm, obj, i));
         }
 
         return JsValue.Object(result);
@@ -1038,8 +1154,8 @@ public static class ArrayCtor
             throw new JsThrow(realm.NewTypeError("Array.prototype.toSorted: comparator must be a function"));
         }
 
-        var len = ToLength(obj);
-        var items = CollectIndexedValues(obj, len);
+        var len = ToLength(realm, obj);
+        var items = CollectIndexedValues(realm, obj, len);
         StableSort(realm, items, cmpV);
         var result = new JsArray(realm);
         foreach (var item in items)
@@ -1053,8 +1169,8 @@ public static class ArrayCtor
     private static JsValue ToSpliced(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
-        var start = args.Length > 0 ? ClampStart(ToInteger(args[0]), len) : 0;
+        var len = ToLength(realm, obj);
+        var start = args.Length > 0 ? ClampStart(ToInteger(realm, args[0]), len) : 0;
         int deleteCount;
         if (args.Length < 1)
         {
@@ -1066,13 +1182,13 @@ public static class ArrayCtor
         }
         else
         {
-            deleteCount = Math.Max(0, Math.Min(ToInteger(args[1]), len - start));
+            deleteCount = Math.Max(0, Math.Min(ToInteger(realm, args[1]), len - start));
         }
 
         var result = new JsArray(realm);
         for (var i = 0; i < start; i++)
         {
-            result.Push(GetElement(obj, i));
+            result.Push(GetElement(realm, obj, i));
         }
 
         for (var i = 2; i < args.Length; i++)
@@ -1082,7 +1198,7 @@ public static class ArrayCtor
 
         for (var i = start + deleteCount; i < len; i++)
         {
-            result.Push(GetElement(obj, i));
+            result.Push(GetElement(realm, obj, i));
         }
 
         return JsValue.Object(result);
@@ -1091,13 +1207,13 @@ public static class ArrayCtor
     private static JsValue With(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var len = ToLength(obj);
+        var len = ToLength(realm, obj);
         if (args.Length < 1)
         {
             throw new JsThrow(realm.NewTypeError("Array.prototype.with: index required"));
         }
 
-        var rel = ToInteger(args[0]);
+        var rel = ToInteger(realm, args[0]);
         var idx = rel < 0 ? len + rel : rel;
         if (idx < 0 || idx >= len)
         {
@@ -1108,7 +1224,7 @@ public static class ArrayCtor
         var result = new JsArray(realm);
         for (var i = 0; i < len; i++)
         {
-            result.Push(i == idx ? value : GetElement(obj, i));
+            result.Push(i == idx ? value : GetElement(realm, obj, i));
         }
 
         return JsValue.Object(result);

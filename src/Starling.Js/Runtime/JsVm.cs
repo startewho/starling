@@ -1033,7 +1033,21 @@ public sealed class JsVm
                                 Push(frame, ref stack, ref sp, ref maxSp, evCell0.Value);
                                 break;
                             }
-                            var globalObj = _runtime.Realm.GlobalObject;
+                            // §9.1.1.4.1 — the global [[DeclarativeRecord]] shadows
+                            // the global object. A hit that is still in its TDZ
+                            // throws even for the unchecked load (typeof of an
+                            // uninitialized lexical is a ReferenceError).
+                            var realmL = _runtime.Realm;
+                            if (realmL.GlobalLexicals.Count != 0 && realmL.GlobalLexicals.TryGetValue(name, out var lexL))
+                            {
+                                if (!lexL.Initialized)
+                                {
+                                    throw new JsThrow(realmL.NewReferenceError("Cannot access '" + name + "' before initialization"));
+                                }
+                                Push(frame, ref stack, ref sp, ref maxSp, lexL.Value);
+                                break;
+                            }
+                            var globalObj = realmL.GlobalObject;
                             Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, globalObj, name, JsValue.Object(globalObj)));
                             break;
                         }
@@ -1058,6 +1072,18 @@ public sealed class JsVm
                                 break;
                             }
                             var realm = _runtime.Realm;
+                            // §9.1.1.4.1 — the global [[DeclarativeRecord]] shadows
+                            // the global object; an uninitialized hit is a TDZ
+                            // ReferenceError.
+                            if (realm.GlobalLexicals.Count != 0 && realm.GlobalLexicals.TryGetValue(name, out var lexC))
+                            {
+                                if (!lexC.Initialized)
+                                {
+                                    throw new JsThrow(realm.NewReferenceError("Cannot access '" + name + "' before initialization"));
+                                }
+                                Push(frame, ref stack, ref sp, ref maxSp, lexC.Value);
+                                break;
+                            }
                             var globalObj = realm.GlobalObject;
                             if (!globalObj.Has(name))
                             {
@@ -1085,6 +1111,24 @@ public sealed class JsVm
                             if (frame.FrameVarStore is not null && frame.FrameVarStore.TryGet(name, out var evCell2))
                             {
                                 evCell2.Value = value;
+                                break;
+                            }
+                            // §9.1.1.4 — a global lexical binding shadows the global
+                            // object for writes too: TDZ before initialization, and
+                            // a const (immutable) binding always rejects with
+                            // TypeError (global lexicals are created strict).
+                            var realmS = _runtime.Realm;
+                            if (realmS.GlobalLexicals.Count != 0 && realmS.GlobalLexicals.TryGetValue(name, out var lexS))
+                            {
+                                if (!lexS.Initialized)
+                                {
+                                    throw new JsThrow(realmS.NewReferenceError("Cannot access '" + name + "' before initialization"));
+                                }
+                                if (!lexS.Mutable)
+                                {
+                                    throw new JsThrow(realmS.NewTypeError("Assignment to constant variable."));
+                                }
+                                lexS.Value = value;
                                 break;
                             }
                             var globalObj = _runtime.Realm.GlobalObject;
@@ -1342,19 +1386,23 @@ public sealed class JsVm
                         {
                             var key = Pop(stack, ref sp);
                             var obj = Pop(stack, ref sp);
+                            // §6.2.5.5 GetValue — the base's coercibility check
+                            // precedes ToPropertyKey, so `null[k]` throws its
+                            // TypeError BEFORE k's toString can run.
+                            if (obj.IsNullish)
+                            {
+                                throw new JsThrow(_runtime.Realm.NewTypeError(
+                                "Cannot read properties of " + NullishLabel(obj) + " (reading computed key)"));
+                            }
+
                             var propertyKey = AbstractOperations.ToPropertyKey(this, key);
                             if (obj.IsObject)
                             {
                                 Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, obj.AsObject, propertyKey));
                             }
-                            else if (!obj.IsNullish)
-                            {
-                                Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), propertyKey, obj));
-                            }
                             else
                             {
-                                throw new JsThrow(_runtime.Realm.NewTypeError(
-                                "Cannot read properties of " + NullishLabel(obj) + " (reading '" + propertyKey + "')"));
+                                Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, AbstractOperations.ToObject(_runtime.Realm, obj), propertyKey, obj));
                             }
 
                             break;
@@ -1431,7 +1479,7 @@ public sealed class JsVm
                             var callee = Pop(stack, ref sp);
                             if (!IsCallableValue(callee))
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: '{_lastLoadName}')")));
+                                throw new JsThrow(_runtime.Realm.NewTypeError(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: '{_lastLoadName}')")));
                             }
                             // wp:M3-84 Stage B — ordinary same-realm JsFunction:
                             // push a trampolined frame, no native recursion.
@@ -1459,7 +1507,7 @@ public sealed class JsVm
                             var receiver = Pop(stack, ref sp);
                             if (!IsCallableValue(callee))
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (method hint: '{_lastLoadName}')")));
+                                throw new JsThrow(_runtime.Realm.NewTypeError(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (method hint: '{_lastLoadName}')")));
                             }
 
                             if (TryPushCall(callee, receiver, callArgs, frame, ip, sp, maxSp, out var pushed))
@@ -1618,7 +1666,7 @@ public sealed class JsVm
                             var ctor = Pop(stack, ref sp);
                             if (!ctor.IsObject)
                             {
-                                throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
+                                throw new JsThrow(_runtime.Realm.NewTypeError(AtPos(chunk, ip, $"not a constructor: {JsValue.ToStringValue(ctor)} (new hint: '{_lastLoadName}')")));
                             }
 
                             if (TryPushConstruct(ctor, newArgs, newTarget: null, frame, ip, sp, maxSp,
@@ -2175,6 +2223,153 @@ public sealed class JsVm
     }
 
 
+    /// <summary>§9.1.1.3.4 GetThisBinding on a function environment whose
+    /// [[ThisBindingStatus]] is "uninitialized" — a super property access in a
+    /// derived constructor before super() — throws a ReferenceError.</summary>
+    private void ThrowIfThisUninitialized(CallFrame frame)
+    {
+        if (frame.ThisV.IsObject
+            && ReferenceEquals(frame.ThisV.AsObject, _runtime.Realm.UninitializedThisSentinel))
+        {
+            throw new JsThrow(_runtime.Realm.NewReferenceError(
+                "Must call super constructor in derived class before accessing 'this'"));
+        }
+    }
+
+    /// <summary>§16.1.7 GlobalDeclarationInstantiation (and §19.2.1.3's global
+    /// branch when the lexical lists are empty). Order is load-bearing: every
+    /// early-error check runs before ANY binding is created, so a script whose
+    /// declarations are rejected leaves the realm untouched.</summary>
+    private void RunGlobalDeclInstantiation(Starling.Js.Bytecode.GlobalDecls decls)
+    {
+        var realm = _runtime.Realm;
+        var g = realm.GlobalObject;
+
+        // Steps 1–4 — early errors for lexical names: collision with an existing
+        // global lexical or a restricted (own, non-configurable) global property
+        // is a SyntaxError. Script vars are created non-configurable, so the
+        // restricted-property check covers var collisions too; non-strict-eval
+        // vars are configurable and deliberately do NOT block a later lexical.
+        CheckLexNames(decls.LetNames);
+        CheckLexNames(decls.ConstNames);
+
+        // A var/function name colliding with an existing global lexical is a
+        // SyntaxError (§16.1.7 step 5 / §19.2.1.3 step 5).
+        CheckVarNames(decls.VarNames);
+        CheckVarNames(decls.FuncNames);
+
+        // Steps 8–10 — declarability (TypeError, still before any creation).
+        foreach (var name in decls.FuncNames)
+        {
+            var existing = g.GetOwnPropertyDescriptor(name);
+            if (existing is not { } fnDesc)
+            {
+                if (!g.Extensible)
+                {
+                    throw new JsThrow(realm.NewTypeError("Cannot declare global function '" + name + "'"));
+                }
+            }
+            else if (!fnDesc.Configurable
+                && !(fnDesc.IsData && fnDesc.Writable && fnDesc.Enumerable))
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot declare global function '" + name + "'"));
+            }
+        }
+
+        foreach (var name in decls.VarNames)
+        {
+            if (!g.HasOwn(name) && !g.Extensible)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot declare global variable '" + name + "'"));
+            }
+        }
+
+        // Steps 15–17 — create the bindings. Lexicals start uninitialized (TDZ);
+        // the declaration's own initializer runs InitGlobalLex later.
+        foreach (var name in decls.ConstNames)
+        {
+            realm.GlobalLexicals[name] = new GlobalLexicalBinding { Mutable = false };
+        }
+
+        foreach (var name in decls.LetNames)
+        {
+            realm.GlobalLexicals[name] = new GlobalLexicalBinding { Mutable = true };
+        }
+
+        // CreateGlobalFunctionBinding — the property is (re)defined up front so
+        // the hoisted closure's StoreGlobal writes an existing binding; the
+        // function VALUE is stored by the hoist code that follows this opcode.
+        // D (deletable) is true for eval bindings, false for script bindings.
+        foreach (var name in decls.FuncNames)
+        {
+            var existing = g.GetOwnPropertyDescriptor(name);
+            if (existing is not { Configurable: false })
+            {
+                g.DefineOwnProperty(name,
+                    PropertyDescriptor.Data(JsValue.Undefined,
+                        writable: true, enumerable: true, configurable: decls.Deletable));
+            }
+        }
+
+        // CreateGlobalVarBinding — idempotent; an existing own property (from a
+        // prior script or a function hoist above) keeps its value.
+        foreach (var name in decls.VarNames)
+        {
+            if (!g.HasOwn(name))
+            {
+                g.DefineOwnProperty(name,
+                    PropertyDescriptor.Data(JsValue.Undefined,
+                        writable: true, enumerable: true, configurable: decls.Deletable));
+            }
+        }
+
+        // Annex B §B.3.3.2/.3 — block-level sloppy function names: LENIENT
+        // pre-declaration (any conflict just skips; never an error).
+        foreach (var name in decls.AnnexBFnNames)
+        {
+            if (realm.GlobalLexicals.ContainsKey(name))
+            {
+                continue;
+            }
+
+            if (!g.HasOwn(name) && g.Extensible)
+            {
+                g.DefineOwnProperty(name,
+                    PropertyDescriptor.Data(JsValue.Undefined,
+                        writable: true, enumerable: true, configurable: decls.Deletable));
+            }
+        }
+
+        void CheckLexNames(string[] names)
+        {
+            foreach (var name in names)
+            {
+                if (realm.GlobalLexicals.ContainsKey(name))
+                {
+                    throw new JsThrow(realm.NewSyntaxError("Identifier '" + name + "' has already been declared"));
+                }
+                // §9.1.1.4.14 HasRestrictedGlobalProperty — an own,
+                // non-configurable global property (undefined, NaN, Infinity, …)
+                // cannot be shadowed by a global lexical.
+                if (g.GetOwnPropertyDescriptor(name) is { Configurable: false })
+                {
+                    throw new JsThrow(realm.NewSyntaxError("Identifier '" + name + "' has already been declared"));
+                }
+            }
+        }
+
+        void CheckVarNames(string[] names)
+        {
+            foreach (var name in names)
+            {
+                if (realm.GlobalLexicals.ContainsKey(name))
+                {
+                    throw new JsThrow(realm.NewSyntaxError("Identifier '" + name + "' has already been declared"));
+                }
+            }
+        }
+    }
+
     /// <summary>wp:M3-84 Stage A — cold opcode arms moved out of the dispatch loop.
     /// RyuJIT gives every IL local in the dispatch method a distinct stack slot (the
     /// method is too large for slot sharing), so keeping these arms' ~280
@@ -2272,13 +2467,81 @@ public sealed class JsVm
                 {
                     var idx = ReadU16(code, ref ip);
                     var name = (string)constants[idx]!;
-                    var globalObj = _runtime.Realm.GlobalObject;
+                    var realm = _runtime.Realm;
+                    var globalObj = realm.GlobalObject;
                     if (!globalObj.HasOwn(name))
                     {
                         globalObj.DefineOwnProperty(name,
                             PropertyDescriptor.Data(JsValue.Undefined,
                                 writable: true, enumerable: true, configurable: false));
                     }
+                    break;
+                }
+            // §16.1.7 GlobalDeclarationInstantiation (and §19.2.1.3's global
+            // branch, with empty lexical lists): all early-error checks first,
+            // then binding creation, so a rejected script leaves no bindings.
+            case Opcode.GlobalDeclInstantiation:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var decls = (Starling.Js.Bytecode.GlobalDecls)constants[idx]!;
+                    RunGlobalDeclInstantiation(decls);
+                    break;
+                }
+            // §9.1.1.4 InitializeBinding on the global [[DeclarativeRecord]] —
+            // the declaration initializer's own write, transitioning the binding
+            // out of the TDZ.
+            case Opcode.InitGlobalLex:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var value = Pop(stack, ref sp);
+                    var lexicals = _runtime.Realm.GlobalLexicals;
+                    if (!lexicals.TryGetValue(name, out var binding))
+                    {
+                        // Defensive: GlobalDeclInstantiation creates the binding
+                        // before any code runs; a miss means a compiler path
+                        // (e.g. a class early-bind) initialized before declare.
+                        binding = new GlobalLexicalBinding { Mutable = true };
+                        lexicals[name] = binding;
+                    }
+                    binding.Value = value;
+                    binding.Initialized = true;
+                    break;
+                }
+            // Annex B §B.3.3.2 — web-compat function-in-block global binding.
+            // Deliberately lenient: a same-named global lexical or an
+            // undeclarable property means the block keeps a purely lexical
+            // function and the global write is skipped, never thrown.
+            case Opcode.AnnexBGlobalFnBind:
+                {
+                    var idx = ReadU16(code, ref ip);
+                    var name = (string)constants[idx]!;
+                    var value = Pop(stack, ref sp);
+                    var realm = _runtime.Realm;
+                    if (realm.GlobalLexicals.ContainsKey(name))
+                    {
+                        break;
+                    }
+
+                    var g = realm.GlobalObject;
+                    var existing = g.GetOwnPropertyDescriptor(name);
+                    if (existing is { Configurable: false } d && !(d.IsData && d.Writable))
+                    {
+                        break;
+                    }
+
+                    if (existing is null)
+                    {
+                        if (g.Extensible)
+                        {
+                            g.DefineOwnProperty(name,
+                                PropertyDescriptor.Data(value,
+                                    writable: true, enumerable: true, configurable: true));
+                        }
+                        break;
+                    }
+
+                    AbstractOperations.Set(this, g, name, value, JsValue.Object(g));
                     break;
                 }
             // wp:M3-73 — §19.2.1.3 EvalDeclarationInstantiation (non-global
@@ -2459,7 +2722,7 @@ public sealed class JsVm
                     }
                     if (!IsCallableValue(callee))
                     {
-                        throw new JsThrow(JsValue.String(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: 'eval')")));
+                        throw new JsThrow(_runtime.Realm.NewTypeError(AtPos(chunk, ip, $"not a function: {JsValue.ToStringValue(callee)} (callee hint: 'eval')")));
                     }
 
                     Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Call(this, callee, JsValue.Undefined, callArgs));
@@ -2585,19 +2848,22 @@ public sealed class JsVm
                     {
                         var srcObj = src.AsObject;
                         var dstObj = dst.AsObject;
-                        // CopyDataProperties (§7.3.27) invokes getters on the source,
-                        // not the data-only fast path. Mirror that here so accessor
-                        // properties are spread by their getter's return value.
-                        foreach (var key in srcObj.EnumerableKeys())
+                        // CopyDataProperties (§7.3.27) — [[OwnPropertyKeys]]
+                        // order (strings and symbols interleaved as the object
+                        // — or its proxy trap — reports them), per-key own
+                        // descriptor check, getters invoked via Get, and the
+                        // copy lands as CreateDataProperty (not [[Set]], so a
+                        // same-named setter on the target never runs).
+                        foreach (var key in new List<JsPropertyKey>(srcObj.OwnPropertyKeys))
                         {
-                            AbstractOperations.Set(this, dstObj, key,
-                                AbstractOperations.Get(this, srcObj, key));
-                        }
-
-                        foreach (var key in srcObj.EnumerableSymbolKeys())
-                        {
-                            AbstractOperations.Set(this, dstObj, JsPropertyKey.Symbol(key),
-                                AbstractOperations.Get(this, srcObj, JsPropertyKey.Symbol(key)));
+                            var desc = srcObj.GetOwnPropertyDescriptor(key);
+                            if (desc is { Enumerable: true })
+                            {
+                                dstObj.DefineOwnProperty(key,
+                                    PropertyDescriptor.Data(
+                                        AbstractOperations.Get(this, srcObj, key),
+                                        writable: true, enumerable: true, configurable: true));
+                            }
                         }
                     }
                     break;
@@ -2866,41 +3132,35 @@ public sealed class JsVm
             case Opcode.RestObject:
                 {
                     var excludedCount = ReadU16(code, ref ip);
-                    var excluded = new HashSet<string>(StringComparer.Ordinal);
+                    var excluded = new HashSet<JsPropertyKey>();
                     for (var i = 0; i < excludedCount; i++)
                     {
-                        var key = AbstractOperations.ToPropertyKey(this, Pop(stack, ref sp));
-                        if (!key.IsSymbol)
-                        {
-                            excluded.Add(key.AsString);
-                        }
+                        excluded.Add(AbstractOperations.ToPropertyKey(this, Pop(stack, ref sp)));
                     }
                     var src = Pop(stack, ref sp);
                     var result = _runtime.Realm.NewOrdinaryObject();
-                    // CopyDataProperties (§7.3.27) — accessor getters on the
-                    // source must be invoked, not bypassed by the data-only
-                    // fast path. Route through AbstractOperations.Get.
-                    if (src.IsObject)
+                    // CopyDataProperties (§7.3.27) — walk [[OwnPropertyKeys]]
+                    // (strings AND symbols, proxy-trap order), consult each
+                    // key's own descriptor (an observable trap on proxies),
+                    // copy only enumerable ones, and invoke source getters via
+                    // AbstractOperations.Get rather than the data fast path.
+                    if (!src.IsNullish)
                     {
-                        var srcObj = src.AsObject;
-                        foreach (var key in srcObj.EnumerableKeys())
+                        var srcObj = src.IsObject ? src.AsObject : AbstractOperations.ToObject(_runtime.Realm, src);
+                        foreach (var key in new List<JsPropertyKey>(srcObj.OwnPropertyKeys))
                         {
-                            if (!excluded.Contains(key))
+                            if (excluded.Contains(key))
                             {
-                                AbstractOperations.Set(this, result, key,
-                                    AbstractOperations.Get(this, srcObj, key));
+                                continue;
                             }
-                        }
-                    }
-                    else if (!src.IsNullish)
-                    {
-                        var srcObj = AbstractOperations.ToObject(_runtime.Realm, src);
-                        foreach (var key in srcObj.EnumerableKeys())
-                        {
-                            if (!excluded.Contains(key))
+
+                            var desc = srcObj.GetOwnPropertyDescriptor(key);
+                            if (desc is { Enumerable: true })
                             {
-                                AbstractOperations.Set(this, result, key,
-                                    AbstractOperations.Get(this, srcObj, key));
+                                result.DefineOwnProperty(key,
+                                    PropertyDescriptor.Data(
+                                        AbstractOperations.Get(this, srcObj, key),
+                                        writable: true, enumerable: true, configurable: true));
                             }
                         }
                     }
@@ -3237,12 +3497,15 @@ public sealed class JsVm
                         throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
                     }
 
-                    var superProto = frame.CurrentFunction.HomeObject.Prototype;
-                    if (superProto is null)
-                    {
-                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
-                        break;
-                    }
+                    // §13.3.7.1 / §9.1.1.3.4 — MakeSuperPropertyReference reads
+                    // GetThisBinding first, so a super access in a derived
+                    // constructor before super() is a ReferenceError.
+                    ThrowIfThisUninitialized(frame);
+                    // §13.3.7.3 GetSuperBase yields undefined for a null home
+                    // prototype; MakeSuperPropertyReference then requires the
+                    // base be object-coercible — so `extends null` throws.
+                    var superProto = frame.CurrentFunction.HomeObject.Prototype
+                        ?? throw new JsThrow(_runtime.Realm.NewTypeError("Cannot read properties of undefined (reading super base)"));
                     Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, superProto, name, frame.ThisV));
                     break;
                 }
@@ -3255,15 +3518,22 @@ public sealed class JsVm
                     {
                         throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
                     }
+
+                    ThrowIfThisUninitialized(frame);
                     // §13.3.4 / §9.1.1.4 PutValue with a Super Reference: the
                     // [[Set]] runs against the super base (GetPrototypeOf([[HomeObject]]))
                     // with the receiver = `this`. So a setter found on the super
                     // base runs with this=receiver; otherwise OrdinarySet creates
                     // the own data property on the receiver, not the prototype.
-                    var superBase = frame.CurrentFunction.HomeObject.Prototype;
-                    if (superBase is not null)
+                    // §6.2.5.6 PutValue — a rejected [[Set]] in strict code is a
+                    // TypeError (class bodies are always strict).
+                    var superBase = frame.CurrentFunction.HomeObject.Prototype
+                        ?? throw new JsThrow(_runtime.Realm.NewTypeError("Cannot set properties of undefined (setting super base)"));
+                    var storeOk = AbstractOperations.Set(this, superBase, name, value, frame.ThisV);
+                    if (!storeOk && frame.FrameStrict)
                     {
-                        AbstractOperations.Set(this, superBase, name, value, frame.ThisV);
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot assign to read-only property '" + name + "'"));
                     }
 
                     Push(frame, ref stack, ref sp, ref maxSp, value);
@@ -3280,12 +3550,13 @@ public sealed class JsVm
                         throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
                     }
 
+                    ThrowIfThisUninitialized(frame);
                     var propertyKey = AbstractOperations.ToPropertyKey(this, key);
+                    // §13.3.7.3 / RequireObjectCoercible — see LoadSuperProperty.
                     var superProto = frame.CurrentFunction.HomeObject.Prototype;
                     if (superProto is null)
                     {
-                        Push(frame, ref stack, ref sp, ref maxSp, JsValue.Undefined);
-                        break;
+                        throw new JsThrow(_runtime.Realm.NewTypeError("Cannot read properties of undefined (reading super base)"));
                     }
                     Push(frame, ref stack, ref sp, ref maxSp, AbstractOperations.Get(this, superProto, propertyKey, frame.ThisV));
                     break;
@@ -3303,11 +3574,15 @@ public sealed class JsVm
                         throw new JsThrow(_runtime.Realm.NewSyntaxError("'super' keyword unexpected here"));
                     }
 
+                    ThrowIfThisUninitialized(frame);
                     var propertyKey = AbstractOperations.ToPropertyKey(this, key);
-                    var superBase = frame.CurrentFunction.HomeObject.Prototype;
-                    if (superBase is not null)
+                    var superBase = frame.CurrentFunction.HomeObject.Prototype
+                        ?? throw new JsThrow(_runtime.Realm.NewTypeError("Cannot set properties of undefined (setting super base)"));
+                    var storeOk = AbstractOperations.Set(this, superBase, propertyKey, value, frame.ThisV);
+                    if (!storeOk && frame.FrameStrict)
                     {
-                        AbstractOperations.Set(this, superBase, propertyKey, value, frame.ThisV);
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot assign to read-only property '" + propertyKey + "'"));
                     }
 
                     Push(frame, ref stack, ref sp, ref maxSp, value);
@@ -5235,8 +5510,20 @@ public sealed class JsVm
         // BindNameToGlobal is false for them, so this does not leak.)
         if (template.BindNameToGlobal && template.Name.Length > 0)
         {
-            AbstractOperations.Set(this, realm.GlobalObject, template.Name,
-                JsValue.Object(ctorInstance), JsValue.Object(realm.GlobalObject));
+            // A script-top class name is a global LEXICAL binding — initialize
+            // it in the realm's declarative record (out of its TDZ) so static
+            // elements' LoadGlobal reads resolve. Fallback to the global object
+            // for chunks compiled without GlobalDeclInstantiation.
+            if (realm.GlobalLexicals.TryGetValue(template.Name, out var classLex))
+            {
+                classLex.Value = JsValue.Object(ctorInstance);
+                classLex.Initialized = true;
+            }
+            else
+            {
+                AbstractOperations.Set(this, realm.GlobalObject, template.Name,
+                    JsValue.Object(ctorInstance), JsValue.Object(realm.GlobalObject));
+            }
         }
 
         // §15.7.14 — for a named class expression, initialize the inner
@@ -5569,7 +5856,10 @@ public sealed class JsVm
         {
             b.Emit(Starling.Js.Bytecode.Opcode.LoadThis);
             b.Emit(Starling.Js.Bytecode.Opcode.LoadUndefined);
-            b.EmitU16(Starling.Js.Bytecode.Opcode.StoreProperty, b.AddConstant(field.StaticKey!));
+            // EmitProperty, not EmitU16: StoreProperty sites carry a [u16
+            // cacheId] operand after the name — omitting it desyncs the
+            // instruction stream (the VM reads the next opcode as the id).
+            b.EmitProperty(Starling.Js.Bytecode.Opcode.StoreProperty, b.AddConstant(field.StaticKey!));
             b.Emit(Starling.Js.Bytecode.Opcode.Pop);
         }
         b.Emit(Starling.Js.Bytecode.Opcode.ReturnUndefined);
@@ -5589,6 +5879,14 @@ public sealed class JsVm
         var realm = _runtime.Realm;
         var frame = new SuspendedFrame(this);
         var gen = new JsGenerator(realm, frame);
+        // §27.5.1.1 — the generator object's [[Prototype]] comes from the
+        // generator FUNCTION's own `prototype` property (so `g() instanceof g`
+        // holds); %GeneratorPrototype% only backs a non-object value.
+        var fnProto = AbstractOperations.Get(this, fn, "prototype");
+        if (fnProto.IsObject)
+        {
+            gen.SetPrototypeOf(fnProto.AsObject);
+        }
         // Stamp own properties so duck-typing tests work.
         // Deep-copy: the caller's args array is pooled and reused after this
         // synchronous call returns, but the suspended frame keeps a reference to

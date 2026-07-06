@@ -30,6 +30,36 @@ public sealed class JsArrayBuffer : JsObject
 
     public int ByteLength => Storage.ByteLength;
 
+    /// <summary>ES2024 resizable buffers — [[ArrayBufferMaxByteLength]]. Null
+    /// for a fixed-length buffer.</summary>
+    public int? MaxByteLength { get; internal set; }
+
+    /// <summary>§25.1.3.5 DetachArrayBuffer — [[ArrayBufferData]] is null.
+    /// Views over a detached buffer are out of bounds; operations that
+    /// ValidateTypedArray throw TypeError.</summary>
+    public bool IsDetached { get; private set; }
+
+    public void Detach()
+    {
+        Storage = new ManagedArrayBufferStorage(Array.Empty<byte>());
+        IsDetached = true;
+        RefreshByteLength();
+    }
+
+    public bool IsResizable => MaxByteLength.HasValue;
+
+    /// <summary>§25.1.5.5 ArrayBuffer.prototype.resize — reallocate to
+    /// <paramref name="newByteLength"/>, preserving the common prefix and
+    /// zero-filling growth. Caller validates resizability and bounds.</summary>
+    public void Resize(int newByteLength)
+    {
+        var fresh = new byte[newByteLength];
+        var old = Storage.GetSpan();
+        old[..Math.Min(old.Length, newByteLength)].CopyTo(fresh);
+        Storage = new ManagedArrayBufferStorage(fresh);
+        RefreshByteLength();
+    }
+
     public Span<byte> GetSpan() => Storage.GetSpan();
 
     public Span<byte> GetSpan(int start) => Storage.GetSpan()[start..];

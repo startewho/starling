@@ -25,14 +25,29 @@ public ref partial struct JsParser
                 return ParseStatement();
             }
 
+            // §16.1 Script : ScriptBody — an ImportDeclaration only matches the
+            // Module goal; in a classic Script (and in eval code, which parses
+            // with the Script goal) it is a SyntaxError at parse time.
+            if (!_module)
+            {
+                throw new JsParseException("'import' declarations may only appear at top level of a module", _current.Start);
+            }
+
             return ParseImportDeclaration();
         }
 
-        return _current.Kind switch
+        if (_current.Kind == JsTokenKind.Export)
         {
-            JsTokenKind.Export => ParseExportDeclaration(),
-            _ => ParseStatement(),
-        };
+            // §16.1 — ExportDeclaration likewise only matches the Module goal.
+            if (!_module)
+            {
+                throw new JsParseException("'export' declarations may only appear at top level of a module", _current.Start);
+            }
+
+            return ParseExportDeclaration();
+        }
+
+        return ParseStatement();
     }
 
     /// <summary>wp:M3-03c — parse the expression-context forms of <c>import</c>:
