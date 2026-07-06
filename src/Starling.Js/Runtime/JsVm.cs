@@ -3703,6 +3703,15 @@ public sealed class JsVm
                             "Cannot initialize the same private member twice on the same object"));
                     }
 
+                    // §7.3.28 PrivateFieldAdd step 3 — a non-extensible target
+                    // rejects new private elements (stabilized objects stay
+                    // stable): TypeError before any state changes.
+                    if (!receiver.AsObject.Extensible)
+                    {
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot define a private field on a non-extensible object"));
+                    }
+
                     receiver.AsObject.DefineOwnProperty(name,
                         PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: false));
                     // §7.3.28 PrivateFieldAdd installs the private element onto
