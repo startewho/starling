@@ -80,71 +80,10 @@ public static partial class IntlObj
         return ctor;
     }
 
-    private static JsNativeFunction CreateLocaleCtor(JsRealm realm, JsObject proto)
-    {
-        var ctor = new JsNativeFunction(realm, "Locale", 1, (newTarget, args) =>
-        {
-            if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
-            {
-                throw new JsThrow(realm.NewTypeError("Intl.Locale requires 'new'"));
-            }
-
-            var state = CreateLocaleState(
-                realm,
-                args.Length > 0 ? args[0] : JsValue.Undefined,
-                args.Length > 1 ? args[1] : JsValue.Undefined);
-            var instProto = IntlPrototypeFor(realm, newTarget, "Locale", proto);
-            return JsValue.Object(CreateLocaleInstance(realm, instProto, state));
-        }, isConstructor: true);
-        ctor.DefineOwnProperty("prototype",
-            PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
-        proto.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-        IntrinsicHelpers.DefineMethod(realm, proto, "toString", 0,
-            (thisV, _) => JsValue.String(RequireLocale(realm, thisV).State.Name));
-        IntrinsicHelpers.DefineMethod(realm, proto, "minimize", 0,
-            (thisV, _) => JsValue.Object(CreateLocaleInstance(
-                realm,
-                proto,
-                RequireLocale(realm, thisV).State.Minimized())));
-        // §14.3.14 maximize — AddLikelySubtags. Without a CLDR likely-subtags
-        // table the identity mapping is the honest minimal form.
-        IntrinsicHelpers.DefineMethod(realm, proto, "maximize", 0,
-            (thisV, _) => JsValue.Object(CreateLocaleInstance(
-                realm,
-                proto,
-                RequireLocale(realm, thisV).State)));
-        // §14.3 — the characteristic properties are prototype ACCESSORS
-        // (get-only, non-enumerable, configurable).
-        void Getter(string name, Func<IntlLocaleState, JsValue> read) =>
-            proto.DefineOwnProperty(name, PropertyDescriptor.Accessor(
-                new JsNativeFunction(realm, "get " + name, 0,
-                    (thisV, _) => read(RequireLocale(realm, thisV).State)),
-                null));
-        Getter("baseName", st => JsValue.String(st.BaseName));
-        Getter("language", st => JsValue.String(st.Language));
-        Getter("script", st => st.Script is null ? JsValue.Undefined : JsValue.String(st.Script));
-        Getter("region", st => st.Region is null ? JsValue.Undefined : JsValue.String(st.Region));
-        Getter("calendar", st => st.Calendar is null ? JsValue.Undefined : JsValue.String(st.Calendar));
-        Getter("hourCycle", st => st.HourCycle is null ? JsValue.Undefined : JsValue.String(st.HourCycle));
-        Getter("numeric", st => JsValue.Boolean(st.Numeric));
-        Getter("caseFirst", _ => JsValue.Undefined);
-        Getter("collation", _ => JsValue.Undefined);
-        Getter("numberingSystem", _ => JsValue.String("latn"));
-        proto.DefineOwnProperty(SymbolCtor.ToStringTag,
-            PropertyDescriptor.Data(JsValue.String("Intl.Locale"), writable: false, enumerable: false, configurable: true));
-        return ctor;
-    }
-
     // §11.5.5/§15.5.3/§10.3.3 — format/compare are GETTERS on the prototype
     // returning a per-instance cached bound function ([[BoundFormat]] /
     // [[BoundCompare]]); instances carry no own property.
     private static IntlCollatorObject CreateCollatorInstance(JsRealm realm, JsObject proto, IntlCollatorState state)
-        => new(proto, state);
-
-    private static IntlLocaleObject CreateLocaleInstance(JsRealm realm, JsObject proto, IntlLocaleState state)
-        // §14.3 — every Locale characteristic is a PROTOTYPE GETTER (see
-        // CreateLocaleCtor), so instances carry no own data properties.
         => new(proto, state);
 
     private static IntlCollatorState CreateCollatorState(JsRealm realm, JsValue[] args)
@@ -157,25 +96,27 @@ public static partial class IntlObj
         return new IntlCollatorState(locale, usage, sensitivity, numeric);
     }
 
-    private static IntlLocaleState CreateLocaleState(JsRealm realm, JsValue tagValue, JsValue optionsValue)
-    {
-        var tag = AbstractOperations.ToStringJs(realm.ActiveVm, tagValue);
-        var state = ParseLocaleState(realm, tag);
-        var options = optionsValue.IsObject ? optionsValue.AsObject : null;
-        var calendar = GetStringOption(realm, options, "calendar") ?? state.Calendar;
-        var hourCycle = GetStringOption(realm, options, "hourCycle", "h11", "h12", "h23", "h24") ?? state.HourCycle;
-        var numeric = GetBooleanOption(realm, options, "numeric") ?? state.Numeric;
-        return state with
-        {
-            Calendar = calendar,
-            HourCycle = hourCycle,
-            Numeric = numeric,
-            Name = BuildLocaleName(state.BaseName, calendar, hourCycle, numeric)
-        };
-    }
-
     private static JsValue SupportedLocalesOf(JsRealm realm, JsValue[] args)
-        => MakeLocaleArray(realm, ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined));
+    {
+        var requested = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var optionsValue = args.Length > 1 ? args[1] : JsValue.Undefined;
+        if (!optionsValue.IsUndefined)
+        {
+            var options = AbstractOperations.ToObject(realm, optionsValue);
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+        }
+
+        var supported = new List<string>(requested.Count);
+        foreach (var tag in requested)
+        {
+            if (TryCreateLocale(tag, out _))
+            {
+                supported.Add(tag);
+            }
+        }
+
+        return MakeLocaleArray(realm, supported);
+    }
 
     private static JsValue SupportedValuesOf(JsRealm realm, JsValue keyValue)
     {
@@ -227,12 +168,12 @@ public static partial class IntlObj
 
         if (value.IsObject && value.AsObject is IntlLocaleObject direct)
         {
-            AddCanonicalLocale(realm, direct.State.Name, result, seen);
+            AddCanonicalLocale(realm, direct.CanonicalName, result, seen);
             return result;
         }
 
         var obj = AbstractOperations.ToObject(realm, value);
-        var length = ToLength(AbstractOperations.Get(realm.ActiveVm, obj, "length"));
+        var length = ToLength(realm, AbstractOperations.Get(realm.ActiveVm, obj, "length"));
         for (long i = 0; i < length; i++)
         {
             var key = i.ToString(CultureInfo.InvariantCulture);
@@ -248,7 +189,7 @@ public static partial class IntlObj
             }
 
             var tag = item.IsObject && item.AsObject is IntlLocaleObject lo
-                ? lo.State.Name
+                ? lo.CanonicalName
                 : AbstractOperations.ToStringJs(realm.ActiveVm, item);
             AddCanonicalLocale(realm, tag, result, seen);
         }
@@ -257,147 +198,31 @@ public static partial class IntlObj
 
     private static void AddCanonicalLocale(JsRealm realm, string requested, List<string> result, HashSet<string> seen)
     {
-        if (!IsStructurallyValidLanguageTag(requested))
+        if (!TryParseUnicodeLocaleId(requested, out var id))
         {
             throw new JsThrow(realm.NewRangeError($"Invalid language tag: \"{requested}\""));
         }
 
-        if (!TryCreateLocale(requested, out var locale))
-        {
-            return;
-        }
-
-        // Canonicalization PRESERVES Unicode extensions ("ar-u-nu-arab" stays
-        // intact) — ResolveLocale re-parses the extension from this list.
-        var name = locale.Name;
-        var extIdx = requested.IndexOf("-u-", StringComparison.OrdinalIgnoreCase);
-        if (extIdx >= 0)
-        {
-            name += requested[extIdx..].ToLowerInvariant();
-        }
-
+        CanonicalizeLocaleId(id);
+        var name = id.ToCanonicalString();
         if (seen.Add(name))
         {
             result.Add(name);
         }
     }
 
-    /// <summary>Structural unicode_locale_id check (no registry lookup):
-    /// language[-script][-region](-variant)*(-singleton subtags..)*(-x-...).</summary>
     private static bool IsStructurallyValidLanguageTag(string tag)
-    {
-        if (tag.Length == 0)
-        {
-            return false;
-        }
-
-        var parts = tag.Split('-');
-        var first = parts[0];
-        if (!IsAsciiLetters(first) || first.Length is < 2 or > 8 || first.Length == 4)
-        {
-            return false;
-        }
-
-        var i = 1;
-        if (first.Length <= 3)
-        {
-            var extlang = 0;
-            while (i < parts.Length && extlang < 3 && parts[i].Length == 3 && IsAsciiLetters(parts[i]))
-            {
-                i++;
-                extlang++;
-            }
-        }
-
-        if (i < parts.Length && parts[i].Length == 4 && IsAsciiLetters(parts[i]))
-        {
-            i++;
-        }
-
-        if (i < parts.Length && IsRegionSubtag(parts[i]))
-        {
-            i++;
-        }
-
-        HashSet<string>? variants = null;
-        while (i < parts.Length)
-        {
-            var v = parts[i];
-            var isVariant = (v.Length is >= 5 and <= 8 && IsAsciiAlnum(v))
-                || (v.Length == 4 && char.IsAsciiDigit(v[0]) && IsAsciiAlnum(v));
-            if (!isVariant)
-            {
-                break;
-            }
-
-            variants ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (!variants.Add(v))
-            {
-                return false;
-            }
-
-            i++;
-        }
-
-        HashSet<char>? singletons = null;
-        while (i < parts.Length)
-        {
-            var sSub = parts[i];
-            if (sSub.Length != 1 || !char.IsAsciiLetterOrDigit(sSub[0]))
-            {
-                return false;
-            }
-
-            var c = char.ToLowerInvariant(sSub[0]);
-            singletons ??= [];
-            if (!singletons.Add(c))
-            {
-                return false;
-            }
-
-            i++;
-            if (c == 'x')
-            {
-                if (i >= parts.Length)
-                {
-                    return false;
-                }
-
-                while (i < parts.Length)
-                {
-                    if (parts[i].Length is < 1 or > 8 || !IsAsciiAlnum(parts[i]))
-                    {
-                        return false;
-                    }
-
-                    i++;
-                }
-
-                return true;
-            }
-
-            var subtags = 0;
-            while (i < parts.Length && parts[i].Length is >= 2 and <= 8 && IsAsciiAlnum(parts[i]))
-            {
-                i++;
-                subtags++;
-            }
-
-            if (subtags == 0)
-            {
-                return false;
-            }
-        }
-
-        return i == parts.Length;
-    }
+        => TryParseUnicodeLocaleId(tag, out _);
 
     private static IntlLocale ResolveLocale(JsRealm realm, JsValue value)
     {
         var requested = ReadRequestedLocales(realm, value);
-        if (requested.Count > 0 && TryCreateLocale(requested[0], out var locale))
+        foreach (var tag in requested)
         {
-            return locale;
+            if (TryCreateLocale(tag, out var locale))
+            {
+                return locale;
+            }
         }
 
         return TryCreateLocale(DefaultLocale, out var defaultLocale)
@@ -488,130 +313,6 @@ public static partial class IntlObj
         "pt" or "pt-BR" or "pt-PT" or "nl" or "nl-NL" or
         "ar" or "ar-SA" or "th" or "th-TH" or "ru" or "ru-RU" or
         "tr" or "tr-TR" or "pl" or "pl-PL" or "sv" or "sv-SE";
-
-    private static IntlLocaleState ParseLocaleState(JsRealm realm, string tag)
-    {
-        if (tag.Length == 0 || tag.AsSpan().IndexOfAny([' ', '\t', '\r', '\n']) >= 0)
-        {
-            throw new JsThrow(realm.NewRangeError("invalid locale tag"));
-        }
-
-        var parts = tag.Replace('_', '-').Split('-', StringSplitOptions.None);
-        if (parts.Length == 0 || parts[0].Length is < 2 or > 8 || !IsAsciiLetters(parts[0]))
-        {
-            throw new JsThrow(realm.NewRangeError("invalid locale tag"));
-        }
-
-        var language = parts[0].ToLowerInvariant();
-        string? script = null;
-        string? region = null;
-        string? calendar = null;
-        string? hourCycle = null;
-        var numeric = false;
-        var i = 1;
-
-        if (i < parts.Length && parts[i].Length == 4 && IsAsciiLetters(parts[i]))
-        {
-            script = char.ToUpperInvariant(parts[i][0]) + parts[i][1..].ToLowerInvariant();
-            i++;
-        }
-
-        if (i < parts.Length && IsRegionSubtag(parts[i]))
-        {
-            region = parts[i].ToUpperInvariant();
-            i++;
-        }
-
-        var baseParts = new List<string> { language };
-        if (script is not null)
-        {
-            baseParts.Add(script);
-        }
-
-        if (region is not null)
-        {
-            baseParts.Add(region);
-        }
-
-        var baseName = string.Join('-', baseParts);
-
-        for (; i < parts.Length; i++)
-        {
-            if (!string.Equals(parts[i], "u", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            i++;
-            while (i < parts.Length)
-            {
-                var key = parts[i].ToLowerInvariant();
-                if (key.Length != 2)
-                {
-                    break;
-                }
-
-                i++;
-                var values = new List<string>();
-                while (i < parts.Length && parts[i].Length != 2)
-                {
-                    if (parts[i].Length == 0)
-                    {
-                        throw new JsThrow(realm.NewRangeError("invalid locale tag"));
-                    }
-
-                    values.Add(parts[i].ToLowerInvariant());
-                    i++;
-                }
-
-                var value = values.Count == 0 ? string.Empty : string.Join('-', values);
-                if (key == "ca" && value.Length > 0)
-                {
-                    calendar = value;
-                }
-                else if (key == "hc" && value is "h11" or "h12" or "h23" or "h24")
-                {
-                    hourCycle = value;
-                }
-                else if (key == "kn")
-                {
-                    numeric = value.Length == 0 || value == "true";
-                }
-            }
-            break;
-        }
-
-        return new IntlLocaleState(
-            BuildLocaleName(baseName, calendar, hourCycle, numeric),
-            baseName,
-            language,
-            script,
-            region,
-            calendar,
-            hourCycle,
-            numeric);
-    }
-
-    private static string BuildLocaleName(string baseName, string? calendar, string? hourCycle, bool numeric)
-    {
-        var extensions = new List<string>();
-        if (calendar is not null)
-        {
-            extensions.Add("ca-" + calendar);
-        }
-
-        if (hourCycle is not null)
-        {
-            extensions.Add("hc-" + hourCycle);
-        }
-
-        if (numeric)
-        {
-            extensions.Add("kn");
-        }
-
-        return extensions.Count == 0 ? baseName : baseName + "-u-" + string.Join('-', extensions);
-    }
 
     private static bool IsRegionSubtag(string value)
         => value.Length == 2 && IsAsciiLetters(value) || value.Length == 3 && IsAsciiDigits(value);
@@ -706,9 +407,15 @@ public static partial class IntlObj
         return Math.Clamp(integer, min, max);
     }
 
-    private static long ToLength(JsValue value)
+    private static long ToLength(JsRealm realm, JsValue value)
     {
-        var number = NumberCtor.ToNumber(value);
+        var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, value, "number");
+        if (prim.IsSymbol)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
+        }
+
+        var number = NumberCtor.ToNumber(prim);
         if (double.IsNaN(number) || number <= 0)
         {
             return 0;
@@ -730,16 +437,6 @@ public static partial class IntlObj
         }
 
         throw new JsThrow(realm.NewTypeError("Intl.Collator method called on incompatible receiver"));
-    }
-
-    private static IntlLocaleObject RequireLocale(JsRealm realm, JsValue thisV)
-    {
-        if (thisV.IsObject && thisV.AsObject is IntlLocaleObject obj)
-        {
-            return obj;
-        }
-
-        throw new JsThrow(realm.NewTypeError("Intl.Locale method called on incompatible receiver"));
     }
 
     private static void DefineData(JsObject obj, string name, JsValue value)
@@ -855,27 +552,6 @@ public static partial class IntlObj
     }
 
     private sealed record IntlCollatorState(IntlLocale Locale, string Usage, string Sensitivity, bool Numeric);
-
-    private sealed record IntlLocaleState(
-        string Name,
-        string BaseName,
-        string Language,
-        string? Script,
-        string? Region,
-        string? Calendar,
-        string? HourCycle,
-        bool Numeric)
-    {
-        public IntlLocaleState Minimized()
-            => Region == "US" && Script is null
-                ? this with { Name = Language, BaseName = Language, Region = null }
-                : this;
-    }
-
-    private sealed class IntlLocaleObject(JsObject prototype, IntlLocaleState state) : JsObject(prototype)
-    {
-        public IntlLocaleState State { get; } = state;
-    }
 
     private sealed class IntlCollatorObject(JsObject prototype, IntlCollatorState state) : JsObject(prototype)
     {
