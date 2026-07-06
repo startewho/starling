@@ -3440,6 +3440,16 @@ public sealed class JsVm
                         // result copy (Dup'd by the compiler) stays beneath.
                         var value = Pop(stack, ref sp);
                         var baseObj = captured.AsObject;
+                        // §9.1.1.2.5 step 3 — the binding may have been DELETED
+                        // between the read and this write (a getter side
+                        // effect); a strict write to the vanished binding is a
+                        // ReferenceError and must not re-create the property.
+                        if (frame.FrameStrict && !AbstractOperations.HasProperty(baseObj, name))
+                        {
+                            throw new JsThrow(_runtime.Realm.NewReferenceError(
+                                name + " is not defined"));
+                        }
+
                         var ok = AbstractOperations.Set(this, baseObj, name, value, captured);
                         if (!ok && frame.FrameStrict)
                         {
