@@ -259,7 +259,19 @@ public static class StringCtor
                 throw new JsThrow(realm.NewRangeError("Invalid code point"));
             }
 
-            sb.Append(char.ConvertFromUtf32((int)n));
+            // UTF16EncodeCodePoint: lone surrogates are legal here and encode
+            // as their own code unit, so avoid ConvertFromUtf32 (it rejects them).
+            var cp = (int)n;
+            if (cp <= 0xFFFF)
+            {
+                sb.Append((char)cp);
+            }
+            else
+            {
+                cp -= 0x10000;
+                sb.Append((char)(0xD800 + (cp >> 10)));
+                sb.Append((char)(0xDC00 + (cp & 0x3FF)));
+            }
         }
         return JsValue.String(sb.ToString());
     }

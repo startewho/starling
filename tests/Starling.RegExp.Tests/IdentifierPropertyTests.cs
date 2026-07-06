@@ -19,8 +19,6 @@ public class IdentifierPropertyTests
     {
         Run("\\p{ID_Start}", "u", "a")!.Group(0).Should().Be("a");
         Run("\\p{ID_Start}", "u", "Z")!.Group(0).Should().Be("Z");
-        Run("\\p{ID_Start}", "u", "$")!.Group(0).Should().Be("$");
-        Run("\\p{ID_Start}", "u", "_")!.Group(0).Should().Be("_");
         Run("\\p{ID_Start}", "u", "π")!.Group(0).Should().Be("π"); // Greek small pi
     }
 
@@ -30,6 +28,9 @@ public class IdentifierPropertyTests
         Run("^\\p{ID_Start}$", "u", "1").Should().BeNull();
         Run("^\\p{ID_Start}$", "u", " ").Should().BeNull();
         Run("^\\p{ID_Start}$", "u", "-").Should().BeNull();
+        // Unlike JS identifiers, the Unicode property excludes '$' and '_'.
+        Run("^\\p{ID_Start}$", "u", "$").Should().BeNull();
+        Run("^\\p{ID_Start}$", "u", "_").Should().BeNull();
     }
 
     [TestMethod]
