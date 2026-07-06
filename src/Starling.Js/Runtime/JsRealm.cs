@@ -348,6 +348,7 @@ public sealed class JsRealm
         // Object.prototype and is itself callable (the empty function) — for
         // bare-bones bootstrap it's just an object.
         ObjectPrototype = new JsObject();
+        ObjectPrototype.IsImmutablePrototype = true;
         FunctionPrototype = new JsObject(ObjectPrototype);
 
         // All other prototypes default to Object.prototype-inheriting empties.

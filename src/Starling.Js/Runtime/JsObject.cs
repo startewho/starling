@@ -255,6 +255,10 @@ public class JsObject
     /// <see cref="PreventExtensions"/> on ordinary objects.</summary>
     private bool _extensible = true;
 
+    /// <summary>§10.4.7 immutable-prototype exotic (%Object.prototype%):
+    /// [[SetPrototypeOf]] only succeeds when the value is unchanged.</summary>
+    internal bool IsImmutablePrototype { get; set; }
+
     /// <summary>Models the spec's <c>[[ParameterMap]]</c> internal slot: true for
     /// an <c>arguments</c> exotic object. Read by §20.1.3.6 step 5 so
     /// <c>Object.prototype.toString</c> reports <c>"[object Arguments]"</c>
@@ -308,7 +312,7 @@ public class JsObject
             return true; // §10.1.2 — same prototype is a no-op success
         }
 
-        if (!Extensible)
+        if (IsImmutablePrototype || !Extensible)
         {
             return false;
         }
@@ -719,7 +723,7 @@ public class JsObject
                         return false;
                     }
 
-                    if (present.HasValue && !desc.Value.Equals(cur.Value))
+                    if (present.HasValue && !AbstractOperations.SameValue(desc.Value, cur.Value))
                     {
                         return false;
                     }
@@ -798,12 +802,7 @@ public class JsObject
             return true;
         }
 
-        if (existing.IsAccessor != desc.IsAccessor)
-        {
-            return false;
-        }
-
-        if (existing.Configurable != desc.Configurable)
+        if (desc.Configurable)
         {
             return false;
         }
@@ -813,9 +812,27 @@ public class JsObject
             return false;
         }
 
-        if (!existing.IsAccessor && existing.Writable != desc.Writable)
+        if (existing.IsAccessor != desc.IsAccessor)
         {
             return false;
+        }
+
+        if (existing.IsAccessor)
+        {
+            return ReferenceEquals(existing.Getter, desc.Getter)
+                && ReferenceEquals(existing.Setter, desc.Setter);
+        }
+
+        // Data: writable may transition true→false; a non-writable slot pins
+        // both the flag and (per SameValue) the value.
+        if (!existing.Writable)
+        {
+            if (desc.Writable)
+            {
+                return false;
+            }
+
+            return AbstractOperations.SameValue(existing.Value, desc.Value);
         }
 
         return true;
