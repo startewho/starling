@@ -372,7 +372,26 @@ public sealed partial class JsCompiler
             }
         }
 
-        return false;
+        // Not a local: a nested closure writing the enclosing function
+        // expression's self-name reaches it as an UPVALUE — same immutable
+        // binding, resolved through the parent chain.
+        return _parent is not null && !_fnSelfNames.Contains(name) && _parent.IsFnSelfNameResolved(name);
+    }
+
+    /// <summary>Parent-chain half of <see cref="IsFnSelfName"/>: does
+    /// <paramref name="name"/> resolve (in THIS compiler or its parents) to a
+    /// function-expression self-binding?</summary>
+    private bool IsFnSelfNameResolved(string name)
+    {
+        for (var i = _scopes.Count - 1; i >= 0; i--)
+        {
+            if (_scopes[i].ContainsKey(name))
+            {
+                return i == 0 && _fnSelfNames.Contains(name);
+            }
+        }
+
+        return _parent is not null && _parent.IsFnSelfNameResolved(name);
     }
 
     /// <summary>§13.15.2 — is <paramref name="name"/> a <c>const</c> binding in
@@ -4092,22 +4111,23 @@ public sealed partial class JsCompiler
 
     private void EmitIdStoreStatic(string name, bool needsTdzCheck)
     {
-        if (TryResolveLocal(name, out var slot))
+        // §15.2.5 — the function-expression self-name is an immutable
+        // binding: strict writes throw TypeError, sloppy writes are silently
+        // dropped (the assigned value stays as the expression result on the
+        // stack; no store happens). Checked BEFORE branch selection so a
+        // nested closure's UPVALUE write to the name gets the same treatment.
+        if (IsFnSelfName(name))
         {
-            // §15.2.5 — the function-expression self-name is an immutable
-            // binding: strict writes throw TypeError, sloppy writes are
-            // silently dropped (the assigned value stays as the expression
-            // result on the stack; no store happens).
-            if (IsFnSelfName(name))
+            if (_b.IsStrict)
             {
-                if (_b.IsStrict)
-                {
-                    _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(name));
-                }
-
-                return;
+                _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(name));
             }
 
+            return;
+        }
+
+        if (TryResolveLocal(name, out var slot))
+        {
             // §13.15.2 — a write to a const local (other than its own
             // initializer, which never routes through here) is a runtime
             // TypeError.
