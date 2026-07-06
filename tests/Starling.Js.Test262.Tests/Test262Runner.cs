@@ -73,7 +73,7 @@ public sealed class Test262Runner
         // Worker-only shared memory (browser-plan: M8+, out of v1 scope):
         "Atomics", "SharedArrayBuffer",
         // ES2025+ library proposals:
-        "iterator-helpers", "set-methods", "Float16Array", "uint8array-base64",
+        "set-methods", "Float16Array", "uint8array-base64",
         "regexp-duplicate-named-groups", "promise-try", "regexp-escape",
         "regexp-modifiers",
         "Array.fromAsync", "json-parse-with-source", "iterator-sequencing",
