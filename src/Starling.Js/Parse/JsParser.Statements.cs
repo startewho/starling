@@ -204,9 +204,12 @@ public ref partial struct JsParser
         // `let yield` is a lexical declaration in sloppy non-generator code —
         // the lexer always classifies `yield` as its keyword token, so the
         // Identifier check alone would misparse the statement as the
-        // IDENTIFIER `let` followed by a stray token.
+        // IDENTIFIER `let` followed by a stray token. Inside a GENERATOR the
+        // head still COMMITS to a declaration (§14.3.1 has no expression
+        // fallback), where ParseBindingTarget then rejects `yield` as a
+        // binding identifier — `let\nyield 0` is a SyntaxError, not ASI.
         return next.Kind == JsTokenKind.Identifier
-            || (next.Kind == JsTokenKind.Yield && !_strict && !_inGenerator)
+            || (next.Kind == JsTokenKind.Yield && !_strict)
             || next.Kind == JsTokenKind.LBracket
             || next.Kind == JsTokenKind.LBrace;
     }

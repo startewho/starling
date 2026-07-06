@@ -237,8 +237,11 @@ public ref partial struct JsParser
         // sloppy code the grammar's lookahead exclusion for an
         // ExpressionStatement is ONLY `let [` — a bare `let` followed by an
         // identifier/`{` parses as the IDENTIFIER `let` (with ASI supplying
-        // the statement break: `while (…) let\nx = 1`). Strict mode keeps
-        // `let` fully reserved, so any declaration-looking head is the error.
+        // the statement break: `while (…) let\nx = 1`, and a same-line
+        // continuation failing naturally: `do let x = 1; …` is a SyntaxError
+        // at `x`). Strict mode keeps `let` fully reserved. The expression
+        // parse must be FORCED — falling into ParseStatement would re-detect
+        // the declaration head and accept it.
         if (_current.Kind is JsTokenKind.Const
             || (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
                 && (_strict ? IsLetDeclarationStart() : _lex.Peek().Kind == JsTokenKind.LBracket)))
@@ -246,6 +249,12 @@ public ref partial struct JsParser
             throw new JsParseException(
                 "lexical declaration cannot appear in a single-statement context",
                 _current.Start);
+        }
+
+        if (!_strict && _current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
+            && IsLetDeclarationStart())
+        {
+            return ParseExpressionStatement();
         }
 
         if (_current.Kind == JsTokenKind.Class)
