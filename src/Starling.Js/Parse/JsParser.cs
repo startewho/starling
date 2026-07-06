@@ -1850,11 +1850,12 @@ public ref partial struct JsParser
         || kind == JsTokenKind.LBracket
         || IsReservedNameAllowedAsPropertyName(kind);
 
-    private static FunctionExpression MakeFnExpression(
+    private FunctionExpression MakeFnExpression(
         Identifier? name, IReadOnlyList<Expression> @params, BlockStatement body,
         JsPosition start, JsPosition end,
         bool generator = false, bool async = false, bool strict = false)
-        => new(name, @params, body, generator, start, end, Async: async, Strict: strict);
+        => new(name, @params, body, generator, start, end, Async: async, Strict: strict,
+            SourceText: SourceSlice(start, end), IsMethod: true);
 
     /// <summary>True when <paramref name="kind"/> can begin a method/property
     /// name immediately after an <c>async</c> or <c>*</c> method modifier

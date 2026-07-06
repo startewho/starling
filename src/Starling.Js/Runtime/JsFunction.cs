@@ -92,6 +92,11 @@ public sealed class JsFunction : JsObject
     /// Inherited lexically through MakeClosure; null outside class code.</summary>
     public Dictionary<string, string>? PrivateNameMap { get; set; }
 
+    /// <summary>§10.2.5 — true for MethodDefinition-shaped functions (object
+    /// or class methods, accessors, arrows): no own <c>prototype</c> property
+    /// and no [[Construct]].</summary>
+    public bool IsMethodDefinition { get; set; }
+
     /// <summary>B1b-2c — function kind. Normal functions run synchronously
     /// and return their body's value. Async functions return a Promise;
     /// generator functions return a Generator object; async generators
@@ -169,6 +174,7 @@ public sealed class JsFunction : JsObject
             // via DefineClass the template carries the slot.
             HomeObject = template.HomeObject,
             Kind = template.Kind,
+            IsMethodDefinition = template.IsMethodDefinition,
             SourceText = template.SourceText,
             // wp:M3-83 — record the creating realm so the VM can run this
             // function's body with its own realm active (cross-realm execution).
@@ -196,6 +202,21 @@ public sealed class JsFunction : JsObject
             PropertyDescriptor.Data(JsValue.Number(template.ArityDeclared), writable: false, enumerable: false, configurable: true));
         fn.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(template.Name), writable: false, enumerable: false, configurable: true));
+
+        // Legacy `caller`/`arguments` (test262 features: [caller]) — plain
+        // SLOPPY functions carry own null-valued data slots so reading either
+        // does not hit %Function.prototype%'s %ThrowTypeError% accessors.
+        // Strict functions, arrows, methods, and class constructors keep the
+        // poisoned prototype path.
+        if (!template.Body.IsStrict && template.Kind == JsFunctionKind.Normal
+            && template.ConstructorKind == ClassConstructorKind.None
+            && !template.Body.IsArrow && template.HomeObject is null)
+        {
+            fn.DefineOwnProperty("arguments",
+                PropertyDescriptor.Data(JsValue.Null, writable: false, enumerable: false, configurable: false));
+            fn.DefineOwnProperty("caller",
+                PropertyDescriptor.Data(JsValue.Null, writable: false, enumerable: false, configurable: false));
+        }
 
         // §10.2.5 MakeConstructor / §27.5.1.1 / §27.6.1.1 — the `prototype`
         // property depends on the function kind:
@@ -227,6 +248,8 @@ public sealed class JsFunction : JsObject
             }
             case JsFunctionKind.Async:
                 break; // no prototype property
+            case JsFunctionKind.Normal when template.IsMethodDefinition:
+                break; // methods/accessors/arrows have no prototype property
             default:
             {
                 var protoObj = new JsObject(realm.ObjectPrototype);

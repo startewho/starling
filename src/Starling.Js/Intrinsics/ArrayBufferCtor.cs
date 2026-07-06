@@ -38,7 +38,8 @@ public static class ArrayBufferCtor
         DefineData(ctor, "name", JsValue.String("ArrayBuffer"), false, false, true);
         DefineData(ctor, "length", JsValue.Number(1), false, false, true);
         ctor.DefineOwnProperty(SymbolCtor.Species,
-            PropertyDescriptor.Accessor(new JsNativeFunction("get [Symbol.species]", (thisV, _) => thisV), null));
+            PropertyDescriptor.Accessor(
+                new JsNativeFunction(realm, "get [Symbol.species]", 0, (thisV, _) => thisV, isConstructor: false), null));
         DefineData(proto, "constructor", JsValue.Object(ctor), true, false, true);
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
             PropertyDescriptor.Data(JsValue.String("ArrayBuffer"), writable: false, enumerable: false, configurable: true));

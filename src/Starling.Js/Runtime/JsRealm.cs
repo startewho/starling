@@ -361,7 +361,13 @@ public sealed class JsRealm
         // bare-bones bootstrap it's just an object.
         ObjectPrototype = new JsObject();
         ObjectPrototype.IsImmutablePrototype = true;
-        FunctionPrototype = new JsObject(ObjectPrototype);
+        // §20.2.3 — %Function.prototype% is itself a built-in function that
+        // accepts any arguments and returns undefined (so `typeof` is
+        // "function" and Function.prototype() is callable). Built with the
+        // realm-less ctor because the realm is mid-bootstrap; FunctionCtor's
+        // install pass stamps its name/length own properties.
+        FunctionPrototype = new JsNativeFunction("", (_, _) => JsValue.Undefined, isConstructor: false);
+        FunctionPrototype.SetPrototypeOf(ObjectPrototype);
 
         // All other prototypes default to Object.prototype-inheriting empties.
         // Intrinsic install passes replace these with fully-populated objects.

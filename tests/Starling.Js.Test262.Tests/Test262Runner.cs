@@ -504,7 +504,7 @@ public sealed class Test262Runner
         }
 
         var block = source.Substring(start + 5, end - start - 5);
-        var lines = block.Replace("\r\n", "\n").Split('\n');
+        var lines = block.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
 
         for (var i = 0; i < lines.Length; i++)
         {

@@ -388,6 +388,7 @@ public sealed partial class JsCompiler
             // wrapper is selected by JsFunction.Kind (copied in CreateInstance).
             Kind = ResolveFunctionKind(md.Async, md.Generator),
             SourceText = md.SourceText,
+            IsMethodDefinition = md.Kind is not MethodKind.Constructor,
         };
         var kind = md.Kind switch
         {

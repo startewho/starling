@@ -109,9 +109,18 @@ public class OwnPropertyKeyOrderTests
         // §10.2.x: OrdinaryFunctionCreate sets [[length]] first, then
         // SetFunctionName adds "name", then MakeConstructor installs
         // "prototype". Observable as the §10.1.11.1 string-bucket order.
+        // Sloppy plain functions also carry the legacy own
+        // `arguments`/`caller` slots (test262 features: [caller]) between
+        // name and prototype, matching mainstream engines.
         Eval(@"
             function F() {}
             Object.getOwnPropertyNames(F).join(',');
+        ").AsString.Should().Be("length,name,arguments,caller,prototype");
+
+        Eval(@"
+            'use strict';
+            function S() {}
+            Object.getOwnPropertyNames(S).join(',');
         ").AsString.Should().Be("length,name,prototype");
 
         // Same shape for class constructors with extra static keys appended.

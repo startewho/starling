@@ -216,8 +216,10 @@ public class FunctionTests
         // "uncurry-this" pattern. Proves call dispatches through the same
         // generic path whether the receiver is the bound `call` slot or
         // not.
+        // A sloppy callee boxes a primitive `this` (§10.2.1.2), so unwrap
+        // via valueOf to observe the original string.
         var r = Run(@"
-            Function.prototype.call.call(function() { return this; }, 'hello');
+            Function.prototype.call.call(function() { return this.valueOf(); }, 'hello');
         ");
         r.AsString.Should().Be("hello");
     }
