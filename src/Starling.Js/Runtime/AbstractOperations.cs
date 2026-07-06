@@ -459,12 +459,17 @@ public static class AbstractOperations
             ? new JsThrow(vm.Realm.NewTypeError($"not a function: {detail}"))
             : new JsThrow(JsValue.String($"not a function: {detail}"));
 
+    private static JsThrow NotAConstructor(JsVm? vm, string detail) =>
+        vm is not null
+            ? new JsThrow(vm.Realm.NewTypeError($"not a constructor: {detail}"))
+            : new JsThrow(JsValue.String($"not a constructor: {detail}"));
+
     /// <summary>§7.3.15 Construct — analogous for <c>new</c>.</summary>
     public static JsValue Construct(JsVm? vm, JsValue ctor, JsValue[] args, JsObject? newTarget = null)
     {
         if (!IsConstructor(ctor))
         {
-            throw new JsThrow(JsValue.String($"not a constructor: {JsValue.ToStringValue(ctor)}"));
+            throw NotAConstructor(vm, JsValue.ToStringValue(ctor));
         }
 
         newTarget ??= ctor.AsObject;
@@ -477,7 +482,7 @@ public static class AbstractOperations
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
                 ConcatBoundArgs(bf.BoundArgs, args), newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
-            _ => throw new JsThrow(JsValue.String($"not a constructor: {ctor.AsObject}")),
+            _ => throw NotAConstructor(vm, ctor.AsObject.ToString() ?? "object"),
         };
     }
 

@@ -284,16 +284,16 @@ public class JsVmTests
         // not-a-function TypeError that must name the callee. (A bare undeclared
         // call now throws ReferenceError instead — see the unresolved-read tests.)
         var act = () => Eval("var nopeFn;\nnopeFn();");
-        act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("nopeFn");
+        var thrown = act.Should().Throw<JsThrow>().Which.Value;
+        JsValue.ToStringValue(thrown.AsObject.Get("message")).Should().Contain("nopeFn");
     }
 
     [TestMethod]
     public void Not_a_function_error_names_the_method_callee()
     {
         var act = () => Eval("var o={}; o.missingMethod();");
-        act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("missingMethod");
+        var thrown = act.Should().Throw<JsThrow>().Which.Value;
+        JsValue.ToStringValue(thrown.AsObject.Get("message")).Should().Contain("missingMethod");
     }
 
     // ----- Helpers --------------------------------------------------------

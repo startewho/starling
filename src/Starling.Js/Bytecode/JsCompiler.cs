@@ -613,6 +613,16 @@ public sealed partial class JsCompiler
         // hoisting, so a hoisted function body resolves a captured name to the
         // parent's local cell instead of falling through to LoadGlobal/StoreGlobal.
         PreallocateCapturedVarBindings(p.Body);
+        // §16.1.7 GlobalDeclarationInstantiation step 18: every VarDeclaredName
+        // gets a global property (value undefined) before the body runs, so a
+        // read before the textual `var` sees undefined instead of throwing.
+        if (IsScriptTop && !_directEvalLocalVars && !_evalInjectVars)
+        {
+            foreach (var vn in Parse.JsParser.EvalVarDeclaredNames(p))
+            {
+                _b.EmitU16(Opcode.DeclareGlobalVar, _b.AddConstant(vn));
+            }
+        }
         if (_directEvalLocalLexicals)
         {
             HoistLexicalDeclarations(p.Body);

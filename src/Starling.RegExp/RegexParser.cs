@@ -695,7 +695,16 @@ public sealed class RegexParser
                 case 'f': _i++; return '\f';
                 case '0': _i++; return 0;
                 case 'b': _i++; return 0x08; // backspace in class
-                case 'x': _i++; return ParseHex(2);
+                case 'x':
+                    _i++;
+                    // Annex B: outside u/v, \x without two hex digits is an
+                    // IdentityEscape for the literal 'x'.
+                    if (!_unicode && !HasHexDigits(2))
+                    {
+                        return 'x';
+                    }
+
+                    return ParseHex(2);
                 case 'u': _i++; return ParseUnicodeEscapeSequence();
                 case 'c': _i++; return ParseControlChar();
                 default:
@@ -835,7 +844,14 @@ public sealed class RegexParser
                     }
                 }
                 return new LiteralNode(0);
-            case 'x': _i++; return new LiteralNode(ParseHex(2));
+            case 'x':
+                _i++;
+                if (!_unicode && !HasHexDigits(2))
+                {
+                    return new LiteralNode('x');
+                }
+
+                return new LiteralNode(ParseHex(2));
             case 'u': _i++; return new LiteralNode(ParseUnicodeEscapeSequence());
             case 'c': _i++; return new LiteralNode(ParseControlChar());
             case 'k':
@@ -902,6 +918,24 @@ public sealed class RegexParser
     private static bool IsIdentityEscape(char c)
         => c is '^' or '$' or '\\' or '.' or '*' or '+' or '?' or '(' or ')'
             or '[' or ']' or '{' or '}' or '|' or '/';
+
+    private bool HasHexDigits(int count)
+    {
+        if (_i + count > _src.Length)
+        {
+            return false;
+        }
+
+        for (var k = 0; k < count; k++)
+        {
+            var c = _src[_i + k];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private int ParseHex(int digits)
     {
