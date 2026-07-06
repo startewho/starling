@@ -1361,12 +1361,14 @@ public ref partial struct JsParser
                 Advance();
                 return new ThisExpression(t.Start, t.End);
             case JsTokenKind.Identifier:
-                // §12.7.1 — `let` is reserved in strict code: it may not be an
-                // IdentifierReference (`for (let in o)`, `strict; let;`).
-                if (_strict && t.TextEquals("let"))
+                // §12.7.1 — the future reserved words (let, static, implements,
+                // interface, package, private, protected, public, yield) may
+                // not be IdentifierReferences in strict code (`public = 42`,
+                // `for (let in o)`).
+                if (_strict && IsStrictReservedWord(t.Lexeme))
                 {
                     throw new JsParseException(
-                        "'let' may not be used as an identifier reference in strict code", t.Start);
+                        $"'{t.Lexeme}' is a reserved word and may not be used as an identifier reference in strict code", t.Start);
                 }
 
                 // §16.2.1.6.2 / §13.3.10.1 — `await` is reserved in module code
