@@ -284,7 +284,7 @@ public enum Opcode : byte
 
     // ----- Iterator protocol (B3-2) -----
     GetIterator,    // pop value, push an opaque iterator-record handle (a JsObject internal)
-    IteratorStep,   // peek iterator-record; push iterator-result object, or push undefined on done. Sets the "done" slot when finished.
+    IteratorStep,   // pop iterator-record; push iterator-result object, or push undefined on done. Sets the "done" slot when finished.
     IteratorClose,  // pop iterator-record; invoke .return() if present
     IteratorBindNext, // peek iterator-record; if already Done push undefined, else IteratorStep and push result.value (undefined on done, sets Done). §8.5.3 array-pattern element step.
     IteratorRest,   // peek iterator-record; collect remaining values into a fresh JsArray until Done, push the array. §8.5.3 BindingRestElement.

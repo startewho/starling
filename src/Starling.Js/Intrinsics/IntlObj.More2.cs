@@ -30,7 +30,7 @@ public static partial class IntlObj
             _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var granularity = GetStringOption(realm, options, "granularity", "grapheme", "word", "sentence") ?? "grapheme";
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = IntlPrototypeFor(realm, newTarget, "Segmenter", proto);
             return JsValue.Object(new IntlSegmenterObject(instProto, granularity));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "Segmenter", "Intl.Segmenter");
@@ -250,7 +250,7 @@ public static partial class IntlObj
                 "language", "region", "script", "currency", "calendar", "dateTimeField")
                 ?? throw new JsThrow(realm.NewTypeError("Intl.DisplayNames options must include a 'type'"));
             var fallback = GetStringOption(realm, options, "fallback", "code", "none") ?? "code";
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = IntlPrototypeFor(realm, newTarget, "DisplayNames", proto);
             return JsValue.Object(new IntlDisplayNamesObject(instProto, type, style, fallback));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "DisplayNames", "Intl.DisplayNames");
@@ -383,73 +383,4 @@ public static partial class IntlObj
         }
     }
 
-    /// <summary>§16.5.4-ish FormatNumericToParts via a scanner over the already
-    /// formatted text: sign, integer digits with group separators, decimal
-    /// point, fraction digits; anything else (currency symbol, percent, NaN,
-    /// infinity) becomes the matching part kind or a literal.</summary>
-    private static JsArray NumberPartsFrom(JsRealm realm, string text)
-    {
-        var parts = new JsArray(realm);
-        var i = 0;
-        var seenDecimal = false;
-        void Emit(string type, string value) => parts.Push(MakePart(realm, type, value));
-        while (i < text.Length)
-        {
-            var c = text[i];
-            if (c is '-' or '+')
-            {
-                Emit(c == '-' ? "minusSign" : "plusSign", c.ToString());
-                i++;
-            }
-            else if (char.IsAsciiDigit(c))
-            {
-                var start = i;
-                while (i < text.Length && char.IsAsciiDigit(text[i]))
-                {
-                    i++;
-                }
-
-                Emit(seenDecimal ? "fraction" : "integer", text[start..i]);
-            }
-            else if (c == '.' && !seenDecimal)
-            {
-                seenDecimal = true;
-                Emit("decimal", ".");
-                i++;
-            }
-            else if (c == ',')
-            {
-                Emit("group", ",");
-                i++;
-            }
-            else if (c == '%')
-            {
-                Emit("percentSign", "%");
-                i++;
-            }
-            else if (text.AsSpan(i).StartsWith("NaN"))
-            {
-                Emit("nan", "NaN");
-                i += 3;
-            }
-            else if (c == '\u221E')
-            {
-                Emit("infinity", c.ToString());
-                i++;
-            }
-            else
-            {
-                var start = i;
-                while (i < text.Length && !char.IsAsciiDigit(text[i])
-                       && text[i] is not ('-' or '+' or '.' or ',' or '%'))
-                {
-                    i++;
-                }
-
-                Emit("literal", text[start..i]);
-            }
-        }
-
-        return parts;
-    }
 }

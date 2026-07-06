@@ -33,7 +33,7 @@ public static partial class IntlObj
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var type = GetStringOption(realm, options, "type", "conjunction", "disjunction", "unit") ?? "conjunction";
             var style = GetStringOption(realm, options, "style", "long", "short", "narrow") ?? "long";
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = IntlPrototypeFor(realm, newTarget, "ListFormat", proto);
             return JsValue.Object(new IntlListFormatObject(instProto, type, style));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "ListFormat", "Intl.ListFormat");
@@ -172,7 +172,7 @@ public static partial class IntlObj
             _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var type = GetStringOption(realm, options, "type", "cardinal", "ordinal") ?? "cardinal";
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = IntlPrototypeFor(realm, newTarget, "PluralRules", proto);
             return JsValue.Object(new IntlPluralRulesObject(instProto, type));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "PluralRules", "Intl.PluralRules");
@@ -290,7 +290,7 @@ public static partial class IntlObj
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var numeric = GetStringOption(realm, options, "numeric", "always", "auto") ?? "always";
             var style = GetStringOption(realm, options, "style", "long", "short", "narrow") ?? "long";
-            var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
+            var instProto = IntlPrototypeFor(realm, newTarget, "RelativeTimeFormat", proto);
             return JsValue.Object(new IntlRelativeTimeFormatObject(instProto, numeric, style));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "RelativeTimeFormat", "Intl.RelativeTimeFormat");
