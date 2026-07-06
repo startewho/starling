@@ -8,7 +8,7 @@ namespace Starling.Js.Intrinsics;
 /// This is intentionally small and deterministic: UTC dates, a default en-US
 /// locale, and .NET globalization-backed formatting for valid locale tags.
 /// </summary>
-public static class IntlObj
+public static partial class IntlObj
 {
     private const string DefaultLocale = "en-US";
     private const string DefaultCalendar = "gregory";
@@ -33,6 +33,11 @@ public static class IntlObj
         DefineData(intl, "DateTimeFormat", JsValue.Object(dateTimeFormatCtor));
         DefineData(intl, "NumberFormat", JsValue.Object(numberFormatCtor));
         DefineData(intl, "Collator", JsValue.Object(collatorCtor));
+        InstallListFormat(realm, intl);
+        InstallPluralRules(realm, intl);
+        InstallRelativeTimeFormat(realm, intl);
+        InstallSegmenter(realm, intl);
+        InstallDisplayNames(realm, intl);
         DefineData(intl, "Locale", JsValue.Object(localeCtor));
         IntrinsicHelpers.DefineMethod(realm, intl, "getCanonicalLocales", 1,
             (_, args) => MakeLocaleArray(realm, ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined)));
@@ -61,6 +66,58 @@ public static class IntlObj
             (_, args) => SupportedLocalesOf(realm, args));
         IntrinsicHelpers.DefineMethod(realm, proto, "format", 1,
             (thisV, args) => JsValue.String(RequireDateTimeFormat(realm, thisV).Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined)));
+        // §11.3.5 formatToParts — one scanner over the formatted text: digit
+        // runs classified positionally (en pattern month/day/year, then
+        // hour/minute/second), everything else literal.
+        IntrinsicHelpers.DefineMethod(realm, proto, "formatToParts", 1, (thisV, args) =>
+        {
+            var dtf = RequireDateTimeFormat(realm, thisV);
+            var text = dtf.Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var parts = new JsArray(realm);
+            var fieldOrder = new[] { "month", "day", "year", "hour", "minute", "second" };
+            var fieldIdx = 0;
+            var i = 0;
+            while (i < text.Length)
+            {
+                if (char.IsAsciiDigit(text[i]))
+                {
+                    var start = i;
+                    while (i < text.Length && char.IsAsciiDigit(text[i]))
+                    {
+                        i++;
+                    }
+
+                    var type = fieldIdx < fieldOrder.Length ? fieldOrder[fieldIdx++] : "literal";
+                    parts.Push(MakePart(realm, type, text[start..i]));
+                }
+                else
+                {
+                    var start = i;
+                    while (i < text.Length && !char.IsAsciiDigit(text[i]))
+                    {
+                        i++;
+                    }
+
+                    var chunk = text[start..i];
+                    parts.Push(MakePart(realm, chunk is "AM" or "PM" ? "dayPeriod" : "literal", chunk));
+                }
+            }
+
+            return JsValue.Object(parts);
+        });
+        // §11.3.6/.7 formatRange/formatRangeToParts — both bounds required.
+        IntrinsicHelpers.DefineMethod(realm, proto, "formatRange", 2, (thisV, args) =>
+        {
+            var dtf = RequireDateTimeFormat(realm, thisV);
+            if (args.Length < 2 || args[0].IsUndefined || args[1].IsUndefined)
+            {
+                throw new JsThrow(realm.NewTypeError("Intl.DateTimeFormat.prototype.formatRange requires two arguments"));
+            }
+
+            var a = dtf.Format(realm, args[0]);
+            var b = dtf.Format(realm, args[1]);
+            return JsValue.String(a == b ? a : a + " \u2013 " + b);
+        });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0,
             (thisV, _) => RequireDateTimeFormat(realm, thisV).ResolvedOptions(realm));
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
@@ -84,6 +141,11 @@ public static class IntlObj
             (_, args) => SupportedLocalesOf(realm, args));
         IntrinsicHelpers.DefineMethod(realm, proto, "format", 1,
             (thisV, args) => JsValue.String(RequireNumberFormat(realm, thisV).Format(args.Length > 0 ? args[0] : JsValue.Undefined)));
+        IntrinsicHelpers.DefineMethod(realm, proto, "formatToParts", 1, (thisV, args) =>
+        {
+            var text = RequireNumberFormat(realm, thisV).Format(args.Length > 0 ? args[0] : JsValue.Undefined);
+            return JsValue.Object(NumberPartsFrom(realm, text));
+        });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0,
             (thisV, _) => RequireNumberFormat(realm, thisV).ResolvedOptions(realm));
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
@@ -141,6 +203,30 @@ public static class IntlObj
                 realm,
                 proto,
                 RequireLocale(realm, thisV).State.Minimized())));
+        // §14.3.14 maximize — AddLikelySubtags. Without a CLDR likely-subtags
+        // table the identity mapping is the honest minimal form.
+        IntrinsicHelpers.DefineMethod(realm, proto, "maximize", 0,
+            (thisV, _) => JsValue.Object(CreateLocaleInstance(
+                realm,
+                proto,
+                RequireLocale(realm, thisV).State)));
+        // §14.3 — the characteristic properties are prototype ACCESSORS
+        // (get-only, non-enumerable, configurable).
+        void Getter(string name, Func<IntlLocaleState, JsValue> read) =>
+            proto.DefineOwnProperty(name, PropertyDescriptor.Accessor(
+                new JsNativeFunction(realm, "get " + name, 0,
+                    (thisV, _) => read(RequireLocale(realm, thisV).State)),
+                null));
+        Getter("baseName", st => JsValue.String(st.BaseName));
+        Getter("language", st => JsValue.String(st.Language));
+        Getter("script", st => st.Script is null ? JsValue.Undefined : JsValue.String(st.Script));
+        Getter("region", st => st.Region is null ? JsValue.Undefined : JsValue.String(st.Region));
+        Getter("calendar", st => st.Calendar is null ? JsValue.Undefined : JsValue.String(st.Calendar));
+        Getter("hourCycle", st => st.HourCycle is null ? JsValue.Undefined : JsValue.String(st.HourCycle));
+        Getter("numeric", st => JsValue.Boolean(st.Numeric));
+        Getter("caseFirst", _ => JsValue.Undefined);
+        Getter("collation", _ => JsValue.Undefined);
+        Getter("numberingSystem", _ => JsValue.String("latn"));
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
             PropertyDescriptor.Data(JsValue.String("Intl.Locale"), writable: false, enumerable: false, configurable: true));
         return ctor;
@@ -174,17 +260,9 @@ public static class IntlObj
     }
 
     private static IntlLocaleObject CreateLocaleInstance(JsRealm realm, JsObject proto, IntlLocaleState state)
-    {
-        var obj = new IntlLocaleObject(proto, state);
-        obj.Set("baseName", JsValue.String(state.BaseName));
-        obj.Set("language", JsValue.String(state.Language));
-        obj.Set("script", state.Script is null ? JsValue.Undefined : JsValue.String(state.Script));
-        obj.Set("region", state.Region is null ? JsValue.Undefined : JsValue.String(state.Region));
-        obj.Set("calendar", state.Calendar is null ? JsValue.Undefined : JsValue.String(state.Calendar));
-        obj.Set("hourCycle", state.HourCycle is null ? JsValue.Undefined : JsValue.String(state.HourCycle));
-        obj.Set("numeric", JsValue.Boolean(state.Numeric));
-        return obj;
-    }
+        // §14.3 — every Locale characteristic is a PROTOTYPE GETTER (see
+        // CreateLocaleCtor), so instances carry no own data properties.
+        => new(proto, state);
 
     private static IntlDateTimeFormatState CreateDateTimeFormatState(JsRealm realm, JsValue[] args)
     {
@@ -223,7 +301,8 @@ public static class IntlObj
 
         var currency = GetStringOption(realm, options, "currency") ?? "USD";
         var useGrouping = GetBooleanOption(realm, options, "useGrouping") ?? true;
-        return new IntlNumberFormatState(locale, style, currency.ToUpperInvariant(), minFraction, maxFraction, useGrouping);
+        var minInteger = GetNumberOption(realm, options, "minimumIntegerDigits", 1, 21, 1);
+        return new IntlNumberFormatState(locale, style, currency.ToUpperInvariant(), minFraction, maxFraction, useGrouping, minInteger);
     }
 
     private static IntlCollatorState CreateCollatorState(JsRealm realm, JsValue[] args)
@@ -704,7 +783,8 @@ public static class IntlObj
         string Currency,
         int MinimumFractionDigits,
         int MaximumFractionDigits,
-        bool UseGrouping);
+        bool UseGrouping,
+        int MinimumIntegerDigits = 1);
 
     private sealed record IntlCollatorState(IntlLocale Locale, string Usage, string Sensitivity, bool Numeric);
 
@@ -929,6 +1009,7 @@ public static class IntlObj
             obj.Set("locale", JsValue.String(state.Locale.Name));
             obj.Set("numberingSystem", JsValue.String(DefaultNumberingSystem));
             obj.Set("style", JsValue.String(state.Style));
+            obj.Set("minimumIntegerDigits", JsValue.Number(state.MinimumIntegerDigits));
             if (state.Style == "currency")
             {
                 obj.Set("currency", JsValue.String(state.Currency));
@@ -948,11 +1029,22 @@ public static class IntlObj
         }
 
         private string FormatDecimal(double number, NumberFormatInfo nfi)
-            => number.ToString(NumberPattern(), nfi);
+        {
+            var text = number.ToString(NumberPattern(), nfi);
+            // §15.5.4 — negative zero keeps its sign ("-0"). .NET drops it.
+            if (number == 0 && double.IsNegative(number) && !text.StartsWith('-'))
+            {
+                text = "-" + text;
+            }
+
+            return text;
+        }
 
         private string NumberPattern()
         {
-            var pattern = state.UseGrouping ? "#,0" : "0";
+            // minimumIntegerDigits pads the integer part with leading zeros.
+            var intPart = new string('0', Math.Max(1, state.MinimumIntegerDigits));
+            var pattern = state.UseGrouping ? "#," + intPart : intPart;
             if (state.MaximumFractionDigits == 0)
             {
                 return pattern;
