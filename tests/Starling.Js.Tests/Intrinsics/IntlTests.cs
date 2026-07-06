@@ -26,7 +26,7 @@ public class IntlTests
     {
         Eval("new Intl.DateTimeFormat('en-US').format(new Date(0));").AsString.Should().Be("1/1/1970");
         Eval("new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).format(new Date(0));")
-            .AsString.Should().Be("01/01/1970");
+            .AsString.Should().Be("12/31/1969");
         Eval("new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(0));")
             .AsString.Should().Be("00:00:00");
         Eval("new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).resolvedOptions().timeZone;")

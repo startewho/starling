@@ -50,89 +50,6 @@ public static partial class IntlObj
             PropertyDescriptor.Data(JsValue.Object(intl), writable: true, enumerable: false, configurable: true));
     }
 
-    private static JsNativeFunction CreateDateTimeFormatCtor(JsRealm realm, JsObject proto)
-    {
-        var ctor = new JsNativeFunction(realm, "DateTimeFormat", 2, (newTarget, args) =>
-        {
-            var state = CreateDateTimeFormatState(realm, args);
-            var instProto = IntlPrototypeFor(realm, newTarget, "DateTimeFormat", proto);
-            return JsValue.Object(CreateDateTimeFormatInstance(realm, instProto, state));
-        }, isConstructor: true);
-        ctor.DefineOwnProperty("prototype",
-            PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
-        proto.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-        IntrinsicHelpers.DefineMethod(realm, ctor, "supportedLocalesOf", 1,
-            (_, args) => SupportedLocalesOf(realm, args));
-        proto.DefineOwnProperty("format", PropertyDescriptor.Accessor(
-            new JsNativeFunction(realm, "get format", 0, (thisV, _) =>
-            {
-                var dtf = RequireDateTimeFormat(realm, thisV);
-                dtf.BoundFormat ??= new JsNativeFunction(realm, "", 1,
-                    (_, args) => JsValue.String(dtf.Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined)),
-                    isConstructor: false);
-                return JsValue.Object(dtf.BoundFormat);
-            }),
-            null));
-        // §11.3.5 formatToParts — one scanner over the formatted text: digit
-        // runs classified positionally (en pattern month/day/year, then
-        // hour/minute/second), everything else literal.
-        IntrinsicHelpers.DefineMethod(realm, proto, "formatToParts", 1, (thisV, args) =>
-        {
-            var dtf = RequireDateTimeFormat(realm, thisV);
-            var text = dtf.Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            var parts = new JsArray(realm);
-            var fieldOrder = new[] { "month", "day", "year", "hour", "minute", "second" };
-            var fieldIdx = 0;
-            var i = 0;
-            while (i < text.Length)
-            {
-                if (char.IsAsciiDigit(text[i]))
-                {
-                    var start = i;
-                    while (i < text.Length && char.IsAsciiDigit(text[i]))
-                    {
-                        i++;
-                    }
-
-                    var type = fieldIdx < fieldOrder.Length ? fieldOrder[fieldIdx++] : "literal";
-                    parts.Push(MakePart(realm, type, text[start..i]));
-                }
-                else
-                {
-                    var start = i;
-                    while (i < text.Length && !char.IsAsciiDigit(text[i]))
-                    {
-                        i++;
-                    }
-
-                    var chunk = text[start..i];
-                    parts.Push(MakePart(realm, chunk is "AM" or "PM" ? "dayPeriod" : "literal", chunk));
-                }
-            }
-
-            return JsValue.Object(parts);
-        });
-        // §11.3.6/.7 formatRange/formatRangeToParts — both bounds required.
-        IntrinsicHelpers.DefineMethod(realm, proto, "formatRange", 2, (thisV, args) =>
-        {
-            var dtf = RequireDateTimeFormat(realm, thisV);
-            if (args.Length < 2 || args[0].IsUndefined || args[1].IsUndefined)
-            {
-                throw new JsThrow(realm.NewTypeError("Intl.DateTimeFormat.prototype.formatRange requires two arguments"));
-            }
-
-            var a = dtf.Format(realm, args[0]);
-            var b = dtf.Format(realm, args[1]);
-            return JsValue.String(a == b ? a : a + " \u2013 " + b);
-        });
-        IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0,
-            (thisV, _) => RequireDateTimeFormat(realm, thisV).ResolvedOptions(realm));
-        proto.DefineOwnProperty(SymbolCtor.ToStringTag,
-            PropertyDescriptor.Data(JsValue.String("Intl.DateTimeFormat"), writable: false, enumerable: false, configurable: true));
-        return ctor;
-    }
-
     private static JsNativeFunction CreateCollatorCtor(JsRealm realm, JsObject proto)
     {
         var ctor = new JsNativeFunction(realm, "Collator", 2, (newTarget, args) =>
@@ -222,9 +139,6 @@ public static partial class IntlObj
     // §11.5.5/§15.5.3/§10.3.3 — format/compare are GETTERS on the prototype
     // returning a per-instance cached bound function ([[BoundFormat]] /
     // [[BoundCompare]]); instances carry no own property.
-    private static IntlDateTimeFormatObject CreateDateTimeFormatInstance(JsRealm realm, JsObject proto, IntlDateTimeFormatState state)
-        => new(proto, state);
-
     private static IntlCollatorObject CreateCollatorInstance(JsRealm realm, JsObject proto, IntlCollatorState state)
         => new(proto, state);
 
@@ -232,27 +146,6 @@ public static partial class IntlObj
         // §14.3 — every Locale characteristic is a PROTOTYPE GETTER (see
         // CreateLocaleCtor), so instances carry no own data properties.
         => new(proto, state);
-
-    private static IntlDateTimeFormatState CreateDateTimeFormatState(JsRealm realm, JsValue[] args)
-    {
-        var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var options = args.Length > 1 && args[1].IsObject ? args[1].AsObject : null;
-        var year = GetStringOption(realm, options, "year", "numeric", "2-digit");
-        var month = GetStringOption(realm, options, "month", "numeric", "2-digit", "short", "long");
-        var day = GetStringOption(realm, options, "day", "numeric", "2-digit");
-        var hour = GetStringOption(realm, options, "hour", "numeric", "2-digit");
-        var minute = GetStringOption(realm, options, "minute", "numeric", "2-digit");
-        var second = GetStringOption(realm, options, "second", "numeric", "2-digit");
-        var hasAnyField = year is not null || month is not null || day is not null || hour is not null || minute is not null || second is not null;
-        if (!hasAnyField)
-        {
-            year = "numeric";
-            month = "numeric";
-            day = "numeric";
-        }
-        var hour12 = GetBooleanOption(realm, options, "hour12") ?? false;
-        return new IntlDateTimeFormatState(locale, year, month, day, hour, minute, second, hour12);
-    }
 
     private static IntlCollatorState CreateCollatorState(JsRealm realm, JsValue[] args)
     {
@@ -829,16 +722,6 @@ public static partial class IntlObj
         return (long)Math.Truncate(number);
     }
 
-    private static IntlDateTimeFormatObject RequireDateTimeFormat(JsRealm realm, JsValue thisV)
-    {
-        if (thisV.IsObject && thisV.AsObject is IntlDateTimeFormatObject obj)
-        {
-            return obj;
-        }
-
-        throw new JsThrow(realm.NewTypeError("Intl.DateTimeFormat method called on incompatible receiver"));
-    }
-
     private static IntlCollatorObject RequireCollator(JsRealm realm, JsValue thisV)
     {
         if (thisV.IsObject && thisV.AsObject is IntlCollatorObject obj)
@@ -971,16 +854,6 @@ public static partial class IntlObj
         return sb.ToString();
     }
 
-    private sealed record IntlDateTimeFormatState(
-        IntlLocale Locale,
-        string? Year,
-        string? Month,
-        string? Day,
-        string? Hour,
-        string? Minute,
-        string? Second,
-        bool Hour12);
-
     private sealed record IntlCollatorState(IntlLocale Locale, string Usage, string Sensitivity, bool Numeric);
 
     private sealed record IntlLocaleState(
@@ -1002,166 +875,6 @@ public static partial class IntlObj
     private sealed class IntlLocaleObject(JsObject prototype, IntlLocaleState state) : JsObject(prototype)
     {
         public IntlLocaleState State { get; } = state;
-    }
-
-    private sealed class IntlDateTimeFormatObject(JsObject prototype, IntlDateTimeFormatState state) : JsObject(prototype)
-    {
-        public JsObject? BoundFormat;
-
-        public string Format(JsRealm realm, JsValue value)
-        {
-            var ms = DateMilliseconds(value);
-            if (double.IsNaN(ms) || double.IsInfinity(ms))
-            {
-                throw new JsThrow(realm.NewRangeError("Invalid time value"));
-            }
-
-            try
-            {
-                var date = DateTimeOffset.FromUnixTimeMilliseconds((long)ms).UtcDateTime;
-                var pattern = DateTimePattern(state);
-                return date.ToString(pattern, state.Locale.Culture);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                throw new JsThrow(realm.NewRangeError("Invalid time value"));
-            }
-        }
-
-        public JsValue ResolvedOptions(JsRealm realm)
-        {
-            var obj = realm.NewOrdinaryObject();
-            obj.Set("locale", JsValue.String(state.Locale.Name));
-            obj.Set("calendar", JsValue.String(DefaultCalendar));
-            obj.Set("numberingSystem", JsValue.String(DefaultNumberingSystem));
-            obj.Set("timeZone", JsValue.String(DefaultTimeZone));
-            if (state.Year is not null)
-            {
-                obj.Set("year", JsValue.String(state.Year));
-            }
-
-            if (state.Month is not null)
-            {
-                obj.Set("month", JsValue.String(state.Month));
-            }
-
-            if (state.Day is not null)
-            {
-                obj.Set("day", JsValue.String(state.Day));
-            }
-
-            if (state.Hour is not null)
-            {
-                obj.Set("hour", JsValue.String(state.Hour));
-                obj.Set("hourCycle", JsValue.String(state.Hour12 ? "h12" : "h23"));
-                obj.Set("hour12", JsValue.Boolean(state.Hour12));
-            }
-            if (state.Minute is not null)
-            {
-                obj.Set("minute", JsValue.String(state.Minute));
-            }
-
-            if (state.Second is not null)
-            {
-                obj.Set("second", JsValue.String(state.Second));
-            }
-
-            return JsValue.Object(obj);
-        }
-
-        private static double DateMilliseconds(JsValue value)
-        {
-            if (value.IsUndefined)
-            {
-                return 0;
-            }
-
-            if (value.IsObject && value.AsObject is JsDate date)
-            {
-                return date.TimeValueMs;
-            }
-
-            return NumberCtor.ToNumber(value);
-        }
-
-        private static string DateTimePattern(IntlDateTimeFormatState state)
-        {
-            var hasDate = state.Year is not null || state.Month is not null || state.Day is not null;
-            var hasTime = state.Hour is not null || state.Minute is not null || state.Second is not null;
-            if (hasDate && !hasTime)
-            {
-                return DatePattern(state);
-            }
-
-            if (hasTime && !hasDate)
-            {
-                return TimePattern(state);
-            }
-
-            if (hasDate && hasTime)
-            {
-                return DatePattern(state) + ", " + TimePattern(state);
-            }
-
-            return ShortDatePattern(state.Locale);
-        }
-
-
-        private static string ShortDatePattern(IntlLocale locale) => locale.Name switch
-        {
-            "en-US" => "M/d/yyyy",
-            "en-GB" => "dd/MM/yyyy",
-            _ => locale.Culture.DateTimeFormat.ShortDatePattern,
-        };
-
-        private static string DatePattern(IntlDateTimeFormatState state)
-        {
-            var parts = new List<string>(3);
-            if (state.Month is not null)
-            {
-                parts.Add(state.Month switch
-                {
-                    "2-digit" => "MM",
-                    "short" => "MMM",
-                    "long" => "MMMM",
-                    _ => "M",
-                });
-            }
-
-            if (state.Day is not null)
-            {
-                parts.Add(state.Day == "2-digit" ? "dd" : "d");
-            }
-
-            if (state.Year is not null)
-            {
-                parts.Add(state.Year == "2-digit" ? "yy" : "yyyy");
-            }
-
-            return parts.Count == 0 ? ShortDatePattern(state.Locale) : string.Join("/", parts);
-        }
-
-        private static string TimePattern(IntlDateTimeFormatState state)
-        {
-            var parts = new List<string>(3);
-            if (state.Hour is not null)
-            {
-                parts.Add(state.Hour12 ? (state.Hour == "2-digit" ? "hh" : "h") : (state.Hour == "2-digit" ? "HH" : "H"));
-            }
-
-            if (state.Minute is not null)
-            {
-                parts.Add(state.Minute == "2-digit" ? "mm" : "m");
-            }
-
-            if (state.Second is not null)
-            {
-                parts.Add(state.Second == "2-digit" ? "ss" : "s");
-            }
-
-            var pattern = parts.Count == 0 ? "HH:mm:ss" : string.Join(":", parts);
-            return state.Hour12 ? pattern + " tt" : pattern;
-        }
     }
 
     private sealed class IntlCollatorObject(JsObject prototype, IntlCollatorState state) : JsObject(prototype)

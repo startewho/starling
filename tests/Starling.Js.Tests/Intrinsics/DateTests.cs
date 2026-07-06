@@ -161,12 +161,11 @@ public class DateTests
     }
 
     [TestMethod]
-    public void Date_toLocale_methods_delegate_to_non_locale()
+    public void Date_toLocale_methods_format_through_DateTimeFormat()
     {
-        // Invariant-locale simplification: toLocaleString === toString.
-        Run("new Date(0).toLocaleString() === new Date(0).toString();").AsBool.Should().BeTrue();
-        Run("new Date(0).toLocaleDateString() === new Date(0).toDateString();").AsBool.Should().BeTrue();
-        Run("new Date(0).toLocaleTimeString() === new Date(0).toTimeString();").AsBool.Should().BeTrue();
+        Run("new Date(0).toLocaleString();").AsString.Should().Be("1/1/1970, 12:00:00 AM");
+        Run("new Date(0).toLocaleDateString();").AsString.Should().Be("1/1/1970");
+        Run("new Date(0).toLocaleTimeString();").AsString.Should().Be("12:00:00 AM");
     }
 
     [TestMethod]
