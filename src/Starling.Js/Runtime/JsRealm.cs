@@ -66,6 +66,11 @@ public sealed class JsRealm
 
     // §9.3.1 — Intrinsic prototypes. Populated by each intrinsic's Install pass.
     public JsObject ObjectPrototype { get; }
+
+    /// <summary>%Object.prototype.toString% — captured at install time so
+    /// callers that need the INTRINSIC (Array.prototype.toString fallback)
+    /// are immune to a deleted/replaced property.</summary>
+    public JsValue ObjectProtoToString { get; internal set; }
     public JsObject FunctionPrototype { get; }
 
     // §9.3.2 — Intrinsic constructors. Each lands with its intrinsic install
@@ -198,6 +203,13 @@ public sealed class JsRealm
     public JsObject ProxyPrototype { get; internal set; }
     public JsObject GeneratorPrototype { get; internal set; }
     public JsObject AsyncFunctionPrototype { get; internal set; }
+
+    /// <summary>%GeneratorFunction.prototype% — the [[Prototype]] of every
+    /// generator function object; carries @@toStringTag "GeneratorFunction".</summary>
+    public JsObject GeneratorFunctionPrototype { get; internal set; }
+
+    /// <summary>%AsyncGeneratorFunction.prototype%.</summary>
+    public JsObject AsyncGeneratorFunctionPrototype { get; internal set; }
     public JsObject AsyncGeneratorPrototype { get; internal set; }
     public JsObject AsyncIteratorPrototype { get; internal set; }
 
@@ -389,6 +401,14 @@ public sealed class JsRealm
         ProxyPrototype = new JsObject(ObjectPrototype);
         GeneratorPrototype = new JsObject(IteratorPrototype);
         AsyncFunctionPrototype = new JsObject(FunctionPrototype);
+        AsyncFunctionPrototype.DefineOwnProperty(Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("AsyncFunction"), writable: false, enumerable: false, configurable: true));
+        GeneratorFunctionPrototype = new JsObject(FunctionPrototype);
+        GeneratorFunctionPrototype.DefineOwnProperty(Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("GeneratorFunction"), writable: false, enumerable: false, configurable: true));
+        AsyncGeneratorFunctionPrototype = new JsObject(FunctionPrototype);
+        AsyncGeneratorFunctionPrototype.DefineOwnProperty(Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("AsyncGeneratorFunction"), writable: false, enumerable: false, configurable: true));
         AsyncIteratorPrototype = new JsObject(ObjectPrototype);
         AsyncGeneratorPrototype = new JsObject(AsyncIteratorPrototype);
 

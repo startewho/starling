@@ -1044,8 +1044,9 @@ public static class ArrayCtor
             return AbstractOperations.Call(realm.ActiveVm, join, JsValue.Object(obj), Array.Empty<JsValue>());
         }
 
-        var objectToString = AbstractOperations.Get(realm.ActiveVm, realm.ObjectPrototype, "toString");
-        return AbstractOperations.Call(realm.ActiveVm, objectToString, JsValue.Object(obj), Array.Empty<JsValue>());
+        // §23.1.3.36 step 3 — the fallback is the %Object.prototype.toString%
+        // INTRINSIC, not a live Get (the property may be deleted).
+        return AbstractOperations.Call(realm.ActiveVm, realm.ObjectProtoToString, JsValue.Object(obj), Array.Empty<JsValue>());
     }
 
     /// <summary>§23.1.3.32 (+ ECMA-402 §13.4.1) — every non-nullish element is
@@ -1083,7 +1084,8 @@ public static class ArrayCtor
                 }
 
                 var target = AbstractOperations.ToObject(realm, v);
-                var method = AbstractOperations.Get(vm, target, "toLocaleString");
+                // GetV — an accessor toLocaleString sees the PRIMITIVE receiver.
+                var method = AbstractOperations.Get(vm, target, "toLocaleString", v);
                 if (!AbstractOperations.IsCallable(method))
                 {
                     throw new JsThrow(realm.NewTypeError("toLocaleString is not callable"));

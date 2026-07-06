@@ -525,7 +525,7 @@ public sealed partial class JsCompiler
         var c = new JsCompiler();
         c._b.IsStrict = program.Strict;
         c._b.SourcePath = name; // wp:M3-63 — referrer for dynamic import()
-        c.RunCaptureAnalysisForScript(program.Body);
+        c.RunCaptureAnalysisForScript(program);
         c.EmitProgram(program, keepLastExpression: false);
         return c._b.Build(name);
     }
@@ -576,7 +576,7 @@ public sealed partial class JsCompiler
         var c = new JsCompiler();
         c._b.IsStrict = program.Strict;
         c._b.SourcePath = name;
-        c.RunCaptureAnalysisForScript(program.Body);
+        c.RunCaptureAnalysisForScript(program);
         c.EmitProgram(program, keepLastExpression: true);
         return c._b.Build(name);
     }
@@ -628,14 +628,28 @@ public sealed partial class JsCompiler
 
     /// <summary>gap:script-top-var-not-global — script-top declarations
     /// (<c>var</c>, <c>let</c>, <c>const</c>, function-declarations, classes)
-    /// all bind on the global object now, so nested functions resolve any
-    /// free identifier through <see cref="Opcode.LoadGlobal"/> /
-    /// <see cref="Opcode.StoreGlobal"/>. There are no script-top "locals"
-    /// to capture, so the captured-name set is empty.</summary>
-    private void RunCaptureAnalysisForScript(IReadOnlyList<Statement> body)
+    /// all bind on the global object now, so nested functions resolve those
+    /// through <see cref="Opcode.LoadGlobal"/> / <see cref="Opcode.StoreGlobal"/>.
+    /// BLOCK-nested lexicals (and block functions) at script top DO live in
+    /// frame slots, so they need real capture analysis — without it a closure
+    /// snapshots the slot's value (a TDZ sentinel for a hoisted block function
+    /// over a later const) instead of sharing a cell. Names that bind globally
+    /// — vars, top-level function declarations, top-level lexicals — are
+    /// stripped so no cell shadows the global binding.</summary>
+    private void RunCaptureAnalysisForScript(Program program)
     {
-        _ = body;
-        _capturedNames = new HashSet<string>(StringComparer.Ordinal);
+        var captured = CaptureAnalysis.Compute(Array.Empty<Expression>(), program.Body);
+        foreach (var vn in Parse.JsParser.EvalVarDeclaredNames(program))
+        {
+            captured.Remove(vn);
+        }
+
+        foreach (var ln in Parse.JsParser.EvalLexicallyDeclaredNames(program))
+        {
+            captured.Remove(ln);
+        }
+
+        _capturedNames = captured;
     }
 
     /// <summary>Populate <see cref="_capturedNames"/> for a function body. Run

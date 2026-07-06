@@ -152,6 +152,14 @@ public sealed class JsArrayIterator : JsObject
             return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
         }
 
+        // §23.1.5.1 step 6.b.i — a typed array that went out of bounds
+        // (shrunk/detached resizable buffer) throws from next(), it does not
+        // complete quietly.
+        if (_iterated is JsTypedArray { IsOutOfBounds: true })
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray is out of bounds"));
+        }
+
         var len = GetLength(_iterated);
         if (_nextIndex >= len)
         {

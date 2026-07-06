@@ -193,12 +193,12 @@ public sealed class JsStringObject : JsObject
             yield return i.ToString(CultureInfo.InvariantCulture);
         }
 
-        List<int>? bagIndices = null;
+        List<uint>? bagIndices = null;
         foreach (var s in base.Keys)
         {
-            if (TryIndex(s, out var bi) && bi >= Text.Length)
+            if (JsArray.IsArrayIndex(s, out var bi) && bi >= (uint)Text.Length)
             {
-                (bagIndices ??= new List<int>()).Add(bi);
+                (bagIndices ??= new List<uint>()).Add(bi);
             }
         }
 
@@ -219,7 +219,7 @@ public sealed class JsStringObject : JsObject
                 continue;
             }
 
-            if (TryIndex(s, out _))
+            if (JsArray.IsArrayIndex(s, out _))
             {
                 continue;
             }

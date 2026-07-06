@@ -38,6 +38,18 @@ public static class GeneratorIntrinsics
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
             PropertyDescriptor.Data(JsValue.String("Generator"), writable: false, enumerable: false, configurable: true));
 
+        // §27.3/§27.4/§27.7 — the (non-global) GeneratorFunction /
+        // AsyncGeneratorFunction / AsyncFunction constructors: enough identity
+        // for fn.constructor.prototype round-trips; dynamic source compilation
+        // through them is not supported.
+        InstallFunctionKindConstructor(realm, "GeneratorFunction", realm.GeneratorFunctionPrototype);
+        InstallFunctionKindConstructor(realm, "AsyncGeneratorFunction", realm.AsyncGeneratorFunctionPrototype);
+        InstallFunctionKindConstructor(realm, "AsyncFunction", realm.AsyncFunctionPrototype);
+        realm.GeneratorFunctionPrototype.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(realm.GeneratorPrototype), writable: false, enumerable: false, configurable: true));
+        realm.AsyncGeneratorFunctionPrototype.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(realm.AsyncGeneratorPrototype), writable: false, enumerable: false, configurable: true));
+
         // ----- AsyncGeneratorPrototype (wp:M3-04g): next/return/throw each
         // return a Promise of {value, done}. The body interleaves yield and
         // await; requests are serialized through a per-generator queue
@@ -220,4 +232,30 @@ public static class GeneratorIntrinsics
 
     private static JsValue AsyncGeneratorThrow(JsRealm realm, JsValue thisV, JsValue err)
         => AsyncGeneratorEnqueue(realm, thisV, AsyncGeneratorRequestKind.Throw, err, "throw");
+    /// <summary>Wire a function-kind constructor (%GeneratorFunction% etc.):
+    /// ctor.prototype ↔ proto.constructor per §27 attribute tables, with
+    /// §20.2.1.1 CreateDynamicFunction source assembly for the matching kind.</summary>
+    private static void InstallFunctionKindConstructor(JsRealm realm, string name, JsObject proto)
+    {
+        var keyword = name switch
+        {
+            "GeneratorFunction" => "function*",
+            "AsyncGeneratorFunction" => "async function*",
+            _ => "async function",
+        };
+        var ctor = new JsNativeFunction(realm, name, 1, (_, args) =>
+        {
+            var body = args.Length > 0 ? JsValue.ToStringValue(args[^1]) : "";
+            var paramList = args.Length > 1
+                ? string.Join(",", args[..^1].Select(JsValue.ToStringValue))
+                : "";
+            var source = "(" + keyword + " anonymous(" + paramList + "\n) {\n" + body + "\n})";
+            return Globals.RunGlobalSource(realm, source, "<anonymous>");
+        }, isConstructor: true);
+        ctor.DefineOwnProperty("prototype",
+            PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
+        proto.DefineOwnProperty("constructor",
+            PropertyDescriptor.Data(JsValue.Object(ctor), writable: false, enumerable: false, configurable: true));
+    }
+
 }

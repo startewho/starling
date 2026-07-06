@@ -100,6 +100,8 @@ public static class ObjectCtor
             new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, args) => ProtoToLocaleString(realm, thisV)),
         });
 
+        realm.ObjectProtoToString = objectProto.Get("toString");
+
         // §B.2.2.2-5 __defineGetter__ / __defineSetter__ / __lookupGetter__ /
         // __lookupSetter__ (Annex B legacy accessor helpers).
         DefineMethod(realm, objectProto, "__defineGetter__",
@@ -1098,7 +1100,9 @@ public static class ObjectCtor
     private static JsValue ProtoToLocaleString(JsRealm realm, JsValue thisV)
     {
         var obj = AbstractOperations.ToObject(realm, thisV);
-        var ts = AbstractOperations.Get(realm.ActiveVm, obj, "toString");
+        // GetV — the boxed object only serves the lookup; an accessor's getter
+        // runs with the ORIGINAL (possibly primitive) receiver.
+        var ts = AbstractOperations.Get(realm.ActiveVm, obj, "toString", thisV);
         if (!AbstractOperations.IsCallable(ts))
         {
             throw new JsThrow(realm.NewTypeError("toString is not a function"));

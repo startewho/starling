@@ -936,7 +936,10 @@ public class JsObject
     {
         get
         {
-            foreach (var key in OrderedStringKeys())
+            // Route through the VIRTUAL Keys so host objects that only
+            // override Keys (storage, DOM collections) surface their exotic
+            // own keys to [[OwnPropertyKeys]] consumers (Object.keys, spread).
+            foreach (var key in Keys)
             {
                 yield return JsPropertyKey.String(key);
             }

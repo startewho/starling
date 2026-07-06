@@ -43,6 +43,19 @@ public sealed class JsTypedArray : JsObject
     public int ByteOffset { get; }
     public bool IsLengthTracking { get; }
 
+    /// <summary>§10.4.5.2 [[PreventExtensions]] — only a FIXED-length view
+    /// (auto-length false AND non-resizable buffer) can become non-extensible;
+    /// Object.freeze/seal on a resizable-buffer view is a TypeError.</summary>
+    public override bool PreventExtensions()
+    {
+        if (IsLengthTracking || Buffer.MaxByteLength >= 0)
+        {
+            return false;
+        }
+
+        return base.PreventExtensions();
+    }
+
     /// <summary>Creation realm, when known — lets coercions inside the exotic
     /// [[Set]] surface JS TypeErrors instead of host exceptions.</summary>
     public JsRealm? Realm { get; set; }

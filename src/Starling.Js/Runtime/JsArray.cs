@@ -579,9 +579,13 @@ public sealed class JsArray : JsObject
     /// the merged value instead of writing it.</summary>
     private static PropertyDescriptor MergeForExotic(PropertyDescriptor? cur, PropertyDescriptor desc, DescriptorFields present)
     {
+        // §10.1.6.3 — the RESULT kind follows field presence: a generic
+        // descriptor ({} / attributes only) keeps the current kind's payload.
+        var wantsData = present.HasValue || present.HasWritable;
+        var wantsAccessor = present.HasGet || present.HasSet;
         if (cur is null)
         {
-            return desc.IsAccessor
+            return wantsAccessor
                 ? PropertyDescriptor.Accessor(
                     present.HasGet ? desc.Getter : null,
                     present.HasSet ? desc.Setter : null,
@@ -596,7 +600,8 @@ public sealed class JsArray : JsObject
         var c = cur.Value;
         var enumerable = present.HasEnumerable ? desc.Enumerable : c.Enumerable;
         var configurable = present.HasConfigurable ? desc.Configurable : c.Configurable;
-        if (desc.IsAccessor)
+        var resultIsAccessor = wantsAccessor || (c.IsAccessor && !wantsData);
+        if (resultIsAccessor)
         {
             return PropertyDescriptor.Accessor(
                 present.HasGet ? desc.Getter : (c.IsAccessor ? c.Getter : null),
@@ -799,7 +804,10 @@ public sealed class JsArray : JsObject
         var n2 = JsValue.ToNumber(prim2);
         if (double.IsNaN(n2) || nu != n2)
         {
-            throw new JsThrow(_realm.NewRangeError("Invalid array length"));
+            // The abrupt completion belongs to the RUNNING execution context's
+            // realm (§10.4.2.1 runs ToUint32 there), not the array's realm.
+            var throwRealm = JsVm.ActiveOnThread?.Realm ?? vm?.Realm ?? _realm;
+            throw new JsThrow(throwRealm.NewRangeError("Invalid array length"));
         }
 
         return nu;

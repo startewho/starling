@@ -174,7 +174,16 @@ public sealed class JsFunction : JsObject
             // function's body with its own realm active (cross-realm execution).
             Realm = realm,
         };
-        fn.SetPrototypeOf(realm.FunctionPrototype);
+        // §27.5.1.1/§27.6.1.1/§27.7.1.1 — generator/async function objects
+        // inherit from their kind's function prototype (which carries the
+        // @@toStringTag consulted by Object.prototype.toString).
+        fn.SetPrototypeOf(template.Kind switch
+        {
+            JsFunctionKind.Generator => realm.GeneratorFunctionPrototype,
+            JsFunctionKind.Async => realm.AsyncFunctionPrototype,
+            JsFunctionKind.AsyncGenerator => realm.AsyncGeneratorFunctionPrototype,
+            _ => realm.FunctionPrototype,
+        });
 
         // Own-property creation order is observable (Object.getOwnPropertyNames
         // / Reflect.ownKeys) and the spec fixes it as length, then name, then
