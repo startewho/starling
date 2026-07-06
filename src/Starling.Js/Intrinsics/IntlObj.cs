@@ -64,8 +64,16 @@ public static partial class IntlObj
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
         IntrinsicHelpers.DefineMethod(realm, ctor, "supportedLocalesOf", 1,
             (_, args) => SupportedLocalesOf(realm, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "format", 1,
-            (thisV, args) => JsValue.String(RequireDateTimeFormat(realm, thisV).Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined)));
+        proto.DefineOwnProperty("format", PropertyDescriptor.Accessor(
+            new JsNativeFunction(realm, "get format", 0, (thisV, _) =>
+            {
+                var dtf = RequireDateTimeFormat(realm, thisV);
+                dtf.BoundFormat ??= new JsNativeFunction(realm, "", 1,
+                    (_, args) => JsValue.String(dtf.Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined)),
+                    isConstructor: false);
+                return JsValue.Object(dtf.BoundFormat);
+            }),
+            null));
         // §11.3.5 formatToParts — one scanner over the formatted text: digit
         // runs classified positionally (en pattern month/day/year, then
         // hour/minute/second), everything else literal.
@@ -139,8 +147,16 @@ public static partial class IntlObj
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
         IntrinsicHelpers.DefineMethod(realm, ctor, "supportedLocalesOf", 1,
             (_, args) => SupportedLocalesOf(realm, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "format", 1,
-            (thisV, args) => JsValue.String(RequireNumberFormat(realm, thisV).Format(args.Length > 0 ? args[0] : JsValue.Undefined)));
+        proto.DefineOwnProperty("format", PropertyDescriptor.Accessor(
+            new JsNativeFunction(realm, "get format", 0, (thisV, _) =>
+            {
+                var nf = RequireNumberFormat(realm, thisV);
+                nf.BoundFormat ??= new JsNativeFunction(realm, "", 1,
+                    (_, args) => JsValue.String(nf.Format(args.Length > 0 ? args[0] : JsValue.Undefined)),
+                    isConstructor: false);
+                return JsValue.Object(nf.BoundFormat);
+            }),
+            null));
         IntrinsicHelpers.DefineMethod(realm, proto, "formatToParts", 1, (thisV, args) =>
         {
             var text = RequireNumberFormat(realm, thisV).Format(args.Length > 0 ? args[0] : JsValue.Undefined);
@@ -167,8 +183,15 @@ public static partial class IntlObj
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
         IntrinsicHelpers.DefineMethod(realm, ctor, "supportedLocalesOf", 1,
             (_, args) => SupportedLocalesOf(realm, args));
-        IntrinsicHelpers.DefineMethod(realm, proto, "compare", 2,
-            (thisV, args) => JsValue.Number(RequireCollator(realm, thisV).Compare(args)));
+        proto.DefineOwnProperty("compare", PropertyDescriptor.Accessor(
+            new JsNativeFunction(realm, "get compare", 0, (thisV, _) =>
+            {
+                var col = RequireCollator(realm, thisV);
+                col.BoundCompare ??= new JsNativeFunction(realm, "", 2,
+                    (_, args) => JsValue.Number(col.Compare(args)), isConstructor: false);
+                return JsValue.Object(col.BoundCompare);
+            }),
+            null));
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0,
             (thisV, _) => RequireCollator(realm, thisV).ResolvedOptions(realm));
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
@@ -232,32 +255,17 @@ public static partial class IntlObj
         return ctor;
     }
 
+    // §11.5.5/§15.5.3/§10.3.3 — format/compare are GETTERS on the prototype
+    // returning a per-instance cached bound function ([[BoundFormat]] /
+    // [[BoundCompare]]); instances carry no own property.
     private static IntlDateTimeFormatObject CreateDateTimeFormatInstance(JsRealm realm, JsObject proto, IntlDateTimeFormatState state)
-    {
-        var obj = new IntlDateTimeFormatObject(proto, state);
-        var format = new JsNativeFunction(realm, "format", 1,
-            (_, args) => JsValue.String(obj.Format(realm, args.Length > 0 ? args[0] : JsValue.Undefined)), isConstructor: false);
-        obj.DefineOwnProperty("format", PropertyDescriptor.BuiltinMethod(JsValue.Object(format)));
-        return obj;
-    }
+        => new(proto, state);
 
     private static IntlNumberFormatObject CreateNumberFormatInstance(JsRealm realm, JsObject proto, IntlNumberFormatState state)
-    {
-        var obj = new IntlNumberFormatObject(proto, state);
-        var format = new JsNativeFunction(realm, "format", 1,
-            (_, args) => JsValue.String(obj.Format(args.Length > 0 ? args[0] : JsValue.Undefined)), isConstructor: false);
-        obj.DefineOwnProperty("format", PropertyDescriptor.BuiltinMethod(JsValue.Object(format)));
-        return obj;
-    }
+        => new(proto, state);
 
     private static IntlCollatorObject CreateCollatorInstance(JsRealm realm, JsObject proto, IntlCollatorState state)
-    {
-        var obj = new IntlCollatorObject(proto, state);
-        var compare = new JsNativeFunction(realm, "compare", 2,
-            (_, args) => JsValue.Number(obj.Compare(args)), isConstructor: false);
-        obj.DefineOwnProperty("compare", PropertyDescriptor.BuiltinMethod(JsValue.Object(compare)));
-        return obj;
-    }
+        => new(proto, state);
 
     private static IntlLocaleObject CreateLocaleInstance(JsRealm realm, JsObject proto, IntlLocaleState state)
         // §14.3 — every Locale characteristic is a PROTOTYPE GETTER (see
@@ -406,9 +414,21 @@ public static partial class IntlObj
             return;
         }
 
-        if (seen.Add(locale.Name))
+        // §9.2.1 CanonicalizeLocaleList PRESERVES Unicode extensions
+        // ("ar-u-nu-arab" stays intact) — and ResolveLocale re-parses the
+        // extension from this list, so stripping it here would lose the
+        // requested numbering system.
+        var name = locale.Name;
+        var ext = requested.Replace('_', '-');
+        var extIdx = ext.IndexOf("-u-", StringComparison.OrdinalIgnoreCase);
+        if (extIdx >= 0)
         {
-            result.Add(locale.Name);
+            name += ext[extIdx..].ToLowerInvariant();
+        }
+
+        if (seen.Add(name))
+        {
+            result.Add(name);
         }
     }
 
@@ -428,6 +448,21 @@ public static partial class IntlObj
     private static bool TryCreateLocale(string locale, out IntlLocale result)
     {
         result = new IntlLocale(DefaultLocale, CultureInfo.InvariantCulture);
+        // BCP-47 `-u-nu-<system>` selects the numbering system; capture it
+        // before the extension is stripped for CultureInfo resolution.
+        var nu = "latn";
+        var nuIdx = locale.IndexOf("-nu-", StringComparison.OrdinalIgnoreCase);
+        if (nuIdx >= 0)
+        {
+            var rest = locale[(nuIdx + 4)..];
+            var end = rest.IndexOf('-');
+            var candidate = (end >= 0 ? rest[..end] : rest).ToLowerInvariant();
+            if (NumberingSystemDigits.ContainsKey(candidate))
+            {
+                nu = candidate;
+            }
+        }
+
         var normalized = CanonicalLocaleName(NormalizeLocale(locale));
         if (normalized.Length == 0)
         {
@@ -438,7 +473,7 @@ public static partial class IntlObj
         {
             var culture = CultureInfo.GetCultureInfo(normalized);
             var name = string.IsNullOrEmpty(culture.Name) ? normalized : culture.Name;
-            result = new IntlLocale(name, culture);
+            result = new IntlLocale(name, culture, nu);
             return true;
         }
         catch (CultureNotFoundException)
@@ -448,7 +483,7 @@ public static partial class IntlObj
                 return false;
             }
 
-            result = new IntlLocale(normalized, CultureInfo.InvariantCulture);
+            result = new IntlLocale(normalized, CultureInfo.InvariantCulture, nu);
             return true;
         }
     }
@@ -765,7 +800,39 @@ public static partial class IntlObj
     private static void DefineData(JsObject obj, string name, JsValue value)
         => obj.DefineOwnProperty(name, PropertyDescriptor.Data(value, writable: true, enumerable: false, configurable: true));
 
-    private readonly record struct IntlLocale(string Name, CultureInfo Culture);
+    private readonly record struct IntlLocale(string Name, CultureInfo Culture, string NumberingSystem = "latn");
+
+    /// <summary>Unicode numbering-system digit sets (CLDR). Formatted output
+    /// maps ASCII digits into the requested system's digits.</summary>
+    private static readonly Dictionary<string, string> NumberingSystemDigits = new(StringComparer.Ordinal)
+    {
+        ["latn"] = "0123456789",
+        ["arab"] = "\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669",
+        ["arabext"] = "\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9",
+        ["thai"] = "\u0E50\u0E51\u0E52\u0E53\u0E54\u0E55\u0E56\u0E57\u0E58\u0E59",
+        ["hanidec"] = "\u3007\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D",
+        ["deva"] = "\u0966\u0967\u0968\u0969\u096A\u096B\u096C\u096D\u096E\u096F",
+        ["beng"] = "\u09E6\u09E7\u09E8\u09E9\u09EA\u09EB\u09EC\u09ED\u09EE\u09EF",
+    };
+
+    private static string MapDigits(string text, string numberingSystem)
+    {
+        if (numberingSystem == "latn" || !NumberingSystemDigits.TryGetValue(numberingSystem, out var digits))
+        {
+            return text;
+        }
+
+        var chars = text.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] is >= '0' and <= '9')
+            {
+                chars[i] = digits[chars[i] - '0'];
+            }
+        }
+
+        return new string(chars);
+    }
 
     private sealed record IntlDateTimeFormatState(
         IntlLocale Locale,
@@ -811,6 +878,8 @@ public static partial class IntlObj
 
     private sealed class IntlDateTimeFormatObject(JsObject prototype, IntlDateTimeFormatState state) : JsObject(prototype)
     {
+        public JsObject? BoundFormat;
+
         public string Format(JsRealm realm, JsValue value)
         {
             var ms = DateMilliseconds(value);
@@ -969,6 +1038,8 @@ public static partial class IntlObj
 
     private sealed class IntlNumberFormatObject(JsObject prototype, IntlNumberFormatState state) : JsObject(prototype)
     {
+        public JsObject? BoundFormat;
+
         public string Format(JsValue value)
         {
             var number = value.IsUndefined ? double.NaN : NumberCtor.ToNumber(value);
@@ -995,19 +1066,20 @@ public static partial class IntlObj
                 nfi.PercentGroupSeparator = string.Empty;
             }
 
-            return state.Style switch
+            var text = state.Style switch
             {
                 "currency" => FormatCurrency(number, nfi),
                 "percent" => FormatDecimal(number * 100, nfi) + nfi.PercentSymbol,
                 _ => FormatDecimal(number, nfi),
             };
+            return MapDigits(text, state.Locale.NumberingSystem);
         }
 
         public JsValue ResolvedOptions(JsRealm realm)
         {
             var obj = realm.NewOrdinaryObject();
             obj.Set("locale", JsValue.String(state.Locale.Name));
-            obj.Set("numberingSystem", JsValue.String(DefaultNumberingSystem));
+            obj.Set("numberingSystem", JsValue.String(state.Locale.NumberingSystem));
             obj.Set("style", JsValue.String(state.Style));
             obj.Set("minimumIntegerDigits", JsValue.Number(state.MinimumIntegerDigits));
             if (state.Style == "currency")
@@ -1073,6 +1145,8 @@ public static partial class IntlObj
 
     private sealed class IntlCollatorObject(JsObject prototype, IntlCollatorState state) : JsObject(prototype)
     {
+        public JsObject? BoundCompare;
+
         public int Compare(JsValue[] args)
         {
             var left = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";

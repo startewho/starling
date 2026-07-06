@@ -1010,9 +1010,21 @@ public ref partial struct JsParser
         return ParseCallAndMemberTail(node);
     }
 
+    /// <summary>§12.7.2 — a ReservedWord spelled with \u escapes may serve as
+    /// an IdentifierName (property key) but never as the KEYWORD itself:
+    /// `f\u{61}lse`, `n\u0065w X`, `th\u0069s` are SyntaxErrors.</summary>
+    private static void RejectEscapedKeyword(JsToken t)
+    {
+        if (t.ContainsEscape)
+        {
+            throw new JsParseException($"keyword '{t.Lexeme}' must not contain escape sequences", t.Start);
+        }
+    }
+
     private Expression ParseNew()
     {
         var start = _current.Start;
+        RejectEscapedKeyword(_current);
         Advance(); // 'new'
         // §13.3.12 NewTarget — `new.target` meta-property.
         if (Check(JsTokenKind.Dot))
@@ -1337,12 +1349,15 @@ public ref partial struct JsParser
                     return new RegExpLiteral(pattern, flags, t.Start, t.End);
                 }
             case JsTokenKind.BooleanLiteral:
+                RejectEscapedKeyword(t);
                 Advance();
                 return new BooleanLiteral((bool)t.Value!, t.Start, t.End);
             case JsTokenKind.NullLiteral:
+                RejectEscapedKeyword(t);
                 Advance();
                 return new NullLiteral(t.Start, t.End);
             case JsTokenKind.This:
+                RejectEscapedKeyword(t);
                 Advance();
                 return new ThisExpression(t.Start, t.End);
             case JsTokenKind.Identifier:

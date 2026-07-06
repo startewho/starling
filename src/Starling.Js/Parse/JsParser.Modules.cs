@@ -72,6 +72,19 @@ public ref partial struct JsParser
                     meta.Start);
             }
 
+            // §13.3.12 — import.meta exists only in Module goal code, and
+            // neither token of a meta-property tolerates escape sequences
+            // (`im\u0070ort.meta` / `import.m\u0065ta` are SyntaxErrors).
+            if (!_module)
+            {
+                throw new JsParseException("import.meta is only valid in module code", start);
+            }
+
+            if (meta.ContainsEscape)
+            {
+                throw new JsParseException("'meta' of import.meta must not contain escape sequences", meta.Start);
+            }
+
             return new ImportMetaExpression(start, meta.End);
         }
 

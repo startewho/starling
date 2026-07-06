@@ -25,6 +25,11 @@ public static class RegExpCtor
         ctor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
 
+        var speciesGetter = new JsNativeFunction(realm, "get [Symbol.species]", 0,
+            (thisV, _) => thisV, isConstructor: false);
+        ctor.DefineOwnProperty(SymbolCtor.Species,
+            PropertyDescriptor.Accessor(speciesGetter, null, enumerable: false, configurable: true));
+
         proto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
 
@@ -601,15 +606,56 @@ public static class RegExpCtor
     // iterator shape (Array.isArray(...) === false) the spec mandates.
     private static JsValue SymbolMatchAll(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var re = RequireRegExp(realm, thisV);
-        if ((re.Flags & RegexFlags.Global) == 0)
+        // §22.2.6.9 — fully generic: any Object receiver; the matcher is
+        // species-constructed from (R, flags-string) with every read
+        // observable; the global TypeError belongs to String.prototype
+        // .matchAll, NOT here.
+        if (!thisV.IsObject)
         {
-            throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
+            throw new JsThrow(realm.NewTypeError("RegExp.prototype[Symbol.matchAll] called on non-object"));
         }
 
+        var r = thisV.AsObject;
+        var vm = realm.ActiveVm;
         var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var unicode = (re.Flags & RegexFlags.Unicode) != 0;
-        return JsValue.Object(new JsRegExpStringIterator(realm, re, s, global: true, unicode: unicode));
+        var flags = JsValue.ToStringValue(AbstractOperations.Get(vm, r, "flags"));
+
+        var ctorV = AbstractOperations.Get(vm, r, "constructor");
+        JsValue species = JsValue.Undefined;
+        if (ctorV.IsObject)
+        {
+            species = AbstractOperations.Get(vm, ctorV.AsObject, JsPropertyKey.Symbol(SymbolCtor.Species));
+        }
+
+        JsValue matcherV;
+        if ((species.IsUndefined || species.IsNull
+            || ReferenceEquals(species.IsObject ? species.AsObject : null, realm.RegExpConstructor))
+            && realm.RegExpConstructor is { } defaultCtor)
+        {
+            matcherV = AbstractOperations.Construct(vm, JsValue.Object(defaultCtor),
+                new[] { thisV, JsValue.String(flags) });
+        }
+        else
+        {
+            if (!AbstractOperations.IsConstructor(species))
+            {
+                throw new JsThrow(realm.NewTypeError("@@species is not a constructor"));
+            }
+
+            matcherV = AbstractOperations.Construct(vm, species, new[] { thisV, JsValue.String(flags) });
+        }
+
+        if (!matcherV.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("Constructed matcher is not an object"));
+        }
+
+        var matcher = matcherV.AsObject;
+        var lastIndex = ToLengthLocal(AbstractOperations.Get(vm, r, "lastIndex"));
+        AbstractOperations.Set(vm, matcher, "lastIndex", JsValue.Number(lastIndex));
+        var global = flags.Contains('g');
+        var unicode = flags.Contains('u') || flags.Contains('v');
+        return JsValue.Object(new JsRegExpStringIterator(realm, matcher, s, global, unicode));
     }
 
     // §22.2.7.1 RegExpExec ( R, S ): read R.exec; if callable, call it and
@@ -1031,19 +1077,57 @@ public static class RegExpCtor
 
     private static JsValue SymbolSearch(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var re = RequireRegExp(realm, thisV);
+        // §22.2.6.12 — generic over any Object receiver: lastIndex is
+        // saved/zeroed/restored through OBSERVABLE property ops and the match
+        // runs through RegExpExec (honoring a user exec).
+        if (!thisV.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("RegExp.prototype[Symbol.search] called on non-object"));
+        }
+
         var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        // search ignores lastIndex; it always starts at 0 and does not advance.
-        var savedLastIndex = re.LastIndex;
-        re.LastIndex = 0;
-        var m = re.Compiled.Exec(s, 0);
-        re.LastIndex = savedLastIndex;
-        return JsValue.Number(m is null ? -1 : m.Start);
+        if (thisV.AsObject is JsRegExp fastRe && IsBuiltinExecAndFlags(realm, fastRe))
+        {
+            var savedLastIndex = fastRe.LastIndex;
+            fastRe.LastIndex = 0;
+            var m = fastRe.Compiled.Exec(s, 0);
+            fastRe.LastIndex = savedLastIndex;
+            return JsValue.Number(m is null ? -1 : m.Start);
+        }
+
+        var rx = thisV.AsObject;
+        var vm = realm.ActiveVm;
+        var previous = AbstractOperations.Get(vm, rx, "lastIndex");
+        if (!previous.Equals(JsValue.Number(0)))
+        {
+            AbstractOperations.Set(vm, rx, "lastIndex", JsValue.Number(0));
+        }
+
+        var result = RegExpExec(realm, rx, s);
+        var current = AbstractOperations.Get(vm, rx, "lastIndex");
+        if (!current.Equals(previous))
+        {
+            AbstractOperations.Set(vm, rx, "lastIndex", previous);
+        }
+
+        return result.IsNull
+            ? JsValue.Number(-1)
+            : AbstractOperations.Get(vm, result.AsObject, "index");
     }
 
     private static JsValue SymbolSplit(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var re = RequireRegExp(realm, thisV);
+        if (!thisV.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("RegExp.prototype[Symbol.split] called on non-object"));
+        }
+
+        if (thisV.AsObject is not JsRegExp || !IsBuiltinExecAndFlags(realm, (JsRegExp)thisV.AsObject))
+        {
+            return GenericSymbolSplit(realm, thisV.AsObject, args);
+        }
+
+        var re = (JsRegExp)thisV.AsObject;
         var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
         var limit = args.Length > 1 && !args[1].IsUndefined ? (uint)System.Math.Max(0, (int)JsValue.ToNumber(args[1])) : uint.MaxValue;
         var arr = new JsArray(realm);
@@ -1136,6 +1220,128 @@ public static class RegExpCtor
     }
 
     public static bool IsRegExp(JsValue v) => v.IsObject && v.AsObject is JsRegExp;
+
+    /// <summary>§7.2.6 IsRegExp — the OBSERVABLE form: a @@match property that
+    /// coerces truthy makes any object "a RegExp"; only when @@match is
+    /// undefined does the internal slot decide.</summary>
+    public static bool IsRegExpSpec(JsRealm realm, JsValue v)
+    {
+        if (!v.IsObject)
+        {
+            return false;
+        }
+
+        var matchV = AbstractOperations.Get(realm.ActiveVm, v.AsObject, JsPropertyKey.Symbol(SymbolCtor.Match));
+        if (!matchV.IsUndefined)
+        {
+            return JsValue.ToBoolean(matchV);
+        }
+
+        return v.AsObject is JsRegExp;
+    }
+
+    /// <summary>§22.2.6.14 slow path — species-constructed sticky splitter
+    /// driven entirely through RegExpExec and observable lastIndex ops, for
+    /// subclassed/patched receivers. The pristine-regexp fast path stays on
+    /// the compiled matcher.</summary>
+    private static JsValue GenericSymbolSplit(JsRealm realm, JsObject rx, JsValue[] args)
+    {
+        var vm = realm.ActiveVm;
+        var s = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
+        var flags = JsValue.ToStringValue(AbstractOperations.Get(vm, rx, "flags"));
+        var newFlags = flags.Contains('y') ? flags : flags + "y";
+        var unicode = flags.Contains('u') || flags.Contains('v');
+
+        var ctorV = AbstractOperations.Get(vm, rx, "constructor");
+        JsValue species = JsValue.Undefined;
+        if (ctorV.IsObject)
+        {
+            species = AbstractOperations.Get(vm, ctorV.AsObject, JsPropertyKey.Symbol(SymbolCtor.Species));
+        }
+
+        JsValue splitterV;
+        if ((species.IsUndefined || species.IsNull
+            || ReferenceEquals(species.IsObject ? species.AsObject : null, realm.RegExpConstructor))
+            && realm.RegExpConstructor is { } defaultCtor)
+        {
+            splitterV = AbstractOperations.Construct(vm, JsValue.Object(defaultCtor),
+                new[] { JsValue.Object(rx), JsValue.String(newFlags) });
+        }
+        else
+        {
+            if (!AbstractOperations.IsConstructor(species))
+            {
+                throw new JsThrow(realm.NewTypeError("@@species is not a constructor"));
+            }
+
+            splitterV = AbstractOperations.Construct(vm, species,
+                new[] { JsValue.Object(rx), JsValue.String(newFlags) });
+        }
+
+        var splitter = splitterV.AsObject;
+        var arr = new JsArray(realm);
+        var limit = args.Length > 1 && !args[1].IsUndefined
+            ? (uint)JsValue.ToNumber(args[1])
+            : uint.MaxValue;
+        if (limit == 0)
+        {
+            return JsValue.Object(arr);
+        }
+
+        if (s.Length == 0)
+        {
+            var z0 = RegExpExec(realm, splitter, s);
+            if (z0.IsNull)
+            {
+                arr.Push(JsValue.String(s));
+            }
+
+            return JsValue.Object(arr);
+        }
+
+        int p = 0, q = 0;
+        while (q < s.Length)
+        {
+            AbstractOperations.Set(vm, splitter, "lastIndex", JsValue.Number(q));
+            var z = RegExpExec(realm, splitter, s);
+            if (z.IsNull)
+            {
+                q = AdvanceStringIndex(s, q, unicode);
+                continue;
+            }
+
+            var e = (int)Math.Min(
+                Math.Max(0, JsValue.ToNumber(AbstractOperations.Get(vm, splitter, "lastIndex"))),
+                s.Length);
+            if (e == p)
+            {
+                q = AdvanceStringIndex(s, q, unicode);
+                continue;
+            }
+
+            arr.Push(JsValue.String(s[p..q]));
+            if (arr.Length >= limit)
+            {
+                return JsValue.Object(arr);
+            }
+
+            p = e;
+            var zLen = (long)Math.Max(0, JsValue.ToNumber(AbstractOperations.Get(vm, z.AsObject, "length")));
+            for (var i = 1; i < zLen; i++)
+            {
+                arr.Push(AbstractOperations.Get(vm, z.AsObject, i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                if (arr.Length >= limit)
+                {
+                    return JsValue.Object(arr);
+                }
+            }
+
+            q = p;
+        }
+
+        arr.Push(JsValue.String(s[p..]));
+        return JsValue.Object(arr);
+    }
 
     private static JsRegExp RequireRegExp(JsRealm realm, JsValue v)
     {

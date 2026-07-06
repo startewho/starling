@@ -18,8 +18,21 @@ namespace Starling.Js.Runtime;
 public sealed class JsArray : JsObject
 {
     private readonly List<JsValue> _items = new();
+    private readonly JsRealm _realm;
 
-    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { DisableInlineCache(); }
+    /// <summary>Indices whose descriptor deviates from the dense default
+    /// (writable+enumerable+configurable data): their AUTHORITATIVE property
+    /// lives in the base bag; the dense slot keeps a placeholder so length
+    /// math stays untouched. Null on the (overwhelmingly common) all-default
+    /// array — every hot path pays a single null check.</summary>
+    private HashSet<int>? _exoticIndices;
+
+    /// <summary>§10.4.2.1 — `length` can be made non-writable via
+    /// defineProperty; a non-writable length rejects value changes and pins
+    /// SetIndex growth.</summary>
+    private bool _lengthWritable = true;
+
+    public JsArray(JsRealm realm) : base(realm.ArrayPrototype) { _realm = realm; DisableInlineCache(); }
 
     /// <summary>Create an empty array whose dense backing is pre-sized to
     /// <paramref name="capacity"/> slots, so a known number of subsequent
@@ -27,6 +40,7 @@ public sealed class JsArray : JsObject
     /// Length stays 0 until items are added.</summary>
     public JsArray(JsRealm realm, int capacity) : base(realm.ArrayPrototype)
     {
+        _realm = realm;
         DisableInlineCache();
         if (capacity > 0)
         {
@@ -36,6 +50,7 @@ public sealed class JsArray : JsObject
 
     public JsArray(JsRealm realm, IReadOnlyList<JsValue> items) : base(realm.ArrayPrototype)
     {
+        _realm = realm;
         DisableInlineCache();
         _items.AddRange(items);
     }
@@ -122,6 +137,11 @@ public sealed class JsArray : JsObject
 
         if (IsArrayIndex(name, out var idx) && idx < _items.Count)
         {
+            if (_exoticIndices is { } ex && ex.Contains((int)idx))
+            {
+                return base.Get(name);
+            }
+
             return _items[(int)idx];
         }
 
@@ -132,11 +152,22 @@ public sealed class JsArray : JsObject
     {
         if (name == "length")
         {
+            if (!_lengthWritable)
+            {
+                return; // sloppy write to a non-writable length is ignored
+            }
+
             SetLength(value);
             return;
         }
         if (IsArrayIndex(name, out var idx))
         {
+            if (_exoticIndices is { } ex && ex.Contains((int)idx))
+            {
+                base.Set(name, value);
+                return;
+            }
+
             SetIndex((int)idx, value);
             return;
         }
@@ -162,11 +193,16 @@ public sealed class JsArray : JsObject
     {
         if (name == "length")
         {
-            return PropertyDescriptor.Data(JsValue.Number(_items.Count), writable: true, enumerable: false, configurable: false);
+            return PropertyDescriptor.Data(JsValue.Number(_items.Count), writable: _lengthWritable, enumerable: false, configurable: false);
         }
 
         if (IsArrayIndex(name, out var idx) && idx < _items.Count)
         {
+            if (_exoticIndices is { } ex && ex.Contains((int)idx))
+            {
+                return base.GetOwnPropertyDescriptor(name);
+            }
+
             return PropertyDescriptor.Data(_items[(int)idx], writable: true, enumerable: true, configurable: true);
         }
 
@@ -177,24 +213,66 @@ public sealed class JsArray : JsObject
     {
         if (name == "length")
         {
-            if (desc.IsAccessor)
+            if (desc.IsAccessor || desc.Configurable || desc.Enumerable)
             {
                 return false;
             }
 
-            SetLength(desc.Value);
-            return true;
+            // §10.4.2.1 ArraySetLength — a non-writable length rejects any
+            // value change; writable:false may still be applied together with
+            // (or after) the value.
+            var newLenNum = JsValue.ToNumber(desc.Value);
+            if (!_lengthWritable && newLenNum != _items.Count)
+            {
+                return false;
+            }
+
+            var ok = SetLengthChecked(desc.Value);
+            if (!desc.Writable)
+            {
+                _lengthWritable = false;
+            }
+
+            return ok;
         }
         if (IsArrayIndex(name, out var idx))
         {
-            if (desc.IsAccessor)
+            // Defining an index at/above length is a length change — rejected
+            // when length is non-writable.
+            if (!_lengthWritable && idx >= _items.Count)
             {
-                // Accessor descriptors on indexed slots aren't supported by the dense backing.
-                // Fall back to the property-bag path (spec actually allows mixing; we don't
-                // for now). Document the simplification in tests if needed.
-                return base.DefineOwnProperty(name, desc);
+                return false;
             }
-            SetIndex((int)idx, desc.Value);
+
+            var i = (int)idx;
+            var isExotic = _exoticIndices is { } ex0 && ex0.Contains(i);
+            if (!isExotic && !desc.IsAccessor && desc.Writable && desc.Enumerable && desc.Configurable)
+            {
+                SetIndex(i, desc.Value);
+                return true;
+            }
+
+            // Deviating attributes (or an accessor) migrate the element to the
+            // base bag, which owns validation from here on.
+            if (!isExotic && i < _items.Count)
+            {
+                // Seed the bag with the current dense descriptor so redefine
+                // validation sees the real prior state.
+                ForceDefineOwnProperty(name, PropertyDescriptor.Data(_items[i], writable: true, enumerable: true, configurable: true));
+            }
+
+            if (!base.DefineOwnProperty(name, desc))
+            {
+                return false;
+            }
+
+            (_exoticIndices ??= new HashSet<int>()).Add(i);
+            // Keep the dense placeholder so length spans the index.
+            if (i >= _items.Count)
+            {
+                SetIndex(i, JsValue.Undefined);
+            }
+
             return true;
         }
         return base.DefineOwnProperty(name, desc);
@@ -267,6 +345,18 @@ public sealed class JsArray : JsObject
 
         if (IsArrayIndex(name, out var idx) && idx < _items.Count)
         {
+            if (_exoticIndices is { } ex && ex.Contains((int)idx))
+            {
+                if (!base.Delete(name))
+                {
+                    return false; // non-configurable element
+                }
+
+                ex.Remove((int)idx);
+                _items[(int)idx] = JsValue.Undefined;
+                return true;
+            }
+
             // Make the slot a hole (spec: delete leaves the slot absent but
             // doesn't shrink length). We model with Undefined since we don't
             // track sparse holes separately.
@@ -287,6 +377,11 @@ public sealed class JsArray : JsObject
 
             foreach (var key in base.Keys)
             {
+                if (IsArrayIndex(key, out var bi) && bi < _items.Count)
+                {
+                    continue; // dense loop already yielded it
+                }
+
                 yield return key;
             }
         }
@@ -303,6 +398,11 @@ public sealed class JsArray : JsObject
 
             foreach (var key in base.OwnPropertyKeys)
             {
+                if (!key.IsSymbol && IsArrayIndex(key.AsString, out var bi) && bi < _items.Count)
+                {
+                    continue;
+                }
+
                 yield return key;
             }
         }
@@ -312,11 +412,22 @@ public sealed class JsArray : JsObject
     {
         for (var i = 0; i < _items.Count; i++)
         {
+            if (_exoticIndices is { } ex && ex.Contains(i)
+                && base.GetOwnPropertyDescriptor(IndexToString((uint)i)) is { Enumerable: false })
+            {
+                continue;
+            }
+
             yield return IndexToString((uint)i);
         }
 
         foreach (var key in base.EnumerableKeys())
         {
+            if (IsArrayIndex(key, out var bi) && bi < _items.Count)
+            {
+                continue;
+            }
+
             yield return key;
         }
     }
@@ -346,36 +457,45 @@ public sealed class JsArray : JsObject
         }
     }
 
-    private void SetLength(JsValue value)
+    private void SetLength(JsValue value) => _ = SetLengthChecked(value);
+
+    /// <summary>§10.4.2.1 ArraySetLength steps 14-16 — shrinking deletes
+    /// elements from high to low and STOPS at the first non-configurable one:
+    /// length ends at that index + 1 and the operation reports failure (the
+    /// defineProperty caller turns that into a TypeError).</summary>
+    private bool SetLengthChecked(JsValue value)
     {
         var n = JsValue.ToNumber(value);
         var nu = (uint)n;
         if (n != nu || double.IsNaN(n) || double.IsInfinity(n))
         {
-            throw new JsThrow(JsValue.String("Invalid array length"));
+            throw new JsThrow(_realm.NewRangeError("Invalid array length"));
         }
 
         var newLen = (int)nu;
         if (newLen < _items.Count)
         {
-            // Shrink: remove indexed slots ≥ newLen. Also remove any own
-            // string keys whose key is an integer-string ≥ newLen.
-            _items.RemoveRange(newLen, _items.Count - newLen);
-            // Walk base own keys for stragglers (paranoia for indices stored
-            // there via mixed-mode DefineOwnProperty fallbacks).
-            var stragglers = new List<string>();
-            foreach (var k in base.Keys)
+            // A non-configurable exotic element ≥ newLen clamps the shrink.
+            if (_exoticIndices is { } ex && ex.Count > 0)
             {
-                if (IsArrayIndex(k, out var i) && i >= newLen)
+                var clamp = -1;
+                foreach (var i in ex)
                 {
-                    stragglers.Add(k);
+                    if (i >= newLen
+                        && base.GetOwnPropertyDescriptor(IndexToString((uint)i)) is { Configurable: false })
+                    {
+                        clamp = Math.Max(clamp, i);
+                    }
+                }
+
+                if (clamp >= 0)
+                {
+                    ShrinkTo(clamp + 1);
+                    return false;
                 }
             }
 
-            foreach (var k in stragglers)
-            {
-                base.Delete(k);
-            }
+            ShrinkTo(newLen);
         }
         else
         {
@@ -384,6 +504,30 @@ public sealed class JsArray : JsObject
                 _items.Add(JsValue.Undefined);
             }
         }
+
+        return true;
+    }
+
+    private void ShrinkTo(int newLen)
+    {
+        _items.RemoveRange(newLen, _items.Count - newLen);
+        // Walk base own keys for stragglers (exotic elements and mixed-mode
+        // fallbacks live in the bag).
+        var stragglers = new List<string>();
+        foreach (var k in base.Keys)
+        {
+            if (IsArrayIndex(k, out var i) && i >= newLen)
+            {
+                stragglers.Add(k);
+            }
+        }
+
+        foreach (var k in stragglers)
+        {
+            base.Delete(k);
+        }
+
+        _exoticIndices?.RemoveWhere(i => i >= newLen);
     }
 
     public override string ToString() => "[object Array]";

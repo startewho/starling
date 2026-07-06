@@ -67,6 +67,11 @@ public static class ArrayCtor
         // methods, ES2023 immutable methods, then the iterator trio
         // (values/keys/entries). All are string-keyed builtin data properties, so
         // the result is byte-identical to the prior sequential DefineMethod chain.
+        var speciesGetter = new JsNativeFunction(realm, "get [Symbol.species]", 0,
+            (thisV, _) => thisV, isConstructor: false);
+        ctor.DefineOwnProperty(SymbolCtor.Species,
+            PropertyDescriptor.Accessor(speciesGetter, null, enumerable: false, configurable: true));
+
         IntrinsicHelpers.BulkInstallBuiltins(realm, proto, new[]
         {
             new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
@@ -472,10 +477,18 @@ public static class ArrayCtor
         }
 
         var insertCount = Math.Max(0, args.Length - 2);
-        var removed = new JsArray(realm);
+        var removed = SpeciesCreateArray(realm, obj, deleteCount);
         for (var i = 0; i < deleteCount; i++)
         {
-            removed.Push(GetElement(realm, obj, start + i));
+            if (TryGetElement(realm, obj, start + i, out var rv))
+            {
+                CreateIndexProperty(realm, removed, i, rv);
+            }
+        }
+
+        if (removed is JsArray)
+        {
+            removed.Set("length", JsValue.Number(deleteCount));
         }
 
         var newLen = len - deleteCount + insertCount;
@@ -655,6 +668,61 @@ public static class ArrayCtor
         return JsValue.Object(obj);
     }
 
+    /// <summary>§7.3.22 ArraySpeciesCreate — reads the receiver's
+    /// `constructor` and its @@species (both observable) and constructs the
+    /// result through it; a plain new array otherwise. Used by the methods
+    /// that return fresh arrays (map/filter/slice/splice/concat).</summary>
+    private static JsObject SpeciesCreateArray(JsRealm realm, JsObject original, long length)
+    {
+        var vm = realm.ActiveVm;
+        if (!JsArray.IsArray(JsValue.Object(original), realm))
+        {
+            return new JsArray(realm);
+        }
+
+        var ctorV = AbstractOperations.Get(vm, original, "constructor");
+        JsValue species = ctorV;
+        if (ctorV.IsObject)
+        {
+            species = AbstractOperations.Get(vm, ctorV.AsObject, JsPropertyKey.Symbol(SymbolCtor.Species));
+            if (species.IsNull)
+            {
+                species = JsValue.Undefined;
+            }
+        }
+
+        if (species.IsUndefined
+            || (species.IsObject && ReferenceEquals(species.AsObject, realm.ArrayConstructor)))
+        {
+            return new JsArray(realm);
+        }
+
+        if (!AbstractOperations.IsConstructor(species))
+        {
+            throw new JsThrow(realm.NewTypeError("@@species is not a constructor"));
+        }
+
+        var created = AbstractOperations.Construct(vm, species, new[] { JsValue.Number(length) });
+        if (!created.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("@@species did not construct an object"));
+        }
+
+        return created.AsObject;
+    }
+
+    private static void CreateIndexProperty(JsRealm realm, JsObject target, long index, JsValue value)
+    {
+        if (target is JsArray fast)
+        {
+            fast[(int)index] = value;
+            return;
+        }
+
+        target.DefineOwnProperty(index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            PropertyDescriptor.Data(value, writable: true, enumerable: true, configurable: true));
+    }
+
     // ============================================================
     //                       Non-mutators
     // ============================================================
@@ -662,22 +730,21 @@ public static class ArrayCtor
     private static JsValue Concat(JsRealm realm, JsValue thisV, JsValue[] args)
     {
         var obj = ThisObject(realm, thisV);
-        var result = new JsArray(realm);
-        if (JsArray.IsArray(JsValue.Object(obj), realm))
-        {
-            _ = AbstractOperations.Get(realm.ActiveVm, obj, "constructor");
-        }
-
-        AppendConcat(realm, result, JsValue.Object(obj));
+        var result = SpeciesCreateArray(realm, obj, 0);
+        long n = 0;
+        AppendConcat(realm, result, JsValue.Object(obj), ref n);
         foreach (var a in args)
         {
-            AppendConcat(realm, result, a);
+            AppendConcat(realm, result, a, ref n);
         }
 
+        // §23.1.3.1 step 6 — the final length write is part of the contract
+        // (holes at the tail must still extend length).
+        AbstractOperations.Set(realm.ActiveVm, result, "length", JsValue.Number(n));
         return JsValue.Object(result);
     }
 
-    private static void AppendConcat(JsRealm realm, JsArray target, JsValue v)
+    private static void AppendConcat(JsRealm realm, JsObject target, JsValue v, ref long n)
     {
         if (IsConcatSpreadable(realm, v))
         {
@@ -685,12 +752,17 @@ public static class ArrayCtor
             var len = ToLength(realm, source);
             for (var i = 0; i < len; i++)
             {
-                target.Push(GetElement(source, i));
+                if (TryGetElement(realm, source, i, out var el))
+                {
+                    CreateIndexProperty(realm, target, n, el);
+                }
+
+                n++; // holes advance the write cursor without materializing
             }
         }
         else
         {
-            target.Push(v);
+            CreateIndexProperty(realm, target, n++, v);
         }
     }
 
@@ -712,10 +784,21 @@ public static class ArrayCtor
         var len = ToLength(realm, obj);
         var start = args.Length > 0 ? ClampStart(ToInteger(realm, args[0]), len) : 0;
         var end = args.Length > 1 && !args[1].IsUndefined ? ClampStart(ToInteger(realm, args[1]), len) : len;
-        var result = new JsArray(realm);
+        var result = SpeciesCreateArray(realm, obj, Math.Max(0, end - start));
+        long to = 0;
         for (var i = start; i < end; i++)
         {
-            result.Push(GetElement(realm, obj, i));
+            if (TryGetElement(realm, obj, i, out var v))
+            {
+                CreateIndexProperty(realm, result, to, v);
+            }
+
+            to++;
+        }
+
+        if (result is JsArray)
+        {
+            result.Set("length", JsValue.Number(to));
         }
 
         return JsValue.Object(result);
@@ -881,7 +964,7 @@ public static class ArrayCtor
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "map");
         var len = ToLength(realm, obj);
-        var result = new JsArray(realm);
+        var result = SpeciesCreateArray(realm, obj, len);
         for (var i = 0; i < len; i++)
         {
             if (!TryGetElement(realm, obj, i, out var v))
@@ -890,11 +973,15 @@ public static class ArrayCtor
             }
 
             var mapped = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
-            result[i] = mapped;
+            CreateIndexProperty(realm, result, i, mapped);
         }
 
         // §23.1.3.21 — the result's length is len even when the tail is holes.
-        result.Set("length", JsValue.Number(len));
+        if (result is JsArray)
+        {
+            result.Set("length", JsValue.Number(len));
+        }
+
         return JsValue.Object(result);
     }
 
@@ -903,7 +990,8 @@ public static class ArrayCtor
         var obj = ThisObject(realm, thisV);
         var (fn, thisArg) = ParseCallback(realm, args, "filter");
         var len = ToLength(realm, obj);
-        var result = new JsArray(realm);
+        var result = SpeciesCreateArray(realm, obj, 0);
+        long to = 0;
         for (var i = 0; i < len; i++)
         {
             if (!TryGetElement(realm, obj, i, out var v))
@@ -914,7 +1002,7 @@ public static class ArrayCtor
             var keep = AbstractOperations.Call(realm.ActiveVm, fn, thisArg, new[] { v, JsValue.Number(i), JsValue.Object(obj) });
             if (JsValue.ToBoolean(keep))
             {
-                result.Push(v);
+                CreateIndexProperty(realm, result, to++, v);
             }
         }
         return JsValue.Object(result);

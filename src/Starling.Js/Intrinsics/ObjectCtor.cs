@@ -78,7 +78,7 @@ public static class ObjectCtor
         DefineMethod(realm, ctor, "isExtensible", (thisV, args) => IsExtensible(args), length: 1);
         DefineMethod(realm, ctor, "is", (thisV, args) => Is(args), length: 2);
         DefineMethod(realm, ctor, "fromEntries", (thisV, args) => FromEntries(realm, args), length: 1);
-        DefineMethod(realm, ctor, "hasOwn", (thisV, args) => HasOwn(args), length: 2);
+        DefineMethod(realm, ctor, "hasOwn", (thisV, args) => HasOwn(realm, args), length: 2);
 
         // -------------------------------------------------------- Prototype methods
         // Bulk-install the constructor back-reference + the six prototype methods
@@ -355,11 +355,20 @@ public static class ObjectCtor
         }
 
         var p = props.AsObject;
+        // §20.1.2.3.1 — two phases: read EVERY descriptor first (through the
+        // vm so accessor-provided descriptors run, and so a bad descriptor
+        // throws before ANY define lands), then apply in order.
+        var pending = new List<(string Key, PropertyDescriptor Desc, JsObject Source)>();
         foreach (var key in p.EnumerableKeys())
         {
-            var descVal = p.Get(key);
+            var descVal = AbstractOperations.Get(realm.ActiveVm, p, key);
             var desc = ToPropertyDescriptor(realm, descVal);
-            if (!Starling.Js.Runtime.JsMappedArguments.DefineFromUser(target, JsPropertyKey.String(key), desc, descVal.AsObject))
+            pending.Add((key, desc, descVal.AsObject));
+        }
+
+        foreach (var (key, desc, source) in pending)
+        {
+            if (!Starling.Js.Runtime.JsMappedArguments.DefineFromUser(target, JsPropertyKey.String(key), desc, source))
             {
                 throw new JsThrow(realm.NewTypeError($"Cannot define property '{key}'"));
             }
@@ -385,7 +394,7 @@ public static class ObjectCtor
         }
 
         var target = args[0].AsObject;
-        var key = AbstractOperations.ToPropertyKey(args[1]);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args[1]);
         var desc = ToPropertyDescriptor(realm, args[2]);
         if (!Starling.Js.Runtime.JsMappedArguments.DefineFromUser(target, key, desc, args[2].AsObject))
         {
@@ -399,7 +408,7 @@ public static class ObjectCtor
     private static JsValue GetOwnPropertyDescriptor(JsRealm realm, JsValue[] args)
     {
         var target = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
         var d = target.GetOwnPropertyDescriptor(key);
         if (d is null)
         {
@@ -790,21 +799,21 @@ public static class ObjectCtor
         }
 
         var entry = entryV.AsObject;
-        var key = AbstractOperations.ToPropertyKey(entry.Get("0"));
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, entry.Get("0"));
         var val = entry.Get("1");
         result.DefineOwnProperty(key,
             PropertyDescriptor.Data(val, writable: true, enumerable: true, configurable: true));
     }
 
     /// <summary>§20.1.2.13 Object.hasOwn(obj, key).</summary>
-    private static JsValue HasOwn(JsValue[] args)
+    private static JsValue HasOwn(JsRealm realm, JsValue[] args)
     {
         if (args.Length == 0 || !args[0].IsObject)
         {
             return JsValue.False;
         }
 
-        var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
         return JsValue.Boolean(args[0].AsObject.HasOwn(key));
     }
 
@@ -815,7 +824,7 @@ public static class ObjectCtor
     /// <summary>§20.1.3.2 Object.prototype.hasOwnProperty.</summary>
     private static JsValue ProtoHasOwnProperty(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var key = AbstractOperations.ToPropertyKey(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var obj = RequireObject(realm, thisV);
         return JsValue.Boolean(obj.HasOwn(key));
     }
@@ -843,7 +852,7 @@ public static class ObjectCtor
     /// <summary>§20.1.3.4 Object.prototype.propertyIsEnumerable.</summary>
     private static JsValue ProtoPropertyIsEnumerable(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var key = AbstractOperations.ToPropertyKey(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var obj = RequireObject(realm, thisV);
         var d = obj.GetOwnPropertyDescriptor(key);
         return JsValue.Boolean(d is { } dv && dv.Enumerable);

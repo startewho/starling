@@ -348,6 +348,26 @@ public sealed partial class JsCompiler
     /// in the innermost scope frame so later writes throw TypeError.</summary>
     private void MarkConst(string name) => _constScopes[^1].Add(name);
 
+    /// <summary>Function-expression self-name bindings (§15.2.5) — writes are
+    /// TypeError in strict code and silently ignored in sloppy code, distinct
+    /// from const's always-throw.</summary>
+    private readonly HashSet<string> _fnSelfNames = new(StringComparer.Ordinal);
+
+    private bool IsFnSelfName(string name)
+    {
+        // Only when the resolving scope entry IS the self-binding (an inner
+        // shadowing let/var/param wins normally).
+        for (var i = _scopes.Count - 1; i >= 0; i--)
+        {
+            if (_scopes[i].ContainsKey(name))
+            {
+                return i == 0 && _fnSelfNames.Contains(name);
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>§13.15.2 — is <paramref name="name"/> a <c>const</c> binding in
     /// some currently-open scope of THIS function? Mirrors
     /// <see cref="IsLexicalLocal"/>: walk innermost-out and stop at the first
@@ -4028,6 +4048,20 @@ public sealed partial class JsCompiler
     {
         if (TryResolveLocal(name, out var slot))
         {
+            // §15.2.5 — the function-expression self-name is an immutable
+            // binding: strict writes throw TypeError, sloppy writes are
+            // silently dropped (the assigned value stays as the expression
+            // result on the stack; no store happens).
+            if (IsFnSelfName(name))
+            {
+                if (_b.IsStrict)
+                {
+                    _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(name));
+                }
+
+                return;
+            }
+
             // §13.15.2 — a write to a const local (other than its own
             // initializer, which never routes through here) is a runtime
             // TypeError.
@@ -5923,6 +5957,7 @@ public sealed partial class JsCompiler
 
         var slot = _b.ReserveLocal();
         _scopes[^1][name] = slot;
+        _fnSelfNames.Add(name);
         if (IsNameCaptured(name))
         {
             // A nested closure references the self-name — back it with a Cell so

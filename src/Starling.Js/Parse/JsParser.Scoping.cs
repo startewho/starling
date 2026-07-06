@@ -233,10 +233,15 @@ public ref partial struct JsParser
     /// <paramref name="allowSloppyFunction"/>.</summary>
     private Statement ParseSubStatement(bool allowSloppyFunction = false)
     {
-        // A lexical declaration head is never a valid Statement here.
+        // A lexical declaration head is never a valid Statement here. In
+        // sloppy code the grammar's lookahead exclusion for an
+        // ExpressionStatement is ONLY `let [` — a bare `let` followed by an
+        // identifier/`{` parses as the IDENTIFIER `let` (with ASI supplying
+        // the statement break: `while (…) let\nx = 1`). Strict mode keeps
+        // `let` fully reserved, so any declaration-looking head is the error.
         if (_current.Kind is JsTokenKind.Const
             || (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
-                && IsLetDeclarationStart()))
+                && (_strict ? IsLetDeclarationStart() : _lex.Peek().Kind == JsTokenKind.LBracket)))
         {
             throw new JsParseException(
                 "lexical declaration cannot appear in a single-statement context",

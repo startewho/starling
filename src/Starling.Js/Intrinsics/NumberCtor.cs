@@ -89,11 +89,18 @@ public static class NumberCtor
     {
         if (!value.IsObject)
         {
-            return value.IsString ? StringToNumber(value.AsString) : JsValue.ToNumber(value);
+            return Convert(value);
         }
 
         var prim = AbstractOperations.ToPrimitive(value, "number");
-        return prim.IsString ? StringToNumber(prim.AsString) : JsValue.ToNumber(prim);
+        return Convert(prim);
+
+        // §21.1.1.1 — Number(value) goes through ToNumeric: a BigInt argument
+        // converts to its Number value rather than throwing (unlike implicit
+        // arithmetic coercion, which is a TypeError).
+        static double Convert(JsValue v) => v.IsString
+            ? StringToNumber(v.AsString)
+            : v.IsBigInt ? (double)v.AsBigInt : JsValue.ToNumber(v);
     }
 
     private static bool IsInteger(JsValue value)

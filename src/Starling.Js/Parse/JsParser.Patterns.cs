@@ -224,6 +224,11 @@ public ref partial struct JsParser
     private Expression ReinterpretAssignmentTarget(Expression expr)
         => expr switch
         {
+            // §13.15.1 — a PARENTHESIZED ObjectLiteral/ArrayLiteral is not a
+            // destructuring pattern: `({}) = x` and `([]) = x` are early
+            // SyntaxErrors (only the bare literal forms reinterpret).
+            ArrayExpression { IsParenthesized: true } or ObjectExpression { IsParenthesized: true }
+                => throw new JsParseException("parenthesized pattern is not a valid assignment target", expr.Start),
             ArrayExpression array => ReinterpretArrayPattern(array),
             ObjectExpression obj => ReinterpretObjectPattern(obj),
             AssignmentExpression { Op: JsTokenKind.Eq } assignment => new AssignmentPattern(

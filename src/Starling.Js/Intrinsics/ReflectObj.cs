@@ -18,7 +18,7 @@ public static class ReflectObj
         DefineMethod(realm, reflect, "get", length: 2, (thisV, args) =>
         {
             var target = RequireObject(realm, args, 0, "get");
-            var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+            var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
             if (args.Length > 2)
             {
                 return AbstractOperations.GetWithReceiver(realm.ActiveVm, target, key, args[2]);
@@ -30,7 +30,7 @@ public static class ReflectObj
         DefineMethod(realm, reflect, "set", length: 3, (thisV, args) =>
         {
             var target = RequireObject(realm, args, 0, "set");
-            var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+            var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var value = args.Length > 2 ? args[2] : JsValue.Undefined;
             if (args.Length > 3)
             {
@@ -43,21 +43,21 @@ public static class ReflectObj
         DefineMethod(realm, reflect, "has", length: 2, (thisV, args) =>
         {
             var target = RequireObject(realm, args, 0, "has");
-            var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+            var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
             return JsValue.Boolean(target.Has(key));
         });
 
         DefineMethod(realm, reflect, "deleteProperty", length: 2, (thisV, args) =>
         {
             var target = RequireObject(realm, args, 0, "deleteProperty");
-            var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+            var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
             return JsValue.Boolean(target.Delete(key));
         });
 
         DefineMethod(realm, reflect, "getOwnPropertyDescriptor", length: 2, (thisV, args) =>
         {
             var target = RequireObject(realm, args, 0, "getOwnPropertyDescriptor");
-            var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+            var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var d = target.GetOwnPropertyDescriptor(key);
             if (d is null)
             {
@@ -70,7 +70,7 @@ public static class ReflectObj
         DefineMethod(realm, reflect, "defineProperty", length: 3, (thisV, args) =>
         {
             var target = RequireObject(realm, args, 0, "defineProperty");
-            var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+            var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
             var descObj = args.Length > 2 ? args[2] : JsValue.Undefined;
             var desc = ToPropertyDescriptor(realm, descObj);
             return JsValue.Boolean(

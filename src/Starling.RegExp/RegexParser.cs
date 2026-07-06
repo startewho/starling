@@ -304,7 +304,7 @@ public sealed class RegexParser
             case '(':
                 return ParseGroup();
             case '[':
-                return ParseClass();
+                return ParseClassOrSet();
             case '\\':
                 return ParseEscape();
             case '*':
@@ -556,6 +556,645 @@ public sealed class RegexParser
 
     private int _currentCapture;
 
+    private RegexNode ParseClassOrSet()
+    {
+        if ((_flags & RegexFlags.UnicodeSets) != 0)
+        {
+            return ParseClassSet();
+        }
+
+        return ParseClass();
+    }
+
+    // ---------------------------------------------------------------------
+    //           §22.2.1 ClassSetExpression (the v flag grammar)
+    // ---------------------------------------------------------------------
+
+    private readonly record struct ClassSet(List<(int Lo, int Hi)> Ranges, List<string> Strings, List<RegexNode> Patterns)
+    {
+        public static ClassSet Empty() => new(new List<(int, int)>(), new List<string>(), new List<RegexNode>());
+    }
+
+    private RegexNode ParseClassSet()
+    {
+        _i++; // '['
+        var negated = false;
+        if (_i < _src.Length && _src[_i] == '^')
+        {
+            negated = true;
+            _i++;
+        }
+
+        var set = ParseClassSetExpression();
+        if (_i >= _src.Length || _src[_i] != ']')
+        {
+            throw new RegexSyntaxException("Unterminated character class");
+        }
+
+        _i++; // ']'
+        if (negated && set.Strings.Count > 0)
+        {
+            // MayContainStrings: a complemented class may not match strings.
+            throw new RegexSyntaxException("Negated character class may not contain strings under the v flag");
+        }
+
+        if (negated && set.Patterns.Count > 0)
+        {
+            throw new RegexSyntaxException("Negated character class may not contain strings under the v flag");
+        }
+
+        var caseInsensitive = (_flags & RegexFlags.IgnoreCase) != 0;
+        var klassNode = new CharClassNode(new RegexCharClass(set.Ranges, negated, caseInsensitive));
+        if (set.Strings.Count == 0 && set.Patterns.Count == 0)
+        {
+            return klassNode;
+        }
+
+        // Strings become a preference-ordered alternation (longest first) in
+        // front of the single-character class; sequence-property patterns
+        // (\p{RGI_Emoji} etc.) come first of all so multi-code-point
+        // sequences win over their single-char prefixes.
+        var alts = new List<RegexNode>();
+        alts.AddRange(set.Patterns);
+        foreach (var str in set.Strings.OrderByDescending(x => x.Length))
+        {
+            RegexNode seq = new EmptyNode();
+            var parts = new List<RegexNode>();
+            var idx = 0;
+            while (idx < str.Length)
+            {
+                var cp = char.ConvertToUtf32(str, idx);
+                parts.Add(new LiteralNode(cp));
+                idx += char.IsSurrogatePair(str, idx) ? 2 : 1;
+            }
+
+            seq = parts.Count == 1 ? parts[0] : new SequenceNode(parts);
+            alts.Add(seq);
+        }
+
+        if (set.Ranges.Count > 0 || !negated)
+        {
+            alts.Add(klassNode);
+        }
+
+        return new AlternationNode(alts);
+    }
+
+    private ClassSet ParseClassSetExpression()
+    {
+        // ClassSetRange (a-b) is only valid in a ClassUnion, but the FIRST
+        // operand can begin one — `[a-z--b]` parses `a-z` before seeing the
+        // subtraction operator.
+        var first = ParseClassSetOperand(allowRange: true);
+        if (PeekDoubledPunctuator("&&"))
+        {
+            // ClassIntersection
+            while (PeekDoubledPunctuator("&&"))
+            {
+                _i += 2;
+                var next = ParseClassSetOperand();
+                first = IntersectSets(first, next);
+            }
+
+            return first;
+        }
+
+        if (PeekDoubledPunctuator("--"))
+        {
+            // ClassSubtraction
+            while (PeekDoubledPunctuator("--"))
+            {
+                _i += 2;
+                var next = ParseClassSetOperand();
+                first = SubtractSets(first, next);
+            }
+
+            return first;
+        }
+
+        // ClassUnion — operands and ranges until ']' / operator.
+        while (_i < _src.Length && _src[_i] != ']')
+        {
+            if (PeekDoubledPunctuator("&&") || PeekDoubledPunctuator("--"))
+            {
+                throw new RegexSyntaxException("Mixed class set operators require explicit nesting under the v flag");
+            }
+
+            var operand = ParseClassSetOperand(allowRange: true, existing: first);
+            first = UnionSets(first, operand);
+        }
+
+        return first;
+    }
+
+    private bool PeekDoubledPunctuator(string op)
+        => _i + 1 < _src.Length && _src[_i] == op[0] && _src[_i + 1] == op[1];
+
+    private static readonly string DoubledPunctuators = "&!#$%*+,.:;<=>?@^`~";
+
+    private ClassSet ParseClassSetOperand(bool allowRange = false, ClassSet existing = default)
+    {
+        _ = existing;
+        if (_i >= _src.Length)
+        {
+            throw new RegexSyntaxException("Unterminated character class");
+        }
+
+        var c = _src[_i];
+        if (c == '[')
+        {
+            // NestedClass — full sub-expression with its own negation.
+            _i++;
+            var negated = false;
+            if (_i < _src.Length && _src[_i] == '^')
+            {
+                negated = true;
+                _i++;
+            }
+
+            var inner = ParseClassSetExpression();
+            if (_i >= _src.Length || _src[_i] != ']')
+            {
+                throw new RegexSyntaxException("Unterminated nested character class");
+            }
+
+            _i++;
+            if (negated)
+            {
+                if (inner.Strings.Count > 0)
+                {
+                    throw new RegexSyntaxException("Negated character class may not contain strings under the v flag");
+                }
+
+                var complement = ClassSet.Empty();
+                AddNegatedRanges(complement.Ranges, inner.Ranges);
+                return complement;
+            }
+
+            return inner;
+        }
+
+        if (c == '\\' && _i + 1 < _src.Length && _src[_i + 1] == 'q')
+        {
+            // ClassStringDisjunction \q{a|bc|...}
+            _i += 2;
+            if (_i >= _src.Length || _src[_i] != '{')
+            {
+                throw new RegexSyntaxException("Invalid \\q escape: missing '{'");
+            }
+
+            _i++;
+            var result = ClassSet.Empty();
+            var sb = new System.Text.StringBuilder();
+            while (_i < _src.Length && _src[_i] != '}')
+            {
+                if (_src[_i] == '|')
+                {
+                    CommitQString(result, sb);
+                    _i++;
+                    continue;
+                }
+
+                int cp;
+                if (_src[_i] == '\\')
+                {
+                    cp = ParseClassSetCharacterEscape();
+                }
+                else
+                {
+                    cp = _src[_i];
+                    _i++;
+                    if (char.IsHighSurrogate((char)cp) && _i < _src.Length && char.IsLowSurrogate(_src[_i]))
+                    {
+                        cp = char.ConvertToUtf32((char)cp, _src[_i]);
+                        _i++;
+                    }
+                }
+
+                sb.Append(char.ConvertFromUtf32(cp));
+            }
+
+            if (_i >= _src.Length)
+            {
+                throw new RegexSyntaxException("Unterminated \\q{ escape");
+            }
+
+            CommitQString(result, sb);
+            _i++; // '}'
+            return result;
+        }
+
+        if (c == '\\' && _i + 1 < _src.Length && (_src[_i + 1] == 'p' || _src[_i + 1] == 'P'))
+        {
+            var negatedProp = _src[_i + 1] == 'P';
+            var propStart = _i;
+            _i += 2;
+            // Properties of STRINGS (sequence properties) are v-flag-only and
+            // may not be complemented (\P{RGI_Emoji} is a SyntaxError).
+            if (TryPeekSequenceProperty(out var seqName))
+            {
+                if (negatedProp)
+                {
+                    throw new RegexSyntaxException($"\\P{{{seqName}}}: a property of strings may not be complemented");
+                }
+
+                SkipPropertyBraces();
+                var setSeq = ClassSet.Empty();
+                setSeq.Patterns.Add(BuildSequenceProperty(seqName));
+                return setSeq;
+            }
+
+            _ = propStart;
+            var klass = ParsePropertyEscape(negatedProp);
+            var setP = ClassSet.Empty();
+            klass.CopyRangesInto(setP.Ranges);
+            return setP;
+        }
+
+        if (c == '\\' && _i + 1 < _src.Length && _src[_i + 1] is 'd' or 'D' or 'w' or 'W' or 's' or 'S')
+        {
+            var escCh = _src[_i + 1];
+            _i += 2;
+            var setE = ClassSet.Empty();
+            AddClassEscapeRanges(setE.Ranges, escCh);
+            return setE;
+        }
+
+        // ClassSetCharacter (possibly a range a-b when allowRange).
+        var lo = ParseClassSetCharacter();
+        if (allowRange && _i + 1 < _src.Length && _src[_i] == '-' && _src[_i + 1] != ']' && _src[_i + 1] != '-')
+        {
+            _i++; // '-'
+            var hi = ParseClassSetCharacter();
+            if (hi < lo)
+            {
+                throw new RegexSyntaxException("Range out of order in character class");
+            }
+
+            var setR = ClassSet.Empty();
+            setR.Ranges.Add((lo, hi));
+            return setR;
+        }
+
+        var single = ClassSet.Empty();
+        single.Ranges.Add((lo, lo));
+        return single;
+    }
+
+    private static void CommitQString(ClassSet result, System.Text.StringBuilder sb)
+    {
+        var str = sb.ToString();
+        sb.Clear();
+        if (str.Length == 0)
+        {
+            return; // the empty string alternative matches the empty sequence; treated as no-op char-wise
+        }
+
+        var cpCount = 0;
+        var idx = 0;
+        while (idx < str.Length)
+        {
+            idx += char.IsSurrogatePair(str, idx) ? 2 : 1;
+            cpCount++;
+        }
+
+        if (cpCount == 1)
+        {
+            var cp = char.ConvertToUtf32(str, 0);
+            result.Ranges.Add((cp, cp));
+        }
+        else
+        {
+            result.Strings.Add(str);
+        }
+    }
+
+    private int ParseClassSetCharacter()
+    {
+        var c = _src[_i];
+        if (c == '\\')
+        {
+            return ParseClassSetCharacterEscape();
+        }
+
+        // ClassSetSyntaxCharacter must be escaped; a doubled punctuator here is
+        // a SyntaxError.
+        if (c is '(' or ')' or '[' or '{' or '}' or '/' or '|' or '-')
+        {
+            throw new RegexSyntaxException($"Unescaped '{c}' in a v-flag character class");
+        }
+
+        if (_i + 1 < _src.Length && _src[_i + 1] == c && DoubledPunctuators.Contains(c))
+        {
+            throw new RegexSyntaxException($"Doubled punctuator '{c}{c}' in a v-flag character class");
+        }
+
+        _i++;
+        if (char.IsHighSurrogate(c) && _i < _src.Length && char.IsLowSurrogate(_src[_i]))
+        {
+            var cp = char.ConvertToUtf32(c, _src[_i]);
+            _i++;
+            return cp;
+        }
+
+        return c;
+    }
+
+    private int ParseClassSetCharacterEscape()
+    {
+        // Consumes the backslash + escape, returning one code point.
+        _i++; // '\\'
+        if (_i >= _src.Length)
+        {
+            throw new RegexSyntaxException("Trailing backslash in character class");
+        }
+
+        var esc = _src[_i];
+        switch (esc)
+        {
+            case 'n': _i++; return '\n';
+            case 'r': _i++; return '\r';
+            case 't': _i++; return '\t';
+            case 'f': _i++; return '\f';
+            case 'v': _i++; return '\v';
+            case 'b': _i++; return '\b';
+            case '0': _i++; return 0;
+            case 'x': _i++; return ParseHex(2);
+            case 'u': _i++; return ParseUnicodeEscapeSequence();
+            case 'c': _i++; return ParseControlChar();
+            default:
+                if (esc is '^' or '$' or '\\' or '.' or '*' or '+' or '?' or '(' or ')'
+                    or '[' or ']' or '{' or '}' or '|' or '/' or '-'
+                    or '&' or '!' or '#' or '%' or ',' or ':' or ';' or '<' or '=' or '>' or '@' or '`' or '~' or 'q')
+                {
+                    _i++;
+                    return esc == 'q'
+                        ? throw new RegexSyntaxException("\\q is only valid as a class string disjunction")
+                        : esc;
+                }
+
+                throw new RegexSyntaxException($"Invalid escape '\\{esc}' in a v-flag character class");
+        }
+    }
+
+    private void AddClassEscapeRanges(List<(int, int)> ranges, char esc)
+    {
+        switch (esc)
+        {
+            case 'd': ranges.Add(('0', '9')); break;
+            case 'D': AddNegatedRanges(ranges, new List<(int, int)> { ('0', '9') }); break;
+            case 'w':
+                ranges.Add(('a', 'z'));
+                ranges.Add(('A', 'Z'));
+                ranges.Add(('0', '9'));
+                ranges.Add(('_', '_'));
+                break;
+            case 'W':
+                AddNegatedRanges(ranges, new List<(int, int)> { ('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_') });
+                break;
+            case 's': AddWhitespaceRanges(ranges); break;
+            case 'S':
+                var ws = new List<(int, int)>();
+                AddWhitespaceRanges(ws);
+                AddNegatedRanges(ranges, ws);
+                break;
+        }
+    }
+
+    private static void AddWhitespaceRanges(List<(int, int)> ranges)
+    {
+        ranges.Add(('\t', '\r'));
+        ranges.Add((' ', ' '));
+        ranges.Add((0x00A0, 0x00A0));
+        ranges.Add((0x1680, 0x1680));
+        ranges.Add((0x2000, 0x200A));
+        ranges.Add((0x2028, 0x2029));
+        ranges.Add((0x202F, 0x202F));
+        ranges.Add((0x205F, 0x205F));
+        ranges.Add((0x3000, 0x3000));
+        ranges.Add((0xFEFF, 0xFEFF));
+    }
+
+    private static ClassSet UnionSets(ClassSet a, ClassSet b)
+    {
+        a.Ranges.AddRange(b.Ranges);
+        a.Strings.AddRange(b.Strings);
+        return a;
+    }
+
+    private static ClassSet IntersectSets(ClassSet a, ClassSet b)
+    {
+        var result = ClassSet.Empty();
+        var normA = NormalizeRanges(a.Ranges);
+        var normB = NormalizeRanges(b.Ranges);
+        int i = 0, j = 0;
+        while (i < normA.Count && j < normB.Count)
+        {
+            var lo = Math.Max(normA[i].Item1, normB[j].Item1);
+            var hi = Math.Min(normA[i].Item2, normB[j].Item2);
+            if (lo <= hi)
+            {
+                result.Ranges.Add((lo, hi));
+            }
+
+            if (normA[i].Item2 < normB[j].Item2)
+            {
+                i++;
+            }
+            else
+            {
+                j++;
+            }
+        }
+
+        foreach (var str in a.Strings)
+        {
+            if (b.Strings.Contains(str))
+            {
+                result.Strings.Add(str);
+            }
+        }
+
+        return result;
+    }
+
+    private static ClassSet SubtractSets(ClassSet a, ClassSet b)
+    {
+        var result = ClassSet.Empty();
+        var normB = NormalizeRanges(b.Ranges);
+        foreach (var (lo, hi) in NormalizeRanges(a.Ranges))
+        {
+            var cursor = lo;
+            foreach (var (blo, bhi) in normB)
+            {
+                if (bhi < cursor || blo > hi)
+                {
+                    continue;
+                }
+
+                if (blo > cursor)
+                {
+                    result.Ranges.Add((cursor, blo - 1));
+                }
+
+                cursor = Math.Max(cursor, bhi + 1);
+                if (cursor > hi)
+                {
+                    break;
+                }
+            }
+
+            if (cursor <= hi)
+            {
+                result.Ranges.Add((cursor, hi));
+            }
+        }
+
+        foreach (var str in a.Strings)
+        {
+            if (!b.Strings.Contains(str))
+            {
+                result.Strings.Add(str);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<(int, int)> NormalizeRanges(List<(int Lo, int Hi)> ranges)
+    {
+        var sorted = new List<(int, int)>(ranges);
+        sorted.Sort((x, y) => x.Item1.CompareTo(y.Item1));
+        var merged = new List<(int, int)>();
+        foreach (var r in sorted)
+        {
+            if (merged.Count > 0 && r.Item1 <= merged[^1].Item2 + 1)
+            {
+                merged[^1] = (merged[^1].Item1, Math.Max(merged[^1].Item2, r.Item2));
+            }
+            else
+            {
+                merged.Add(r);
+            }
+        }
+
+        return merged;
+    }
+
+    private static readonly string[] SequenceProperties =
+    [
+        "RGI_Emoji", "Basic_Emoji", "Emoji_Keycap_Sequence",
+        "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence",
+        "RGI_Emoji_Tag_Sequence", "RGI_Emoji_ZWJ_Sequence",
+    ];
+
+    private bool TryPeekSequenceProperty(out string name)
+    {
+        name = "";
+        if (_i >= _src.Length || _src[_i] != '{')
+        {
+            return false;
+        }
+
+        var end = _i + 1;
+        while (end < _src.Length && _src[end] != '}')
+        {
+            end++;
+        }
+
+        if (end >= _src.Length)
+        {
+            return false;
+        }
+
+        var candidate = _src[(_i + 1)..end].ToString();
+        foreach (var p in SequenceProperties)
+        {
+            if (string.Equals(p, candidate, StringComparison.Ordinal))
+            {
+                name = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void SkipPropertyBraces()
+    {
+        // _i is at '{'; consume through '}'.
+        while (_i < _src.Length && _src[_i] != '}')
+        {
+            _i++;
+        }
+
+        _i++; // '}'
+    }
+
+    /// <summary>UTS #51 sequence properties as sub-patterns. Built from the
+    /// component char properties rather than the RGI enumeration: keycaps and
+    /// flag/tag/modifier sequences are exact grammars; ZWJ sequences use the
+    /// structural grammar (emoji joined by ZWJ), which matches every RGI
+    /// sequence (and some non-RGI ones — an accepted approximation).</summary>
+    private RegexNode BuildSequenceProperty(string name)
+    {
+        RegexNode CharSet(string prop) => new CharClassNode(
+            new RegexCharClass(RegexCharClass.GetPropertyRanges(prop), negated: false, caseInsensitive: false));
+        RegexNode Lit(int cp) => new LiteralNode(cp);
+        RegexNode Seq(params RegexNode[] parts) => new SequenceNode(parts);
+        RegexNode Alt(params RegexNode[] alts) => new AlternationNode(alts);
+        // emoji presentation unit: an Emoji_Presentation char, or any Emoji
+        // char followed by VS16 (FE0F), or a modifier-base + skin tone.
+        RegexNode EmojiUnit() => Alt(
+            Seq(CharSet("Emoji_Modifier_Base"), CharSet("Emoji_Modifier")),
+            Seq(CharSet("Emoji"), Lit(0xFE0F)),
+            CharSet("Emoji_Presentation"));
+
+        switch (name)
+        {
+            case "Emoji_Keycap_Sequence":
+                return Seq(new CharClassNode(new RegexCharClass(
+                    new List<(int, int)> { ('0', '9'), ('#', '#'), ('*', '*') }, negated: false, caseInsensitive: false)),
+                    Lit(0xFE0F), Lit(0x20E3));
+            case "RGI_Emoji_Flag_Sequence":
+                return Seq(new CharClassNode(new RegexCharClass(
+                        new List<(int, int)> { (0x1F1E6, 0x1F1FF) }, negated: false, caseInsensitive: false)),
+                    new CharClassNode(new RegexCharClass(
+                        new List<(int, int)> { (0x1F1E6, 0x1F1FF) }, negated: false, caseInsensitive: false)));
+            case "RGI_Emoji_Tag_Sequence":
+                return Seq(Lit(0x1F3F4),
+                    new QuantifierNode(new CharClassNode(new RegexCharClass(
+                        new List<(int, int)> { (0xE0020, 0xE007E) }, negated: false, caseInsensitive: false)), 1, -1, Greedy: true),
+                    Lit(0xE007F));
+            case "RGI_Emoji_Modifier_Sequence":
+                return Seq(CharSet("Emoji_Modifier_Base"), CharSet("Emoji_Modifier"));
+            case "Basic_Emoji":
+                return Alt(
+                    Seq(CharSet("Emoji"), Lit(0xFE0F)),
+                    CharSet("Emoji_Presentation"));
+            case "RGI_Emoji_ZWJ_Sequence":
+                return Seq(EmojiUnit(),
+                    new QuantifierNode(Seq(Lit(0x200D), EmojiUnit()), 1, -1, Greedy: true));
+            default: // RGI_Emoji — union of all the above, longest-ish first
+                return Alt(
+                    Seq(EmojiUnit(), new QuantifierNode(Seq(Lit(0x200D), EmojiUnit()), 1, -1, Greedy: true)),
+                    Seq(Lit(0x1F3F4),
+                        new QuantifierNode(new CharClassNode(new RegexCharClass(
+                            new List<(int, int)> { (0xE0020, 0xE007E) }, negated: false, caseInsensitive: false)), 1, -1, Greedy: true),
+                        Lit(0xE007F)),
+                    Seq(new CharClassNode(new RegexCharClass(
+                            new List<(int, int)> { (0x1F1E6, 0x1F1FF) }, negated: false, caseInsensitive: false)),
+                        new CharClassNode(new RegexCharClass(
+                            new List<(int, int)> { (0x1F1E6, 0x1F1FF) }, negated: false, caseInsensitive: false))),
+                    Seq(new CharClassNode(new RegexCharClass(
+                            new List<(int, int)> { ('0', '9'), ('#', '#'), ('*', '*') }, negated: false, caseInsensitive: false)),
+                        Lit(0xFE0F), Lit(0x20E3)),
+                    Seq(CharSet("Emoji_Modifier_Base"), CharSet("Emoji_Modifier")),
+                    Seq(CharSet("Emoji"), Lit(0xFE0F)),
+                    CharSet("Emoji_Presentation"));
+        }
+    }
+
     private CharClassNode ParseClass()
     {
         _i++; // '['
@@ -564,20 +1203,10 @@ public sealed class RegexParser
         {
             negated = true; _i++;
         }
-        // v-flag set ops not implemented; reject syntactically.
         var ranges = new List<(int, int)>();
         var nestedKlasses = new List<RegexCharClass>();
         while (_i < _src.Length && _src[_i] != ']')
         {
-            if ((_flags & RegexFlags.UnicodeSets) != 0 && _src[_i] == '[')
-            {
-                throw new RegexSyntaxException("v-flag character class set operations are not supported");
-            }
-
-            if (_i + 1 < _src.Length && _src[_i] == '&' && _src[_i + 1] == '&')
-            {
-                throw new RegexSyntaxException("v-flag character class set operations are not supported");
-            }
 
             // §22.2.1 (u/v): in a NonemptyClassRanges, a ClassAtom that is a
             // CharacterClassEscape (\d \w \s …) cannot be an endpoint of a `-`
@@ -815,6 +1444,19 @@ public sealed class RegexParser
                 {
                     var negated = c == 'P';
                     _i++;
+                    // v-flag: a property of STRINGS at pattern level compiles
+                    // to its sequence sub-pattern; \P over one is an error.
+                    if ((_flags & RegexFlags.UnicodeSets) != 0 && TryPeekSequenceProperty(out var seqName))
+                    {
+                        if (negated)
+                        {
+                            throw new RegexSyntaxException($"\\P{{{seqName}}}: a property of strings may not be complemented");
+                        }
+
+                        SkipPropertyBraces();
+                        return BuildSequenceProperty(seqName);
+                    }
+
                     var klass = ParsePropertyEscape(negated);
                     return new CharClassNode(klass);
                 }

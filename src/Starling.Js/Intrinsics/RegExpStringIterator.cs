@@ -1,40 +1,30 @@
-using System.Buffers;
-using Starling.RegExp;
 using Starling.Js.Runtime;
 
 namespace Starling.Js.Intrinsics;
 
 /// <summary>
 /// §22.2.9 RegExp String Iterator — the iterator returned by
-/// <c>String.prototype.matchAll(re)</c>. Wraps a compiled regex + the input
-/// string and walks one match per <c>.next()</c> call. Inherits from
-/// %IteratorPrototype% so <c>iter[Symbol.iterator]()</c> returns the same
-/// iterator (one-shot).
+/// <c>String.prototype.matchAll(re)</c> / <c>RegExp.prototype[@@matchAll]</c>.
+/// Holds the species-constructed matcher OBJECT and drives §22.2.7.1
+/// RegExpExec per <c>.next()</c>, so a subclass or monkey-patched
+/// <c>exec</c>/<c>lastIndex</c> is honored. Inherits from %IteratorPrototype%
+/// so <c>iter[Symbol.iterator]()</c> returns the same iterator (one-shot).
 /// </summary>
-/// <remarks>
-/// We exec the underlying <see cref="CompiledRegex"/> directly rather than
-/// re-routing through <c>RegExp.prototype.exec</c> so the iterator is
-/// hermetic — a user-visible monkey-patch of <c>exec</c> would not change
-/// matchAll's behavior (acceptable simplification; the spec's "let result be
-/// ? RegExpExec(R, S)" route is the same observable in the common path).
-/// </remarks>
 internal sealed class JsRegExpStringIterator : JsObject
 {
-    private readonly JsRegExp _regex;
+    private readonly JsObject _matcher;
     private readonly string _input;
     private readonly bool _global;
     private readonly bool _unicode;
     private bool _done;
-    private int _cursor;
 
-    public JsRegExpStringIterator(JsRealm realm, JsRegExp regex, string input, bool global, bool unicode)
+    public JsRegExpStringIterator(JsRealm realm, JsObject matcher, string input, bool global, bool unicode)
         : base(realm.IteratorPrototype)
     {
-        _regex = regex;
+        _matcher = matcher;
         _input = input;
         _global = global;
         _unicode = unicode;
-        _cursor = 0;
 
         // Install .next as an own property so we don't need a dedicated
         // %RegExpStringIteratorPrototype% slot in JsRealm. %IteratorPrototype%
@@ -56,33 +46,30 @@ internal sealed class JsRegExpStringIterator : JsObject
             return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
         }
 
-        int bufLen = 2 * (_regex.Compiled.CaptureCount + 1);
-        var spanBuffer = ArrayPool<int>.Shared.Rent(bufLen);
-        try
+        var vm = realm.ActiveVm;
+        var result = RegExpCtor.RegExpExec(realm, _matcher, _input);
+        if (result.IsNull)
         {
-            if (!_regex.Compiled.ExecSpans(_input, _cursor, spanBuffer, out var matchStart, out var matchEnd))
-            {
-                _done = true;
-                return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
-            }
-            // Advance cursor; guard against zero-width matches.
-            _cursor = matchEnd;
-            if (matchEnd == matchStart)
-            {
-                _cursor = RegExpCtor.AdvanceStringIndex(_input, _cursor, _unicode);
-            }
-
-            if (!_global)
-            {
-                _done = true;
-            }
-
-            var matchArr = RegExpCtor.BuildMatchArrayForIterator(realm, _regex, _input, spanBuffer);
-            return IteratorIntrinsics.MakeResult(realm, JsValue.Object(matchArr), done: false);
+            _done = true;
+            return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
         }
-        finally
+
+        if (!_global)
         {
-            ArrayPool<int>.Shared.Return(spanBuffer);
+            _done = true;
+            return IteratorIntrinsics.MakeResult(realm, result, done: false);
         }
+
+        // §22.2.9.2.1 step ii.4 — an empty total match advances lastIndex so
+        // the loop terminates.
+        var matchStr = JsValue.ToStringValue(AbstractOperations.Get(vm, result.AsObject, "0"));
+        if (matchStr.Length == 0)
+        {
+            var li = (long)Math.Max(0, JsValue.ToNumber(AbstractOperations.Get(vm, _matcher, "lastIndex")));
+            AbstractOperations.Set(vm, _matcher, "lastIndex",
+                JsValue.Number(RegExpCtor.AdvanceStringIndex(_input, (int)Math.Min(li, int.MaxValue), _unicode)));
+        }
+
+        return IteratorIntrinsics.MakeResult(realm, result, done: false);
     }
 }

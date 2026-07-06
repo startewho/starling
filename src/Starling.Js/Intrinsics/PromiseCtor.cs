@@ -96,6 +96,11 @@ public static class PromiseCtor
         ctor.DefineOwnProperty("length",
             PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
 
+        var speciesGetter = new JsNativeFunction(realm, "get [Symbol.species]", 0,
+            (thisV, _) => thisV, isConstructor: false);
+        ctor.DefineOwnProperty(SymbolCtor.Species,
+            PropertyDescriptor.Accessor(speciesGetter, null, enumerable: false, configurable: true));
+
         proto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
         proto.DefineOwnProperty(SymbolCtor.ToStringTag,
@@ -126,22 +131,22 @@ public static class PromiseCtor
         DefineMethod(realm, ctor, "all", (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "all");
-            return All(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            return All(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
         }, length: 1);
         DefineMethod(realm, ctor, "allSettled", (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "allSettled");
-            return AllSettled(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            return AllSettled(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
         }, length: 1);
         DefineMethod(realm, ctor, "any", (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "any");
-            return Any(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            return Any(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
         }, length: 1);
         DefineMethod(realm, ctor, "race", (thisV, args) =>
         {
             RequireObjectReceiver(thisV, "race");
-            return Race(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            return Race(realm, thisV, args.Length > 0 ? args[0] : JsValue.Undefined);
         }, length: 1);
         DefineMethod(realm, ctor, "withResolvers", (thisV, args) =>
         {
@@ -375,6 +380,25 @@ public static class PromiseCtor
     // ====================================================================
 
     /// <summary>§27.2.5.4 Promise.prototype.then.</summary>
+    /// <summary>Observable `then` invocation (§27.2.4.1.1 step 4.i) — reads
+    /// `then` off the adopted promise so subclass overrides participate.</summary>
+    private static void InvokeThen(JsRealm realm, JsValue promise, JsValue onFulfilled, JsValue onRejected)
+    {
+        if (!promise.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("Promise resolve returned a non-object"));
+        }
+
+        var vm = realm.ActiveVm;
+        var then = AbstractOperations.Get(vm, promise.AsObject, "then");
+        if (!AbstractOperations.IsCallable(then))
+        {
+            throw new JsThrow(realm.NewTypeError("Adopted promise has no callable then"));
+        }
+
+        AbstractOperations.Call(vm, then, promise, new[] { onFulfilled, onRejected });
+    }
+
     private static JsValue Then(JsRealm realm, JsValue thisV, JsValue onFulfilled, JsValue onRejected)
     {
         if (!thisV.IsObject || thisV.AsObject is not JsPromise self)
@@ -493,9 +517,26 @@ public static class PromiseCtor
     /// <summary>§27.2.4.1 Promise.all (array-like simplification). Resolves
     /// to an array-like of values in source order; rejects with the first
     /// rejection reason.</summary>
-    private static JsValue All(JsRealm realm, JsValue iterable)
+    private static JsValue All(JsRealm realm, JsValue thisV, JsValue iterable)
     {
-        var capability = NewPromiseCapability(realm);
+        var capability = NewPromiseCapability(realm, thisV);
+        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
+        // before the iteration; a non-callable value rejects via TypeError.
+        JsValue promiseResolve;
+        try
+        {
+            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
+            if (!AbstractOperations.IsCallable(promiseResolve))
+            {
+                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+            }
+        }
+        catch (JsThrow ex)
+        {
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            return JsValue.Object(capability.Promise);
+        }
+
         if (!TryArrayLikeToList(realm, iterable, capability, out var items))
         {
             return JsValue.Object(capability.Promise);
@@ -514,7 +555,7 @@ public static class PromiseCtor
         {
             var idx = i;
             results[idx] = JsValue.Undefined;
-            var item = ResolveStatic(realm, items[idx]);
+            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[idx] });
             var onFulfilled = new JsNativeFunction("", (_, args) =>
             {
                 results[idx] = args.Length > 0 ? args[0] : JsValue.Undefined;
@@ -525,15 +566,32 @@ public static class PromiseCtor
                 }
                 return JsValue.Undefined;
             }, isConstructor: false);
-            Then(realm, item, JsValue.Object(onFulfilled), capability.Reject);
+            InvokeThen(realm, item, JsValue.Object(onFulfilled), capability.Reject);
         }
         return JsValue.Object(capability.Promise);
     }
 
     /// <summary>§27.2.4.2 Promise.allSettled.</summary>
-    private static JsValue AllSettled(JsRealm realm, JsValue iterable)
+    private static JsValue AllSettled(JsRealm realm, JsValue thisV, JsValue iterable)
     {
-        var capability = NewPromiseCapability(realm);
+        var capability = NewPromiseCapability(realm, thisV);
+        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
+        // before the iteration; a non-callable value rejects via TypeError.
+        JsValue promiseResolve;
+        try
+        {
+            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
+            if (!AbstractOperations.IsCallable(promiseResolve))
+            {
+                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+            }
+        }
+        catch (JsThrow ex)
+        {
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            return JsValue.Object(capability.Promise);
+        }
+
         if (!TryArrayLikeToList(realm, iterable, capability, out var items))
         {
             return JsValue.Object(capability.Promise);
@@ -563,7 +621,7 @@ public static class PromiseCtor
         for (var i = 0; i < items.Count; i++)
         {
             var idx = i;
-            var item = ResolveStatic(realm, items[idx]);
+            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[idx] });
             var onFulfilled = new JsNativeFunction("", (_, args) =>
             {
                 var entry = realm.NewOrdinaryObject();
@@ -586,7 +644,7 @@ public static class PromiseCtor
                 TryFinalize();
                 return JsValue.Undefined;
             }, isConstructor: false);
-            Then(realm, item, JsValue.Object(onFulfilled), JsValue.Object(onRejected));
+            InvokeThen(realm, item, JsValue.Object(onFulfilled), JsValue.Object(onRejected));
         }
         return JsValue.Object(capability.Promise);
     }
@@ -594,9 +652,26 @@ public static class PromiseCtor
     /// <summary>§27.2.4.3 Promise.any. Resolves with the first fulfillment;
     /// if every input rejects, rejects with an <c>AggregateError</c> whose
     /// <c>errors</c> own property is a JsArray of the rejection reasons.</summary>
-    private static JsValue Any(JsRealm realm, JsValue iterable)
+    private static JsValue Any(JsRealm realm, JsValue thisV, JsValue iterable)
     {
-        var capability = NewPromiseCapability(realm);
+        var capability = NewPromiseCapability(realm, thisV);
+        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
+        // before the iteration; a non-callable value rejects via TypeError.
+        JsValue promiseResolve;
+        try
+        {
+            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
+            if (!AbstractOperations.IsCallable(promiseResolve))
+            {
+                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+            }
+        }
+        catch (JsThrow ex)
+        {
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            return JsValue.Object(capability.Promise);
+        }
+
         if (!TryArrayLikeToList(realm, iterable, capability, out var items))
         {
             return JsValue.Object(capability.Promise);
@@ -616,7 +691,7 @@ public static class PromiseCtor
         {
             var idx = i;
             errors[idx] = JsValue.Undefined;
-            var item = ResolveStatic(realm, items[idx]);
+            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[idx] });
             var onRejected = new JsNativeFunction("", (_, args) =>
             {
                 errors[idx] = args.Length > 0 ? args[0] : JsValue.Undefined;
@@ -627,15 +702,32 @@ public static class PromiseCtor
                 }
                 return JsValue.Undefined;
             }, isConstructor: false);
-            Then(realm, item, capability.Resolve, JsValue.Object(onRejected));
+            InvokeThen(realm, item, capability.Resolve, JsValue.Object(onRejected));
         }
         return JsValue.Object(capability.Promise);
     }
 
     /// <summary>§27.2.4.5 Promise.race.</summary>
-    private static JsValue Race(JsRealm realm, JsValue iterable)
+    private static JsValue Race(JsRealm realm, JsValue thisV, JsValue iterable)
     {
-        var capability = NewPromiseCapability(realm);
+        var capability = NewPromiseCapability(realm, thisV);
+        // §27.2.4.1.1 step 1 — `resolve` is read from C ONCE, observably,
+        // before the iteration; a non-callable value rejects via TypeError.
+        JsValue promiseResolve;
+        try
+        {
+            promiseResolve = AbstractOperations.Get(realm.ActiveVm, thisV.AsObject, "resolve");
+            if (!AbstractOperations.IsCallable(promiseResolve))
+            {
+                throw new JsThrow(realm.NewTypeError("Promise resolve is not a function"));
+            }
+        }
+        catch (JsThrow ex)
+        {
+            AbstractOperations.Call(realm.ActiveVm, capability.Reject, JsValue.Undefined, new[] { ex.Value });
+            return JsValue.Object(capability.Promise);
+        }
+
         if (!TryArrayLikeToList(realm, iterable, capability, out var items))
         {
             return JsValue.Object(capability.Promise);
@@ -643,8 +735,8 @@ public static class PromiseCtor
 
         for (var i = 0; i < items.Count; i++)
         {
-            var item = ResolveStatic(realm, items[i]);
-            Then(realm, item, capability.Resolve, capability.Reject);
+            var item = AbstractOperations.Call(realm.ActiveVm, promiseResolve, thisV, new[] { items[i] });
+            InvokeThen(realm, item, capability.Resolve, capability.Reject);
         }
         // Empty race never settles, matching spec (§27.2.4.5 step 8).
         return JsValue.Object(capability.Promise);
@@ -676,6 +768,53 @@ public static class PromiseCtor
         var promise = new JsPromise(realm.PromisePrototype);
         var (resolve, reject) = CreateResolvingFunctions(realm, promise);
         return new PromiseCapability(promise, resolve, reject);
+    }
+
+    /// <summary>§27.2.1.5 NewPromiseCapability(C) — the generic form: a
+    /// Promise subclass (or any constructor with Promise-compatible executor
+    /// semantics) builds the result promise, so `Promise.all.call(Sub, …)`
+    /// yields a Sub instance. The realm's own %Promise% takes the fast
+    /// path.</summary>
+    private static PromiseCapability NewPromiseCapability(JsRealm realm, JsValue c)
+    {
+        if (c.IsObject && ReferenceEquals(c.AsObject, realm.PromiseConstructor))
+        {
+            return NewPromiseCapability(realm);
+        }
+
+        if (!AbstractOperations.IsConstructor(c))
+        {
+            throw new JsThrow(realm.NewTypeError("Promise capability requires a constructor"));
+        }
+
+        var vm = realm.ActiveVm;
+        var resolveFn = JsValue.Undefined;
+        var rejectFn = JsValue.Undefined;
+        var seen = false;
+        var executor = new JsNativeFunction("", (_, eargs) =>
+        {
+            if (seen)
+            {
+                throw new JsThrow(realm.NewTypeError("Promise executor called twice"));
+            }
+
+            seen = true;
+            resolveFn = eargs.Length > 0 ? eargs[0] : JsValue.Undefined;
+            rejectFn = eargs.Length > 1 ? eargs[1] : JsValue.Undefined;
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        var promiseV = AbstractOperations.Construct(vm, c, new[] { JsValue.Object(executor) });
+        if (!AbstractOperations.IsCallable(resolveFn) || !AbstractOperations.IsCallable(rejectFn))
+        {
+            throw new JsThrow(realm.NewTypeError("Promise executor did not receive callable resolving functions"));
+        }
+
+        if (!promiseV.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("Promise constructor did not return an object"));
+        }
+
+        return new PromiseCapability(promiseV.AsObject, resolveFn, rejectFn);
     }
 
     /// <summary>If <paramref name="value"/> is already a JsPromise, return it;

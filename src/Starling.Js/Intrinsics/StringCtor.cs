@@ -190,7 +190,17 @@ public static class StringCtor
                 throw new JsThrow(realm.NewRangeError("Invalid code point"));
             }
 
-            sb.Append(char.ConvertFromUtf32((int)n));
+            // §22.1.2.2 — lone surrogate code points are legal in JS strings
+            // (UTF-16 code units, not scalar values); ConvertFromUtf32 rejects
+            // them, so append the raw unit.
+            if ((int)n is >= 0xD800 and <= 0xDFFF)
+            {
+                sb.Append((char)(int)n);
+            }
+            else
+            {
+                sb.Append(char.ConvertFromUtf32((int)n));
+            }
         }
         return JsValue.String(sb.ToString());
     }
@@ -511,6 +521,23 @@ public static class StringCtor
         var regexp = args.Length > 0 ? args[0] : JsValue.Undefined;
         if (!regexp.IsNullish)
         {
+            // §22.1.3.14 steps 1.b-1.c — matchAll rejects a REGEXP argument
+            // without the g flag BEFORE delegating, using the observable spec
+            // IsRegExp (a @@match read) and an observable `flags` read.
+            if (all && RegExpCtor.IsRegExpSpec(realm, regexp))
+            {
+                var flagsV = AbstractOperations.Get(realm.ActiveVm, regexp.AsObject, "flags");
+                if (flagsV.IsNullish)
+                {
+                    throw new JsThrow(realm.NewTypeError("Cannot read flags of the matchAll argument"));
+                }
+
+                if (!JsValue.ToStringValue(flagsV).Contains('g'))
+                {
+                    throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
+                }
+            }
+
             var symbol = all ? SymbolCtor.MatchAll : SymbolCtor.Match;
             var matcher = AbstractOperations.GetMethod(realm.ActiveVm, regexp, symbol);
             if (!matcher.IsUndefined)
@@ -528,15 +555,13 @@ public static class StringCtor
                 all ? "g" : "");
         if (all)
         {
-            // Spec §22.1.3.13 requires matchAll to throw TypeError if the
-            // regex is not global. Mirror that here for parity with the
-            // Symbol.matchAll path before returning the RegExp string iterator.
-            if ((re.Flags & Starling.RegExp.RegexFlags.Global) == 0)
+            var unicode = (re.Flags & Starling.RegExp.RegexFlags.Unicode) != 0;
+            var isGlobal = (re.Flags & Starling.RegExp.RegexFlags.Global) != 0;
+            if (!isGlobal)
             {
                 throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
             }
 
-            var unicode = (re.Flags & Starling.RegExp.RegexFlags.Unicode) != 0;
             return JsValue.Object(new JsRegExpStringIterator(realm, re, s, global: true, unicode: unicode));
         }
         var fn = re.Get(SymbolCtor.Match);

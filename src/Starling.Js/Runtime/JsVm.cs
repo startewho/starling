@@ -4491,6 +4491,15 @@ public sealed class JsVm
 
         if (frame.CurrentFunction is { ConstructorKind: ClassConstructorKind.Derived })
         {
+            // §10.2.2 step 13.b — a derived constructor may only return an
+            // Object or undefined; any other completion value is a TypeError
+            // BEFORE the this-initialized check resolves the result.
+            if (!rv.IsUndefined)
+            {
+                throw new JsThrow(_runtime.Realm.NewTypeError(
+                    "Derived constructors may only return object or undefined"));
+            }
+
             return frame.DerivedThis ?? throw new JsThrow(_runtime.Realm.NewReferenceError(
                 "Must call super constructor in derived class before returning from derived constructor"));
         }

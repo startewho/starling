@@ -30,8 +30,8 @@ public class Test262Tests
 
     // Ratchet floors, percent. Raise deliberately after a measured improvement;
     // never lower. 0 = report-only (bucket not yet baselined).
-    private const double LanguageFloor = 97d;
-    private const double BuiltInsFloor = 72d;  // 72.61% chunked after TypedArray/RegExp arc (2026-07-06)
+    private const double LanguageFloor = 98d;   // 98.02% (2026-07-06) — derived-return, paren-pattern, escaped keywords, sloppy-let
+    private const double BuiltInsFloor = 79d;  // 79.21% after TypedArray ctor/species + Promise/RegExp generics (2026-07-06)
     private const double Intl402Floor = 50d;   // 50.61% after DateTimeFormat parts/range (2026-07-06)
     private const double AnnexBFloor = 65d;    // 65.60% after RegExp legacy statics (2026-07-06)
     private const double StagingFloor = 50d;   // baseline 50.63% (2026-07-06)

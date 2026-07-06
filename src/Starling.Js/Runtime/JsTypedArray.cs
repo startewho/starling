@@ -137,6 +137,14 @@ public sealed class JsTypedArray : JsObject
 
     public JsValue GetElement(int index)
     {
+        // A read past the (possibly shrunk/detached) window is `undefined`,
+        // never a host throw — methods snapshot their length at entry and a
+        // mid-callback detach/resize must not crash the loop (§10.4.5.16).
+        if ((uint)index >= (uint)Length)
+        {
+            return JsValue.Undefined;
+        }
+
         var offset = CheckedOffset(index);
         var bytes = Buffer.GetSpan();
         var span = bytes[offset..];
@@ -158,10 +166,18 @@ public sealed class JsTypedArray : JsObject
 
     public void SetElement(int index, JsValue value, JsRealm? realm = null)
     {
+        // §10.4.5.17 — the VALUE conversion (with its observable valueOf and
+        // its BigInt/Number mixing TypeError) runs even when the write target
+        // is out of bounds; only the store itself is skipped.
+        var n = Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64 ? 0 : ToNumber(value, realm);
+        if ((uint)index >= (uint)Length)
+        {
+            return;
+        }
+
         var offset = CheckedOffset(index);
         var bytes = Buffer.GetSpan();
         var span = bytes[offset..];
-        var n = Kind is JsTypedArrayKind.BigInt64 or JsTypedArrayKind.BigUint64 ? 0 : ToNumber(value, realm);
         switch (Kind)
         {
             case JsTypedArrayKind.Int8:
@@ -234,9 +250,13 @@ public sealed class JsTypedArray : JsObject
 
             return JsValue.ToNumber(AbstractOperations.ToPrimitive(value, "number"));
         }
-        catch (InvalidOperationException ex) when (realm is not null)
+        catch (InvalidOperationException ex)
         {
-            throw new JsThrow(realm.NewTypeError(ex.Message));
+            // Realm-less callers (the exotic index-write path) still get a
+            // catchable JS throw — a string-valued one — never a host crash.
+            throw realm is not null
+                ? new JsThrow(realm.NewTypeError(ex.Message))
+                : new JsThrow(JsValue.String(ex.Message));
         }
     }
 

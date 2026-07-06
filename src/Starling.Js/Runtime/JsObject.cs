@@ -688,7 +688,12 @@ public class JsObject
         }
 
         var cur = existing.Value;
-        var changingKind = desc.IsAccessor != cur.IsAccessor;
+        // §10.1.6.3 — kind is decided by FIELD PRESENCE, not the collapsed
+        // descriptor's default: a GENERIC descriptor ({} / {enumerable:…})
+        // has neither data nor accessor fields and never changes the kind.
+        var wantsData = present.HasValue || present.HasWritable;
+        var wantsAccessor = present.HasGet || present.HasSet;
+        var changingKind = (wantsData && cur.IsAccessor) || (wantsAccessor && !cur.IsAccessor);
         var enumerable = present.HasEnumerable ? desc.Enumerable : cur.Enumerable;
         var configurable = present.HasConfigurable ? desc.Configurable : cur.Configurable;
 
@@ -738,8 +743,11 @@ public class JsObject
             }
         }
 
+        // Merge by RESULTING kind: a kind flip rebuilds from the new fields; a
+        // generic descriptor keeps the current kind's payload untouched.
         PropertyDescriptor merged;
-        if (desc.IsAccessor)
+        var resultIsAccessor = wantsAccessor || (cur.IsAccessor && !wantsData);
+        if (resultIsAccessor)
         {
             merged = PropertyDescriptor.Accessor(
                 present.HasGet ? desc.Getter : (cur.IsAccessor ? cur.Getter : null),
