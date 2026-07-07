@@ -1,8 +1,8 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using Starling.Dom;
 using Starling.Html;
 using Starling.Html.TreeBuilder;
-using Starling.Js.Intrinsics;
 using Starling.Js.Runtime;
 
 namespace Starling.Bindings;
@@ -1933,129 +1933,153 @@ public static class NodeBindings
         realm.GlobalObject.DefineOwnProperty("Element",
             PropertyDescriptor.Data(JsValue.Object(elCtor), writable: true, enumerable: false, configurable: true));
 
-        // HTMLElement is just a thin alias for now (inherits from Element).
+        // HTMLElement.prototype — the base of every HTML element's real
+        // interface chain (→ Element → Node → EventTarget → Object).
         var htmlElProto = new JsObject(elProto);
         var htmlElCtor = new JsNativeFunction(realm, "HTMLElement", 0, (_, _) =>
             throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
+        htmlElCtor.SetPrototypeOf(realm.ElementConstructor);
         htmlElCtor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(htmlElProto), writable: false, enumerable: false, configurable: false));
         htmlElProto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(htmlElCtor), writable: true, enumerable: false, configurable: true));
-        DefineHtmlElementHasInstance(realm, htmlElCtor);
         realm.GlobalObject.DefineOwnProperty("HTMLElement",
             PropertyDescriptor.Data(JsValue.Object(htmlElCtor), writable: true, enumerable: false, configurable: true));
+        realm.HtmlElementPrototype = htmlElProto;
+        realm.HtmlElementConstructor = htmlElCtor;
 
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLButtonElement", "button");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLInputElement", "input");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOptionElement", "option");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSelectElement", "select");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTextAreaElement", "textarea");
-        // HTML §4 element interfaces — tag(s) per the WHATWG element-interface table.
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLAnchorElement", "a");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLAreaElement", "area");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLBaseElement", "base");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLQuoteElement", "blockquote", "q");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLBodyElement", "body");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLBRElement", "br");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLCanvasElement", "canvas");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableCaptionElement", "caption");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableColElement", "col", "colgroup");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDataElement", "data");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDataListElement", "datalist");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLModElement", "del", "ins");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDetailsElement", "details");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDialogElement", "dialog");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDivElement", "div");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLDListElement", "dl");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLEmbedElement", "embed");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLFieldSetElement", "fieldset");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLFormElement", "form");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHeadingElement", "h1", "h2", "h3", "h4", "h5", "h6");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHeadElement", "head");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHRElement", "hr");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLHtmlElement", "html");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLIFrameElement", "iframe");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLImageElement", "img");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLabelElement", "label");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLegendElement", "legend");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLIElement", "li");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLLinkElement", "link");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMapElement", "map");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMenuElement", "menu");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMetaElement", "meta");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMeterElement", "meter");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLObjectElement", "object");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOListElement", "ol");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOptGroupElement", "optgroup");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLOutputElement", "output");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLParagraphElement", "p");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLParamElement", "param");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLPictureElement", "picture");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLPreElement", "pre");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLProgressElement", "progress");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLScriptElement", "script");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSlotElement", "slot");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSourceElement", "source");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLSpanElement", "span");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLStyleElement", "style");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableElement", "table");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableSectionElement", "tbody", "thead", "tfoot");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableCellElement", "td", "th");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTemplateElement", "template");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTableRowElement", "tr");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTimeElement", "time");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTitleElement", "title");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLTrackElement", "track");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLUListElement", "ul");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLMediaElement", "audio", "video");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLAudioElement", "audio");
-        InstallHtmlElementConstructor(realm, htmlElProto, "HTMLVideoElement", "video");
+        // Build the real per-interface prototype chain and the tag→prototype map
+        // consulted by DomWrappers.WrapNode. Each interface prototype's parent is
+        // HTMLElement.prototype unless the table names a more specific one (the
+        // media hierarchy: HTMLAudio/VideoElement → HTMLMediaElement).
+        var protosByInterface = new Dictionary<string, JsObject>(StringComparer.Ordinal)
+        {
+            ["HTMLElement"] = htmlElProto,
+        };
+        var tagMap = new Dictionary<string, JsObject>(HtmlElementInterfaces.Length * 2, StringComparer.OrdinalIgnoreCase);
+        foreach (var (interfaceName, parent, tags) in HtmlElementInterfaces)
+        {
+            var parentProto = parent is null ? htmlElProto : protosByInterface[parent];
+            var proto = InstallHtmlElementConstructor(realm, parentProto, interfaceName);
+            protosByInterface[interfaceName] = proto;
+            foreach (var tag in tags)
+            {
+                tagMap[tag] = proto;
+            }
+        }
+
+        // Valid HTML tags with no dedicated interface use HTMLElement directly
+        // (HTML §4). Unknown tags fall through to HTMLUnknownElement in WrapNode.
+        foreach (var tag in HtmlBaseInterfaceTags)
+        {
+            tagMap[tag] = htmlElProto;
+        }
+
+        realm.HtmlUnknownElementPrototype =
+            InstallHtmlElementConstructor(realm, htmlElProto, "HTMLUnknownElement");
+        realm.HtmlInterfacePrototypesByTag = tagMap.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static void InstallHtmlElementConstructor(
-        JsRealm realm,
-        JsObject htmlElementPrototype,
-        string interfaceName,
-        params string[] localNames)
+    // WHATWG HTML §4 element-interface table: interface name, optional parent
+    // interface (null ⇒ HTMLElement), and the tag names that use it. Add a row
+    // to model a new element interface. Entries whose parent is named must
+    // appear after that parent so its prototype exists when linked.
+    private static readonly (string Interface, string? Parent, string[] Tags)[] HtmlElementInterfaces =
     {
-        var proto = new JsObject(htmlElementPrototype);
+        ("HTMLButtonElement", null, new[] { "button" }),
+        ("HTMLInputElement", null, new[] { "input" }),
+        ("HTMLOptionElement", null, new[] { "option" }),
+        ("HTMLSelectElement", null, new[] { "select" }),
+        ("HTMLTextAreaElement", null, new[] { "textarea" }),
+        ("HTMLAnchorElement", null, new[] { "a" }),
+        ("HTMLAreaElement", null, new[] { "area" }),
+        ("HTMLBaseElement", null, new[] { "base" }),
+        ("HTMLQuoteElement", null, new[] { "blockquote", "q" }),
+        ("HTMLBodyElement", null, new[] { "body" }),
+        ("HTMLBRElement", null, new[] { "br" }),
+        ("HTMLCanvasElement", null, new[] { "canvas" }),
+        ("HTMLTableCaptionElement", null, new[] { "caption" }),
+        ("HTMLTableColElement", null, new[] { "col", "colgroup" }),
+        ("HTMLDataElement", null, new[] { "data" }),
+        ("HTMLDataListElement", null, new[] { "datalist" }),
+        ("HTMLModElement", null, new[] { "del", "ins" }),
+        ("HTMLDetailsElement", null, new[] { "details" }),
+        ("HTMLDialogElement", null, new[] { "dialog" }),
+        ("HTMLDivElement", null, new[] { "div" }),
+        ("HTMLDListElement", null, new[] { "dl" }),
+        ("HTMLEmbedElement", null, new[] { "embed" }),
+        ("HTMLFieldSetElement", null, new[] { "fieldset" }),
+        ("HTMLFormElement", null, new[] { "form" }),
+        ("HTMLHeadingElement", null, new[] { "h1", "h2", "h3", "h4", "h5", "h6" }),
+        ("HTMLHeadElement", null, new[] { "head" }),
+        ("HTMLHRElement", null, new[] { "hr" }),
+        ("HTMLHtmlElement", null, new[] { "html" }),
+        ("HTMLIFrameElement", null, new[] { "iframe" }),
+        ("HTMLImageElement", null, new[] { "img" }),
+        ("HTMLLabelElement", null, new[] { "label" }),
+        ("HTMLLegendElement", null, new[] { "legend" }),
+        ("HTMLLIElement", null, new[] { "li" }),
+        ("HTMLLinkElement", null, new[] { "link" }),
+        ("HTMLMapElement", null, new[] { "map" }),
+        ("HTMLMenuElement", null, new[] { "menu" }),
+        ("HTMLMetaElement", null, new[] { "meta" }),
+        ("HTMLMeterElement", null, new[] { "meter" }),
+        ("HTMLObjectElement", null, new[] { "object" }),
+        ("HTMLOListElement", null, new[] { "ol" }),
+        ("HTMLOptGroupElement", null, new[] { "optgroup" }),
+        ("HTMLOutputElement", null, new[] { "output" }),
+        ("HTMLParagraphElement", null, new[] { "p" }),
+        ("HTMLParamElement", null, new[] { "param" }),
+        ("HTMLPictureElement", null, new[] { "picture" }),
+        ("HTMLPreElement", null, new[] { "pre" }),
+        ("HTMLProgressElement", null, new[] { "progress" }),
+        ("HTMLScriptElement", null, new[] { "script" }),
+        ("HTMLSlotElement", null, new[] { "slot" }),
+        ("HTMLSourceElement", null, new[] { "source" }),
+        ("HTMLSpanElement", null, new[] { "span" }),
+        ("HTMLStyleElement", null, new[] { "style" }),
+        ("HTMLTableElement", null, new[] { "table" }),
+        ("HTMLTableSectionElement", null, new[] { "tbody", "thead", "tfoot" }),
+        ("HTMLTableCellElement", null, new[] { "td", "th" }),
+        ("HTMLTemplateElement", null, new[] { "template" }),
+        ("HTMLTableRowElement", null, new[] { "tr" }),
+        ("HTMLTimeElement", null, new[] { "time" }),
+        ("HTMLTitleElement", null, new[] { "title" }),
+        ("HTMLTrackElement", null, new[] { "track" }),
+        ("HTMLUListElement", null, new[] { "ul" }),
+        ("HTMLMediaElement", null, System.Array.Empty<string>()),
+        ("HTMLAudioElement", "HTMLMediaElement", new[] { "audio" }),
+        ("HTMLVideoElement", "HTMLMediaElement", new[] { "video" }),
+    };
+
+    // HTML §4 element names whose interface is HTMLElement itself (no dedicated
+    // interface). Kept apart from HtmlElementInterfaces because they share one
+    // prototype rather than minting their own.
+    private static readonly string[] HtmlBaseInterfaceTags =
+    {
+        "abbr", "address", "article", "aside", "b", "bdi", "bdo", "cite", "code",
+        "dd", "dfn", "dt", "em", "figcaption", "figure", "footer", "header",
+        "hgroup", "i", "kbd", "main", "mark", "nav", "noscript", "rp", "rt",
+        "ruby", "s", "samp", "section", "small", "strong", "sub", "summary",
+        "sup", "u", "var", "wbr",
+    };
+
+    private static JsObject InstallHtmlElementConstructor(
+        JsRealm realm,
+        JsObject parentPrototype,
+        string interfaceName)
+    {
+        var proto = new JsObject(parentPrototype);
         var ctor = new JsNativeFunction(realm, interfaceName, 0, (_, _) =>
             throw new JsThrow(realm.NewTypeError("Illegal constructor")), isConstructor: false);
+        ctor.SetPrototypeOf(realm.HtmlElementConstructor ?? realm.ElementConstructor);
         ctor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(proto), writable: false, enumerable: false, configurable: false));
         proto.DefineOwnProperty("constructor",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-        DefineHtmlElementHasInstance(realm, ctor, localNames);
         realm.GlobalObject.DefineOwnProperty(interfaceName,
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));
-    }
-
-    private static void DefineHtmlElementHasInstance(JsRealm realm, JsObject ctor, params string[] localNames)
-    {
-        var hasInstance = new JsNativeFunction(realm, "Symbol.hasInstance", 1, (_, args) =>
-        {
-            var element = args.Length > 0 ? DomWrappers.UnwrapElement(args[0]) : null;
-            if (element is null)
-            {
-                return JsValue.False;
-            }
-
-            if (localNames.Length == 0)
-            {
-                return JsValue.True;
-            }
-
-            foreach (var localName in localNames)
-            {
-                if (StringComparer.OrdinalIgnoreCase.Equals(element.LocalName, localName))
-                {
-                    return JsValue.True;
-                }
-            }
-            return JsValue.False;
-        }, isConstructor: false);
-        ctor.DefineOwnProperty(SymbolCtor.HasInstance,
-            PropertyDescriptor.Data(JsValue.Object(hasInstance), writable: false, enumerable: false, configurable: true));
+        return proto;
     }
 
     // =====================================================================

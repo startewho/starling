@@ -302,7 +302,11 @@ public sealed class WindowDocumentTests
         var (runtime, _) = BuildEnv();
         Eval(runtime, "result = Object.getPrototypeOf(document) === Document.prototype;")
             .AsBool.Should().BeTrue();
-        Eval(runtime, "result = Object.getPrototypeOf(document.body) === Element.prototype;")
+        // body carries its real interface prototype (HTMLBodyElement.prototype),
+        // which still chains through Element.prototype.
+        Eval(runtime, "result = Object.getPrototypeOf(document.body) === HTMLBodyElement.prototype;")
+            .AsBool.Should().BeTrue();
+        Eval(runtime, "result = document.body instanceof Element;")
             .AsBool.Should().BeTrue();
     }
 

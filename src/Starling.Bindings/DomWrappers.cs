@@ -61,7 +61,7 @@ public static class DomWrappers
         {
             Document { IsHtml: false } => realm.XmlDocumentPrototype ?? realm.DocumentPrototype ?? realm.ObjectPrototype,
             Document => realm.DocumentPrototype ?? realm.ObjectPrototype,
-            Element => realm.ElementPrototype ?? realm.ObjectPrototype,
+            Element el => SelectElementPrototype(realm, el),
             AttrNode => realm.AttrPrototype ?? realm.NodePrototype ?? realm.ObjectPrototype,
             Text => realm.TextPrototype ?? realm.CharacterDataPrototype ?? realm.NodePrototype ?? realm.ObjectPrototype,
             Comment => realm.CommentPrototype ?? realm.CharacterDataPrototype ?? realm.NodePrototype ?? realm.ObjectPrototype,
@@ -77,6 +77,30 @@ public static class DomWrappers
         EventTargetBinding.BindWrapper(wrapper, node);
         cache.Add(node, wrapper);
         return wrapper;
+    }
+
+    // Pick the element's real per-interface prototype so instanceof and
+    // Object.getPrototypeOf hold structurally. HTML elements resolve through the
+    // realm's tag→interface map (falling back to HTMLUnknownElement); non-HTML
+    // elements (SVG/MathML/XML) keep the generic Element.prototype until their
+    // interfaces are modeled.
+    private static JsObject SelectElementPrototype(JsRealm realm, Element element)
+    {
+        if (element.Namespace == Element.HtmlNamespace)
+        {
+            if (realm.HtmlInterfacePrototypesByTag is { } map
+                && map.TryGetValue(element.LocalName, out var proto))
+            {
+                return proto;
+            }
+
+            return realm.HtmlUnknownElementPrototype
+                ?? realm.HtmlElementPrototype
+                ?? realm.ElementPrototype
+                ?? realm.ObjectPrototype;
+        }
+
+        return realm.ElementPrototype ?? realm.ObjectPrototype;
     }
 
     /// <summary>Wrap an <see cref="AttrNode"/> in a JS object bound to the

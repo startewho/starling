@@ -244,6 +244,16 @@ public sealed class JsRealm
     public JsObject? DocumentFragmentPrototype { get; set; }
     public JsObject? DocumentTypePrototype { get; set; }
     public JsObject? ElementPrototype { get; set; }
+
+    // HTML §4 per-interface element prototypes. Built once during bindings
+    // install, then read by DomWrappers.WrapNode so each element carries its
+    // real interface prototype (HTMLDivElement.prototype, …). This is what makes
+    // Object.getPrototypeOf(el) === HTMLDivElement.prototype and instanceof hold
+    // structurally instead of through a faked @@hasInstance.
+    public JsObject? HtmlElementPrototype { get; set; }
+    public JsObject? HtmlUnknownElementPrototype { get; set; }
+    public System.Collections.Frozen.FrozenDictionary<string, JsObject>? HtmlInterfacePrototypesByTag { get; set; }
+
     public JsObject? DocumentPrototype { get; set; }
     public JsObject? XmlDocumentPrototype { get; set; }
     public JsObject? EventPrototype { get; set; }
@@ -264,6 +274,7 @@ public sealed class JsRealm
     public JsObject? DocumentFragmentConstructor { get; set; }
     public JsObject? DocumentTypeConstructor { get; set; }
     public JsObject? ElementConstructor { get; set; }
+    public JsObject? HtmlElementConstructor { get; set; }
     public JsObject? DocumentConstructor { get; set; }
     // DOM §4.9 — Attr + NamedNodeMap (WPT-05).
     public JsObject? AttrPrototype { get; set; }
