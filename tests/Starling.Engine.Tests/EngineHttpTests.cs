@@ -5,7 +5,6 @@ using AwesomeAssertions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using Starling.Net;
-using Starling.Net.Http;
 using StarlingUrlParser = global::Starling.Url.UrlParser;
 namespace Starling.Engine.Tests;
 
@@ -288,9 +287,6 @@ public class EngineHttpTests
 
         server.AcceptCount.Should().Be(1,
             "the pool must reuse the kept-alive TCP connection across sequential GETs");
-        client.ConnectionPool.IdleCountFor(
-            OriginKey.Create("http", "localhost", server.Port))
-            .Should().Be(1, "after the second response the transport returns to the idle pool");
     }
 
     [TestMethod]
@@ -356,7 +352,6 @@ public class EngineHttpTests
         (await client.GetAsync(url, CancellationToken.None)).IsOk.Should().BeTrue();
 
         server.AcceptCount.Should().Be(2);
-        client.ConnectionPool.IdleCount.Should().Be(0);
     }
 
     [TestMethod]

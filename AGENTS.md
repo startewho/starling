@@ -277,14 +277,14 @@ libpng/libjpeg/libwebp on Linux. It is also the only engine project with
 `AllowUnsafeBlocks=true`. Every other engine module under
 `src/Starling.{Common,Url,Net,Html,Dom,Css,Layout,Paint,Js,Bindings,Mcp,Telemetry,Engine}/`
 stays **pure managed** — no P/Invoke, no native dependencies beyond what the
-.NET BCL ships. **TLS path: BouncyCastle.** `Starling.Net` uses
-`BouncyCastle.Cryptography` (pure-managed, no P/Invoke) for TLS 1.3 via
-`BcTlsTransport`. The `wp:M3-06e` SslStream migration was rolled back in
-`939f3a5 fix ssl crash` (2026-05-14) after a macOS TLS 1.3 issue surfaced in
-integration; re-attempting SslStream — or formally re-blessing BouncyCastle as
-the long-term path — is a tracked open item in `wp:M3-06-native-interop-pivot`'s
-handoff log. The interop-seam policy is still satisfied either way, because
-BouncyCastle adds no native dependency. CI greps the engine-project allowlist
+.NET BCL ships. **One carve-out: `Starling.Net`.** As of 2026-07-07 it runs on
+`System.Net.Http.HttpClient` over `SocketsHttpHandler` (transport, TLS, HTTP/1.1,
+HTTP/2), which reaches native crypto through the BCL. The BouncyCastle TLS client
+was deleted. `Starling.Net` still writes no P/Invoke of its own, so it stays off
+the interop grep, but it is no longer strictly pure-managed at runtime — the
+"managed-first" rule now means "no P/Invoke in our code," not "no native code
+anywhere below us." Cert trust stays ours: `HttpClient` chains to the bundled
+CCADB root store via a custom `ConnectCallback`, not the OS store. CI greps the engine-project allowlist
 (every engine project *except* the Codecs interop project); the lint job fails
 if you regress it. The GUI shell (`src/Starling.Gui`, Avalonia 12) and the Aspire
 AppHost/ServiceDefaults projects are exempt — they link against Avalonia desktop

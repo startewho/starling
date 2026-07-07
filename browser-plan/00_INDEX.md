@@ -27,7 +27,7 @@
 | UI | Avalonia 12 (stable 12.0.x, released Apr 2026; targets .NET 10 directly; .NET 8+ only) | user |
 | Rasterization | `SixLabors.ImageSharp` 3.x + `SixLabors.ImageSharp.Drawing` 2.x + `SixLabors.Fonts` 2.x | user |
 | JS engine | The Starling JS engine, written from scratch in C#. No third-party JS engine dependencies. | user |
-| Networking | Hand-written from `System.Net.Sockets` up. No `HttpClient`, no `SslStream`. | user |
+| Networking | `System.Net.Http.HttpClient` over a configured `SocketsHttpHandler`, wrapped by the `StarlingHttpClient` facade. Browser policy (redirects, cookies, cert trust) stays in Starling; the transport (HTTP/1.1, HTTP/2, TLS) is the BCL's. Reversed the earlier hand-rolled-from-`Sockets` decision on 2026-07-07; see `03_NETWORKING.md`. | user |
 | Process model | Single-process for v1. Ladybird-style multi-process sandboxing deferred to v2. | this plan |
 | Cross-platform | Windows + macOS + Linux from day one. No platform branches without an `OPEN QUESTION`. | user |
 | Threading | Single-threaded UI + event loop. Worker pools for parsing/networking/JS. Details in `01_ARCHITECTURE.md`. | this plan |

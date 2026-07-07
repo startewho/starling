@@ -18,7 +18,9 @@ public class StarlingHttpClientTests
         {
             req.Should().StartWith("GET /test?x=1 HTTP/1.1\r\n");
             req.Should().Contain("Host: localhost:");
-            req.Should().Contain("Accept-Encoding: gzip, br, deflate");
+            // HttpClient's SocketsHttpHandler picks the Accept-Encoding value
+            // (AutomaticDecompression is on); we only assert it is advertised.
+            req.Should().Contain("Accept-Encoding:");
             return BuildResponse(body, "text/html; charset=utf-8");
         });
 
@@ -89,6 +91,31 @@ public class StarlingHttpClientTests
             $"http://localhost:{server.Port}/", CancellationToken.None);
         result.IsOk.Should().BeTrue();
         Encoding.UTF8.GetString(result.Value.Body.Span).Should().Be("hello world!");
+    }
+
+    [TestMethod]
+    public async Task Duplicate_Set_Cookie_response_headers_are_preserved()
+    {
+        using var server = await StubHttpServer.StartAsync(_ =>
+        {
+            var head =
+                "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/plain\r\n" +
+                "Set-Cookie: a=1\r\n" +
+                "Set-Cookie: b=2; Path=/\r\n" +
+                "Content-Length: 0\r\n" +
+                "Connection: close\r\n\r\n";
+            return Encoding.ASCII.GetBytes(head);
+        });
+
+        using var client = new StarlingHttpClient();
+        var result = await client.GetAsync(
+            $"http://localhost:{server.Port}/", CancellationToken.None);
+
+        result.IsOk.Should().BeTrue();
+        var setCookies = result.Value.Headers.GetAll("Set-Cookie");
+        setCookies.Should().HaveCount(2);
+        setCookies.Should().Contain("a=1").And.Contain("b=2; Path=/");
     }
 
     [TestMethod]

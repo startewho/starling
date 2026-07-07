@@ -1,5 +1,21 @@
 # 03 — Networking
 
+> **Status (2026-07-07): switched to `HttpClient`.** The hand-rolled transport —
+> UDP DNS, the raw `Socket` dialer, the BouncyCastle TLS client, the HTTP/1.1
+> parser, the HTTP/2 + HPACK stack, the connection pool, and the body decoders —
+> was deleted. `StarlingHttpClient` is now a thin browser-policy wrapper over
+> `System.Net.Http.HttpClient` on a configured `SocketsHttpHandler`. This
+> reverses the "no `HttpClient`, no `SslStream`" rule that the rest of this doc
+> was written under. What Starling still owns: redirects (the engine follows
+> them; `AllowAutoRedirect` is off), cookies (our `CookieJar`, not
+> `CookieContainer`; `UseCookies` is off), and cert trust (the bundled CCADB
+> root store via a `ConnectCallback` that also captures the leaf for the lock
+> UI). What the BCL now owns: TCP, TLS, HTTP/1.1, HTTP/2, decompression, and
+> pooling — plus native crypto under the hood, which is why the engine is no
+> longer strictly pure-managed (see `AGENTS.md` interop policy). The sections
+> below describe the retired design and are kept for history; trust this banner
+> where they disagree.
+
 ## Scope
 
 **In:** URL parsing, DNS, TCP, TLS 1.3 (via `SslStream`), HTTP/1.1, HTTP/2 + HPACK, cookies, content decoding (gzip/brotli/deflate), HTTP cache, fetch primitives. Public seam for the engine.
@@ -42,11 +58,13 @@ its clean bill on the CI grep.
 > `wp:M3-06-native-interop-pivot`'s handoff log. See `AGENTS.md` §"Interop
 > policy" for the current authoritative statement.
 
-**No `HttpClient`.** We do not use `System.Net.Http.HttpClient` — the HTTP/1.1
-stack (and the planned HTTP/2 stack) is hand-rolled. That is the whole point of
-this doc: the engine owns connection pooling, cookies, caching, redirects, and
-cert trust, none of which `HttpClient` lets us control to browser spec. The ban
-on `HttpClient` is unchanged.
+**`HttpClient` (as of 2026-07-07).** Superseded by the status banner at the top.
+We now use `System.Net.Http.HttpClient` over `SocketsHttpHandler`. The pieces a
+browser must control — redirects, cookies, and cert trust — are kept above the
+transport by turning off the handler's automatic redirect and cookie handling
+and by validating certificates against the bundled root store in a custom
+`ConnectCallback`. Everything else (pooling, HTTP/1.1, HTTP/2, decompression) is
+the handler's job.
 
 What we *do* use:
 - `System.Net.Sockets.Socket` (raw TCP / UDP, fully managed).
@@ -470,5 +488,5 @@ Used by [10_WEB_APIS.md#fetch](10_WEB_APIS.md#fetch).
 - [ ] Gzip and Brotli-encoded bodies decode byte-identical to non-encoded servers.
 - [ ] Connection pool reuses a TCP connection across two sequential HTTPS requests to the same origin.
 - [ ] All of the above pass on Windows, macOS, Linux in CI.
-- [ ] `grep -rn 'System.Net.Http\|HttpClient' src/Starling.Net/` is empty (the `HttpClient` ban stands; `SslStream` is now the sanctioned TLS path).
-- [ ] `grep -rn 'DllImport\|LibraryImport' src/Starling.Net/` is empty — `Starling.Net` is not a designated interop project.
+- [ ] `Starling.Net` builds against `System.Net.Http.HttpClient` — the earlier `HttpClient` ban is lifted (see the status banner). TLS is the BCL's (`SslStream` under `SocketsHttpHandler`), not BouncyCastle.
+- [ ] `grep -rn 'DllImport\|LibraryImport' src/Starling.Net/` is still empty — `Starling.Net` writes no P/Invoke itself, even though the `HttpClient` it now calls uses native crypto internally.

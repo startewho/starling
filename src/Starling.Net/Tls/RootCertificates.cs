@@ -1,13 +1,18 @@
-using Org.BouncyCastle.X509;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Starling.Net.Tls;
 
+/// <summary>
+/// The trust anchors Starling chains server certificates to. Backed by the
+/// embedded CCADB bundle so trust decisions are deterministic across machines,
+/// independent of the OS trust store.
+/// </summary>
 public sealed class RootCertificates
 {
     private const string ResourceSuffix = ".Resources.Roots.ccadb.pem";
-    private readonly IReadOnlyList<X509Certificate> _certificates;
+    private readonly X509Certificate2Collection _certificates;
 
-    private RootCertificates(IReadOnlyList<X509Certificate> certificates)
+    private RootCertificates(X509Certificate2Collection certificates)
     {
         _certificates = certificates;
     }
@@ -26,7 +31,11 @@ public sealed class RootCertificates
     /// </summary>
     public static RootCertificates SystemTrust { get; } = BuildSystemTrust();
 
-    public IReadOnlyList<X509Certificate> Certificates => _certificates;
+    /// <summary>
+    /// The trust anchors as a collection suitable for
+    /// <see cref="X509ChainPolicy.CustomTrustStore"/>.
+    /// </summary>
+    public X509Certificate2Collection Certificates => _certificates;
 
     public static RootCertificates FromPem(Stream pemStream)
     {
@@ -35,9 +44,11 @@ public sealed class RootCertificates
             throw new ArgumentNullException(nameof(pemStream));
         }
 
-        var parser = new X509CertificateParser();
-        var certificates = parser.ReadCertificates(pemStream).ToArray();
-        if (certificates.Length == 0)
+        using var reader = new StreamReader(pemStream);
+        var pem = reader.ReadToEnd();
+        var certificates = new X509Certificate2Collection();
+        certificates.ImportFromPem(pem);
+        if (certificates.Count == 0)
         {
             throw new InvalidDataException("root certificate bundle is empty");
         }
@@ -47,18 +58,20 @@ public sealed class RootCertificates
 
     private static RootCertificates BuildSystemTrust()
     {
-        var combined = new List<X509Certificate>(Default._certificates);
-        // Dedup by encoded bytes so a CA present in both the bundle and the OS
-        // store becomes a single trust anchor.
-        var seen = new HashSet<string>(Default._certificates.Count);
+        var combined = new X509Certificate2Collection();
+        combined.AddRange(Default._certificates);
+
+        // Dedup by thumbprint so a CA present in both the bundle and the OS store
+        // becomes a single trust anchor.
+        var seen = new HashSet<string>(Default._certificates.Count, StringComparer.Ordinal);
         foreach (var certificate in Default._certificates)
         {
-            seen.Add(Fingerprint(certificate));
+            seen.Add(certificate.Thumbprint);
         }
 
         foreach (var certificate in SystemRootCertificates.Load())
         {
-            if (seen.Add(Fingerprint(certificate)))
+            if (seen.Add(certificate.Thumbprint))
             {
                 combined.Add(certificate);
             }
@@ -66,9 +79,6 @@ public sealed class RootCertificates
 
         return new RootCertificates(combined);
     }
-
-    private static string Fingerprint(X509Certificate certificate) =>
-        Convert.ToHexString(certificate.GetEncoded());
 
     private static RootCertificates LoadDefault()
     {
