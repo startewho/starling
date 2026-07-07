@@ -1,16 +1,11 @@
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Org.BouncyCastle.X509;
-using BcCertificate = Org.BouncyCastle.X509.X509Certificate;
 
 namespace Starling.Net.Tls;
 
 internal static partial class SystemRootCertificatesLog
 {
-    [LoggerMessage(Level = LogLevel.Debug, Message = "skipping unparseable certificate in {StoreLocation} Root store")]
-    public static partial void DroppedCert(ILogger logger, Exception ex, string storeLocation);
-
     [LoggerMessage(Level = LogLevel.Debug, Message = "OS Root store unavailable for {StoreLocation}")]
     public static partial void StoreUnavailable(ILogger logger, Exception ex, string storeLocation);
 }
@@ -27,11 +22,10 @@ internal static partial class SystemRootCertificatesLog
 /// </summary>
 internal static class SystemRootCertificates
 {
-    public static IReadOnlyList<BcCertificate> Load(ILogger? log = null)
+    public static IReadOnlyList<X509Certificate2> Load(ILogger? log = null)
     {
         log ??= NullLogger.Instance;
-        var parser = new X509CertificateParser();
-        var certificates = new List<BcCertificate>();
+        var certificates = new List<X509Certificate2>();
 
         foreach (var location in new[] { StoreLocation.CurrentUser, StoreLocation.LocalMachine })
         {
@@ -41,16 +35,7 @@ internal static class SystemRootCertificates
                 store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
                 foreach (var osCertificate in store.Certificates)
                 {
-                    try
-                    {
-                        certificates.Add(parser.ReadCertificate(osCertificate.RawData));
-                    }
-                    catch (Exception ex)
-                    {
-                        // Skip any entry BouncyCastle can't parse; one bad cert
-                        // must not poison the whole store.
-                        SystemRootCertificatesLog.DroppedCert(log, ex, location.ToString());
-                    }
+                    certificates.Add(osCertificate);
                 }
             }
             catch (Exception ex)
