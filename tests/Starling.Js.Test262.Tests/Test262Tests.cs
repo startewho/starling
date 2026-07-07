@@ -37,8 +37,8 @@ public class Test262Tests
     // Ratchet floors, percent. Raise deliberately after a measured improvement;
     // never lower. 0 = report-only (bucket not yet baselined).
     private const double LanguageFloor = 98.2d; // 98.33% — param TDZ + private-name identity + namespace TDZ (2026-07-06)
-    private const double BuiltInsFloor = 93.5d; // 93.64% — Unicode 17 property-escape tables drove built-ins/RegExp 61.8%->98.8% (2026-07-06)
-    private const double Intl402Floor = 69d;   // 69.77% after the NumberFormat option/decimal engine (2026-07-06)
+    private const double BuiltInsFloor = 95.9d; // 96.02% — Iterator 5.7->100, Promise 71.5->100, Function 77.5->99.6 (2026-07-07)
+    private const double Intl402Floor = 99.5d;  // 99.81% — DateTimeFormat/Collator/Locale/ListFormat/RelativeTimeFormat/Segmenter/PluralRules/DisplayNames engines (2026-07-07)
     private const double AnnexBFloor = 85d;   // 85.38% — + catch-pattern bindings forced catch-local in eval/script tops (2026-07-06)
     private const double StagingFloor = 61d;   // 61.51% after the day-2 sweep + agent merges (2026-07-06)
 
