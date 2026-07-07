@@ -24,8 +24,6 @@ internal static class Program
         // Default the HTML parser to the Starling parser. HtmlBackendSelector
         // reads STARLING_HTML_PARSER lazily on first page load; an explicit value
         // (Aspire, CI, shell) still wins. AngleSharp is opt-in via "anglesharp".
-        // (The JS engine no longer needs seeding here — Starling is the default
-        // for a blank STARLING_JS_ENGINE.)
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STARLING_HTML_PARSER")))
         {
             Environment.SetEnvironmentVariable("STARLING_HTML_PARSER", "starling");

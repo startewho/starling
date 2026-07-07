@@ -22,11 +22,10 @@ namespace Starling.Engine;
 /// so the same live realm survives reflows.
 /// </summary>
 /// <remarks>
-/// Engine-neutral: the live realm is reached only through the
-/// <see cref="IScriptSession"/> seam, so the same retained-context behaviour
-/// works whichever JS backend (<c>STARLING_JS_ENGINE</c>) ran the page. The
-/// backend owns the realm, the simulated loop, and the dynamic-script runner;
-/// this host just routes the shell's post-load events and pump ticks into it.
+/// The live realm is reached only through the <see cref="IScriptSession"/> seam
+/// to the Starling JS engine, which owns the realm, the simulated loop, and the
+/// dynamic-script runner; this host just routes the shell's post-load events and
+/// pump ticks into it.
 /// </remarks>
 /// <remarks>
 /// Single-threaded: every method must run on the shell's UI thread. The realm is

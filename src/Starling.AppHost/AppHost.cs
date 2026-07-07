@@ -2,26 +2,23 @@
 // typically http://localhost:18888) and launches the registered resources.
 // Run with:
 //
-//     aspire run                         # defaults: --starling --imagesharp-gpu
-//     aspire run -- --starling --imagesharp # Starling + CPU paint backend
+//     aspire run                         # defaults: --imagesharp-gpu
+//     aspire run -- --imagesharp         # CPU paint backend
 //
 // Runtime-selection flags (everything after `aspire run --` lands in args) are
 // parsed here and forwarded to BOTH the gui and headless resources:
 //
-//     --starling                         JS engine     (default: --starling)
 //     --imagesharp | --imagesharp-gpu    paint backend (default: --imagesharp-gpu)
 //     --starling-html | --anglesharp-html  HTML parser  (default: --starling-html)
 //
-// A command-line flag wins over the matching env var (STARLING_JS_ENGINE /
-// STARLING_PAINT_BACKEND / STARLING_HTML_PARSER); the env var wins over the
-// built-in default.
+// A command-line flag wins over the matching env var (STARLING_PAINT_BACKEND /
+// STARLING_HTML_PARSER); the env var wins over the built-in default.
 //
 // The dashboard surfaces stdout/stderr and (when the resource wires it via
 // Starling.Telemetry) OpenTelemetry traces + metrics + logs.
 
 // Resolve selection up front so the flags can be stripped from the args handed
 // to Aspire. Left in, they'd be parsed as bogus configuration keys.
-var jsEngine = SelectJsEngine(args) ?? Env("STARLING_JS_ENGINE") ?? "starling";
 var paintBackend = SelectPaintBackend(args) ?? Env("STARLING_PAINT_BACKEND") ?? "imagesharp-gpu";
 var htmlParser = SelectHtmlParser(args) ?? Env("STARLING_HTML_PARSER") ?? "starling";
 
@@ -46,7 +43,6 @@ var repoRoot = LocateRepoRoot();
 // STARLING_MCP_URL still wins.
 var gui = builder.AddProject<Projects.Starling_Gui>("gui")
     .WithEnvironment("STARLING_PAINT_BACKEND", paintBackend)
-    .WithEnvironment("STARLING_JS_ENGINE", jsEngine)
     .WithEnvironment("STARLING_HTML_PARSER", htmlParser)
     .WithEnvironment("STARLING_MCP_URL", "http://127.0.0.1:3078/mcp")
     .WithOtlpExporter();
@@ -63,7 +59,6 @@ var headless = builder.AddProject<Projects.Starling_Headless>("headless")
         Path.Combine(repoRoot, "testdata", "hello.html"),
         "-o", Path.Combine(Path.GetTempPath(), "starling-headless-out.png"))
     .WithEnvironment("STARLING_PAINT_BACKEND", paintBackend)
-    .WithEnvironment("STARLING_JS_ENGINE", jsEngine)
     .WithEnvironment("STARLING_HTML_PARSER", htmlParser)
     .WithExplicitStart()
     .WithOtlpExporter();
@@ -116,11 +111,6 @@ static string? Env(string name)
     return string.IsNullOrWhiteSpace(value) ? null : value;
 }
 
-// --starling  ->  STARLING_JS_ENGINE value (null if no flag given).
-static string? SelectJsEngine(string[] args) => SelectFlag(
-    args, "JS engine",
-    ("--starling", "starling"));
-
 // --imagesharp/--cpu | --imagesharp-gpu/--imagesharp-webgpu/--gpu  ->  STARLING_PAINT_BACKEND.
 static string? SelectPaintBackend(string[] args) => SelectFlag(
     args, "paint backend",
@@ -164,10 +154,9 @@ static string? SelectFlag(string[] args, string label, params (string Flag, stri
     return selected;
 }
 
-// True for any flag SelectJsEngine / SelectPaintBackend recognize, so it can be
+// True for any flag SelectPaintBackend / SelectHtmlParser recognize, so it can be
 // stripped before the args reach Aspire's command-line configuration provider.
 static bool IsStarlingSelectionFlag(string arg) => arg is
-    "--starling"
-    or "--imagesharp" or "--cpu"
+    "--imagesharp" or "--cpu"
     or "--imagesharp-gpu" or "--imagesharp-webgpu" or "--gpu"
     or "--starling-html" or "--anglesharp-html";

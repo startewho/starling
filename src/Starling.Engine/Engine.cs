@@ -8,6 +8,7 @@ using Starling.Common;
 using Starling.Common.Diagnostics;
 using Starling.Common.Encoding;
 using Starling.Bindings;
+using Starling.Bindings.Backend;
 using Starling.Css;
 using Starling.Css.Cascade;
 using Starling.Css.Parser;
@@ -1244,8 +1245,8 @@ public sealed class StarlingEngine
     /// </summary>
     /// <remarks>
     /// The engine keeps script ordering/selection/dedup and the pump-loop shape;
-    /// all JS-touching work goes through <see cref="IScriptSession"/>, so the
-    /// active engine is swappable via <c>STARLING_JS_ENGINE</c>. Timers and
+    /// all JS-touching work goes through <see cref="IScriptSession"/>, the seam
+    /// to the Starling JS engine. Timers and
     /// <c>requestAnimationFrame</c> ride a backend-owned simulated clock that
     /// <see cref="PumpToQuiescenceAsync"/> advances one
     /// <see cref="IScriptSession.PumpOnce"/> at a time, so chained
@@ -1316,7 +1317,7 @@ public sealed class StarlingEngine
         // Stand up the JS backend. The session owns the realm, the simulated
         // loop, the dynamic-script runner, and the src/inject hooks; the engine
         // keeps only script ordering/selection/dedup and the pump-loop shape.
-        var inner = JsEngineSelector.Factory.CreateSession(new ScriptSessionOptions(
+        var inner = new StarlingScriptEngineFactory().CreateSession(new ScriptSessionOptions(
             Document: document,
             BaseUrl: baseUrl,
             // The dynamic-script runner + ES module loader inside the backend

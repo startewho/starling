@@ -13,8 +13,8 @@ internal enum HtmlBackendKind
 /// <summary>
 /// Reads <c>STARLING_HTML_PARSER</c> once and installs the matching
 /// <see cref="IHtmlParserBackend"/> into <see cref="HtmlParsing.Backend"/>.
-/// Mirrors <see cref="JsEngineSelector"/>: lazy, default <c>"starling"</c>, and a
-/// typo is rejected loudly rather than silently falling back.
+/// Lazy, default <c>"starling"</c>, and a typo is rejected loudly rather than
+/// silently falling back.
 /// </summary>
 /// <remarks>
 /// This is the only project that references the AngleSharp backend. Removing

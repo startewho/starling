@@ -19,8 +19,7 @@ internal enum RegexBackendKind
 
 /// <summary>
 /// Reads <c>STARLING_REGEX_ENGINE</c> once and dispenses the matching regex
-/// backend. Mirrors <c>Starling.Engine.JsEngineSelector</c> /
-/// <c>PaintBackendSelector</c>: lazy, and a typo is rejected loudly rather than
+/// backend. Mirrors <c>PaintBackendSelector</c>: lazy, and a typo is rejected loudly rather than
 /// silently falling back, so a bad value in an Aspire manifest or CI matrix
 /// surfaces immediately. Default is <c>"dotnet"</c> (System.Text with a Pike-VM
 /// fallback); set <c>STARLING_REGEX_ENGINE=starling</c> to force the pure Pike VM.
