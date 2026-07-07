@@ -386,6 +386,14 @@ public sealed class JsVm
 
     private JsValue CallFunctionLocal(JsFunction fn, JsValue thisValue, JsValue[] args)
     {
+        // §10.2.1 [[Call]] step 2 — a class constructor can only be invoked
+        // via [[Construct]]; the TypeError comes from the FUNCTION'S realm.
+        if (fn.ConstructorKind != ClassConstructorKind.None)
+        {
+            throw new JsThrow((fn.Realm ?? _runtime.Realm).NewTypeError(
+                "Class constructor cannot be invoked without 'new'"));
+        }
+
         // §10.2.1.2 OrdinaryCallBindThis: a SLOPPY function called with a nullish
         // `this` binds the global object, not undefined. This makes the
         // ubiquitous global-detection idiom `(function(){return this})()` and
@@ -393,10 +401,14 @@ public sealed class JsVm
         // function leaves `this` as the passed value (undefined/null). Arrows
         // capture `this` lexically and ignore this argument; class constructors
         // only run via [[Construct]] with a real `this`, so neither is affected.
-        if (thisValue.IsNullish && fn.ConstructorKind == ClassConstructorKind.None
-            && !fn.Body.IsStrict)
+        if (fn.ConstructorKind == ClassConstructorKind.None && !fn.Body.IsStrict
+            && !thisValue.IsObject)
         {
-            thisValue = JsValue.Object(_runtime.Realm.GlobalObject);
+            // Nullish binds the global; any other primitive is boxed in the
+            // function's realm (§10.2.1.2 step 6.a-b).
+            thisValue = thisValue.IsNullish
+                ? JsValue.Object(_runtime.Realm.GlobalObject)
+                : JsValue.Object(AbstractOperations.ToObject(_runtime.Realm, thisValue));
         }
 
         if (fn.Kind == JsFunctionKind.Generator)
@@ -479,8 +491,42 @@ public sealed class JsVm
         }
 
         var protoSlot = newTarget.Get("prototype");
-        var proto = protoSlot.IsObject ? protoSlot.AsObject : _runtime.Realm.ObjectPrototype;
+        // §10.1.13/§7.3.25: a non-object `prototype` falls back to the
+        // intrinsic of new.target's FUNCTION REALM; a revoked-proxy
+        // new.target makes GetFunctionRealm throw.
+        var proto = protoSlot.IsObject
+            ? protoSlot.AsObject
+            : GetFunctionRealm(newTarget).ObjectPrototype;
         return JsValue.Object(_runtime.Realm.NewObjectWithProto(proto));
+    }
+
+    /// <summary>§7.3.25 GetFunctionRealm — bound functions and live proxies
+    /// delegate to their target; a revoked proxy is a TypeError. Callables
+    /// with no realm slot report the running realm.</summary>
+    private JsRealm GetFunctionRealm(JsObject fn)
+    {
+        while (true)
+        {
+            switch (fn)
+            {
+                case JsFunction { Realm: { } r }:
+                    return r;
+                case JsBoundFunction bf:
+                    fn = bf.Target;
+                    continue;
+                case JsProxy proxy:
+                    if (proxy.IsRevoked)
+                    {
+                        throw new JsThrow(_runtime.Realm.NewTypeError(
+                            "Cannot get the realm of a revoked proxy"));
+                    }
+
+                    fn = proxy.Target!;
+                    continue;
+                default:
+                    return _runtime.Realm;
+            }
+        }
     }
 
     /// <summary>DIAG: name of the most recent property/global load, used to
@@ -4424,13 +4470,20 @@ public sealed class JsVm
         {
             throw new JsThrow(_runtime.Realm.NewRangeError("Maximum call stack size exceeded"));
         }
-        // §10.2.1.2 OrdinaryCallBindThis — same sloppy-this coercion as
-        // CallFunctionLocal: a sloppy function called with nullish `this`
-        // binds the global object.
-        if (thisValue.IsNullish && fn.ConstructorKind == ClassConstructorKind.None
-            && !fn.Body.IsStrict)
+        // §10.2.1 [[Call]] step 2 — class constructors reject plain calls.
+        if (fn.ConstructorKind != ClassConstructorKind.None)
         {
-            thisValue = JsValue.Object(_runtime.Realm.GlobalObject);
+            throw new JsThrow((fn.Realm ?? _runtime.Realm).NewTypeError(
+                "Class constructor cannot be invoked without 'new'"));
+        }
+        // §10.2.1.2 OrdinaryCallBindThis — same sloppy-this coercion as
+        // CallFunctionLocal: nullish binds the global, other primitives box.
+        if (fn.ConstructorKind == ClassConstructorKind.None && !fn.Body.IsStrict
+            && !thisValue.IsObject)
+        {
+            thisValue = thisValue.IsNullish
+                ? JsValue.Object(_runtime.Realm.GlobalObject)
+                : JsValue.Object(AbstractOperations.ToObject(_runtime.Realm, thisValue));
         }
 
         var callee_frame = CreateFrame(fn.Body, args, thisValue, fn.Upvalues, fn,

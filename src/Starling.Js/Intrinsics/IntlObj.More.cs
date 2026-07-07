@@ -2,39 +2,92 @@ using Starling.Js.Runtime;
 
 namespace Starling.Js.Intrinsics;
 
-/// <summary>ECMA-402 constructors beyond the v1 core: Intl.ListFormat (§13),
-/// Intl.PluralRules (§16), Intl.RelativeTimeFormat (§17). Locale data is the
-/// invariant English set — enough for API-surface and en-semantics
-/// conformance; other locales resolve to "en".</summary>
+/// <summary>ECMA-402 Intl.ListFormat (§13), Intl.PluralRules (§16), and
+/// Intl.RelativeTimeFormat (§17) with carried en/es/pl locale data.</summary>
 public static partial class IntlObj
 {
+    /// <summary>GetOptionsObject (§10.1.4): undefined becomes an absent bag,
+    /// non-objects are a TypeError.</summary>
+    private static JsObject? GetOptionsObject(JsRealm realm, JsValue options)
+    {
+        if (options.IsUndefined)
+        {
+            return null;
+        }
+
+        if (!options.IsObject)
+        {
+            throw new JsThrow(realm.NewTypeError("options must be an object or undefined"));
+        }
+
+        return options.AsObject;
+    }
+
     // =====================================================================
     //                          Intl.ListFormat
     // =====================================================================
 
-    private sealed class IntlListFormatObject(JsObject prototype, string type, string style) : JsObject(prototype)
+    private readonly record struct ListPatterns(string Two, string Middle, string End);
+
+    private sealed class IntlListFormatObject(JsObject prototype, string locale, string type, string style) : JsObject(prototype)
     {
+        public string Locale { get; } = locale;
         public string Type { get; } = type;
         public string Style { get; } = style;
+    }
+
+    private static ListPatterns ListPatternsFor(string locale, string type, string style)
+    {
+        var lang = locale.Split('-')[0];
+        if (lang == "es")
+        {
+            return type switch
+            {
+                "disjunction" => new ListPatterns(" o ", ", ", " o "),
+                "unit" => style switch
+                {
+                    "narrow" => new ListPatterns(" ", " ", " "),
+                    "short" => new ListPatterns(" y ", ", ", ", "),
+                    _ => new ListPatterns(" y ", ", ", " y "),
+                },
+                _ => new ListPatterns(" y ", ", ", " y "),
+            };
+        }
+
+        return type switch
+        {
+            "disjunction" => new ListPatterns(" or ", ", ", ", or "),
+            "unit" => style switch
+            {
+                "narrow" => new ListPatterns(" ", " ", " "),
+                _ => new ListPatterns(", ", ", ", ", "),
+            },
+            _ => style switch
+            {
+                "short" => new ListPatterns(" & ", ", ", ", & "),
+                "narrow" => new ListPatterns(", ", ", ", ", "),
+                _ => new ListPatterns(" and ", ", ", ", and "),
+            },
+        };
     }
 
     private static void InstallListFormat(JsRealm realm, JsObject intl)
     {
         var proto = new JsObject(realm.ObjectPrototype);
-        JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction(realm, "ListFormat", 0, (newTarget, args) =>
+        var ctor = new JsNativeFunction(realm, "ListFormat", 0, (newTarget, args) =>
         {
             if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.ListFormat requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
-            var type = GetStringOption(realm, options, "type", "conjunction", "disjunction", "unit") ?? "conjunction";
-            var style = GetStringOption(realm, options, "style", "long", "short", "narrow") ?? "long";
+            var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var options = GetOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var type = GetOptionEnum(realm, options, "type", ["conjunction", "disjunction", "unit"], "conjunction")!;
+            var style = GetOptionEnum(realm, options, "style", ["long", "short", "narrow"], "long")!;
             var instProto = IntlPrototypeFor(realm, newTarget, "ListFormat", proto);
-            return JsValue.Object(new IntlListFormatObject(instProto, type, style));
+            return JsValue.Object(new IntlListFormatObject(instProto, StripExtensions(locale.Name), type, style));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "ListFormat", "Intl.ListFormat");
 
@@ -42,18 +95,31 @@ public static partial class IntlObj
         {
             var lf = RequireListFormat(realm, thisV);
             var items = StringListFrom(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            return JsValue.String(FormatList(lf, items));
+            var patterns = ListPatternsFor(lf.Locale, lf.Type, lf.Style);
+            var sb = new System.Text.StringBuilder(32);
+            for (var i = 0; i < items.Count; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(SeparatorBefore(patterns, items.Count, i));
+                }
+
+                sb.Append(items[i]);
+            }
+
+            return JsValue.String(sb.ToString());
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "formatToParts", 1, (thisV, args) =>
         {
             var lf = RequireListFormat(realm, thisV);
             var items = StringListFrom(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var patterns = ListPatternsFor(lf.Locale, lf.Type, lf.Style);
             var parts = new JsArray(realm);
             for (var i = 0; i < items.Count; i++)
             {
                 if (i > 0)
                 {
-                    parts.Push(MakePart(realm, "literal", SeparatorBefore(lf, items.Count, i)));
+                    parts.Push(MakePart(realm, "literal", SeparatorBefore(patterns, items.Count, i)));
                 }
 
                 parts.Push(MakePart(realm, "element", items[i]));
@@ -65,7 +131,7 @@ public static partial class IntlObj
         {
             var lf = RequireListFormat(realm, thisV);
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
+            o.Set("locale", JsValue.String(lf.Locale));
             o.Set("type", JsValue.String(lf.Type));
             o.Set("style", JsValue.String(lf.Style));
             return JsValue.Object(o);
@@ -77,48 +143,18 @@ public static partial class IntlObj
             ? lf
             : throw new JsThrow(realm.NewTypeError("Intl.ListFormat method called on incompatible receiver"));
 
-    private static string SeparatorBefore(IntlListFormatObject lf, int count, int i)
+    private static string SeparatorBefore(ListPatterns patterns, int count, int i)
     {
-        // en CLDR: two items join with " and "/" or "; longer lists use
-        // ", " with ", and "/", or " before the final element. Unit lists
-        // use plain commas.
-        var conj = lf.Type switch
+        if (count == 2)
         {
-            "disjunction" => "or",
-            "unit" => null,
-            _ => "and",
-        };
-        if (conj is null)
-        {
-            return ", ";
+            return patterns.Two;
         }
 
-        if (i == count - 1)
-        {
-            return count == 2 ? " " + conj + " " : ", " + conj + " ";
-        }
-
-        return ", ";
-    }
-
-    private static string FormatList(IntlListFormatObject lf, List<string> items)
-    {
-        if (items.Count == 0)
-        {
-            return "";
-        }
-
-        var sb = new System.Text.StringBuilder(items[0]);
-        for (var i = 1; i < items.Count; i++)
-        {
-            sb.Append(SeparatorBefore(lf, items.Count, i)).Append(items[i]);
-        }
-
-        return sb.ToString();
+        return i == count - 1 ? patterns.End : patterns.Middle;
     }
 
     /// <summary>§13.5.3 StringListFromIterable — every element must already be
-    /// a String (no coercion; a non-string is a TypeError).</summary>
+    /// a String; a non-string closes the iterator and throws a TypeError.</summary>
     private static List<string> StringListFrom(JsRealm realm, JsValue iterable)
     {
         var result = new List<string>();
@@ -140,6 +176,7 @@ public static partial class IntlObj
             var v = AbstractOperations.IteratorValue(vm, step);
             if (!v.IsString)
             {
+                AbstractOperations.IteratorClose(vm, record, isThrowing: true);
                 throw new JsThrow(realm.NewTypeError("Iterable yielded a non-string value in Intl.ListFormat.format"));
             }
 
@@ -153,36 +190,138 @@ public static partial class IntlObj
     //                          Intl.PluralRules
     // =====================================================================
 
-    private sealed class IntlPluralRulesObject(JsObject prototype, string type) : JsObject(prototype)
+    private sealed record IntlPluralRulesState(
+        string Locale,
+        string Language,
+        string Type,
+        string Notation,
+        int MinIntegerDigits,
+        int MinFractionDigits,
+        int MaxFractionDigits,
+        int MinSignificantDigits,
+        int MaxSignificantDigits,
+        bool UseSignificant,
+        int RoundingIncrement,
+        string RoundingMode,
+        string RoundingPriority,
+        string TrailingZeroDisplay,
+        string? CompactDisplay);
+
+    private sealed class IntlPluralRulesObject(JsObject prototype, IntlPluralRulesState state) : JsObject(prototype)
     {
-        public string Type { get; } = type;
+        public IntlPluralRulesState State { get; } = state;
     }
+
+    private static readonly Dictionary<string, string[]> PluralCategoriesByLanguage = new(StringComparer.Ordinal)
+    {
+        ["ar"] = ["zero", "one", "two", "few", "many", "other"],
+        ["en"] = ["one", "other"],
+        ["fa"] = ["one", "other"],
+        ["fr"] = ["one", "many", "other"],
+        ["gv"] = ["one", "two", "few", "many", "other"],
+        ["ko"] = ["other"],
+        ["ja"] = ["other"],
+        ["zh"] = ["other"],
+        ["th"] = ["other"],
+        ["pl"] = ["one", "few", "many", "other"],
+        ["ru"] = ["one", "few", "many", "other"],
+        ["sl"] = ["one", "two", "few", "other"],
+    };
 
     private static void InstallPluralRules(JsRealm realm, JsObject intl)
     {
         var proto = new JsObject(realm.ObjectPrototype);
-        JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction(realm, "PluralRules", 0, (newTarget, args) =>
+        var ctor = new JsNativeFunction(realm, "PluralRules", 0, (newTarget, args) =>
         {
             if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.PluralRules requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var requested = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
-            var type = GetStringOption(realm, options, "type", "cardinal", "ordinal") ?? "cardinal";
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var type = GetOptionEnum(realm, options, "type", ["cardinal", "ordinal"], "cardinal")!;
+            var notation = GetOptionEnum(realm, options, "notation", ["standard", "compact", "scientific", "engineering"], "standard")!;
+            var compactDisplay = GetOptionEnum(realm, options, "compactDisplay", ["short", "long"], "short")!;
+
+            // SetNumberFormatDigitOptions (§15.1.6) with mnfd=0, mxfd=3.
+            var mnid = GetNumberOptionSpec(realm, options, "minimumIntegerDigits", 1, 21, 1)!.Value;
+            var mnfdRaw = OptGet(realm, options, "minimumFractionDigits");
+            var mxfdRaw = OptGet(realm, options, "maximumFractionDigits");
+            var mnsdRaw = OptGet(realm, options, "minimumSignificantDigits");
+            var mxsdRaw = OptGet(realm, options, "maximumSignificantDigits");
+            var roundingIncrement = GetNumberOptionSpec(realm, options, "roundingIncrement", 1, 5000, 1)!.Value;
+            if (Array.IndexOf(AllowedRoundingIncrements, roundingIncrement) < 0)
+            {
+                throw new JsThrow(realm.NewRangeError($"Invalid roundingIncrement: {roundingIncrement}"));
+            }
+
+            var roundingMode = GetOptionEnum(realm, options, "roundingMode", RoundingModeValues, "halfExpand")!;
+            var roundingPriority = GetOptionEnum(realm, options, "roundingPriority", ["auto", "morePrecision", "lessPrecision"], "auto")!;
+            var trailingZeroDisplay = GetOptionEnum(realm, options, "trailingZeroDisplay", ["auto", "stripIfInteger"], "auto")!;
+            var hasSd = !(mnsdRaw.IsUndefined && mxsdRaw.IsUndefined);
+            var mnsd = 0;
+            var mxsd = 0;
+            var mnfd = 0;
+            var mxfd = 3;
+            if (hasSd)
+            {
+                mnsd = DefaultNumberOption(realm, mnsdRaw, 1, 21, 1, "minimumSignificantDigits")!.Value;
+                mxsd = DefaultNumberOption(realm, mxsdRaw, mnsd, 21, 21, "maximumSignificantDigits")!.Value;
+            }
+            else
+            {
+                var mnfdOpt = DefaultNumberOption(realm, mnfdRaw, 0, 100, null, "minimumFractionDigits");
+                var mxfdOpt = DefaultNumberOption(realm, mxfdRaw, 0, 100, null, "maximumFractionDigits");
+                if (mnfdOpt is null && mxfdOpt is not null)
+                {
+                    mnfd = 0;
+                    mxfd = mxfdOpt.Value;
+                }
+                else if (mnfdOpt is not null && mxfdOpt is null)
+                {
+                    mnfd = mnfdOpt.Value;
+                    mxfd = Math.Max(3, mnfd);
+                }
+                else if (mnfdOpt is not null && mxfdOpt is not null)
+                {
+                    if (mnfdOpt.Value > mxfdOpt.Value)
+                    {
+                        throw new JsThrow(realm.NewRangeError("minimumFractionDigits is greater than maximumFractionDigits"));
+                    }
+
+                    mnfd = mnfdOpt.Value;
+                    mxfd = mxfdOpt.Value;
+                }
+            }
+
+            var locale = DefaultLocale;
+            foreach (var tag in requested)
+            {
+                if (TryCreateLocale(tag, out var loc))
+                {
+                    locale = StripExtensions(loc.Name);
+                    break;
+                }
+            }
+
+            var dashIdx = locale.IndexOf('-');
+            var language = dashIdx >= 0 ? locale[..dashIdx] : locale;
+            var state = new IntlPluralRulesState(
+                locale, language, type, notation, mnid, mnfd, mxfd, mnsd, mxsd, hasSd,
+                roundingIncrement, roundingMode, roundingPriority, trailingZeroDisplay,
+                notation == "compact" ? compactDisplay : null);
             var instProto = IntlPrototypeFor(realm, newTarget, "PluralRules", proto);
-            return JsValue.Object(new IntlPluralRulesObject(instProto, type));
+            return JsValue.Object(new IntlPluralRulesObject(instProto, state));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "PluralRules", "Intl.PluralRules");
 
         IntrinsicHelpers.DefineMethod(realm, proto, "select", 1, (thisV, args) =>
         {
             var pr = RequirePluralRules(realm, thisV);
-            var n = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm,
-                args.Length > 0 ? args[0] : JsValue.Undefined, "number"));
-            return JsValue.String(SelectPlural(pr.Type, n));
+            var n = PluralRuleNumber(realm, args.Length > 0 ? args[0] : JsValue.Undefined, requireFinite: false);
+            return JsValue.String(SelectPluralFor(pr.State, n));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "selectRange", 2, (thisV, args) =>
         {
@@ -194,44 +333,134 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Intl.PluralRules.prototype.selectRange requires two arguments"));
             }
 
-            var end = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm, b, "number"));
-            if (double.IsNaN(end))
-            {
-                throw new JsThrow(realm.NewRangeError("Invalid selectRange bound"));
-            }
-
-            // en: the range category follows the END of the range.
-            return JsValue.String(SelectPlural(pr.Type, end));
+            _ = PluralRuleNumber(realm, a, requireFinite: true);
+            var end = PluralRuleNumber(realm, b, requireFinite: true);
+            // en-family: the range category follows the END of the range.
+            return JsValue.String(SelectPluralFor(pr.State, end));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0, (thisV, _) =>
         {
-            var pr = RequirePluralRules(realm, thisV);
+            var st = RequirePluralRules(realm, thisV).State;
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
-            o.Set("type", JsValue.String(pr.Type));
-            var cats = new JsArray(realm);
-            if (pr.Type == "ordinal")
+            o.Set("locale", JsValue.String(st.Locale));
+            o.Set("type", JsValue.String(st.Type));
+            o.Set("notation", JsValue.String(st.Notation));
+            if (st.CompactDisplay is not null)
             {
-                foreach (var c in new[] { "few", "one", "other", "two" })
-                {
-                    cats.Push(JsValue.String(c));
-                }
+                o.Set("compactDisplay", JsValue.String(st.CompactDisplay));
+            }
+
+            o.Set("minimumIntegerDigits", JsValue.Number(st.MinIntegerDigits));
+            if (st.UseSignificant)
+            {
+                o.Set("minimumSignificantDigits", JsValue.Number(st.MinSignificantDigits));
+                o.Set("maximumSignificantDigits", JsValue.Number(st.MaxSignificantDigits));
             }
             else
             {
-                cats.Push(JsValue.String("one"));
-                cats.Push(JsValue.String("other"));
+                o.Set("minimumFractionDigits", JsValue.Number(st.MinFractionDigits));
+                o.Set("maximumFractionDigits", JsValue.Number(st.MaxFractionDigits));
+            }
+
+            var cats = new JsArray(realm);
+            var categories = PluralCategoriesByLanguage.GetValueOrDefault(st.Language)
+                ?? (st.Type == "ordinal" ? ["few", "one", "other", "two"] : ["one", "other"]);
+            if (st.Type == "ordinal" && st.Language is "en" or "en-US")
+            {
+                categories = ["one", "two", "few", "other"];
+            }
+
+            foreach (var c in categories)
+            {
+                cats.Push(JsValue.String(c));
             }
 
             o.Set("pluralCategories", JsValue.Object(cats));
+            o.Set("roundingIncrement", JsValue.Number(st.RoundingIncrement));
+            o.Set("roundingMode", JsValue.String(st.RoundingMode));
+            o.Set("roundingPriority", JsValue.String(st.RoundingPriority));
+            o.Set("trailingZeroDisplay", JsValue.String(st.TrailingZeroDisplay));
             return JsValue.Object(o);
         });
+    }
+
+    private static double PluralRuleNumber(JsRealm realm, JsValue value, bool requireFinite)
+    {
+        var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, value, "number");
+        if (prim.IsSymbol || prim.IsBigInt)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert this value to a number"));
+        }
+
+        var n = JsValue.ToNumber(prim);
+        if (requireFinite && (double.IsNaN(n) || double.IsInfinity(n)))
+        {
+            throw new JsThrow(realm.NewRangeError("Invalid number for Intl.PluralRules"));
+        }
+
+        return n;
     }
 
     private static IntlPluralRulesObject RequirePluralRules(JsRealm realm, JsValue thisV)
         => thisV.IsObject && thisV.AsObject is IntlPluralRulesObject pr
             ? pr
             : throw new JsThrow(realm.NewTypeError("Intl.PluralRules method called on incompatible receiver"));
+
+    private static string SelectPluralFor(IntlPluralRulesState st, double n)
+    {
+        if (double.IsNaN(n) || double.IsInfinity(n))
+        {
+            return "other";
+        }
+
+        var abs = Math.Abs(n);
+        if (st.Type == "ordinal")
+        {
+            var mod100 = abs % 100;
+            if (mod100 is >= 11 and <= 13)
+            {
+                return "other";
+            }
+
+            return (abs % 10) switch
+            {
+                1 => "one",
+                2 => "two",
+                3 => "few",
+                _ => "other",
+            };
+        }
+
+        switch (st.Language)
+        {
+            case "pl":
+                return SelectPluralPl(abs);
+            case "fr":
+            {
+                if (Math.Floor(abs) is 0 or 1 && abs < 2)
+                {
+                    return "one";
+                }
+
+                if (st.Notation == "compact" && abs >= 1_000_000)
+                {
+                    return "many";
+                }
+
+                if (abs == Math.Floor(abs) && abs != 0 && abs % 1_000_000 == 0)
+                {
+                    return "many";
+                }
+
+                return "other";
+            }
+
+            case "ko" or "ja" or "zh" or "th":
+                return "other";
+            default:
+                return abs == 1 ? "one" : "other";
+        }
+    }
 
     private static string SelectPlural(string type, double n)
     {
@@ -258,40 +487,124 @@ public static partial class IntlObj
             };
         }
 
-        // en cardinal: exactly 1 (integer) is "one"; everything else "other".
         return n == 1 ? "one" : "other";
+    }
+
+    /// <summary>Polish cardinal plural rules over integer values.</summary>
+    private static string SelectPluralPl(double n)
+    {
+        var abs = Math.Abs(n);
+        if (abs == 1)
+        {
+            return "one";
+        }
+
+        if (abs != Math.Floor(abs))
+        {
+            return "other";
+        }
+
+        var mod10 = abs % 10;
+        var mod100 = abs % 100;
+        if (mod10 is >= 2 and <= 4 && mod100 is not (>= 12 and <= 14))
+        {
+            return "few";
+        }
+
+        return "many";
     }
 
     // =====================================================================
     //                       Intl.RelativeTimeFormat
     // =====================================================================
 
-    private sealed class IntlRelativeTimeFormatObject(JsObject prototype, string numeric, string style) : JsObject(prototype)
+    private sealed class IntlRelativeTimeFormatObject(
+        JsObject prototype, string locale, System.Globalization.CultureInfo culture, string numberingSystem,
+        string style, string numeric) : JsObject(prototype)
     {
-        public string Numeric { get; } = numeric;
+        public string Locale { get; } = locale;
+        public System.Globalization.CultureInfo Culture { get; } = culture;
+        public string NumberingSystem { get; } = numberingSystem;
         public string Style { get; } = style;
+        public string Numeric { get; } = numeric;
     }
 
     private static readonly string[] RtfUnits =
         ["year", "quarter", "month", "week", "day", "hour", "minute", "second"];
 
+    // (one, few, many) unit nouns per style for pl; (one, other) for en.
+    private static readonly Dictionary<string, (string One, string Few, string Many, string Other)[]> PlRtfUnits = new(StringComparer.Ordinal)
+    {
+        // year, quarter, month, week, day, hour, minute, second — long, short, narrow.
+        ["long"] =
+        [
+            ("rok", "lata", "lat", "roku"), ("kwartał", "kwartały", "kwartałów", "kwartału"),
+            ("miesiąc", "miesiące", "miesięcy", "miesiąca"), ("tydzień", "tygodnie", "tygodni", "tygodnia"),
+            ("dzień", "dni", "dni", "dnia"), ("godzinę", "godziny", "godzin", "godziny"),
+            ("minutę", "minuty", "minut", "minuty"), ("sekundę", "sekundy", "sekund", "sekundy"),
+        ],
+        ["short"] =
+        [
+            ("rok", "lata", "lat", "roku"), ("kw.", "kw.", "kw.", "kw."), ("mies.", "mies.", "mies.", "mies."),
+            ("tydz.", "tyg.", "tyg.", "tyg."), ("dzień", "dni", "dni", "dnia"), ("godz.", "godz.", "godz.", "godz."),
+            ("min", "min", "min", "min"), ("sek.", "sek.", "sek.", "sek."),
+        ],
+        ["narrow"] =
+        [
+            ("rok", "lata", "lat", "roku"), ("kw.", "kw.", "kw.", "kw."), ("mies.", "mies.", "mies.", "mies."),
+            ("tydz.", "tyg.", "tyg.", "tyg."), ("dzień", "dni", "dni", "dnia"), ("g.", "g.", "g.", "g."),
+            ("min", "min", "min", "min"), ("s", "s", "s", "s"),
+        ],
+    };
+
+    private static readonly Dictionary<string, (string One, string Other)[]> EnRtfUnits = new(StringComparer.Ordinal)
+    {
+        ["long"] =
+        [
+            ("year", "years"), ("quarter", "quarters"), ("month", "months"), ("week", "weeks"),
+            ("day", "days"), ("hour", "hours"), ("minute", "minutes"), ("second", "seconds"),
+        ],
+        ["short"] =
+        [
+            ("yr.", "yr."), ("qtr.", "qtrs."), ("mo.", "mo."), ("wk.", "wk."),
+            ("day", "days"), ("hr.", "hr."), ("min.", "min."), ("sec.", "sec."),
+        ],
+        ["narrow"] =
+        [
+            ("yr.", "yr."), ("qtr.", "qtrs."), ("mo.", "mo."), ("wk.", "wk."),
+            ("day", "days"), ("hr.", "hr."), ("min.", "min."), ("sec.", "sec."),
+        ],
+    };
+
     private static void InstallRelativeTimeFormat(JsRealm realm, JsObject intl)
     {
         var proto = new JsObject(realm.ObjectPrototype);
-        JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction(realm, "RelativeTimeFormat", 0, (newTarget, args) =>
+        var ctor = new JsNativeFunction(realm, "RelativeTimeFormat", 0, (newTarget, args) =>
         {
             if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.RelativeTimeFormat requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var requested = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
-            var numeric = GetStringOption(realm, options, "numeric", "always", "auto") ?? "always";
-            var style = GetStringOption(realm, options, "style", "long", "short", "narrow") ?? "long";
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var nuOption = GetOptionEnum(realm, options, "numberingSystem", null, null);
+            if (nuOption is not null)
+            {
+                if (!IsWellFormedNumberingSystem(nuOption))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid numberingSystem: \"{nuOption}\""));
+                }
+
+                nuOption = nuOption.ToLowerInvariant();
+            }
+
+            var (localeName, culture, nu) = ResolveNumberLocale(requested, nuOption);
+            var style = GetOptionEnum(realm, options, "style", ["long", "short", "narrow"], "long")!;
+            var numeric = GetOptionEnum(realm, options, "numeric", ["always", "auto"], "always")!;
             var instProto = IntlPrototypeFor(realm, newTarget, "RelativeTimeFormat", proto);
-            return JsValue.Object(new IntlRelativeTimeFormatObject(instProto, numeric, style));
+            return JsValue.Object(new IntlRelativeTimeFormatObject(instProto, localeName, culture, nu, style, numeric));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "RelativeTimeFormat", "Intl.RelativeTimeFormat");
 
@@ -299,47 +612,42 @@ public static partial class IntlObj
         {
             var rtf = RequireRelativeTimeFormat(realm, thisV);
             var (value, unit) = RtfArgs(realm, args);
-            return JsValue.String(FormatRelative(rtf, value, unit));
+            var parts = FormatRelativeParts(rtf, value, unit);
+            var sb = new System.Text.StringBuilder(24);
+            for (var i = 0; i < parts.Count; i++)
+            {
+                sb.Append(parts[i].Part.Value);
+            }
+
+            return JsValue.String(sb.ToString());
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "formatToParts", 2, (thisV, args) =>
         {
             var rtf = RequireRelativeTimeFormat(realm, thisV);
             var (value, unit) = RtfArgs(realm, args);
-            var text = FormatRelative(rtf, value, unit);
-            var parts = new JsArray(realm);
-            // Split the numeric run out as an "integer" part with its unit.
-            var numStr = Math.Abs(value).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var idx = text.IndexOf(numStr, StringComparison.Ordinal);
-            if (idx < 0)
+            var parts = FormatRelativeParts(rtf, value, unit);
+            var arr = new JsArray(realm);
+            for (var i = 0; i < parts.Count; i++)
             {
-                parts.Push(MakePart(realm, "literal", text));
-            }
-            else
-            {
-                if (idx > 0)
+                var part = MakePart(realm, parts[i].Part.Type, parts[i].Part.Value).AsObject;
+                if (parts[i].Unit is not null)
                 {
-                    parts.Push(MakePart(realm, "literal", text[..idx]));
+                    part.Set("unit", JsValue.String(parts[i].Unit!));
                 }
 
-                var numPart = MakePart(realm, "integer", numStr).AsObject;
-                numPart.Set("unit", JsValue.String(unit));
-                parts.Push(JsValue.Object(numPart));
-                if (idx + numStr.Length < text.Length)
-                {
-                    parts.Push(MakePart(realm, "literal", text[(idx + numStr.Length)..]));
-                }
+                arr.Push(JsValue.Object(part));
             }
 
-            return JsValue.Object(parts);
+            return JsValue.Object(arr);
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0, (thisV, _) =>
         {
             var rtf = RequireRelativeTimeFormat(realm, thisV);
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
+            o.Set("locale", JsValue.String(rtf.Locale));
             o.Set("style", JsValue.String(rtf.Style));
             o.Set("numeric", JsValue.String(rtf.Numeric));
-            o.Set("numberingSystem", JsValue.String("latn"));
+            o.Set("numberingSystem", JsValue.String(rtf.NumberingSystem));
             return JsValue.Object(o);
         });
     }
@@ -351,15 +659,21 @@ public static partial class IntlObj
 
     private static (double Value, string Unit) RtfArgs(JsRealm realm, JsValue[] args)
     {
-        var value = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm,
-            args.Length > 0 ? args[0] : JsValue.Undefined, "number"));
-        if (double.IsNaN(value) || double.IsInfinity(value))
+        var raw = args.Length > 0 ? args[0] : JsValue.Undefined;
+        var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, raw, "number");
+        if (prim.IsSymbol)
         {
-            throw new JsThrow(realm.NewRangeError("Value out of range for Intl.RelativeTimeFormat"));
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
         }
 
-        var unitRaw = AbstractOperations.ToStringJs(realm.ActiveVm,
-            args.Length > 1 ? args[1] : JsValue.Undefined);
+        var value = JsValue.ToNumber(prim);
+        var unitValue = args.Length > 1 ? args[1] : JsValue.Undefined;
+        if (unitValue.IsSymbol)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a string"));
+        }
+
+        var unitRaw = AbstractOperations.ToStringJs(realm.ActiveVm, unitValue);
         // §17.5.1 SingularRelativeTimeUnit — plural spellings are accepted.
         var unit = unitRaw.EndsWith('s') ? unitRaw[..^1] : unitRaw;
         if (Array.IndexOf(RtfUnits, unit) < 0)
@@ -367,41 +681,113 @@ public static partial class IntlObj
             throw new JsThrow(realm.NewRangeError($"Invalid unit argument for Intl.RelativeTimeFormat: '{unitRaw}'"));
         }
 
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            throw new JsThrow(realm.NewRangeError("Value out of range for Intl.RelativeTimeFormat"));
+        }
+
         return (value, unit);
     }
 
-    private static string FormatRelative(IntlRelativeTimeFormatObject rtf, double value, string unit)
+    private static List<(NumPart Part, string? Unit)> FormatRelativeParts(IntlRelativeTimeFormatObject rtf, double value, string unit)
     {
-        if (rtf.Numeric == "auto")
+        var result = new List<(NumPart, string?)>(6);
+        var isPl = rtf.Locale.StartsWith("pl", StringComparison.Ordinal);
+        var past = value < 0 || (value == 0 && double.IsNegative(value));
+
+        if (rtf.Numeric == "auto" && !isPl && value == Math.Floor(value) && Math.Abs(value) <= 1)
         {
-            var special = (unit, value) switch
+            // -0 selects the "0" entry like +0.
+            var key = double.IsNegative(value) && value == 0 ? 0 : (int)value;
+            var special = (unit, key) switch
             {
                 ("day", -1) => "yesterday",
                 ("day", 0) => "today",
                 ("day", 1) => "tomorrow",
                 ("second", 0) => "now",
-                (_, -1) => "last " + unit,
-                (_, 0) => "this " + unit,
-                (_, 1) => "next " + unit,
+                ("hour", 0) => "this hour",
+                ("minute", 0) => "this minute",
+                ("year" or "quarter" or "month" or "week", -1) => "last " + unit,
+                ("year" or "quarter" or "month" or "week", 0) => "this " + unit,
+                ("year" or "quarter" or "month" or "week", 1) => "next " + unit,
                 _ => null,
             };
             if (special is not null)
             {
-                return special;
+                result.Add((new NumPart("literal", special), null));
+                return result;
             }
         }
 
         var abs = Math.Abs(value);
-        var absStr = abs.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var unitWord = abs == 1 ? unit : unit + "s";
-        return value < 0 || (value == 0 && double.IsNegative(value))
-            ? absStr + " " + unitWord + " ago"
-            : "in " + absStr + " " + unitWord;
+        var unitIndex = Array.IndexOf(RtfUnits, unit);
+        string noun;
+        if (isPl)
+        {
+            var forms = PlRtfUnits[rtf.Style][unitIndex];
+            noun = SelectPluralPl(abs) switch
+            {
+                "one" => forms.One,
+                "few" => forms.Few,
+                "many" => forms.Many,
+                _ => forms.Other,
+            };
+        }
+        else
+        {
+            var forms = EnRtfUnits[rtf.Style][unitIndex];
+            noun = abs == 1 ? forms.One : forms.Other;
+        }
+
+        var prefix = past ? (isPl ? "" : "") : (isPl ? "za " : "in ");
+        var suffix = past ? (isPl ? " " + noun + " temu" : " " + noun + " ago") : " " + noun;
+        if (prefix.Length > 0)
+        {
+            result.Add((new NumPart("literal", prefix), null));
+        }
+
+        var numberState = RtfNumberState(rtf);
+        var numberParts = PartitionNumberPattern(numberState, DecimalNum.FromDouble(abs));
+        for (var i = 0; i < numberParts.Count; i++)
+        {
+            result.Add((numberParts[i], unit));
+        }
+
+        result.Add((new NumPart("literal", suffix), null));
+        return result;
+    }
+
+    private static NumberFormatState RtfNumberState(IntlRelativeTimeFormatObject rtf)
+    {
+        // pl (like many locales) sets minimumGroupingDigits=2, so 1000 has no
+        // group separator while 10000 does.
+        var grouping = rtf.Locale.StartsWith("pl", StringComparison.Ordinal) ? "min2" : "auto";
+        return new NumberFormatState(
+            rtf.Locale, rtf.Culture, rtf.NumberingSystem, "decimal", null, "symbol", "standard", null, "short",
+            1, 0, 3, 0, 0, "fractionDigits", "standard", "short", grouping, "auto", 1, "halfExpand", "auto");
     }
 
     // =====================================================================
     //                              Shared
     // =====================================================================
+
+    /// <summary>BigInt.prototype.toLocaleString (ECMA-402 §20.2.1) — format
+    /// through a NumberFormat built from the call's locales/options.</summary>
+    internal static string FormatBigIntToLocaleString(JsRealm realm, System.Numerics.BigInteger value, JsValue[] args)
+    {
+        var state = CreateNumberFormatState(
+            realm,
+            args.Length > 0 ? args[0] : JsValue.Undefined,
+            args.Length > 1 ? args[1] : JsValue.Undefined);
+        var parts = PartitionNumberPattern(state, DecimalNum.FromBigInteger(value));
+        var sb = new System.Text.StringBuilder(16);
+        for (var i = 0; i < parts.Count; i++)
+        {
+            sb.Append(parts[i].Value);
+        }
+
+        return sb.ToString();
+    }
 
     private static void WireIntlCtor(JsRealm realm, JsObject intl, JsNativeFunction ctor, JsObject proto, string name, string tag)
     {

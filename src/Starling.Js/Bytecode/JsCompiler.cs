@@ -1385,12 +1385,13 @@ public sealed partial class JsCompiler
 
     private void EmitFunctionConstructor(
         string name, Chunk body, int arity, IReadOnlyList<UpvalueRef> upvalues,
-        Runtime.JsFunctionKind kind, string? sourceText = null)
+        Runtime.JsFunctionKind kind, string? sourceText = null, bool isMethod = false)
     {
         var fn = new Runtime.JsFunction(name, body, arity)
         {
             Kind = kind,
             SourceText = sourceText,
+            IsMethodDefinition = isMethod,
         };
         var fnIdx = _b.AddConstant(fn);
 
@@ -5728,7 +5729,8 @@ public sealed partial class JsCompiler
         var name = fe.Name?.Name ?? "";
         var chunk = sub._b.Build(name);
         var kind = ResolveFunctionKind(fe.Async, fe.Generator);
-        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind, fe.SourceText);
+        EmitFunctionConstructor(name, chunk, CountSimpleParams(fe.Params), sub._upvalues, kind, fe.SourceText,
+            isMethod: fe.IsMethod || isArrow);
     }
 
     /// <summary>B1b-2c — emit <c>yield expr</c> / <c>yield</c> / <c>yield* iter</c>.

@@ -17,7 +17,9 @@ public class IntlTests
         Eval("typeof Intl.Collator === 'function';").AsBool.Should().BeTrue();
         Eval("typeof Intl.Locale === 'function';").AsBool.Should().BeTrue();
         Eval("typeof Intl.supportedValuesOf === 'function';").AsBool.Should().BeTrue();
-        Eval("Intl.getCanonicalLocales(['en-us', 'bad-locale']).join('|');").AsString.Should().Be("en-US");
+        // "bad-locale" is structurally valid ("bad" language + "locale" variant),
+        // so CanonicalizeLocaleList keeps it (§9.2.1).
+        Eval("Intl.getCanonicalLocales(['en-us', 'bad-locale']).join('|');").AsString.Should().Be("en-US|bad-locale");
         Eval("Object.prototype.toString.call(Intl);").AsString.Should().Be("[object Intl]");
     }
 
@@ -26,7 +28,7 @@ public class IntlTests
     {
         Eval("new Intl.DateTimeFormat('en-US').format(new Date(0));").AsString.Should().Be("1/1/1970");
         Eval("new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).format(new Date(0));")
-            .AsString.Should().Be("01/01/1970");
+            .AsString.Should().Be("12/31/1969");
         Eval("new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(0));")
             .AsString.Should().Be("00:00:00");
         Eval("new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).resolvedOptions().timeZone;")

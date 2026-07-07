@@ -579,7 +579,8 @@ public static partial class IntlObj
     {
         var norm = tag.Replace('_', '-');
         var uIdx = norm.IndexOf("-u-", StringComparison.OrdinalIgnoreCase);
-        if (uIdx < 0)
+        var xIdx = norm.IndexOf("-x-", StringComparison.OrdinalIgnoreCase);
+        if (uIdx < 0 || (xIdx >= 0 && xIdx < uIdx))
         {
             return null;
         }

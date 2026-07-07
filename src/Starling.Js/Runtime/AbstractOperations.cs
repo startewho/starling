@@ -210,7 +210,7 @@ public static class AbstractOperations
         {
             // §27.5/§27.6/§27.7 — generator and async functions have no
             // [[Construct]]; `new` on them is a TypeError.
-            JsFunction fn => fn.Kind == JsFunctionKind.Normal,
+            JsFunction fn => fn.Kind == JsFunctionKind.Normal && !fn.IsMethodDefinition,
             JsNativeFunction nat => nat.IsConstructor,
             JsBoundFunction bf => IsConstructor(JsValue.Object(bf.Target)),
             JsProxy proxy => !proxy.IsRevoked && proxy.TargetIsConstructor,
@@ -526,8 +526,11 @@ public static class AbstractOperations
             JsFunction fn => vm is not null
                 ? vm.ConstructFunction(fn, args, newTarget)
                 : ConstructForeignRealm(fn, args, newTarget),
+            // §10.4.1.2 step 5 — `new bound()` forwards the TARGET as
+            // new.target when new.target was the bound function itself.
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
-                ConcatBoundArgs(bf.BoundArgs, args), newTarget),
+                ConcatBoundArgs(bf.BoundArgs, args),
+                ReferenceEquals(newTarget, bf) ? bf.Target : newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
             _ => throw NotAConstructor(vm, ctor.AsObject.ToString() ?? "object"),
         };

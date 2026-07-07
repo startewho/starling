@@ -439,7 +439,7 @@ public static class TypedArrayCtors
         ArrayBufferCtor.DefineMethod(realm, proto, "some", (thisV, args) => Some(realm, thisV, args), 1);
         ArrayBufferCtor.DefineMethod(realm, proto, "sort", (thisV, args) => Sort(realm, thisV, args), 1);
         ArrayBufferCtor.DefineMethod(realm, proto, "subarray", (thisV, args) => Subarray(realm, thisV, args), 2);
-        ArrayBufferCtor.DefineMethod(realm, proto, "toLocaleString", (thisV, args) => Join(realm, thisV, args), 0);
+        ArrayBufferCtor.DefineMethod(realm, proto, "toLocaleString", (thisV, args) => TypedToLocaleString(realm, thisV, args), 0);
         ArrayBufferCtor.DefineMethod(realm, proto, "toReversed", (thisV, args) => ToReversed(realm, thisV), 0);
         ArrayBufferCtor.DefineMethod(realm, proto, "toSorted", (thisV, args) => ToSorted(realm, thisV, args), 1);
         ArrayBufferCtor.DefineMethod(realm, proto, "toString", (thisV, args) => Join(realm, thisV, args), 0);
@@ -986,6 +986,41 @@ public static class TypedArrayCtors
             }
         }
         return JsValue.Number(-1);
+    }
+
+    private static JsValue TypedToLocaleString(JsRealm realm, JsValue thisV, JsValue[] args)
+    {
+        var ta = ThisTA(realm, thisV);
+        var vm = realm.ActiveVm;
+        var forwarded = new JsValue[2];
+        forwarded[0] = args.Length > 0 ? args[0] : JsValue.Undefined;
+        forwarded[1] = args.Length > 1 ? args[1] : JsValue.Undefined;
+        var sb = new System.Text.StringBuilder(16);
+        var len = ta.Length;
+        for (var i = 0; i < len; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            var element = ta.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (element.IsUndefined || element.IsNull)
+            {
+                continue;
+            }
+
+            var fn = AbstractOperations.Get(vm, AbstractOperations.ToObject(realm, element), "toLocaleString");
+            if (!fn.IsObject || !AbstractOperations.IsCallable(fn))
+            {
+                throw new JsThrow(realm.NewTypeError("element toLocaleString is not callable"));
+            }
+
+            var text = AbstractOperations.Call(vm, fn, element, forwarded);
+            sb.Append(AbstractOperations.ToStringJs(vm, text));
+        }
+
+        return JsValue.String(sb.ToString());
     }
 
     private static JsValue Join(JsRealm realm, JsValue thisV, JsValue[] args)

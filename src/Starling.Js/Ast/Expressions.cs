@@ -170,7 +170,9 @@ public sealed record FunctionExpression(
     bool Async = false,
     // ES strict mode: true when this function's body parses as strict.
     bool Strict = false,
-    string? SourceText = null)
+    string? SourceText = null,
+    // §13.2.5/§15.4 MethodDefinition-shaped: no `prototype`, not a constructor.
+    bool IsMethod = false)
     : Expression(Start, End);
 
 /// <summary>

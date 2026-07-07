@@ -186,6 +186,14 @@ internal static class StringNormalization
     private static int CombiningClass(int cp)
         => cp < 0x0300 ? 0 : (_combiningClass!.TryGetValue(cp, out var cc) ? cc : 0);
 
+    /// <summary>Canonical combining class lookup for special-casing
+    /// conditions (Before_Dot, More_Above, After_Soft_Dotted).</summary>
+    internal static int CombiningClassOf(int cp)
+    {
+        EnsureTables();
+        return CombiningClass(cp);
+    }
+
     private static void EnsureTables()
     {
         if (_pairs is not null)

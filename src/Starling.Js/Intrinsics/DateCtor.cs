@@ -227,21 +227,22 @@ public static class DateCtor
         // toUTCString (not a wrapper), mirroring the trimLeft/trimStart alias.
         proto.DefineOwnProperty("toGMTString",
             PropertyDescriptor.BuiltinMethod(proto.Get("toUTCString")));
-        // Locale variants — invariant, so delegate to the non-locale form.
-        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, _) =>
+        // Locale variants (ECMA-402 §19.4) — each builds a DateTimeFormat
+        // with its own required/defaults pair.
+        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleString", 0, (thisV, args) =>
         {
             var d = RequireDate(realm, thisV);
-            return JsValue.String(d.IsValid ? FormatToString(d.TimeValueMs) : "Invalid Date");
+            return JsValue.String(d.IsValid ? IntlObj.FormatDateToLocale(realm, d.TimeValueMs, args, "any", "all") : "Invalid Date");
         });
-        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleDateString", 0, (thisV, _) =>
+        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleDateString", 0, (thisV, args) =>
         {
             var d = RequireDate(realm, thisV);
-            return JsValue.String(d.IsValid ? FormatDateString(d.TimeValueMs) : "Invalid Date");
+            return JsValue.String(d.IsValid ? IntlObj.FormatDateToLocale(realm, d.TimeValueMs, args, "date", "date") : "Invalid Date");
         });
-        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleTimeString", 0, (thisV, _) =>
+        IntrinsicHelpers.DefineMethod(realm, proto, "toLocaleTimeString", 0, (thisV, args) =>
         {
             var d = RequireDate(realm, thisV);
-            return JsValue.String(d.IsValid ? FormatTimeString(d.TimeValueMs) : "Invalid Date");
+            return JsValue.String(d.IsValid ? IntlObj.FormatDateToLocale(realm, d.TimeValueMs, args, "time", "time") : "Invalid Date");
         });
 
         // §21.4.4.45 Date.prototype[@@toPrimitive] — generic over any object

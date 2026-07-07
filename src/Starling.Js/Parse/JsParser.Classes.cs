@@ -290,6 +290,10 @@ public ref partial struct JsParser
             }
         }
 
+        // §20.2.3.5 — a MethodDefinition's source text starts AFTER the
+        // `static` modifier (and after any trivia following it).
+        var sourceStart = _current.Start;
+
         // Detect async / generator method modifiers (ES2024 §15.4):
         //   *gen(){}, async m(){}, async *gen(){}, static async *gen(){}
         // `async` is contextual: a method modifier only when followed (same
@@ -458,7 +462,7 @@ public ref partial struct JsParser
         var method = new MethodDefinition(key, methodKind, isStatic, computed,
             parameters, body, memberStart, endPos,
             Generator: isGenerator, Async: isAsync, Strict: true,
-            SourceText: SourceSlice(memberStart, endPos));
+            SourceText: SourceSlice(sourceStart, endPos));
         if (isCtor)
         {
             if (existingCtor is not null)

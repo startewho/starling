@@ -93,8 +93,8 @@ public static class StringCtor
             new IntrinsicHelpers.BulkMember("substr", 2, (thisV, args) => Substr(realm, thisV, args)),
             new IntrinsicHelpers.BulkMember("toLowerCase", 0, (thisV, args) => JsValue.String(StringCasing.ToLowerJs(CoerceThisString(realm, thisV)))),
             new IntrinsicHelpers.BulkMember("toUpperCase", 0, (thisV, args) => JsValue.String(StringCasing.ToUpperJs(CoerceThisString(realm, thisV)))),
-            new IntrinsicHelpers.BulkMember("toLocaleLowerCase", 0, (thisV, args) => JsValue.String(StringCasing.ToLowerJs(CoerceThisString(realm, thisV)))),
-            new IntrinsicHelpers.BulkMember("toLocaleUpperCase", 0, (thisV, args) => JsValue.String(StringCasing.ToUpperJs(CoerceThisString(realm, thisV)))),
+            new IntrinsicHelpers.BulkMember("toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ToLocaleCase(realm, thisV, args, upper: false))),
+            new IntrinsicHelpers.BulkMember("toLocaleUpperCase", 0, (thisV, args) => JsValue.String(ToLocaleCase(realm, thisV, args, upper: true))),
             new IntrinsicHelpers.BulkMember("trim", 0, (thisV, args) => JsValue.String(TrimJs(CoerceThisString(realm, thisV), trimStart: true, trimEnd: true))),
             new IntrinsicHelpers.BulkMember("trimStart", 0, (thisV, args) => JsValue.String(TrimJs(CoerceThisString(realm, thisV), trimStart: true, trimEnd: false))),
             new IntrinsicHelpers.BulkMember("trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(CoerceThisString(realm, thisV), trimStart: false, trimEnd: true))),
@@ -405,13 +405,243 @@ public static class StringCtor
     {
         var s = CoerceThisString(realm, thisV);
         var that = ToStringArg(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        // Canonically equivalent strings must compare equal (§22.1.3.12 note 2);
-        // under invariant globalization the comparison itself is ordinal, so
-        // compare canonical decompositions.
-        var result = string.CompareOrdinal(
-            StringNormalization.Normalize(s, compatibility: false, compose: false),
-            StringNormalization.Normalize(that, compatibility: false, compose: false));
-        return JsValue.Number(Math.Sign(result));
+        // ECMA-402 §19.1.1 — compare through a Collator built from the call's
+        // locales/options.
+        return JsValue.Number(IntlObj.CompareForLocaleCompare(realm, s, that, args));
+    }
+
+    /// <summary>ECMA-402 §19.1.2/.3 — locale-sensitive case conversion. The
+    /// locales list is validated (RangeError on malformed tags); Turkish,
+    /// Azerbaijani and Lithuanian dotted/dotless I rules are applied.</summary>
+    private static string ToLocaleCase(JsRealm realm, JsValue thisV, JsValue[] args, bool upper)
+    {
+        var s = CoerceThisString(realm, thisV);
+        var lang = IntlObj.FirstRequestedLanguage(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        if (lang is "tr" or "az")
+        {
+            return upper ? TurkicUpper(s) : TurkicLower(s);
+        }
+
+        if (lang == "lt")
+        {
+            return upper ? LithuanianUpper(s) : LithuanianLower(s);
+        }
+
+        return upper ? StringCasing.ToUpperJs(s) : StringCasing.ToLowerJs(s);
+    }
+
+    private static readonly HashSet<int> SoftDottedCodePoints =
+    [
+        0x0069, 0x006A, 0x012F, 0x0249, 0x0268, 0x029D, 0x02B2, 0x03F3, 0x0456, 0x0458,
+        0x1D62, 0x1D96, 0x1DA4, 0x1DA8, 0x1E2D, 0x1ECB, 0x2071, 0x2148, 0x2149, 0x2C7C,
+        0x1D422, 0x1D423, 0x1D456, 0x1D457, 0x1D48A, 0x1D48B, 0x1D4BE, 0x1D4BF, 0x1D4F2, 0x1D4F3,
+        0x1D526, 0x1D527, 0x1D55A, 0x1D55B, 0x1D58E, 0x1D58F, 0x1D5C2, 0x1D5C3, 0x1D5F6, 0x1D5F7,
+        0x1D62A, 0x1D62B, 0x1D65E, 0x1D65F, 0x1D692, 0x1D693,
+    ];
+
+    private static int CodePointAt(string s, int index, out int length)
+    {
+        var c = s[index];
+        if (char.IsHighSurrogate(c) && index + 1 < s.Length && char.IsLowSurrogate(s[index + 1]))
+        {
+            length = 2;
+            return char.ConvertToUtf32(c, s[index + 1]);
+        }
+
+        length = 1;
+        return c;
+    }
+
+    /// <summary>Unicode Before_Dot: the next combining-class-230 mark after
+    /// index is U+0307. On match returns its offset so it can be elided.</summary>
+    private static int FollowingDotAboveIndex(string s, int index)
+    {
+        var k = index + 1;
+        while (k < s.Length)
+        {
+            var cp = CodePointAt(s, k, out var len);
+            var ccc = StringNormalization.CombiningClassOf(cp);
+            if (ccc == 0)
+            {
+                return -1;
+            }
+
+            if (cp == 0x0307)
+            {
+                return k;
+            }
+
+            if (ccc == 230)
+            {
+                return -1;
+            }
+
+            k += len;
+        }
+
+        return -1;
+    }
+
+    /// <summary>Unicode More_Above: a combining-class-230 mark follows with no
+    /// intervening starter.</summary>
+    private static bool HasMoreAbove(string s, int index)
+    {
+        var k = index + 1;
+        while (k < s.Length)
+        {
+            var cp = CodePointAt(s, k, out var len);
+            var ccc = StringNormalization.CombiningClassOf(cp);
+            if (ccc == 0)
+            {
+                return false;
+            }
+
+            if (ccc == 230)
+            {
+                return true;
+            }
+
+            k += len;
+        }
+
+        return false;
+    }
+
+    /// <summary>Unicode After_Soft_Dotted: the closest preceding character
+    /// with combining class 0 or 230 is Soft_Dotted.</summary>
+    private static bool IsAfterSoftDotted(string s, int index)
+    {
+        var k = index - 1;
+        while (k >= 0)
+        {
+            if (char.IsLowSurrogate(s[k]) && k > 0 && char.IsHighSurrogate(s[k - 1]))
+            {
+                k--;
+            }
+
+            var cp = CodePointAt(s, k, out _);
+            var ccc = StringNormalization.CombiningClassOf(cp);
+            if (ccc == 0 || ccc == 230)
+            {
+                return SoftDottedCodePoints.Contains(cp);
+            }
+
+            k--;
+        }
+
+        return false;
+    }
+
+    private static string TurkicLower(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length);
+        var skip = -1;
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (i == skip)
+            {
+                continue;
+            }
+
+            var c = s[i];
+            if (c == '\u0130')
+            {
+                sb.Append('i');
+            }
+            else if (c == 'I')
+            {
+                var dot = FollowingDotAboveIndex(s, i);
+                if (dot >= 0)
+                {
+                    sb.Append('i');
+                    skip = dot;
+                }
+                else
+                {
+                    sb.Append('\u0131');
+                }
+            }
+            else
+            {
+                sb.Append(StringCasing.ToLowerJs(c.ToString()));
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string TurkicUpper(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            var c = s[i];
+            if (c == 'i')
+            {
+                sb.Append('\u0130');
+            }
+            else if (c == '\u0131')
+            {
+                sb.Append('I');
+            }
+            else
+            {
+                sb.Append(StringCasing.ToUpperJs(c.ToString()));
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string LithuanianLower(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length + 4);
+        for (var i = 0; i < s.Length; i++)
+        {
+            var c = s[i];
+            switch (c)
+            {
+                case 'I' when HasMoreAbove(s, i):
+                    sb.Append("i\u0307");
+                    break;
+                case 'J' when HasMoreAbove(s, i):
+                    sb.Append("j\u0307");
+                    break;
+                case '\u012E' when HasMoreAbove(s, i):
+                    sb.Append("\u012F\u0307");
+                    break;
+                case '\u00CC':
+                    sb.Append("i\u0307\u0300");
+                    break;
+                case '\u00CD':
+                    sb.Append("i\u0307\u0301");
+                    break;
+                case '\u0128':
+                    sb.Append("i\u0307\u0303");
+                    break;
+                default:
+                    sb.Append(StringCasing.ToLowerJs(c.ToString()));
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string LithuanianUpper(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\u0307' && IsAfterSoftDotted(s, i))
+            {
+                continue;
+            }
+
+            sb.Append(StringCasing.ToUpperJs(s[i].ToString()));
+        }
+
+        return sb.ToString();
     }
 
     private static JsValue Normalize(JsRealm realm, JsValue thisV, JsValue[] args)

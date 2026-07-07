@@ -52,16 +52,16 @@ public static class SymbolCtor
         DefineData(ctor, "length", JsValue.Number(0), writable: false, enumerable: false, configurable: true);
         DefineData(ctor, "prototype", JsValue.Object(proto), writable: false, enumerable: false, configurable: false);
 
-        DefineMethod(ctor, "for", (_, args) => SymbolFor(realm, args), 1);
-        DefineMethod(ctor, "keyFor", (_, args) => KeyFor(realm, args), 1);
+        DefineMethod(realm, ctor, "for", (_, args) => SymbolFor(realm, args), 1);
+        DefineMethod(realm, ctor, "keyFor", (_, args) => KeyFor(realm, args), 1);
         foreach (var (name, symbol) in WellKnown)
         {
             DefineData(ctor, name, JsValue.Symbol(symbol), writable: false, enumerable: false, configurable: false);
         }
 
         DefineData(proto, "constructor", JsValue.Object(ctor), writable: true, enumerable: false, configurable: true);
-        DefineMethod(proto, "toString", (thisV, _) => JsValue.String(ThisSymbol(realm, thisV).DescriptiveString), 0);
-        DefineMethod(proto, "valueOf", (thisV, _) => JsValue.Symbol(ThisSymbol(realm, thisV)), 0);
+        DefineMethod(realm, proto, "toString", (thisV, _) => JsValue.String(ThisSymbol(realm, thisV).DescriptiveString), 0);
+        DefineMethod(realm, proto, "valueOf", (thisV, _) => JsValue.Symbol(ThisSymbol(realm, thisV)), 0);
         var descriptionGetter = new JsNativeFunction("get description",
             (thisV, _) => ThisSymbol(realm, thisV).Description is { } d ? JsValue.String(d) : JsValue.Undefined,
             isConstructor: false);
@@ -69,7 +69,7 @@ public static class SymbolCtor
         DefineData(descriptionGetter, "name", JsValue.String("get description"), false, false, true);
         DefineData(descriptionGetter, "length", JsValue.Number(0), false, false, true);
         proto.DefineOwnProperty("description", PropertyDescriptor.Accessor(descriptionGetter, null, enumerable: false, configurable: true));
-        DefineSymbolMethod(proto, ToPrimitive, "[Symbol.toPrimitive]", (thisV, _) => JsValue.Symbol(ThisSymbol(realm, thisV)), 1);
+        DefineSymbolMethod(realm, proto, ToPrimitive, "[Symbol.toPrimitive]", (thisV, _) => JsValue.Symbol(ThisSymbol(realm, thisV)), 1);
         // §20.4.3.6 Symbol.prototype[@@toStringTag] = "Symbol" (non-writable, non-enumerable, configurable).
         proto.DefineOwnProperty(ToStringTag,
             PropertyDescriptor.Data(JsValue.String("Symbol"), writable: false, enumerable: false, configurable: true));
@@ -125,19 +125,15 @@ public static class SymbolCtor
         throw new JsThrow(realm.NewTypeError("Symbol.prototype method called on incompatible receiver"));
     }
 
-    private static void DefineMethod(JsObject target, string name, Func<JsValue, JsValue[], JsValue> body, int length)
+    private static void DefineMethod(JsRealm realm, JsObject target, string name, Func<JsValue, JsValue[], JsValue> body, int length)
     {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        DefineData(fn, "name", JsValue.String(name), false, false, true);
-        DefineData(fn, "length", JsValue.Number(length), false, false, true);
+        var fn = new JsNativeFunction(realm, name, length, body, isConstructor: false);
         target.DefineOwnProperty(name, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 
-    private static void DefineSymbolMethod(JsObject target, JsSymbol key, string name, Func<JsValue, JsValue[], JsValue> body, int length)
+    private static void DefineSymbolMethod(JsRealm realm, JsObject target, JsSymbol key, string name, Func<JsValue, JsValue[], JsValue> body, int length)
     {
-        var fn = new JsNativeFunction(name, body, isConstructor: false);
-        DefineData(fn, "name", JsValue.String(name), false, false, true);
-        DefineData(fn, "length", JsValue.Number(length), false, false, true);
+        var fn = new JsNativeFunction(realm, name, length, body, isConstructor: false);
         target.DefineOwnProperty(key, PropertyDescriptor.BuiltinMethod(JsValue.Object(fn)));
     }
 

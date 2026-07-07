@@ -188,11 +188,8 @@ public static class ErrorCtor
         // via the prototype chain. Skip re-installing for subclasses.
         if (name == "Error")
         {
-            var toStringFn = new JsNativeFunction("toString", (thisV, _) => ToStringImpl(thisV), isConstructor: false);
-            toStringFn.DefineOwnProperty("name",
-                PropertyDescriptor.Data(JsValue.String("toString"), writable: false, enumerable: false, configurable: true));
-            toStringFn.DefineOwnProperty("length",
-                PropertyDescriptor.Data(JsValue.Number(0), writable: false, enumerable: false, configurable: true));
+            var toStringFn = new JsNativeFunction(realm, "toString", 0,
+                (thisV, _) => ToStringImpl(thisV), isConstructor: false);
             proto.DefineOwnProperty("toString", PropertyDescriptor.BuiltinMethod(JsValue.Object(toStringFn)));
             var stackGetter = new JsNativeFunction(realm, "get stack", 0,
                 (thisV, _) => ToStringImpl(thisV), isConstructor: false);

@@ -1,4 +1,3 @@
-using System.Globalization;
 using Starling.Js.Runtime;
 
 namespace Starling.Js.Intrinsics;
@@ -11,37 +10,51 @@ public static partial class IntlObj
     //                          Intl.Segmenter
     // =====================================================================
 
-    private sealed class IntlSegmenterObject(JsObject prototype, string granularity) : JsObject(prototype)
+    private sealed class IntlSegmenterObject(JsObject prototype, string locale, string granularity) : JsObject(prototype)
+    {
+        public string Locale { get; } = locale;
+        public string Granularity { get; } = granularity;
+    }
+
+    private sealed class IntlSegmentsObject(JsObject prototype, string granularity, string input) : JsObject(prototype)
     {
         public string Granularity { get; } = granularity;
+        public string Input { get; } = input;
     }
 
     private static void InstallSegmenter(JsRealm realm, JsObject intl)
     {
         var proto = new JsObject(realm.ObjectPrototype);
-        JsNativeFunction? ctor = null;
-        ctor = new JsNativeFunction(realm, "Segmenter", 0, (newTarget, args) =>
+        var ctor = new JsNativeFunction(realm, "Segmenter", 0, (newTarget, args) =>
         {
             if (!IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.Segmenter requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            var options = ReadOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
-            var granularity = GetStringOption(realm, options, "granularity", "grapheme", "word", "sentence") ?? "grapheme";
+            var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            var options = GetOptionsObject(realm, args.Length > 1 ? args[1] : JsValue.Undefined);
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var granularity = GetOptionEnum(realm, options, "granularity", ["grapheme", "word", "sentence"], "grapheme")!;
             var instProto = IntlPrototypeFor(realm, newTarget, "Segmenter", proto);
-            return JsValue.Object(new IntlSegmenterObject(instProto, granularity));
+            return JsValue.Object(new IntlSegmenterObject(instProto, StripExtensions(locale.Name), granularity));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "Segmenter", "Intl.Segmenter");
 
+        var segmentsProto = MakeSegmentsPrototype(realm);
         IntrinsicHelpers.DefineMethod(realm, proto, "segment", 1, (thisV, args) =>
         {
             var seg = thisV.IsObject && thisV.AsObject is IntlSegmenterObject so
                 ? so
                 : throw new JsThrow(realm.NewTypeError("Intl.Segmenter.prototype.segment called on incompatible receiver"));
-            var input = AbstractOperations.ToStringJs(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
-            return JsValue.Object(MakeSegments(realm, seg.Granularity, input));
+            var arg = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (arg.IsSymbol)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a string"));
+            }
+
+            var input = AbstractOperations.ToStringJs(realm.ActiveVm, arg);
+            return JsValue.Object(new IntlSegmentsObject(segmentsProto, seg.Granularity, input));
         });
         IntrinsicHelpers.DefineMethod(realm, proto, "resolvedOptions", 0, (thisV, _) =>
         {
@@ -49,13 +62,100 @@ public static partial class IntlObj
                 ? so
                 : throw new JsThrow(realm.NewTypeError("Intl.Segmenter.prototype.resolvedOptions called on incompatible receiver"));
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
+            o.Set("locale", JsValue.String(seg.Locale));
             o.Set("granularity", JsValue.String(seg.Granularity));
             return JsValue.Object(o);
         });
     }
 
+    private static IntlSegmentsObject RequireSegments(JsRealm realm, JsValue thisV)
+        => thisV.IsObject && thisV.AsObject is IntlSegmentsObject so
+            ? so
+            : throw new JsThrow(realm.NewTypeError("%Segments.prototype% method called on incompatible receiver"));
+
+    private static JsObject MakeSegmentsPrototype(JsRealm realm)
+    {
+        var segmentsProto = new JsObject(realm.ObjectPrototype);
+        IntrinsicHelpers.DefineMethod(realm, segmentsProto, "containing", 1, (thisV, cargs) =>
+        {
+            var segments = RequireSegments(realm, thisV);
+            var arg = cargs.Length > 0 ? cargs[0] : JsValue.Undefined;
+            var prim = AbstractOperations.ToPrimitive(realm.ActiveVm, arg, "number");
+            if (prim.IsSymbol || prim.IsBigInt)
+            {
+                throw new JsThrow(realm.NewTypeError("Cannot convert this value to a number"));
+            }
+
+            var n = JsValue.ToNumber(prim);
+            var idx = double.IsNaN(n) ? 0 : (int)Math.Truncate(n);
+            var input = segments.Input;
+            if (idx < 0 || idx >= input.Length)
+            {
+                return JsValue.Undefined;
+            }
+
+            foreach (var s in Segment(segments.Granularity, input))
+            {
+                if (idx >= s.Start && idx < s.End)
+                {
+                    return MakeSegmentData(realm, segments.Granularity, input, s);
+                }
+            }
+
+            return JsValue.Undefined;
+        });
+        var iterFn = new JsNativeFunction(realm, "[Symbol.iterator]", 0, (thisV, _) =>
+        {
+            var segments = RequireSegments(realm, thisV);
+            var spans = Segment(segments.Granularity, segments.Input);
+            var i = 0;
+            var iter = realm.NewOrdinaryObject();
+            IntrinsicHelpers.DefineMethod(realm, iter, "next", 0, (_, _) =>
+            {
+                var res = realm.NewOrdinaryObject();
+                if (i < spans.Count)
+                {
+                    res.Set("value", MakeSegmentData(realm, segments.Granularity, segments.Input, spans[i]));
+                    res.Set("done", JsValue.False);
+                    i++;
+                }
+                else
+                {
+                    res.Set("value", JsValue.Undefined);
+                    res.Set("done", JsValue.True);
+                }
+
+                return JsValue.Object(res);
+            });
+            return JsValue.Object(iter);
+        }, isConstructor: false);
+        segmentsProto.DefineOwnProperty(SymbolCtor.Iterator,
+            PropertyDescriptor.Data(JsValue.Object(iterFn), writable: true, enumerable: false, configurable: true));
+        segmentsProto.DefineOwnProperty(SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("Intl.Segments"), writable: false, enumerable: false, configurable: true));
+        return segmentsProto;
+    }
+
     private readonly record struct SegmentSpan(int Start, int End, bool IsWordLike);
+
+    /// <summary>Grapheme-cluster boundaries via UAX #29 text elements; lone
+    /// surrogates fall out as single-unit clusters.</summary>
+    private static List<int> GraphemeStarts(string input)
+    {
+        var starts = new List<int>(input.Length);
+        var e = System.Globalization.StringInfo.GetTextElementEnumerator(input);
+        while (e.MoveNext())
+        {
+            starts.Add(e.ElementIndex);
+        }
+
+        if (starts.Count == 0 && input.Length > 0)
+        {
+            starts.Add(0);
+        }
+
+        return starts;
+    }
 
     private static List<SegmentSpan> Segment(string granularity, string input)
     {
@@ -65,40 +165,87 @@ public static partial class IntlObj
             return spans;
         }
 
+        var starts = GraphemeStarts(input);
+
+        static bool IsWordLikeAt(string text, int index)
+        {
+            var c = text[index];
+            if (char.IsHighSurrogate(c) && index + 1 < text.Length && char.IsLowSurrogate(text[index + 1]))
+            {
+                return System.Text.Rune.IsLetterOrDigit(new System.Text.Rune(c, text[index + 1]));
+            }
+
+            return !char.IsSurrogate(c) && char.IsLetterOrDigit(c);
+        }
+
+        static bool IsWhiteSpaceAt(string text, int index)
+        {
+            var c = text[index];
+            return !char.IsSurrogate(c) && char.IsWhiteSpace(c);
+        }
+
         switch (granularity)
         {
             case "word":
             {
                 var i = 0;
-                while (i < input.Length)
+                while (i < starts.Count)
                 {
-                    var start = i;
-                    var wordLike = char.IsLetterOrDigit(input[i]);
-                    while (i < input.Length && char.IsLetterOrDigit(input[i]) == wordLike
-                           && (wordLike || !char.IsLetterOrDigit(input[i])))
+                    var startUnit = starts[i];
+                    if (IsWordLikeAt(input, startUnit))
                     {
-                        if (!wordLike && i > start && !char.IsWhiteSpace(input[i]) != !char.IsWhiteSpace(input[start]))
+                        var j = i + 1;
+                        while (j < starts.Count)
                         {
+                            if (IsWordLikeAt(input, starts[j]))
+                            {
+                                j++;
+                                continue;
+                            }
+
+                            // UAX #29 MidNum: "." or "," between digits stays
+                            // inside the word ("1.23").
+                            var chEnd = j + 1 < starts.Count ? starts[j + 1] : input.Length;
+                            var cluster = input[starts[j]..chEnd];
+                            if ((cluster == "." || cluster == ",")
+                                && j + 1 < starts.Count
+                                && char.IsAsciiDigit(input[starts[j] - 1])
+                                && char.IsAsciiDigit(input[starts[j + 1]]))
+                            {
+                                j += 2;
+                                continue;
+                            }
+
                             break;
                         }
 
-                        i++;
-                        if (wordLike && i < input.Length && !char.IsLetterOrDigit(input[i]))
-                        {
-                            break;
-                        }
+                        var endUnit = j < starts.Count ? starts[j] : input.Length;
+                        spans.Add(new SegmentSpan(startUnit, endUnit, true));
+                        i = j;
                     }
-
-                    if (i == start)
+                    else if (IsWhiteSpaceAt(input, startUnit))
                     {
+                        var j = i + 1;
+                        while (j < starts.Count && IsWhiteSpaceAt(input, starts[j]))
+                        {
+                            j++;
+                        }
+
+                        var endUnit = j < starts.Count ? starts[j] : input.Length;
+                        spans.Add(new SegmentSpan(startUnit, endUnit, false));
+                        i = j;
+                    }
+                    else
+                    {
+                        var endUnit = i + 1 < starts.Count ? starts[i + 1] : input.Length;
+                        spans.Add(new SegmentSpan(startUnit, endUnit, false));
                         i++;
                     }
-
-                    spans.Add(new SegmentSpan(start, i, wordLike));
                 }
 
                 break;
             }
+
             case "sentence":
             {
                 var start = 0;
@@ -125,22 +272,15 @@ public static partial class IntlObj
 
                 break;
             }
+
             default: // grapheme
             {
-                var e = StringInfo.GetTextElementEnumerator(input);
-                var prev = 0;
-                while (e.MoveNext())
+                for (var i = 0; i < starts.Count; i++)
                 {
-                    var idx = e.ElementIndex;
-                    if (idx > prev)
-                    {
-                        spans.Add(new SegmentSpan(prev, idx, false));
-                    }
-
-                    prev = idx;
+                    var end = i + 1 < starts.Count ? starts[i + 1] : input.Length;
+                    spans.Add(new SegmentSpan(starts[i], end, false));
                 }
 
-                spans.Add(new SegmentSpan(prev, input.Length, false));
                 break;
             }
         }
@@ -162,67 +302,18 @@ public static partial class IntlObj
         return JsValue.Object(d);
     }
 
-    private static JsObject MakeSegments(JsRealm realm, string granularity, string input)
-    {
-        var segments = realm.NewOrdinaryObject();
-        IntrinsicHelpers.DefineMethod(realm, segments, "containing", 1, (_, cargs) =>
-        {
-            var n = JsValue.ToNumber(AbstractOperations.ToPrimitive(realm.ActiveVm,
-                cargs.Length > 0 ? cargs[0] : JsValue.Undefined, "number"));
-            var idx = double.IsNaN(n) ? 0 : (int)Math.Truncate(n);
-            if (idx < 0 || idx >= input.Length)
-            {
-                return JsValue.Undefined;
-            }
-
-            foreach (var s in Segment(granularity, input))
-            {
-                if (idx >= s.Start && idx < s.End)
-                {
-                    return MakeSegmentData(realm, granularity, input, s);
-                }
-            }
-
-            return JsValue.Undefined;
-        });
-        var iterFn = new JsNativeFunction(realm, "[Symbol.iterator]", 0, (_, _) =>
-        {
-            var spans = Segment(granularity, input);
-            var i = 0;
-            var iter = realm.NewOrdinaryObject();
-            IntrinsicHelpers.DefineMethod(realm, iter, "next", 0, (_, _) =>
-            {
-                var res = realm.NewOrdinaryObject();
-                if (i < spans.Count)
-                {
-                    res.Set("value", MakeSegmentData(realm, granularity, input, spans[i]));
-                    res.Set("done", JsValue.False);
-                    i++;
-                }
-                else
-                {
-                    res.Set("value", JsValue.Undefined);
-                    res.Set("done", JsValue.True);
-                }
-
-                return JsValue.Object(res);
-            });
-            return JsValue.Object(iter);
-        }, isConstructor: false);
-        segments.DefineOwnProperty(SymbolCtor.Iterator,
-            PropertyDescriptor.Data(JsValue.Object(iterFn), writable: true, enumerable: false, configurable: true));
-        return segments;
-    }
-
     // =====================================================================
     //                          Intl.DisplayNames
     // =====================================================================
 
-    private sealed class IntlDisplayNamesObject(JsObject prototype, string type, string style, string fallback) : JsObject(prototype)
+    private sealed class IntlDisplayNamesObject(
+        JsObject prototype, string locale, string type, string style, string fallback, string? languageDisplay) : JsObject(prototype)
     {
+        public string Locale { get; } = locale;
         public string Type { get; } = type;
         public string Style { get; } = style;
         public string Fallback { get; } = fallback;
+        public string? LanguageDisplay { get; } = languageDisplay;
     }
 
     private static void InstallDisplayNames(JsRealm realm, JsObject intl)
@@ -236,7 +327,10 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Constructor Intl.DisplayNames requires 'new'"));
             }
 
-            _ = ReadRequestedLocales(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            // §12.1.1 step 2 — OrdinaryCreateFromConstructor reads
+            // newTarget.prototype before any option validation.
+            var instProto = IntlPrototypeFor(realm, newTarget, "DisplayNames", proto);
+            var locale = ResolveLocale(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
             // §12.1.1 step 3 — options is REQUIRED (GetOptionsObject, then a
             // required `type`).
             if (args.Length < 2 || args[1].IsUndefined)
@@ -244,14 +338,17 @@ public static partial class IntlObj
                 throw new JsThrow(realm.NewTypeError("Intl.DisplayNames requires an options argument with a 'type'"));
             }
 
-            var options = ReadOptionsObject(realm, args[1]);
-            var style = GetStringOption(realm, options, "style", "narrow", "short", "long") ?? "long";
-            var type = GetStringOption(realm, options, "type",
-                "language", "region", "script", "currency", "calendar", "dateTimeField")
+            var options = GetOptionsObject(realm, args[1]);
+            _ = GetOptionEnum(realm, options, "localeMatcher", ["lookup", "best fit"], "best fit");
+            var style = GetOptionEnum(realm, options, "style", ["narrow", "short", "long"], "long")!;
+            var type = GetOptionEnum(realm, options, "type",
+                ["language", "region", "script", "currency", "calendar", "dateTimeField"], null)
                 ?? throw new JsThrow(realm.NewTypeError("Intl.DisplayNames options must include a 'type'"));
-            var fallback = GetStringOption(realm, options, "fallback", "code", "none") ?? "code";
-            var instProto = IntlPrototypeFor(realm, newTarget, "DisplayNames", proto);
-            return JsValue.Object(new IntlDisplayNamesObject(instProto, type, style, fallback));
+            var fallback = GetOptionEnum(realm, options, "fallback", ["code", "none"], "code")!;
+            var languageDisplay = GetOptionEnum(realm, options, "languageDisplay", ["dialect", "standard"], "dialect")!;
+            return JsValue.Object(new IntlDisplayNamesObject(
+                instProto, StripExtensions(locale.Name), type, style, fallback,
+                type == "language" ? languageDisplay : null));
         }, isConstructor: true);
         WireIntlCtor(realm, intl, ctor, proto, "DisplayNames", "Intl.DisplayNames");
 
@@ -261,6 +358,7 @@ public static partial class IntlObj
                 ? d
                 : throw new JsThrow(realm.NewTypeError("Intl.DisplayNames.prototype.of called on incompatible receiver"));
             var code = AbstractOperations.ToStringJs(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            code = CanonicalizeDisplayNamesCode(realm, dn.Type, code);
             var name = DisplayNameOf(realm, dn.Type, code);
             if (name is not null)
             {
@@ -275,12 +373,66 @@ public static partial class IntlObj
                 ? d
                 : throw new JsThrow(realm.NewTypeError("Intl.DisplayNames.prototype.resolvedOptions called on incompatible receiver"));
             var o = realm.NewOrdinaryObject();
-            o.Set("locale", JsValue.String("en"));
+            o.Set("locale", JsValue.String(dn.Locale));
             o.Set("style", JsValue.String(dn.Style));
             o.Set("type", JsValue.String(dn.Type));
             o.Set("fallback", JsValue.String(dn.Fallback));
+            if (dn.LanguageDisplay is not null)
+            {
+                o.Set("languageDisplay", JsValue.String(dn.LanguageDisplay));
+            }
+
             return JsValue.Object(o);
         });
+    }
+
+    private static string CanonicalizeDisplayNamesCode(JsRealm realm, string type, string code)
+    {
+        switch (type)
+        {
+            case "language":
+            {
+                if (!TryParseUnicodeLocaleId(code, out var id)
+                    || id.HasT || id.HasU || id.OtherExtensions.Count > 0 || id.PrivateUse is not null)
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid language code: '{code}'"));
+                }
+
+                CanonicalizeLocaleId(id);
+                return id.BaseName();
+            }
+
+            case "region":
+                if (!IsRegionSubtag(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid region code: '{code}'"));
+                }
+
+                return code.ToUpperInvariant();
+            case "script":
+                if (!IsScriptSubtag(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid script code: '{code}'"));
+                }
+
+                return TitleCaseSubtag(code);
+            case "currency":
+                if (!IsWellFormedCurrencyCode(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid currency code: '{code}'"));
+                }
+
+                return code.ToUpperInvariant();
+            case "calendar":
+                if (!IsWellFormedNumberingSystem(code))
+                {
+                    throw new JsThrow(realm.NewRangeError($"Invalid calendar: '{code}'"));
+                }
+
+                return CanonicalizeCalendarAlias(code.ToLowerInvariant());
+            default:
+                return code;
+        }
     }
 
     private static string? DisplayNameOf(JsRealm realm, string type, string code)
@@ -288,42 +440,54 @@ public static partial class IntlObj
         switch (type)
         {
             case "language":
-                if (code.Length is < 2 or > 11 || code.Contains('_', StringComparison.Ordinal))
+                return code switch
                 {
-                    throw new JsThrow(realm.NewRangeError($"Invalid language code: '{code}'"));
-                }
-
-                try
-                {
-                    var name = CultureInfo.GetCultureInfo(code).EnglishName;
-                    return name.StartsWith("Unknown", StringComparison.Ordinal) ? null : name;
-                }
-                catch (CultureNotFoundException)
-                {
-                    return null;
-                }
+                    "en" => "English",
+                    "en-US" => "American English",
+                    "en-GB" => "British English",
+                    "de" => "German",
+                    "fr" => "French",
+                    "es" => "Spanish",
+                    "it" => "Italian",
+                    "ja" => "Japanese",
+                    "ko" => "Korean",
+                    "zh" => "Chinese",
+                    "pt" => "Portuguese",
+                    "ru" => "Russian",
+                    "ar" => "Arabic",
+                    "hi" => "Hindi",
+                    "nl" => "Dutch",
+                    "pl" => "Polish",
+                    "th" => "Thai",
+                    "tr" => "Turkish",
+                    "sv" => "Swedish",
+                    _ => null,
+                };
 
             case "region":
-                if (code.Length != 2 && !(code.Length == 3 && code.All(char.IsAsciiDigit)))
+                return code switch
                 {
-                    throw new JsThrow(realm.NewRangeError($"Invalid region code: '{code}'"));
-                }
-
-                try
-                {
-                    return new RegionInfo(code).EnglishName;
-                }
-                catch (ArgumentException)
-                {
-                    return null;
-                }
+                    "US" => "United States",
+                    "GB" => "United Kingdom",
+                    "DE" => "Germany",
+                    "FR" => "France",
+                    "ES" => "Spain",
+                    "IT" => "Italy",
+                    "JP" => "Japan",
+                    "KR" => "South Korea",
+                    "CN" => "China",
+                    "BR" => "Brazil",
+                    "RU" => "Russia",
+                    "IN" => "India",
+                    "CA" => "Canada",
+                    "AU" => "Australia",
+                    "MX" => "Mexico",
+                    "NL" => "Netherlands",
+                    "419" => "Latin America",
+                    _ => null,
+                };
 
             case "script":
-                if (code.Length != 4 || !char.IsAsciiLetterUpper(code[0]))
-                {
-                    throw new JsThrow(realm.NewRangeError($"Invalid script code: '{code}'"));
-                }
-
                 return code switch
                 {
                     "Latn" => "Latin",

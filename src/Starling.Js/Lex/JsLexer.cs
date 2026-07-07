@@ -203,11 +203,32 @@ public ref struct JsLexer
                 if (depth == 0) { i++; break; }
             }
         }
-        // Skip whitespace between ')' and a possible '=>'.
+        // Skip whitespace AND comments between ')' and a possible '=>'
+        // (`( a, b ) /* e */ => body` is a valid arrow head).
         while (i < _src.Length)
         {
             var c = _src[i];
             if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { i++; continue; }
+            if (c == '/' && i + 1 < _src.Length && _src[i + 1] == '/')
+            {
+                while (i < _src.Length && _src[i] != '\n')
+                {
+                    i++;
+                }
+
+                continue;
+            }
+            if (c == '/' && i + 1 < _src.Length && _src[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < _src.Length && !(_src[i] == '*' && _src[i + 1] == '/'))
+                {
+                    i++;
+                }
+
+                i += 2;
+                continue;
+            }
             break;
         }
         return i + 1 < _src.Length && _src[i] == '=' && _src[i + 1] == '>';

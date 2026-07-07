@@ -180,6 +180,15 @@ public sealed class JsRealm
     public JsObject EvalErrorPrototype { get; internal set; }
     public JsObject AggregateErrorPrototype { get; internal set; }
     public JsObject IteratorPrototype { get; internal set; }
+    /// <summary>§27.1.2.1 %IteratorHelperPrototype% — proto of the lazy
+    /// objects returned by Iterator.prototype.{map,filter,...} and
+    /// Iterator.zip/zipKeyed.</summary>
+    public JsObject IteratorHelperPrototype { get; internal set; }
+    /// <summary>§27.1.3.2.1 %WrapForValidIteratorPrototype% — proto of the
+    /// wrappers Iterator.from builds around foreign iterators.</summary>
+    public JsObject WrapForValidIteratorPrototype { get; internal set; }
+    /// <summary>§27.1.3.1 the %Iterator% constructor object.</summary>
+    public JsNativeFunction? IteratorConstructor { get; set; }
     public JsObject ArrayIteratorPrototype { get; internal set; }
     public JsObject StringIteratorPrototype { get; internal set; }
     public JsObject MapPrototype { get; internal set; }
@@ -361,7 +370,13 @@ public sealed class JsRealm
         // bare-bones bootstrap it's just an object.
         ObjectPrototype = new JsObject();
         ObjectPrototype.IsImmutablePrototype = true;
-        FunctionPrototype = new JsObject(ObjectPrototype);
+        // §20.2.3 — %Function.prototype% is itself a built-in function that
+        // accepts any arguments and returns undefined (so `typeof` is
+        // "function" and Function.prototype() is callable). Built with the
+        // realm-less ctor because the realm is mid-bootstrap; FunctionCtor's
+        // install pass stamps its name/length own properties.
+        FunctionPrototype = new JsNativeFunction("", (_, _) => JsValue.Undefined, isConstructor: false);
+        FunctionPrototype.SetPrototypeOf(ObjectPrototype);
 
         // All other prototypes default to Object.prototype-inheriting empties.
         // Intrinsic install passes replace these with fully-populated objects.
@@ -382,6 +397,8 @@ public sealed class JsRealm
         EvalErrorPrototype = new JsObject(ErrorPrototype);
         AggregateErrorPrototype = new JsObject(ErrorPrototype);
         IteratorPrototype = new JsObject(ObjectPrototype);
+        IteratorHelperPrototype = new JsObject(IteratorPrototype);
+        WrapForValidIteratorPrototype = new JsObject(IteratorPrototype);
         ArrayIteratorPrototype = new JsObject(IteratorPrototype);
         StringIteratorPrototype = new JsObject(IteratorPrototype);
         MapPrototype = new JsObject(ObjectPrototype);
