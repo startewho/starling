@@ -476,6 +476,27 @@ public static class AbstractOperations
         {
             return nat.Body(thisValue, args);
         }
+        catch (JsThrow)
+        {
+            throw;
+        }
+        catch (JsReturnSentinel)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (vm is not null)
+        {
+            if (vm.Realm.NativeExceptionTranslator?.Invoke(vm.Realm, ex) is { } translated)
+            {
+                throw new JsThrow(translated);
+            }
+
+            throw new JsThrow(vm.Realm.NewTypeError(ex.Message));
+        }
         finally
         {
             t_nativeCallDepth--;

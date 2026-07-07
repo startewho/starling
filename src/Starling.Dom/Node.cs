@@ -105,14 +105,7 @@ public abstract class Node : EventTarget
             throw DomException.Create("NotFoundError", "The reference child is not a child of this node.");
         }
 
-        try
-        {
-            return InsertBefore(child, referenceChild);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw MapMutationException(ex);
-        }
+        return InsertBefore(child, referenceChild);
     }
 
     /// <summary>WHATWG DOM §4.2.3 "pre-remove(child)": throws NotFoundError when
@@ -126,14 +119,7 @@ public abstract class Node : EventTarget
             throw DomException.Create("NotFoundError", "The node to be removed is not a child of this node");
         }
 
-        try
-        {
-            return RemoveChild(child);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw DomException.Create("NotFoundError", ex.Message ?? "");
-        }
+        return RemoveChild(child);
     }
 
     /// <summary>WHATWG DOM §4.2.3 "replace(child, node)": validates the hierarchy
@@ -167,14 +153,7 @@ public abstract class Node : EventTarget
             throw DomException.Create("NotFoundError", "The child to be replaced is not a child of this node");
         }
 
-        try
-        {
-            return ReplaceChild(newChild, oldChild);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw MapMutationException(ex);
-        }
+        return ReplaceChild(newChild, oldChild);
     }
 
     /// <summary>WHATWG DOM §4.4 "contains": true when <paramref name="other"/> is
@@ -609,21 +588,13 @@ public abstract class Node : EventTarget
         }
     }
 
-    private static DomException MapMutationException(InvalidOperationException ex)
-    {
-        string msg = ex.Message ?? "";
-        string name = msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
-                      || msg.Contains("not a child", StringComparison.OrdinalIgnoreCase)
-            ? "NotFoundError" : "HierarchyRequestError";
-        return DomException.Create(name, msg);
-    }
 
     public Node InsertBefore(Node child, Node? referenceChild)
     {
         ArgumentNullException.ThrowIfNull(child);
         if (referenceChild is not null && referenceChild.ParentNode != this)
         {
-            throw new InvalidOperationException("The reference child is not a child of this node.");
+            throw DomException.Create("NotFoundError", "The reference child is not a child of this node.");
         }
 
         if (child == referenceChild)
@@ -633,14 +604,14 @@ public abstract class Node : EventTarget
 
         if (child == this)
         {
-            throw new InvalidOperationException("A node cannot be its own child.");
+            throw DomException.Create("HierarchyRequestError", "A node cannot be its own child.");
         }
 
         for (var ancestor = this.ParentNode; ancestor is not null; ancestor = ancestor.ParentNode)
         {
             if (ancestor == child)
             {
-                throw new InvalidOperationException("A node cannot be inserted into one of its descendants.");
+                throw DomException.Create("HierarchyRequestError", "A node cannot be inserted into one of its descendants.");
             }
         }
 
@@ -773,7 +744,7 @@ public abstract class Node : EventTarget
         ArgumentNullException.ThrowIfNull(oldChild);
         if (oldChild.ParentNode != this)
         {
-            throw new InvalidOperationException("The old child is not a child of this node.");
+            throw DomException.Create("NotFoundError", "The old child is not a child of this node.");
         }
 
         InsertBefore(newChild, oldChild);
@@ -786,7 +757,7 @@ public abstract class Node : EventTarget
         ArgumentNullException.ThrowIfNull(child);
         if (child.ParentNode != this)
         {
-            throw new InvalidOperationException("The node is not a child of this node.");
+            throw DomException.Create("NotFoundError", "The node is not a child of this node.");
         }
 
         child.RemoveFromParent();

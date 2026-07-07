@@ -64,7 +64,7 @@ public abstract class EventTarget
         ArgumentNullException.ThrowIfNull(@event);
         if (@event.DispatchFlag)
         {
-            throw new InvalidOperationException("Event is already being dispatched.");
+            throw DomException.Create("InvalidStateError", "Event is already being dispatched.");
         }
 
         return EventDispatcher.Dispatch(this, @event);

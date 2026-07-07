@@ -53,6 +53,14 @@ public sealed class JsRealm
     /// promise (late <c>.catch</c>).</summary>
     public Action<JsPromise>? OnRejectionHandled { get; set; }
 
+    /// <summary>Host hook that maps a .NET exception escaping a native binding
+    /// delegate to a JS error value (e.g. a DOM-layer exception to a JS
+    /// DOMException), or null when the host does not recognize it. The native
+    /// call boundary in <c>AbstractOperations.CallNative</c> uses this so a
+    /// throwing DOM setter/getter/method fails one operation cleanly instead of
+    /// propagating a raw .NET exception out of the interpreter.</summary>
+    public Func<JsRealm, Exception, JsValue?>? NativeExceptionTranslator { get; set; }
+
     internal Dictionary<string, System.Diagnostics.Stopwatch> ConsoleTimers { get; } = new(StringComparer.Ordinal);
     internal Dictionary<string, int> ConsoleCounts { get; } = new(StringComparer.Ordinal);
     internal int ConsoleGroupDepth { get; set; }

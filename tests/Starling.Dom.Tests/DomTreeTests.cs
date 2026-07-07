@@ -138,11 +138,11 @@ public class DomTreeTests
         child.AppendChild(grandchild);
 
         var actCycle = () => grandchild.AppendChild(root);
-        actCycle.Should().Throw<InvalidOperationException>();
+        actCycle.Should().Throw<DomException>().Which.Name.Should().Be("HierarchyRequestError");
 
         var outsider = doc.CreateElement("p");
         var actReference = () => root.InsertBefore(doc.CreateElement("a"), outsider);
-        actReference.Should().Throw<InvalidOperationException>();
+        actReference.Should().Throw<DomException>().Which.Name.Should().Be("NotFoundError");
     }
 
     [TestMethod]

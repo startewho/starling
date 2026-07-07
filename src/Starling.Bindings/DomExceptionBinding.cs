@@ -48,6 +48,13 @@ public static class DomExceptionBinding
         var proto = new JsObject(realm.ObjectPrototype);
         realm.DomExceptionPrototype = proto;
 
+        realm.NativeExceptionTranslator ??= static (r, ex) => ex switch
+        {
+            Starling.Dom.DomException dx => Make(r, dx.Name, dx.Message),
+            Starling.Dom.DomRangeException rx => Make(r, rx.DomName, rx.Message),
+            _ => (JsValue?)null,
+        };
+
         EventTargetBinding.DefineAccessor(realm, proto, "code", (thisV, _) =>
         {
             var n = thisV.IsObject ? thisV.AsObject.Get("name") : JsValue.Undefined;
