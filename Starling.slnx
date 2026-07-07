@@ -21,7 +21,6 @@
     <Project Path="bench/Starling.HtmlParserBench/Starling.HtmlParserBench.csproj" />
     <Project Path="bench/Starling.RegExp.Benchmarks/Starling.RegExp.Benchmarks.csproj" />
     <Project Path="tests/Starling.RegExp.Tests/Starling.RegExp.Tests.csproj" />
-    <Project Path="tests/Starling.Bindings.Jint.Tests/Starling.Bindings.Jint.Tests.csproj" />
     <Project Path="tests/Starling.BindingSurface.Tests/Starling.BindingSurface.Tests.csproj" />
     <Project Path="tests/Starling.Bindings.Tests/Starling.Bindings.Tests.csproj" />
     <Project Path="tests/Starling.Ipc.Tests/Starling.Ipc.Tests.csproj" />
@@ -52,7 +51,6 @@
     <Project Path="tools/Starling.IdlGen/Starling.IdlGen.csproj" />
   </Folder>
   <Project Path="src/Starling.Bindings/Starling.Bindings.csproj" />
-  <Project Path="src/Starling.Bindings.Jint/Starling.Bindings.Jint.csproj" />
   <Project Path="src/Starling.Common/Starling.Common.csproj" />
   <Project Path="src/Starling.Css/Starling.Css.csproj" />
   <Project Path="src/Starling.Dom/Starling.Dom.csproj" />
