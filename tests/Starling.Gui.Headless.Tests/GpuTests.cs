@@ -11,7 +11,7 @@ namespace Starling.Gui.Headless.Tests;
 /// those tests fail for reasons unrelated to the code under test.
 ///
 /// Set <c>STARLING_GPU_TESTS=1</c> on a machine with a display (or a GPU CI arm)
-/// to run them. This mirrors the suite's existing <c>STARLING_JS_ENGINE</c> gate.
+/// to run them.
 /// </summary>
 internal static class GpuTests
 {

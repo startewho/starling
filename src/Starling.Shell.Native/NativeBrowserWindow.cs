@@ -306,10 +306,7 @@ internal sealed class NativeBrowserWindow : IDisposable
         return source.Length == 0 ? '?' : char.ToUpperInvariant(source[0]);
     }
 
-    private static string JsEngineLabel() =>
-        Environment.GetEnvironmentVariable("STARLING_JS_ENGINE") is { Length: > 0 } engine
-            ? engine
-            : "starling";
+    private static string JsEngineLabel() => "starling";
 
     private static string RenderBackendLabel() =>
         Environment.GetEnvironmentVariable("STARLING_PAINT_BACKEND") is { Length: > 0 } backend

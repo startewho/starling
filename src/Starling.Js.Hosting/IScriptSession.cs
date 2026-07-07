@@ -10,9 +10,9 @@ namespace Starling.Js.Hosting;
 /// <summary>
 /// Severity of a <c>console.*</c> message, surfaced through
 /// <see cref="IScriptSession.ConsoleSink"/>. This is a hosting-local mirror of
-/// the per-engine console levels (e.g. <c>Starling.Js.ConsoleLevel</c>): the
-/// seam project must not reference any concrete JS engine, so it owns its own
-/// neutral enum. Each backend maps its native level to/from this set.
+/// <c>Starling.Js.ConsoleLevel</c>: the seam project must not reference the
+/// concrete JS engine (<c>Starling.Js</c>), so it owns its own neutral enum and
+/// the backend maps its native level into this set.
 /// </summary>
 public enum ConsoleLevel
 {
@@ -29,7 +29,7 @@ public enum ConsoleLevel
 /// <summary>Fetch the source text of a script/module URL (file:// + data: +
 /// http(s)), or <c>null</c> on failure. Matches the engine's existing
 /// <c>ScriptFetcher.FetchSourceAsync</c> shape so the same fetch+cache path is
-/// reused by both backends and by dynamic <c>&lt;script src&gt;</c> + ES module
+/// reused by the engine and by dynamic <c>&lt;script src&gt;</c> + ES module
 /// import resolution.</summary>
 public delegate Task<string?> ScriptFetcherDelegate(StarlingUrl url, CancellationToken ct);
 
@@ -61,11 +61,10 @@ public sealed record ScriptSessionOptions(
     public int ViewportHeight { get; init; }
 
     /// <summary>Cancellation observed by the backend's JS execution path so a
-    /// user-visible Stop interrupts mid-script. Each backend wires this into
-    /// its interpreter loop — Starling.Js checks it from the VM dispatch loop,
-    /// Jint passes it via <c>Options.CancellationToken</c>. Defaults to
-    /// <see cref="CancellationToken.None"/> for callers that do not need
-    /// interruption (PNG/headless tests, unit tests).</summary>
+    /// user-visible Stop interrupts mid-script. Starling.Js checks it from the
+    /// VM dispatch loop. Defaults to <see cref="CancellationToken.None"/> for
+    /// callers that do not need interruption (PNG/headless tests, unit
+    /// tests).</summary>
     public CancellationToken AbortToken { get; init; }
 
     /// <summary>Optional host for the Web Animations API (<c>element.animate</c>).
@@ -78,8 +77,7 @@ public sealed record ScriptSessionOptions(
 /// Engine-neutral handle to one page's live JS execution context. The engine
 /// keeps ALL orchestration (ordered → async → module ordering,
 /// DOMContentLoaded/load timing, the async pump loop) and delegates every
-/// JS-touching operation to this interface, so the active engine is swappable
-/// via <c>STARLING_JS_ENGINE</c> without changing the engine's control flow.
+/// JS-touching operation to this interface, the seam to the Starling JS engine.
 /// </summary>
 public interface IScriptSession : IDisposable
 {
@@ -194,13 +192,13 @@ public interface IScriptSession : IDisposable
 }
 
 /// <summary>
-/// A factory for one named JS engine backend. Selected by
-/// <c>JsEngineSelector</c> from <c>STARLING_JS_ENGINE</c>.
+/// A factory that stands up JS sessions. Starling.Bindings supplies the one
+/// implementation, <c>StarlingScriptEngineFactory</c>; the engine and tests
+/// construct sessions through it so they never name the concrete session type.
 /// </summary>
 public interface IScriptEngineFactory
 {
-    /// <summary>Stable identifier matched against the env var, e.g.
-    /// <c>"starling"</c> or <c>"jint"</c>.</summary>
+    /// <summary>Stable backend identifier, <c>"starling"</c>.</summary>
     string Name { get; }
 
     /// <summary>Stand up a fresh session (realm + bindings + hooks) for one
@@ -209,11 +207,10 @@ public interface IScriptEngineFactory
 }
 
 /// <summary>
-/// Engine-neutral normalized form of an uncaught JavaScript exception. Each
-/// backend converts its native throw (e.g. <c>Starling.Js.JsThrow</c> or
-/// <c>Jint.Runtime.JavaScriptException</c>) into this so the engine's
-/// fail-soft logging path is identical across engines. The original JS stack
-/// (when the engine can produce one) rides in <see cref="JsStack"/>.
+/// Engine-neutral normalized form of an uncaught JavaScript exception. The
+/// Starling backend converts its native throw (<c>Starling.Js.JsThrow</c>) into
+/// this so the engine's fail-soft logging path stays uniform. The original JS
+/// stack (when the engine can produce one) rides in <see cref="JsStack"/>.
 /// </summary>
 public sealed class ScriptThrow : Exception
 {

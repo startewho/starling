@@ -29,9 +29,8 @@ namespace Starling.Bindings.Backend;
 /// </summary>
 /// <remarks>
 /// All JS-engine knowledge stays inside this assembly. The engine talks only to
-/// <see cref="IScriptSession"/>, so swapping in the Jint backend never touches
-/// the engine's script orchestration. Removing this backend is a single-file
-/// delete plus one selector arm.
+/// <see cref="IScriptSession"/>, so the engine's script orchestration never
+/// depends on the Starling JS engine's internals.
 /// </remarks>
 internal sealed class StarlingScriptSession : IScriptSession
 {
@@ -179,8 +178,7 @@ internal sealed class StarlingScriptSession : IScriptSession
     /// <summary>Pull the JS-side <c>error.stack</c> string off a thrown Error
     /// object so it can ride along in <see cref="ScriptThrow.JsStack"/> and be
     /// logged at the engine's fail-soft path. The Starling VM builds this string
-    /// via <c>FormatJsStack</c>. Mirrors the Jint backend's stack passthrough so
-    /// uncaught-error diagnostics are identical across engines. Returns
+    /// via <c>FormatJsStack</c>. Returns
     /// <see langword="null"/> when the thrown value is not an object or has no
     /// <c>stack</c>.</summary>
     internal static string? ExtractJsStack(JsValue v)
@@ -567,8 +565,7 @@ internal sealed class StarlingScriptSession : IScriptSession
 
 /// <summary>
 /// The Starling backend's <see cref="IScriptEngineFactory"/>. Named
-/// <c>"starling"</c>; this is the default engine selected when
-/// <c>STARLING_JS_ENGINE</c> is unset.
+/// <c>"starling"</c> — the one JS engine.
 /// </summary>
 public sealed class StarlingScriptEngineFactory : IScriptEngineFactory
 {
