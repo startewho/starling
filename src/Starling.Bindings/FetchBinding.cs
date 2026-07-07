@@ -492,6 +492,8 @@ public static class FetchBinding
             PropertyDescriptor.Data(JsValue.Object(ctor), true, false, true));
     }
 
+    private static byte[] BodyOrEmpty(IBodyOwner owner) => owner.BodyBytes ?? Array.Empty<byte>();
+
     private static void InstallBodyMethods(JsRealm realm, JsObject proto, Func<JsValue, IBodyOwner> resolve)
     {
         EventTargetBinding.DefineMethod(realm, proto, "text", (thisV, _) =>
@@ -503,7 +505,7 @@ public static class FetchBinding
             }
 
             owner.BodyUsed = true;
-            var s = Encoding.UTF8.GetString(owner.BodyBytes);
+            var s = Encoding.UTF8.GetString(BodyOrEmpty(owner));
             return ResolvedPromise(realm, JsValue.String(s));
         }, length: 0);
 
@@ -516,7 +518,7 @@ public static class FetchBinding
             }
 
             owner.BodyUsed = true;
-            var s = Encoding.UTF8.GetString(owner.BodyBytes);
+            var s = Encoding.UTF8.GetString(BodyOrEmpty(owner));
             // Use the global JSON.parse so we honour the realm's implementation.
             try
             {
@@ -550,8 +552,9 @@ public static class FetchBinding
             }
 
             owner.BodyUsed = true;
-            var buf = new JsArrayBuffer(realm.ArrayBufferPrototype, owner.BodyBytes.Length);
-            owner.BodyBytes.CopyTo(buf.GetSpan());
+            var bytes = BodyOrEmpty(owner);
+            var buf = new JsArrayBuffer(realm.ArrayBufferPrototype, bytes.Length);
+            bytes.CopyTo(buf.GetSpan());
             return ResolvedPromise(realm, JsValue.Object(buf));
         }, length: 0);
 
@@ -566,7 +569,7 @@ public static class FetchBinding
             owner.BodyUsed = true;
             var type = owner is ResponseObject response ? response.Headers.Store.Get("content-type") ?? "" : "";
             var blob = new BlobObject(realm.GlobalObject.Get("Blob").AsObject.Get("prototype").AsObject,
-                owner.BodyBytes.ToArray(), type);
+                BodyOrEmpty(owner).ToArray(), type);
             return ResolvedPromise(realm, JsValue.Object(blob));
         }, length: 0);
         EventTargetBinding.DefineMethod(realm, proto, "formData", (thisV, _) =>
@@ -590,7 +593,7 @@ public static class FetchBinding
             }
 
             var protoObj = realm.GlobalObject.Get("FormData").AsObject.Get("prototype").AsObject;
-            var form = CoreWebApiBinding.ParseUrlEncodedFormData(realm, protoObj, Encoding.UTF8.GetString(owner.BodyBytes));
+            var form = CoreWebApiBinding.ParseUrlEncodedFormData(realm, protoObj, Encoding.UTF8.GetString(BodyOrEmpty(owner)));
             return ResolvedPromise(realm, JsValue.Object(form));
         }, length: 0);
     }

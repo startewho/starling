@@ -257,6 +257,6 @@ public sealed class DomEventTests
 
         target.DispatchEvent(new Event("click"));
 
-        caught.Should().BeOfType<InvalidOperationException>();
+        caught.Should().BeOfType<DomException>().Which.Name.Should().Be("InvalidStateError");
     }
 }

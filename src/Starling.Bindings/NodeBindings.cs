@@ -216,8 +216,7 @@ public static class NodeBindings
             }
 
             ValidatePreInsert(realm, parent, child, null);
-            try { parent.AppendChild(child); }
-            catch (InvalidOperationException ex) { throw NodeMutationException(realm, ex, parent, child); }
+            parent.AppendChild(child);
             return args[0];
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, nodeProto, "removeChild", (thisV, args) =>
@@ -239,8 +238,7 @@ public static class NodeBindings
                 throw DomExceptionBinding.Throw(realm, "NotFoundError", "The node to be removed is not a child of this node");
             }
 
-            try { parent.RemoveChild(child); }
-            catch (InvalidOperationException ex) { throw NodeMutationException(realm, ex, parent, child); }
+            parent.RemoveChild(child);
             return args[0];
         }, length: 1);
         EventTargetBinding.DefineMethod(realm, nodeProto, "insertBefore", (thisV, args) =>
@@ -270,8 +268,7 @@ public static class NodeBindings
             }
 
             ValidatePreInsert(realm, parent, child, refChild);
-            try { parent.InsertBefore(child, refChild); }
-            catch (InvalidOperationException ex) { throw NodeMutationException(realm, ex, parent, child); }
+            parent.InsertBefore(child, refChild);
             return args[0];
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, nodeProto, "replaceChild", (thisV, args) =>
@@ -301,8 +298,7 @@ public static class NodeBindings
                 throw DomExceptionBinding.Throw(realm, "NotFoundError", "The child to be replaced is not a child of this node");
             }
 
-            try { parent.ReplaceChild(newChild, oldChild); }
-            catch (InvalidOperationException ex) { throw NodeMutationException(realm, ex, parent, newChild); }
+            parent.ReplaceChild(newChild, oldChild);
             return args[1];
         }, length: 2);
         EventTargetBinding.DefineMethod(realm, nodeProto, "hasChildNodes",
@@ -3808,27 +3804,6 @@ public static class NodeBindings
             throw DomExceptionBinding.Throw(realm, "HierarchyRequestError",
                 "Documents cannot be inserted as a child node");
         }
-    }
-
-    /// <summary>Convert an <see cref="InvalidOperationException"/> from a host
-    /// tree mutation into the correct <see cref="JsThrow"/> DOMException.</summary>
-    private static JsThrow NodeMutationException(JsRealm realm, InvalidOperationException ex, Node parent, Node child)
-    {
-        // Map common host-side error messages to DOM error names.
-        var msg = ex.Message ?? "";
-        if (msg.Contains("ancestor", StringComparison.OrdinalIgnoreCase) ||
-            msg.Contains("hierarchy", StringComparison.OrdinalIgnoreCase))
-        {
-            return DomExceptionBinding.Throw(realm, "HierarchyRequestError", msg);
-        }
-
-        if (msg.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-            msg.Contains("not a child", StringComparison.OrdinalIgnoreCase))
-        {
-            return DomExceptionBinding.Throw(realm, "NotFoundError", msg);
-        }
-        // Default: HierarchyRequestError
-        return DomExceptionBinding.Throw(realm, "HierarchyRequestError", msg);
     }
 
     // Browsers (and the WPT name-validity tests) accept any non-ASCII code point
