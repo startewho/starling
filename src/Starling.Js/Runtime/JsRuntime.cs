@@ -117,13 +117,22 @@ public sealed class JsRuntime
         RegExpCtor.Install(Realm);  // B4-1 — depends on Function/Error/Array protos.
         ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Date", () => DateCtor.Install(Realm)); // B4-2 — depends on Function.prototype only (lazy).
         ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Intl", () => IntlObj.Install(Realm)); // Intl-lite bundle compatibility surface (lazy).
+        ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Temporal", () => TemporalObj.Install(Realm)); // Temporal foundation slice (lazy).
         BigIntCtor.Install(Realm);  // B4-3 — depends on Function.prototype only.
         ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Proxy", () => ProxyCtor.Install(Realm));   // B4-4 — depends on Function.prototype only (lazy).
         ((JsGlobalObject)Realm.GlobalObject).ReserveLazyGlobal("Reflect", () => ReflectObj.Install(Realm)); // B4-4 — depends on Symbol (for @@toStringTag) (lazy).
-        Global.Set("globalThis", JsValue.Object(Global));
-        Global.Set("undefined", JsValue.Undefined);
-        Global.Set("NaN", JsValue.NaN);
-        Global.Set("Infinity", JsValue.Number(double.PositiveInfinity));
+        // §19.1 value properties of the global object. undefined/NaN/Infinity
+        // are non-writable, non-enumerable, NON-configurable — which also makes
+        // them "restricted global properties" (§9.1.1.4.14): a top-level
+        // `let NaN` is a SyntaxError because the lexical can't shadow them.
+        Global.DefineOwnProperty("globalThis",
+            PropertyDescriptor.Data(JsValue.Object(Global), writable: true, enumerable: false, configurable: true));
+        Global.DefineOwnProperty("undefined",
+            PropertyDescriptor.Data(JsValue.Undefined, writable: false, enumerable: false, configurable: false));
+        Global.DefineOwnProperty("NaN",
+            PropertyDescriptor.Data(JsValue.NaN, writable: false, enumerable: false, configurable: false));
+        Global.DefineOwnProperty("Infinity",
+            PropertyDescriptor.Data(JsValue.Number(double.PositiveInfinity), writable: false, enumerable: false, configurable: false));
 
         // Route uncaught microtask exceptions through the console sink so
         // they don't crash the embedder. The full unhandledrejection event
@@ -323,8 +332,19 @@ public sealed class JsRuntime
     public void SetMicrotaskScheduler(Action<Action>? scheduler)
         => Realm.Microtasks.SetHostScheduler(scheduler);
 
-    /// <summary>Look up a global. Returns Undefined if absent.</summary>
-    public JsValue GetGlobal(string name) => Global.Get(name);
+    /// <summary>Look up a global. Checks the global lexical record first
+    /// (§9.1.1.4.1 order — a top-level <c>let</c>/<c>const</c>/<c>class</c>
+    /// shadows the global object), then the global object. Returns Undefined
+    /// if absent or still in its TDZ.</summary>
+    public JsValue GetGlobal(string name)
+    {
+        if (Realm.GlobalLexicals.TryGetValue(name, out var lex))
+        {
+            return lex.Initialized ? lex.Value : JsValue.Undefined;
+        }
+
+        return Global.Get(name);
+    }
 
     private static string LevelName(ConsoleLevel level) => level switch
     {

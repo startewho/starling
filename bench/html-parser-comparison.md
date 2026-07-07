@@ -3,8 +3,8 @@
 Where does the Starling HTML parser land against a mature, pure-managed
 reference parser? This runs Starling.Html and [AngleSharp](https://github.com/AngleSharp/AngleSharp)
 on the same pages, on one machine, ranked together so the numbers compare
-fairly. It is the HTML-parsing counterpart of `engine-comparison.md`, which does
-the same for the Starling JS engine against Jint.
+fairly. It is the HTML-parsing counterpart of `engine-comparison.md`, which
+measures the Starling JS engine on its script suite.
 
 The benchmark lives in `bench/Starling.HtmlParserBench`. AngleSharp is a
 dev-only dependency there. No engine project references it, so the managed-first

@@ -332,7 +332,7 @@ public class JsOperatorsGapTests
     }
 
     [TestMethod]
-    public void Bitwise_to_int32_and_uint32_wraps_like_jint_type_converter_cases()
+    public void Bitwise_to_int32_and_uint32_wraps_per_spec_type_conversion_cases()
     {
         (string Expression, int ExpectedInt32)[] cases =
         [

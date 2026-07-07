@@ -133,6 +133,32 @@ public enum Opcode : byte
     /// before its initializer runs, and so a later redeclaration without
     /// an initializer doesn't reset its value.</summary>
     DeclareGlobalVar,
+    /// <summary>[u16 declsIdx] — §16.1.7 GlobalDeclarationInstantiation (and the
+    /// global branch of §19.2.1.3 EvalDeclarationInstantiation, with empty
+    /// lexical lists). <c>declsIdx</c> points at a <see cref="GlobalDecls"/>
+    /// constant. Runs ALL the early-error checks first — a lexical name
+    /// colliding with an existing global lexical / global var / restricted
+    /// (non-configurable) global property is a SyntaxError; a var name
+    /// colliding with a global lexical is a SyntaxError; an undeclarable
+    /// var/function on a non-extensible global is a TypeError — and only then
+    /// creates the script's bindings: lexicals uninitialized (TDZ) in the
+    /// realm's global lexical record, vars/functions as global-object
+    /// properties recorded in [[VarNames]]. Emitted once at the top of every
+    /// global script chunk that declares anything.</summary>
+    GlobalDeclInstantiation,
+    /// <summary>[u16 nameIdx] — pop a value and initialize the named binding in
+    /// the realm's global lexical record (the declaration initializer's write,
+    /// which transitions the binding out of the TDZ). §9.1.1.4 InitializeBinding
+    /// on the global [[DeclarativeRecord]].</summary>
+    InitGlobalLex,
+    /// <summary>[u16 nameIdx] — Annex B §B.3.3.2 web-compat function-in-block
+    /// hoisting at the global scope: pop the function value and bind it as a
+    /// global var IF doing so is allowed — skipped silently (never throws) when
+    /// a same-named global lexical exists or the property is not declarable.
+    /// Runs when the block's FunctionDeclaration evaluates, so the global sees
+    /// the value from that point on while the block keeps its own lexical
+    /// binding.</summary>
+    AnnexBGlobalFnBind,
 
     // ----- Stack manipulation -----
     Pop,
@@ -258,7 +284,7 @@ public enum Opcode : byte
 
     // ----- Iterator protocol (B3-2) -----
     GetIterator,    // pop value, push an opaque iterator-record handle (a JsObject internal)
-    IteratorStep,   // peek iterator-record; push iterator-result object, or push undefined on done. Sets the "done" slot when finished.
+    IteratorStep,   // pop iterator-record; push iterator-result object, or push undefined on done. Sets the "done" slot when finished.
     IteratorClose,  // pop iterator-record; invoke .return() if present
     IteratorBindNext, // peek iterator-record; if already Done push undefined, else IteratorStep and push result.value (undefined on done, sets Done). §8.5.3 array-pattern element step.
     IteratorRest,   // peek iterator-record; collect remaining values into a fresh JsArray until Done, push the array. §8.5.3 BindingRestElement.

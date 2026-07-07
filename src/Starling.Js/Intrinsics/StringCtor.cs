@@ -48,7 +48,7 @@ public static class StringCtor
             {
                 // §22.1.1.1 step 5: StringCreate with OrdinaryCreateFromConstructor —
                 // prototype comes from new.target so `class S extends String {}` works.
-                var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, stringProto);
+                var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, stringProto, static r => r.StringPrototype);
                 return JsValue.Object(CreateStringObject(realm, text, instProto));
             }
             return JsValue.String(text);
@@ -56,15 +56,13 @@ public static class StringCtor
         ctor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(stringProto), writable: false, enumerable: false, configurable: false));
 
-        IntrinsicHelpers.DefineMethod(realm, ctor, "fromCharCode", 1, (_, args) => FromCharCode(args));
+        IntrinsicHelpers.DefineMethod(realm, ctor, "fromCharCode", 1, (_, args) => FromCharCode(realm, args));
         IntrinsicHelpers.DefineMethod(realm, ctor, "fromCodePoint", 1, (_, args) => FromCodePoint(realm, args));
         IntrinsicHelpers.DefineMethod(realm, ctor, "raw", 1, (_, args) => Raw(realm, args));
 
         // Bulk-install constructor + every string-keyed prototype method by
-        // adopting one precomputed shape. Order is unchanged from the prior
-        // sequential install, so getOwnPropertyNames order is identical and the
-        // result is byte-identical. The symbol-keyed @@iterator is installed
-        // separately below (symbols can never enter a shape).
+        // adopting one precomputed shape. The symbol-keyed @@iterator is
+        // installed separately below (symbols can never enter a shape).
         IntrinsicHelpers.BulkInstallBuiltins(realm, stringProto, new[]
         {
             new IntrinsicHelpers.BulkMember("constructor", 0, null, JsValue.Object(ctor)),
@@ -93,15 +91,31 @@ public static class StringCtor
             new IntrinsicHelpers.BulkMember("substring", 2, (thisV, args) => Substring(realm, thisV, args)),
             // Annex B §B.2.2.1 String.prototype.substr(start[, length]) — legacy but widely used.
             new IntrinsicHelpers.BulkMember("substr", 2, (thisV, args) => Substr(realm, thisV, args)),
-            new IntrinsicHelpers.BulkMember("toLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLowerInvariant())),
-            new IntrinsicHelpers.BulkMember("toUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpperInvariant())),
-            new IntrinsicHelpers.BulkMember("toLocaleLowerCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToLower(CultureInfo.InvariantCulture))),
-            new IntrinsicHelpers.BulkMember("toLocaleUpperCase", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV).ToUpper(CultureInfo.InvariantCulture))),
-            new IntrinsicHelpers.BulkMember("trim", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: true))),
-            new IntrinsicHelpers.BulkMember("trimStart", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: true, trimEnd: false))),
-            new IntrinsicHelpers.BulkMember("trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(ThisStringValue(realm, thisV), trimStart: false, trimEnd: true))),
+            new IntrinsicHelpers.BulkMember("toLowerCase", 0, (thisV, args) => JsValue.String(StringCasing.ToLowerJs(CoerceThisString(realm, thisV)))),
+            new IntrinsicHelpers.BulkMember("toUpperCase", 0, (thisV, args) => JsValue.String(StringCasing.ToUpperJs(CoerceThisString(realm, thisV)))),
+            new IntrinsicHelpers.BulkMember("toLocaleLowerCase", 0, (thisV, args) => JsValue.String(StringCasing.ToLowerJs(CoerceThisString(realm, thisV)))),
+            new IntrinsicHelpers.BulkMember("toLocaleUpperCase", 0, (thisV, args) => JsValue.String(StringCasing.ToUpperJs(CoerceThisString(realm, thisV)))),
+            new IntrinsicHelpers.BulkMember("trim", 0, (thisV, args) => JsValue.String(TrimJs(CoerceThisString(realm, thisV), trimStart: true, trimEnd: true))),
+            new IntrinsicHelpers.BulkMember("trimStart", 0, (thisV, args) => JsValue.String(TrimJs(CoerceThisString(realm, thisV), trimStart: true, trimEnd: false))),
+            new IntrinsicHelpers.BulkMember("trimEnd", 0, (thisV, args) => JsValue.String(TrimJs(CoerceThisString(realm, thisV), trimStart: false, trimEnd: true))),
             new IntrinsicHelpers.BulkMember("toString", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
             new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, args) => JsValue.String(ThisStringValue(realm, thisV))),
+            new IntrinsicHelpers.BulkMember("isWellFormed", 0, (thisV, args) => JsValue.Boolean(IsWellFormedString(CoerceThisString(realm, thisV)))),
+            new IntrinsicHelpers.BulkMember("toWellFormed", 0, (thisV, args) => JsValue.String(ToWellFormedString(CoerceThisString(realm, thisV)))),
+            // Annex B §B.2.2.2–.14 HTML wrapper methods.
+            new IntrinsicHelpers.BulkMember("anchor", 1, (thisV, args) => CreateHtml(realm, thisV, "a", "name", args)),
+            new IntrinsicHelpers.BulkMember("big", 0, (thisV, args) => CreateHtml(realm, thisV, "big", "", args)),
+            new IntrinsicHelpers.BulkMember("blink", 0, (thisV, args) => CreateHtml(realm, thisV, "blink", "", args)),
+            new IntrinsicHelpers.BulkMember("bold", 0, (thisV, args) => CreateHtml(realm, thisV, "b", "", args)),
+            new IntrinsicHelpers.BulkMember("fixed", 0, (thisV, args) => CreateHtml(realm, thisV, "tt", "", args)),
+            new IntrinsicHelpers.BulkMember("fontcolor", 1, (thisV, args) => CreateHtml(realm, thisV, "font", "color", args)),
+            new IntrinsicHelpers.BulkMember("fontsize", 1, (thisV, args) => CreateHtml(realm, thisV, "font", "size", args)),
+            new IntrinsicHelpers.BulkMember("italics", 0, (thisV, args) => CreateHtml(realm, thisV, "i", "", args)),
+            new IntrinsicHelpers.BulkMember("link", 1, (thisV, args) => CreateHtml(realm, thisV, "a", "href", args)),
+            new IntrinsicHelpers.BulkMember("small", 0, (thisV, args) => CreateHtml(realm, thisV, "small", "", args)),
+            new IntrinsicHelpers.BulkMember("strike", 0, (thisV, args) => CreateHtml(realm, thisV, "strike", "", args)),
+            new IntrinsicHelpers.BulkMember("sub", 0, (thisV, args) => CreateHtml(realm, thisV, "sub", "", args)),
+            new IntrinsicHelpers.BulkMember("sup", 0, (thisV, args) => CreateHtml(realm, thisV, "sup", "", args)),
         });
         stringProto.DefineOwnProperty("trimLeft",
             PropertyDescriptor.BuiltinMethod(stringProto.Get("trimStart")));
@@ -113,7 +127,7 @@ public static class StringCtor
         // [..."😀ab"].length === 3.
         var stringIterator = new JsNativeFunction(realm, "[Symbol.iterator]", 0, (thisV, _) =>
         {
-            var s = ThisStringValue(realm, thisV);
+            var s = CoerceThisString(realm, thisV);
             return IteratorIntrinsics.CreateStringIterator(realm, s);
         }, isConstructor: false);
         stringProto.DefineOwnProperty(SymbolCtor.Iterator,
@@ -127,38 +141,108 @@ public static class StringCtor
     private static JsStringObject CreateStringObject(JsRealm realm, string text, JsObject? proto = null)
         => new(proto ?? realm.StringPrototype, text);
 
+    /// <summary>§22.1.3.29/§22.1.3.35 thisStringValue: only primitive strings
+    /// and String exotic wrappers qualify; anything else is a TypeError (never
+    /// ToPrimitive — that would re-enter toString and recurse).</summary>
     private static string ThisStringValue(JsRealm realm, JsValue thisV)
     {
-        // §22.1.3.4 thisStringValue: accept primitive strings and String exotic
-        // wrappers; otherwise RequireObjectCoercible then ToString.
-        if (thisV.IsNullish)
-        {
-            throw new JsThrow(realm.NewTypeError("String.prototype method called on null or undefined"));
-        }
-
         if (thisV.IsString)
         {
             return thisV.AsString;
         }
 
-        if (thisV.IsObject)
+        if (thisV.IsObject && thisV.AsObject is JsStringObject jso)
         {
-            if (thisV.AsObject is JsStringObject jso)
-            {
-                return jso.Text;
-            }
-
-            return JsValue.ToStringValue(AbstractOperations.ToPrimitive(thisV, "string"));
+            return jso.Text;
         }
-        return JsValue.ToStringValue(thisV);
+
+        throw new JsThrow(realm.NewTypeError("String.prototype method requires a String receiver"));
     }
 
-    private static JsValue FromCharCode(JsValue[] args)
+    /// <summary>Generic-method receiver coercion: RequireObjectCoercible then
+    /// §7.1.17 ToString, so object receivers dispatch their own toString.</summary>
+    private static string CoerceThisString(JsRealm realm, JsValue thisV)
+    {
+        if (thisV.IsString)
+        {
+            return thisV.AsString;
+        }
+
+        if (thisV.IsNullish)
+        {
+            throw new JsThrow(realm.NewTypeError("String.prototype method called on null or undefined"));
+        }
+
+        return AbstractOperations.ToStringJs(realm.ActiveVm, thisV);
+    }
+
+    /// <summary>Receiver to hand a matched @@match/@@search/@@split hook: the
+    /// builtin native hooks stringify with the non-observable fast ToString, so
+    /// they get the coerced primitive; a user-defined hook gets the raw
+    /// receiver per spec.</summary>
+    private static JsValue DelegateReceiver(JsRealm realm, JsValue thisV, JsValue method)
+    {
+        if (thisV.IsObject && method.IsObject && method.AsObject is JsNativeFunction)
+        {
+            return JsValue.String(CoerceThisString(realm, thisV));
+        }
+
+        return thisV;
+    }
+
+    private static void RequireCoercibleThis(JsRealm realm, JsValue thisV)
+    {
+        if (thisV.IsNullish)
+        {
+            throw new JsThrow(realm.NewTypeError("String.prototype method called on null or undefined"));
+        }
+    }
+
+    private static string ToStringArg(JsRealm realm, JsValue v)
+        => AbstractOperations.ToStringJs(realm.ActiveVm, v);
+
+    /// <summary>§7.1.4 ToNumber with observable ToPrimitive for objects and JS
+    /// TypeErrors for Symbol/BigInt inputs.</summary>
+    private static double ToNumberJs(JsRealm realm, JsValue v)
+    {
+        var prim = v.Kind == JsValueKind.Object ? AbstractOperations.ToPrimitive(realm.ActiveVm, v, "number") : v;
+        if (prim.IsSymbol)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a Symbol value to a number"));
+        }
+
+        if (prim.IsBigInt)
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot convert a BigInt value to a number"));
+        }
+
+        return JsValue.ToNumber(prim);
+    }
+
+    /// <summary>§7.2.6 IsRegExp — the observable check: Get(@@match) first,
+    /// falling back to the [[RegExpMatcher]] slot.</summary>
+    private static bool IsRegExpSpec(JsRealm realm, JsValue v)
+    {
+        if (!v.IsObject)
+        {
+            return false;
+        }
+
+        var matcher = AbstractOperations.Get(realm.ActiveVm, v.AsObject, JsPropertyKey.Symbol(SymbolCtor.Match));
+        if (!matcher.IsUndefined)
+        {
+            return JsValue.ToBoolean(matcher);
+        }
+
+        return v.AsObject is JsRegExp;
+    }
+
+    private static JsValue FromCharCode(JsRealm realm, JsValue[] args)
     {
         var chars = new char[args.Length];
         for (var i = 0; i < args.Length; i++)
         {
-            chars[i] = (char)ToUint16(args[i]);
+            chars[i] = (char)ToUint16(realm, args[i]);
         }
 
         return JsValue.String(new string(chars));
@@ -169,39 +253,46 @@ public static class StringCtor
         var sb = new StringBuilder();
         foreach (var arg in args)
         {
-            var n = JsValue.ToNumber(arg);
+            var n = ToNumberJs(realm, arg);
             if (!IsIntegral(n) || n < 0 || n > 0x10FFFF)
             {
                 throw new JsThrow(realm.NewRangeError("Invalid code point"));
             }
 
-            sb.Append(char.ConvertFromUtf32((int)n));
+            // UTF16EncodeCodePoint: lone surrogates are legal here and encode
+            // as their own code unit, so avoid ConvertFromUtf32 (it rejects them).
+            var cp = (int)n;
+            if (cp <= 0xFFFF)
+            {
+                sb.Append((char)cp);
+            }
+            else
+            {
+                cp -= 0x10000;
+                sb.Append((char)(0xD800 + (cp >> 10)));
+                sb.Append((char)(0xDC00 + (cp & 0x3FF)));
+            }
         }
         return JsValue.String(sb.ToString());
     }
 
     private static JsValue Raw(JsRealm realm, JsValue[] args)
     {
-        if (args.Length == 0)
-        {
-            throw new JsThrow(realm.NewTypeError("String.raw requires a template object"));
-        }
-
-        var cooked = AbstractOperations.ToObject(realm, args[0]);
-        var raw = AbstractOperations.ToObject(realm, cooked.Get("raw"));
-        var literalSegments = ToLength(raw.Get("length"));
+        var cooked = AbstractOperations.ToObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var raw = AbstractOperations.ToObject(realm, AbstractOperations.Get(realm.ActiveVm, cooked, "raw"));
+        var literalSegments = ToLengthJs(realm, AbstractOperations.Get(realm.ActiveVm, raw, "length"));
         if (literalSegments == 0)
         {
             return JsValue.String(string.Empty);
         }
 
         var sb = new StringBuilder();
-        for (var i = 0; i < literalSegments; i++)
+        for (var i = 0L; i < literalSegments; i++)
         {
-            sb.Append(JsValue.ToStringValue(raw.Get(i.ToString(CultureInfo.InvariantCulture))));
-            if (i + 1 < literalSegments)
+            sb.Append(ToStringArg(realm, AbstractOperations.Get(realm.ActiveVm, raw, i.ToString(CultureInfo.InvariantCulture))));
+            if (i + 1 < literalSegments && i + 1 < args.Length)
             {
-                sb.Append(i + 1 < args.Length ? JsValue.ToStringValue(args[i + 1]) : string.Empty);
+                sb.Append(ToStringArg(realm, args[i + 1]));
             }
         }
         return JsValue.String(sb.ToString());
@@ -209,30 +300,30 @@ public static class StringCtor
 
     private static JsValue At(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var i = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var s = CoerceThisString(realm, thisV);
+        var i = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var k = i >= 0 ? i : s.Length + i;
         return k < 0 || k >= s.Length ? JsValue.Undefined : JsValue.String(s[(int)k].ToString());
     }
 
     private static JsValue CharAt(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var pos = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var s = CoerceThisString(realm, thisV);
+        var pos = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         return pos < 0 || pos >= s.Length ? JsValue.String(string.Empty) : JsValue.String(s[(int)pos].ToString());
     }
 
     private static JsValue CharCodeAt(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var pos = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var s = CoerceThisString(realm, thisV);
+        var pos = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         return pos < 0 || pos >= s.Length ? JsValue.NaN : JsValue.Number(s[(int)pos]);
     }
 
     private static JsValue CodePointAt(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var pos = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var s = CoerceThisString(realm, thisV);
+        var pos = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         if (pos < 0 || pos >= s.Length)
         {
             return JsValue.Undefined;
@@ -249,10 +340,10 @@ public static class StringCtor
 
     private static JsValue Concat(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var sb = new StringBuilder(ThisStringValue(realm, thisV));
+        var sb = new StringBuilder(CoerceThisString(realm, thisV));
         foreach (var arg in args)
         {
-            sb.Append(JsValue.ToStringValue(arg));
+            sb.Append(ToStringArg(realm, arg));
         }
 
         return JsValue.String(sb.ToString());
@@ -260,34 +351,47 @@ public static class StringCtor
 
     private static JsValue EndsWith(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var end = args.Length > 1 && !args[1].IsUndefined ? Clamp(ToIntegerOrInfinity(args[1]), 0, s.Length) : s.Length;
-        return JsValue.Boolean(s[..(int)end].EndsWith(search, StringComparison.Ordinal));
+        var s = CoerceThisString(realm, thisV);
+        var searchArg = args.Length > 0 ? args[0] : JsValue.Undefined;
+        if (IsRegExpSpec(realm, searchArg))
+        {
+            throw new JsThrow(realm.NewTypeError("First argument to String.prototype.endsWith must not be a regular expression"));
+        }
+
+        var search = ToStringArg(realm, searchArg);
+        var end = args.Length > 1 && !args[1].IsUndefined ? Clamp(ToIntegerOrInfinity(realm, args[1]), 0, s.Length) : s.Length;
+        var start = end - search.Length;
+        return JsValue.Boolean(start >= 0 && s.AsSpan((int)start, search.Length).SequenceEqual(search));
     }
 
     private static JsValue Includes(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var pos = Clamp(ToIntegerOrInfinity(args.Length > 1 ? args[1] : JsValue.Undefined), 0, s.Length);
+        var s = CoerceThisString(realm, thisV);
+        var searchArg = args.Length > 0 ? args[0] : JsValue.Undefined;
+        if (IsRegExpSpec(realm, searchArg))
+        {
+            throw new JsThrow(realm.NewTypeError("First argument to String.prototype.includes must not be a regular expression"));
+        }
+
+        var search = ToStringArg(realm, searchArg);
+        var pos = Clamp(ToIntegerOrInfinity(realm, args.Length > 1 ? args[1] : JsValue.Undefined), 0, s.Length);
         return JsValue.Boolean(s.IndexOf(search, (int)pos, StringComparison.Ordinal) >= 0);
     }
 
     private static JsValue IndexOf(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var pos = Clamp(ToIntegerOrInfinity(args.Length > 1 ? args[1] : JsValue.Undefined), 0, s.Length);
+        var s = CoerceThisString(realm, thisV);
+        var search = ToStringArg(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var pos = Clamp(ToIntegerOrInfinity(realm, args.Length > 1 ? args[1] : JsValue.Undefined), 0, s.Length);
         return JsValue.Number(s.IndexOf(search, (int)pos, StringComparison.Ordinal));
     }
 
     private static JsValue LastIndexOf(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var raw = args.Length > 1 ? JsValue.ToNumber(args[1]) : double.NaN;
-        var pos = double.IsNaN(raw) ? s.Length : Clamp(ToIntegerOrInfinity(args[1]), 0, s.Length);
+        var s = CoerceThisString(realm, thisV);
+        var search = ToStringArg(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var raw = args.Length > 1 ? ToNumberJs(realm, args[1]) : double.NaN;
+        var pos = double.IsNaN(raw) ? s.Length : Clamp(IntegerOrInfinityOf(raw), 0, s.Length);
         if (search.Length == 0)
         {
             return JsValue.Number(pos);
@@ -299,37 +403,38 @@ public static class StringCtor
 
     private static JsValue LocaleCompare(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var that = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        return JsValue.Number(string.Compare(s, that, CultureInfo.InvariantCulture, CompareOptions.None));
+        var s = CoerceThisString(realm, thisV);
+        var that = ToStringArg(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        // Canonically equivalent strings must compare equal (§22.1.3.12 note 2);
+        // under invariant globalization the comparison itself is ordinal, so
+        // compare canonical decompositions.
+        var result = string.CompareOrdinal(
+            StringNormalization.Normalize(s, compatibility: false, compose: false),
+            StringNormalization.Normalize(that, compatibility: false, compose: false));
+        return JsValue.Number(Math.Sign(result));
     }
 
     private static JsValue Normalize(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var formName = args.Length == 0 || args[0].IsUndefined ? "NFC" : JsValue.ToStringValue(args[0]);
-        var form = formName switch
+        var s = CoerceThisString(realm, thisV);
+        var formName = args.Length == 0 || args[0].IsUndefined ? "NFC" : ToStringArg(realm, args[0]);
+        var (compatibility, compose) = formName switch
         {
-            "NFC" => NormalizationForm.FormC,
-            "NFD" => NormalizationForm.FormD,
-            "NFKC" => NormalizationForm.FormKC,
-            "NFKD" => NormalizationForm.FormKD,
+            "NFC" => (false, true),
+            "NFD" => (false, false),
+            "NFKC" => (true, true),
+            "NFKD" => (true, false),
             _ => throw new JsThrow(realm.NewRangeError("Invalid normalization form")),
         };
-        return JsValue.String(s.Normalize(form));
+        return JsValue.String(StringNormalization.Normalize(s, compatibility, compose));
     }
 
     private static JsValue Pad(JsRealm realm, JsValue thisV, JsValue[] args, bool atStart)
     {
-        var s = ThisStringValue(realm, thisV);
-        var maxLength = ToLength(args.Length > 0 ? args[0] : JsValue.Undefined);
-        if (maxLength <= s.Length)
-        {
-            return JsValue.String(s);
-        }
-
-        var fill = args.Length > 1 && !args[1].IsUndefined ? JsValue.ToStringValue(args[1]) : " ";
-        if (fill.Length == 0)
+        var s = CoerceThisString(realm, thisV);
+        var maxLength = ToLengthJs(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var fill = args.Length > 1 && !args[1].IsUndefined ? ToStringArg(realm, args[1]) : " ";
+        if (maxLength <= s.Length || fill.Length == 0)
         {
             return JsValue.String(s);
         }
@@ -341,10 +446,9 @@ public static class StringCtor
 
     private static JsValue Repeat(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var n = JsValue.ToNumber(args.Length > 0 ? args[0] : JsValue.Undefined);
-        var count = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
-        if (double.IsInfinity(n) || count < 0)
+        var s = CoerceThisString(realm, thisV);
+        var count = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        if (count < 0 || count == long.MaxValue)
         {
             throw new JsThrow(realm.NewRangeError("Invalid repeat count"));
         }
@@ -352,6 +456,11 @@ public static class StringCtor
         if (s.Length != 0 && count > MaxRepeatLength / s.Length)
         {
             throw new JsThrow(realm.NewRangeError("Repeat count too large"));
+        }
+
+        if (s.Length == 0 || count == 0)
+        {
+            return JsValue.String(string.Empty);
         }
 
         var sb = new StringBuilder(s.Length * (int)count);
@@ -365,36 +474,48 @@ public static class StringCtor
 
     private static JsValue Replace(JsRealm realm, JsValue thisV, JsValue[] args, bool replaceAll)
     {
-        var s = ThisStringValue(realm, thisV);
-        // §22.1.3.19/§22.1.3.20: if searchValue is not undefined/null, let
-        // replacer be GetMethod(searchValue, @@replace) and, if not undefined,
-        // delegate to it. This is NOT RegExp-specific — any object exposing a
-        // callable [Symbol.replace] participates (core-js feature-detects this).
-        if (args.Length > 0 && args[0].IsObject)
+        RequireCoercibleThis(realm, thisV);
+        var searchValue = args.Length > 0 ? args[0] : JsValue.Undefined;
+        var replacement = args.Length > 1 ? args[1] : JsValue.Undefined;
+        // §22.1.3.19/§22.1.3.20 step 2: when searchValue is not nullish, look
+        // up a callable [Symbol.replace] and delegate with the RAW receiver.
+        // This is NOT RegExp-specific — any object exposing a callable
+        // [Symbol.replace] participates (core-js feature-detects this).
+        if (!searchValue.IsNullish)
         {
-            // replaceAll's non-global guard is a RegExp-specific invariant
-            // (§22.1.3.20 step 2): a RegExp without the global flag throws.
-            if (replaceAll && RegExpCtor.IsRegExp(args[0])
-                && (((JsRegExp)args[0].AsObject).Flags & Starling.RegExp.RegexFlags.Global) == 0)
+            // §22.1.3.20 step 2a: replaceAll requires a global regexp, checked
+            // via the observable `flags` property, before @@replace lookup.
+            if (replaceAll && IsRegExpSpec(realm, searchValue))
             {
-                throw new JsThrow(realm.NewTypeError("String.prototype.replaceAll called with a non-global RegExp"));
+                var flags = AbstractOperations.Get(realm.ActiveVm, searchValue.AsObject, "flags");
+                if (flags.IsNullish)
+                {
+                    throw new JsThrow(realm.NewTypeError("String.prototype.replaceAll called with a RegExp whose flags are not object coercible"));
+                }
+
+                if (!ToStringArg(realm, flags).Contains('g'))
+                {
+                    throw new JsThrow(realm.NewTypeError("String.prototype.replaceAll called with a non-global RegExp"));
+                }
             }
 
-            var replaceFn = args[0].AsObject.Get(SymbolCtor.Replace);
-            if (args[0].AsObject is JsRegExp re && replaceFn.IsObject
-                && ReferenceEquals(replaceFn.AsObject, realm.RegExpBuiltinSymbolReplace))
+            var replaceFn = AbstractOperations.GetMethod(realm.ActiveVm, searchValue, SymbolCtor.Replace);
+            if (!replaceFn.IsUndefined)
             {
-                return RegExpCtor.ReplaceString(realm, re, s, args.Length > 1 ? args[1] : JsValue.Undefined);
-            }
+                if (searchValue.AsObject is JsRegExp re && replaceFn.IsObject
+                    && ReferenceEquals(replaceFn.AsObject, realm.RegExpBuiltinSymbolReplace))
+                {
+                    return RegExpCtor.ReplaceString(realm, re, CoerceThisString(realm, thisV), replacement);
+                }
 
-            if (AbstractOperations.IsCallable(replaceFn))
-            {
-                return AbstractOperations.Call(realm.ActiveVm, replaceFn, args[0],
-                    new[] { JsValue.String(s), args.Length > 1 ? args[1] : JsValue.Undefined });
+                return AbstractOperations.Call(realm.ActiveVm, replaceFn, searchValue, new[] { DelegateReceiver(realm, thisV, replaceFn), replacement });
             }
         }
-        var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var replacement = args.Length > 1 ? args[1] : JsValue.Undefined;
+
+        var s = CoerceThisString(realm, thisV);
+        var search = ToStringArg(realm, searchValue);
+        var functional = AbstractOperations.IsCallable(replacement);
+        var replStr = functional ? null : ToStringArg(realm, replacement);
         if (!replaceAll)
         {
             var pos = s.IndexOf(search, StringComparison.Ordinal);
@@ -403,7 +524,7 @@ public static class StringCtor
                 return JsValue.String(s);
             }
 
-            return JsValue.String(s[..pos] + ReplacementText(realm, replacement, search, pos, s) + s[(pos + search.Length)..]);
+            return JsValue.String(s[..pos] + ReplacementText(realm, replacement, replStr, search, pos, s) + s[(pos + search.Length)..]);
         }
 
         if (search.Length == 0)
@@ -411,7 +532,7 @@ public static class StringCtor
             var sbEmpty = new StringBuilder();
             for (var i = 0; i <= s.Length; i++)
             {
-                sbEmpty.Append(ReplacementText(realm, replacement, search, i, s));
+                sbEmpty.Append(ReplacementText(realm, replacement, replStr, search, i, s));
                 if (i < s.Length)
                 {
                     sbEmpty.Append(s[i]);
@@ -431,22 +552,22 @@ public static class StringCtor
             }
 
             sb.Append(s, cursor, pos - cursor);
-            sb.Append(ReplacementText(realm, replacement, search, pos, s));
+            sb.Append(ReplacementText(realm, replacement, replStr, search, pos, s));
             cursor = pos + search.Length;
         }
         sb.Append(s, cursor, s.Length - cursor);
         return JsValue.String(sb.ToString());
     }
 
-    private static string ReplacementText(JsRealm realm, JsValue replacement, string matched, int position, string whole)
+    private static string ReplacementText(JsRealm realm, JsValue replacement, string? replStr, string matched, int position, string whole)
     {
-        if (AbstractOperations.IsCallable(replacement))
+        if (replStr is null)
         {
             var result = AbstractOperations.Call(realm.ActiveVm, replacement, JsValue.Undefined,
                 new[] { JsValue.String(matched), JsValue.Number(position), JsValue.String(whole) });
-            return JsValue.ToStringValue(result);
+            return ToStringArg(realm, result);
         }
-        return GetSubstitution(JsValue.ToStringValue(replacement), matched, position, whole);
+        return GetSubstitution(replStr, matched, position, whole);
     }
 
     private static string GetSubstitution(string replacement, string matched, int position, string whole)
@@ -476,11 +597,11 @@ public static class StringCtor
 
     private static JsValue Slice(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
+        var s = CoerceThisString(realm, thisV);
         var len = s.Length;
-        var start = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var start = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var from = start < 0 ? Math.Max(len + start, 0) : Math.Min(start, len);
-        var end = args.Length > 1 && !args[1].IsUndefined ? ToIntegerOrInfinity(args[1]) : len;
+        var end = args.Length > 1 && !args[1].IsUndefined ? ToIntegerOrInfinity(realm, args[1]) : len;
         var to = end < 0 ? Math.Max(len + end, 0) : Math.Min(end, len);
         return JsValue.String(from >= to ? string.Empty : s.Substring((int)from, (int)(to - from)));
     }
@@ -493,88 +614,93 @@ public static class StringCtor
         // need not be a genuine RegExp. (Only this delegation makes core-js's
         // DELEGATES_TO_SYMBOL feature-detect pass; without it core-js wraps the
         // native and recurses.)
+        RequireCoercibleThis(realm, thisV);
         var regexp = args.Length > 0 ? args[0] : JsValue.Undefined;
         if (!regexp.IsNullish)
         {
+            // §22.1.3.14 step 2a: matchAll on a RegExp demands the global flag,
+            // observed via the `flags` property, before the @@matchAll lookup.
+            if (all && IsRegExpSpec(realm, regexp))
+            {
+                var flags = AbstractOperations.Get(realm.ActiveVm, regexp.AsObject, "flags");
+                if (flags.IsNullish)
+                {
+                    throw new JsThrow(realm.NewTypeError("String.prototype.matchAll called with a RegExp whose flags are not object coercible"));
+                }
+
+                if (!ToStringArg(realm, flags).Contains('g'))
+                {
+                    throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
+                }
+            }
+
             var symbol = all ? SymbolCtor.MatchAll : SymbolCtor.Match;
             var matcher = AbstractOperations.GetMethod(realm.ActiveVm, regexp, symbol);
             if (!matcher.IsUndefined)
             {
-                var sArg = ThisStringValue(realm, thisV);
-                return AbstractOperations.Call(realm.ActiveVm, matcher, regexp,
-                    new[] { JsValue.String(sArg) });
+                return AbstractOperations.Call(realm.ActiveVm, matcher, regexp, new[] { DelegateReceiver(realm, thisV, matcher) });
             }
         }
 
-        var s = ThisStringValue(realm, thisV);
-        var re = args.Length > 0 && RegExpCtor.IsRegExp(args[0])
-            ? (JsRegExp)args[0].AsObject
-            : RegExpCtor.Create(realm, args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : "",
-                all ? "g" : "");
-        if (all)
-        {
-            // Spec §22.1.3.13 requires matchAll to throw TypeError if the
-            // regex is not global. Mirror that here for parity with the
-            // Symbol.matchAll path before returning the RegExp string iterator.
-            if ((re.Flags & Starling.RegExp.RegexFlags.Global) == 0)
-            {
-                throw new JsThrow(realm.NewTypeError("matchAll requires a global regular expression"));
-            }
-
-            var unicode = (re.Flags & Starling.RegExp.RegexFlags.Unicode) != 0;
-            return JsValue.Object(new JsRegExpStringIterator(realm, re, s, global: true, unicode: unicode));
-        }
-        var fn = re.Get(SymbolCtor.Match);
-        if (!fn.IsObject)
-        {
-            return JsValue.Null;
-        }
-
+        var s = CoerceThisString(realm, thisV);
+        var re = RegExpCtor.Create(realm, regexp.IsUndefined ? "" : ToStringArg(realm, regexp), all ? "g" : "");
+        var fn = AbstractOperations.Get(realm.ActiveVm, re, JsPropertyKey.Symbol(all ? SymbolCtor.MatchAll : SymbolCtor.Match));
         return AbstractOperations.Call(realm.ActiveVm, fn, JsValue.Object(re), new[] { JsValue.String(s) });
     }
 
     private static JsValue Search(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var re = args.Length > 0 && RegExpCtor.IsRegExp(args[0])
-            ? (JsRegExp)args[0].AsObject
-            : RegExpCtor.Create(realm, args.Length > 0 && !args[0].IsUndefined ? JsValue.ToStringValue(args[0]) : "", "");
-        var fn = re.Get(SymbolCtor.Search);
-        if (!fn.IsObject)
+        RequireCoercibleThis(realm, thisV);
+        var regexp = args.Length > 0 ? args[0] : JsValue.Undefined;
+        if (!regexp.IsNullish)
         {
-            return JsValue.Number(-1);
+            var searcher = AbstractOperations.GetMethod(realm.ActiveVm, regexp, SymbolCtor.Search);
+            if (!searcher.IsUndefined)
+            {
+                return AbstractOperations.Call(realm.ActiveVm, searcher, regexp, new[] { DelegateReceiver(realm, thisV, searcher) });
+            }
         }
 
+        var s = CoerceThisString(realm, thisV);
+        var re = RegExpCtor.Create(realm, regexp.IsUndefined ? "" : ToStringArg(realm, regexp), "");
+        var fn = AbstractOperations.Get(realm.ActiveVm, re, JsPropertyKey.Symbol(SymbolCtor.Search));
         return AbstractOperations.Call(realm.ActiveVm, fn, JsValue.Object(re), new[] { JsValue.String(s) });
     }
 
     private static JsValue Split(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        // RegExp path
-        if (args.Length > 0 && RegExpCtor.IsRegExp(args[0]))
+        RequireCoercibleThis(realm, thisV);
+        var separator = args.Length > 0 ? args[0] : JsValue.Undefined;
+        var limitArg = args.Length > 1 ? args[1] : JsValue.Undefined;
+        if (!separator.IsNullish)
         {
-            var re = (JsRegExp)args[0].AsObject;
-            var fn = re.Get(SymbolCtor.Split);
-            if (fn.IsObject)
+            var splitter = AbstractOperations.GetMethod(realm.ActiveVm, separator, SymbolCtor.Split);
+            if (!splitter.IsUndefined)
             {
-                return AbstractOperations.Call(realm.ActiveVm, fn, args[0],
-                    new[] { JsValue.String(s), args.Length > 1 ? args[1] : JsValue.Undefined });
+                return AbstractOperations.Call(realm.ActiveVm, splitter, separator, new[] { DelegateReceiver(realm, thisV, splitter), limitArg });
             }
         }
-        var limit = args.Length > 1 && !args[1].IsUndefined ? ToUint32(args[1]) : uint.MaxValue;
+
+        var s = CoerceThisString(realm, thisV);
+        var limit = limitArg.IsUndefined ? uint.MaxValue : ToUint32(realm, limitArg);
+        if (separator.IsUndefined)
+        {
+            var whole = new List<JsValue>();
+            if (limit != 0)
+            {
+                whole.Add(JsValue.String(s));
+            }
+
+            return MakeArrayLike(realm, whole);
+        }
+
+        var sep = ToStringArg(realm, separator);
         var result = new List<JsValue>();
         if (limit == 0)
         {
             return MakeArrayLike(realm, result);
         }
 
-        if (args.Length == 0 || args[0].IsUndefined)
-        {
-            result.Add(JsValue.String(s));
-            return MakeArrayLike(realm, result);
-        }
-        var sep = JsValue.ToStringValue(args[0]);
         if (sep.Length == 0)
         {
             for (var i = 0; i < s.Length && result.Count < limit; i++)
@@ -606,18 +732,25 @@ public static class StringCtor
 
     private static JsValue StartsWith(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var search = args.Length > 0 ? JsValue.ToStringValue(args[0]) : "undefined";
-        var pos = Clamp(ToIntegerOrInfinity(args.Length > 1 ? args[1] : JsValue.Undefined), 0, s.Length);
-        return JsValue.Boolean(s[(int)pos..].StartsWith(search, StringComparison.Ordinal));
+        var s = CoerceThisString(realm, thisV);
+        var searchArg = args.Length > 0 ? args[0] : JsValue.Undefined;
+        if (IsRegExpSpec(realm, searchArg))
+        {
+            throw new JsThrow(realm.NewTypeError("First argument to String.prototype.startsWith must not be a regular expression"));
+        }
+
+        var search = ToStringArg(realm, searchArg);
+        var pos = Clamp(ToIntegerOrInfinity(realm, args.Length > 1 ? args[1] : JsValue.Undefined), 0, s.Length);
+        return JsValue.Boolean((int)pos + search.Length <= s.Length
+            && s.AsSpan((int)pos, search.Length).SequenceEqual(search));
     }
 
     private static JsValue Substring(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
-        var start = Clamp(ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined), 0, s.Length);
+        var s = CoerceThisString(realm, thisV);
+        var start = Clamp(ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined), 0, s.Length);
         var end = args.Length > 1 && !args[1].IsUndefined
-            ? Clamp(ToIntegerOrInfinity(args[1]), 0, s.Length)
+            ? Clamp(ToIntegerOrInfinity(realm, args[1]), 0, s.Length)
             : s.Length;
         if (start > end)
         {
@@ -630,21 +763,21 @@ public static class StringCtor
     // Annex B §B.2.2.1 String.prototype.substr(start[, length]).
     private static JsValue Substr(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var s = ThisStringValue(realm, thisV);
+        var s = CoerceThisString(realm, thisV);
         var size = (long)s.Length;
-        var intStart = ToIntegerOrInfinity(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var intStart = ToIntegerOrInfinity(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         long lstart;
-        if (double.IsNegativeInfinity(intStart))
+        if (intStart == long.MinValue)
         {
             lstart = 0;
         }
         else if (intStart < 0)
         {
-            lstart = Math.Max(size + (long)intStart, 0);
+            lstart = Math.Max(size + intStart, 0);
         }
         else
         {
-            lstart = Math.Min((long)intStart, size);
+            lstart = Math.Min(intStart, size);
         }
 
         long resultLen;
@@ -654,13 +787,13 @@ public static class StringCtor
         }
         else
         {
-            var lenNum = ToIntegerOrInfinity(args[1]);
-            if (double.IsNegativeInfinity(lenNum) || lenNum <= 0)
+            var lenNum = ToIntegerOrInfinity(realm, args[1]);
+            if (lenNum <= 0)
             {
                 return JsValue.String("");
             }
 
-            resultLen = Math.Min(double.IsPositiveInfinity(lenNum) ? size : (long)lenNum, size - lstart);
+            resultLen = Math.Min(lenNum == long.MaxValue ? size : lenNum, size - lstart);
         }
         if (resultLen <= 0)
         {
@@ -668,6 +801,73 @@ public static class StringCtor
         }
 
         return JsValue.String(s.Substring((int)lstart, (int)resultLen));
+    }
+
+    // Annex B §B.2.2 CreateHTML: wrap the coerced receiver in a tag, escaping
+    // double quotes in the attribute value.
+    private static JsValue CreateHtml(JsRealm realm, JsValue thisV, string tag, string attribute, JsValue[] args)
+    {
+        var s = CoerceThisString(realm, thisV);
+        var sb = new StringBuilder("<").Append(tag);
+        if (attribute.Length != 0)
+        {
+            var v = ToStringArg(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+            sb.Append(' ').Append(attribute).Append("=\"").Append(v.Replace("\"", "&quot;", StringComparison.Ordinal)).Append('"');
+        }
+        sb.Append('>').Append(s).Append("</").Append(tag).Append('>');
+        return JsValue.String(sb.ToString());
+    }
+
+    private static bool IsWellFormedString(string s)
+    {
+        for (var i = 0; i < s.Length; i++)
+        {
+            var c = s[i];
+            if (char.IsHighSurrogate(c))
+            {
+                if (i + 1 >= s.Length || !char.IsLowSurrogate(s[i + 1]))
+                {
+                    return false;
+                }
+
+                i++;
+            }
+            else if (char.IsLowSurrogate(c))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static string ToWellFormedString(string s)
+    {
+        if (IsWellFormedString(s))
+        {
+            return s;
+        }
+
+        var chars = s.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            var c = chars[i];
+            if (char.IsHighSurrogate(c))
+            {
+                if (i + 1 < chars.Length && char.IsLowSurrogate(chars[i + 1]))
+                {
+                    i++;
+                }
+                else
+                {
+                    chars[i] = '\uFFFD';
+                }
+            }
+            else if (char.IsLowSurrogate(c))
+            {
+                chars[i] = '\uFFFD';
+            }
+        }
+        return new string(chars);
     }
 
     // §22.1.3.21 String.prototype.split returns a genuine Array (ArrayCreate),
@@ -711,16 +911,27 @@ public static class StringCtor
         return start > end ? string.Empty : s[start..(end + 1)];
     }
 
-    private static bool IsJsWhiteSpace(char c) => char.IsWhiteSpace(c) || c == '\uFEFF';
+    // §12.2 WhiteSpace ∪ §12.3 LineTerminator — NOT .NET's set: U+0085 and
+    // U+200B are excluded, U+FEFF is included.
+    private static bool IsJsWhiteSpace(char c) => c switch
+    {
+        '\t' or '\n' or '\v' or '\f' or '\r' or ' ' => true,
+        '\u00A0' or '\u1680' or '\u2028' or '\u2029' or '\u202F' or '\u205F' or '\u3000' or '\uFEFF' => true,
+        >= '\u2000' and <= '\u200A' => true,
+        _ => false,
+    };
 
     private static long Clamp(long value, long min, long max) => Math.Min(Math.Max(value, min), max);
 
     private static bool IsIntegral(double d) => !double.IsNaN(d) && !double.IsInfinity(d) && d == Math.Truncate(d);
 
-    /// <summary>§7.1.5 ToIntegerOrInfinity.</summary>
-    private static long ToIntegerOrInfinity(JsValue value)
+    /// <summary>§7.1.5 ToIntegerOrInfinity with ±infinity mapped to
+    /// long.MaxValue/long.MinValue sentinels.</summary>
+    private static long ToIntegerOrInfinity(JsRealm realm, JsValue value)
+        => IntegerOrInfinityOf(ToNumberJs(realm, value));
+
+    private static long IntegerOrInfinityOf(double n)
     {
-        var n = JsValue.ToNumber(value);
         if (double.IsNaN(n) || n == 0)
         {
             return 0;
@@ -740,9 +951,9 @@ public static class StringCtor
     }
 
     /// <summary>§7.1.20 LengthOfArrayLike's ToLength clamp.</summary>
-    private static long ToLength(JsValue value)
+    private static long ToLengthJs(JsRealm realm, JsValue value)
     {
-        var len = ToIntegerOrInfinity(value);
+        var len = ToIntegerOrInfinity(realm, value);
         if (len <= 0)
         {
             return 0;
@@ -752,9 +963,9 @@ public static class StringCtor
     }
 
     /// <summary>§7.1.6 ToInt32/§7.1.7 ToUint32 modulo arithmetic.</summary>
-    private static uint ToUint32(JsValue value)
+    private static uint ToUint32(JsRealm realm, JsValue value)
     {
-        var n = JsValue.ToNumber(value);
+        var n = ToNumberJs(realm, value);
         if (double.IsNaN(n) || double.IsInfinity(n) || n == 0)
         {
             return 0;
@@ -765,9 +976,9 @@ public static class StringCtor
         return (uint)mod;
     }
 
-    private static ushort ToUint16(JsValue value)
+    private static ushort ToUint16(JsRealm realm, JsValue value)
     {
-        var n = JsValue.ToNumber(value);
+        var n = ToNumberJs(realm, value);
         if (double.IsNaN(n) || double.IsInfinity(n) || n == 0)
         {
             return 0;

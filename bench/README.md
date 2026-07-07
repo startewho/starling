@@ -11,11 +11,11 @@ one generated overview.
   `bench/results/<date>/`.
 - **`benchmarks.md`** — a generated dashboard that merges both. Do not edit it by
   hand. See [Generate the dashboard](#generate-the-dashboard).
-- **Engine comparisons** — standalone projects that rank a Starling subsystem
-  against a mature managed library on the same inputs. `Starling.JsEngineBench`
-  does this for the Starling JS engine against Jint (`engine-comparison.md`).
-  `Starling.HtmlParserBench` does it for the Starling HTML parser against
-  AngleSharp (`html-parser-comparison.md`).
+- **Subsystem benches** — standalone projects that measure one Starling
+  subsystem on a fixed suite of inputs. `Starling.JsEngineBench` does this for
+  the Starling JS engine (`engine-comparison.md`). `Starling.HtmlParserBench`
+  ranks the Starling HTML parser against AngleSharp
+  (`html-parser-comparison.md`).
 
 The split follows the pattern from
 [dotnet/performance](https://github.com/dotnet/performance): microbenchmarks for

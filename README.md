@@ -100,7 +100,7 @@ aspire run
 
 ```bash
 # Defaults are --starling (JS VM) and --imagesharp-gpu (WebGPU paint).
-aspire run -- --jint --imagesharp     # Jint JS engine + CPU paint backend
+aspire run -- --starling --imagesharp # Starling JS engine + CPU paint backend
 ```
 
 **Agent access.** Starling exposes a loopback Model Context Protocol server for

@@ -37,14 +37,20 @@ public sealed class JsModuleNamespace : JsObject
     /// stable, ordered view.</summary>
     private readonly List<string> _sortedNames = new();
 
+    /// <summary>The owning realm — needed to (a) shape the §10.4.6.8 step-5
+    /// ReferenceError for a read of an uninitialized (TDZ) binding and (b)
+    /// recognize the realm's TDZ sentinel in a cell.</summary>
+    private readonly JsRealm? _realm;
+
     /// <summary>§10.4.6 — a module namespace object has no [[Prototype]] and is
     /// not extensible from creation; build it that way. Internal because
     /// <see cref="Cell"/> (the live-binding box) is engine-internal.</summary>
-    internal JsModuleNamespace(Dictionary<string, Cell> exports)
+    internal JsModuleNamespace(Dictionary<string, Cell> exports, JsRealm? realm = null)
         : base(prototype: null)
     {
         DisableInlineCache();
         _exports = exports;
+        _realm = realm;
         RefreshExportNames();
     }
 
@@ -204,7 +210,23 @@ public sealed class JsModuleNamespace : JsObject
     //                §10.4.6.8 [[Get]] (P, Receiver)
     // ==========================================================
     public override JsValue Get(string name)
-        => _exports.TryGetValue(name, out var cell) ? cell.Value : JsValue.Undefined;
+    {
+        if (!_exports.TryGetValue(name, out var cell))
+        {
+            return JsValue.Undefined;
+        }
+
+        // §10.4.6.8 step 5 — reading an export whose binding is still in its
+        // TDZ (module not yet evaluated up to the declaration) throws.
+        if (_realm is not null && cell.Value.IsObject
+            && ReferenceEquals(cell.Value.AsObject, _realm.TdzSentinel))
+        {
+            throw new JsThrow(_realm.NewReferenceError(
+                $"Cannot access '{name}' before initialization"));
+        }
+
+        return cell.Value;
+    }
 
     public override JsValue Get(JsSymbol symbol)
         => ReferenceEquals(symbol, SymbolCtor.ToStringTag)

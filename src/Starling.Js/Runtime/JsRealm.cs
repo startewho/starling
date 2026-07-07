@@ -15,6 +15,27 @@ public sealed class JsRealm
 {
     public JsObject GlobalObject { get; }
 
+    /// <summary>§9.1.1.4 Global Environment Record [[DeclarativeRecord]] — the
+    /// global lexical environment. Top-level script <c>let</c>/<c>const</c>/
+    /// <c>class</c> bindings live here, NOT on the global object. Realm-level
+    /// and persistent so successive scripts (and <c>$262.evalScript</c>) share
+    /// one record. Checked BEFORE the global object on every global name
+    /// resolution (§9.1.1.4.1 HasBinding order).</summary>
+    public Dictionary<string, GlobalLexicalBinding> GlobalLexicals { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Annex B legacy RegExp statics (%RegExp%.$1, lastMatch, …) —
+    /// the most recent successful BUILTIN regexp match in this realm. Null
+    /// until the first match. Updated by the builtin exec path only (a
+    /// user-overridden exec does not update legacy state, matching the
+    /// legacy-RegExp-features proposal).</summary>
+    public LegacyMatchState? LegacyRegExpMatch { get; set; }
+
+    /// <summary>Snapshot backing the legacy RegExp statics.</summary>
+    public sealed record LegacyMatchState(string Input, int MatchStart, int MatchEnd, string?[] Captures)
+    {
+        public static readonly LegacyMatchState Empty = new("", 0, 0, []);
+    }
+
     /// <summary>Host hook for WHATWG Console Standard §2.3 printer output.</summary>
     public ConsoleSink ConsoleSink { get; set; } = DefaultConsoleSink;
 
@@ -45,6 +66,11 @@ public sealed class JsRealm
 
     // §9.3.1 — Intrinsic prototypes. Populated by each intrinsic's Install pass.
     public JsObject ObjectPrototype { get; }
+
+    /// <summary>%Object.prototype.toString% — captured at install time so
+    /// callers that need the INTRINSIC (Array.prototype.toString fallback)
+    /// are immune to a deleted/replaced property.</summary>
+    public JsValue ObjectProtoToString { get; internal set; }
     public JsObject FunctionPrototype { get; }
 
     // §9.3.2 — Intrinsic constructors. Each lands with its intrinsic install
@@ -170,9 +196,20 @@ public sealed class JsRealm
     public JsObject ArrayBufferPrototype { get; internal set; }
     public JsObject DataViewPrototype { get; internal set; }
     public JsObject TypedArrayPrototype { get; internal set; }
+
+    /// <summary>§23.2.1 — the abstract %TypedArray% constructor every concrete
+    /// TypedArray constructor inherits from. Populated by TypedArrayCtors.Install.</summary>
+    public JsObject? TypedArrayAbstract { get; internal set; }
     public JsObject ProxyPrototype { get; internal set; }
     public JsObject GeneratorPrototype { get; internal set; }
     public JsObject AsyncFunctionPrototype { get; internal set; }
+
+    /// <summary>%GeneratorFunction.prototype% — the [[Prototype]] of every
+    /// generator function object; carries @@toStringTag "GeneratorFunction".</summary>
+    public JsObject GeneratorFunctionPrototype { get; internal set; }
+
+    /// <summary>%AsyncGeneratorFunction.prototype%.</summary>
+    public JsObject AsyncGeneratorFunctionPrototype { get; internal set; }
     public JsObject AsyncGeneratorPrototype { get; internal set; }
     public JsObject AsyncIteratorPrototype { get; internal set; }
 
@@ -323,12 +360,15 @@ public sealed class JsRealm
         // Object.prototype and is itself callable (the empty function) — for
         // bare-bones bootstrap it's just an object.
         ObjectPrototype = new JsObject();
+        ObjectPrototype.IsImmutablePrototype = true;
         FunctionPrototype = new JsObject(ObjectPrototype);
 
         // All other prototypes default to Object.prototype-inheriting empties.
         // Intrinsic install passes replace these with fully-populated objects.
-        ArrayPrototype = new JsObject(ObjectPrototype);
-        StringPrototype = new JsObject(ObjectPrototype);
+        ArrayPrototype = new JsArray(this, ObjectPrototype, asIntrinsicPrototype: true);
+        // §22.1.3: the String prototype is itself a String exotic object whose
+        // [[StringData]] is the empty String.
+        StringPrototype = new JsStringObject(ObjectPrototype, string.Empty);
         NumberPrototype = new JsObject(ObjectPrototype);
         BooleanPrototype = new JsObject(ObjectPrototype);
         BigIntPrototype = new JsObject(ObjectPrototype);
@@ -361,6 +401,14 @@ public sealed class JsRealm
         ProxyPrototype = new JsObject(ObjectPrototype);
         GeneratorPrototype = new JsObject(IteratorPrototype);
         AsyncFunctionPrototype = new JsObject(FunctionPrototype);
+        AsyncFunctionPrototype.DefineOwnProperty(Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("AsyncFunction"), writable: false, enumerable: false, configurable: true));
+        GeneratorFunctionPrototype = new JsObject(FunctionPrototype);
+        GeneratorFunctionPrototype.DefineOwnProperty(Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("GeneratorFunction"), writable: false, enumerable: false, configurable: true));
+        AsyncGeneratorFunctionPrototype = new JsObject(FunctionPrototype);
+        AsyncGeneratorFunctionPrototype.DefineOwnProperty(Intrinsics.SymbolCtor.ToStringTag,
+            PropertyDescriptor.Data(JsValue.String("AsyncGeneratorFunction"), writable: false, enumerable: false, configurable: true));
         AsyncIteratorPrototype = new JsObject(ObjectPrototype);
         AsyncGeneratorPrototype = new JsObject(AsyncIteratorPrototype);
 
@@ -465,7 +513,7 @@ public sealed class JsRealm
     /// before the full Error intrinsic lands.</summary>
     public JsValue NewError(JsObject errorPrototype, string message)
     {
-        var err = new JsObject(errorPrototype);
+        var err = new JsObject(errorPrototype) { IsErrorExotic = true };
         err.DefineOwnProperty("message",
             PropertyDescriptor.Data(JsValue.String(message), writable: true, enumerable: false, configurable: true));
         return JsValue.Object(err);
@@ -484,7 +532,7 @@ public sealed class JsRealm
     /// wrapped exception or other JS value.</summary>
     public JsValue NewError(JsObject errorPrototype, string message, JsValue cause)
     {
-        var err = new JsObject(errorPrototype);
+        var err = new JsObject(errorPrototype) { IsErrorExotic = true };
         err.DefineOwnProperty("message",
             PropertyDescriptor.Data(JsValue.String(message), writable: true, enumerable: false, configurable: true));
         err.DefineOwnProperty("cause",
@@ -499,10 +547,8 @@ public sealed class JsRealm
     public JsValue NewUriError(string message, JsValue cause) => NewError(UriErrorPrototype, message, cause);
     public JsValue NewEvalError(string message, JsValue cause) => NewError(EvalErrorPrototype, message, cause);
 
-    /// <summary>§7.1.18 boxing for primitives. Placeholder: returns a wrapper
-    /// object whose [[Prototype]] is the matching <c>*Prototype</c> and which
-    /// stores the primitive in an internal slot under <c>__primitiveValue</c>
-    /// until the typed wrapper subclasses land.</summary>
+    /// <summary>§7.1.18 boxing for primitives: a <see cref="JsPrimitiveBox"/>
+    /// whose [[Prototype]] is the matching <c>*Prototype</c>.</summary>
     internal JsObject BoxBoolean(JsValue v) => BoxPrimitive(BooleanPrototype, v);
     internal JsObject BoxNumber(JsValue v) => BoxPrimitive(NumberPrototype, v);
     internal JsObject BoxString(JsValue v)
@@ -517,17 +563,36 @@ public sealed class JsRealm
     internal JsObject BoxBigInt(JsValue v) => BoxPrimitive(BigIntPrototype, v);
     internal JsObject BoxSymbol(JsValue v) => BoxPrimitive(SymbolPrototype, v);
 
-    private static JsObject BoxPrimitive(JsObject proto, JsValue value)
-    {
-        var box = new JsObject(proto);
-        box.DefineOwnProperty("__primitiveValue",
-            PropertyDescriptor.Data(value, writable: false, enumerable: false, configurable: false));
-        return box;
-    }
+    private static JsPrimitiveBox BoxPrimitive(JsObject proto, JsValue value)
+        => new(proto, value);
 
     private static void DefaultConsoleSink(ConsoleLevel level, string message)
     {
         var writer = level is ConsoleLevel.Warn or ConsoleLevel.Error ? Console.Error : Console.Out;
         writer.WriteLine(message);
     }
+}
+
+/// <summary>§7.1.18 primitive wrapper (Boolean / Number / BigInt / Symbol
+/// boxes): the primitive lives in a host slot, invisible to property
+/// enumeration and getOwnPropertyNames.</summary>
+public sealed class JsPrimitiveBox : JsObject
+{
+    public JsValue Primitive { get; }
+
+    internal JsPrimitiveBox(JsObject? prototype, JsValue primitive) : base(prototype)
+    {
+        Primitive = primitive;
+    }
+}
+
+/// <summary>One binding in the realm's global lexical environment
+/// (<see cref="JsRealm.GlobalLexicals"/>). Created uninitialized (TDZ) by
+/// GlobalDeclarationInstantiation; initialized by the declaration's own
+/// initializer. <see cref="Mutable"/> is false for <c>const</c>.</summary>
+public sealed class GlobalLexicalBinding
+{
+    public JsValue Value;
+    public bool Mutable;
+    public bool Initialized;
 }

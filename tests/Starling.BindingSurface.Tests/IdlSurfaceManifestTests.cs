@@ -3,15 +3,11 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AwesomeAssertions;
-using Jint;
-using Microsoft.Extensions.Logging.Abstractions;
 using Starling.Bindings;
-using Starling.Bindings.Jint;
 using Starling.Html;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
-using Starling.Loop;
 
 namespace Starling.BindingSurface.Tests;
 
@@ -24,19 +20,15 @@ public sealed class IdlSurfaceManifestTests
     };
 
     [TestMethod]
-    public void Backends_match_required_idl_surface_manifest()
+    public void Backend_matches_required_idl_surface_manifest()
     {
         var runtime = NewStarlingRuntime();
-        var engine = NewJintEngine();
         foreach (var member in RequiredMembers())
         {
             string expected = ExpectedSurface(member);
             string starling = ReadStarlingSurface(runtime, member);
-            string jint = ReadJintSurface(engine, member);
 
             starling.Should().Be(expected, $"Starling JS {member.Interface}.{member.Name} must match the IDL surface manifest");
-            jint.Should().Be(expected, $"Jint {member.Interface}.{member.Name} must match the IDL surface manifest");
-            jint.Should().Be(starling, $"{member.Interface}.{member.Name} must expose the same surface on both backends");
         }
     }
 
@@ -48,23 +40,6 @@ public sealed class IdlSurfaceManifestTests
         return runtime;
     }
 
-    private static Engine NewJintEngine()
-    {
-        var doc = HtmlParser.Parse("<!doctype html><html><head><title>Hi</title></head><body><div id='main'></div></body></html>");
-        var engine = new Engine();
-        var ctx = new JintBackendContext(
-            engine: engine,
-            document: doc,
-            baseUrl: Starling.Url.UrlParser.Parse("about:blank").Value,
-            http: new Starling.Net.StarlingHttpClient(),
-            loggerFactory: NullLoggerFactory.Instance,
-            loop: new WebEventLoop(),
-            layoutHost: null,
-            fetch: (_, _) => Task.FromResult<string?>(null));
-        JintBindings.InstallAll(ctx);
-        return engine;
-    }
-
     private static string ReadStarlingSurface(JsRuntime runtime, SurfaceMember member)
     {
         string source = "result = " + SurfaceCheckScript(member);
@@ -73,9 +48,6 @@ public sealed class IdlSurfaceManifestTests
         new JsVm(runtime).Run(chunk);
         return JsValue.ToStringValue(runtime.GetGlobal("result"));
     }
-
-    private static string ReadJintSurface(Engine engine, SurfaceMember member) =>
-        engine.Evaluate(SurfaceCheckScript(member)).AsString();
 
     private static string SurfaceCheckScript(SurfaceMember member)
     {

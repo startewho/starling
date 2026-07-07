@@ -4,7 +4,7 @@
     same fixtures, ranked on one machine so the numbers compare fairly.
 
     Kept as its OWN project, separate from bench/Starling.Bench, on purpose
-    (same reasoning as Starling.JsEngineBench vs Jint): it needs only
+    (same reasoning as Starling.JsEngineBench): it needs only
     Starling.Html + Starling.Dom + AngleSharp (+ the AngleSharp backend adapter),
     so it builds and runs without dragging in the paint/compositor benches and
     needs no Six Labors license. AngleSharp is pure-managed, so referencing it

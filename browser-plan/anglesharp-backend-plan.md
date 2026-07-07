@@ -1,8 +1,8 @@
 # Plan: AngleSharp as a swappable HTML-parser backend
 
 This is the agreed plan for adding AngleSharp as an opt-in, off-by-default HTML
-parser, picked at runtime. It mirrors how the JS engine already switches between
-the Starling engine and Jint. The Starling parser stays the default.
+parser, picked at runtime. It mirrors the JS-engine backend seam. The Starling
+parser stays the default.
 
 Read this top to bottom. It is self-contained, so a fresh session can pick it up
 and build it without the chat history.
@@ -57,7 +57,6 @@ except the new backend project plus the selector wiring. It is deletable.
 - `src/Starling.Bindings/NodeBindings.cs` — `innerHTML` / `outerHTML` /
   `insertAdjacentHTML` (helper around line 2325-2328, callers near 581, 601,
   1115+).
-- `src/Starling.Bindings.Jint/NodeBindings.cs` — the Jint mirror (around 1209).
 - `src/Starling.Shell.Native/*` — demo and window render call sites
   (`NativePresentDemo.cs:63`, `NativeBrowserWindow.cs:186` and neighbors).
 
@@ -65,14 +64,12 @@ except the new backend project plus the selector wiring. It is deletable.
 
 - Seam interface lives in `src/Starling.Js.Hosting` (`IScriptEngineFactory`,
   `IScriptSession`). It depends only on `Starling.Dom` and `Starling.Common`.
-- Backends: `src/Starling.Bindings` (Starling) and
-  `src/Starling.Bindings.Jint` (Jint, references only the seam plus the Jint
-  package). Each provides a factory.
+- Backend: `src/Starling.Bindings` (Starling) provides the factory.
 - Selector: `src/Starling.Engine/JsEngineSelector.cs` reads `STARLING_JS_ENGINE`
-  once, caches the choice, and builds the factory. It lives in `Starling.Engine`
-  because that is the only project that references both backends.
-- Flags: `src/Starling.AppHost/AppHost.cs` maps `--jint` / `--starling` with a
-  reusable `SelectFlag` helper, strips them before Aspire, and forwards the
+  once, caches the choice, and builds the factory. It lives in `Starling.Engine`,
+  where the backend assembly is referenced.
+- Flags: `src/Starling.AppHost/AppHost.cs` maps `--starling` with a
+  reusable `SelectFlag` helper, strips it before Aspire, and forwards the
   choice as an environment variable. `src/Starling.Gui/Program.cs` defaults the
   env var when it is unset. Flag beats env var beats default.
 - `Starling.Dom` already grants `InternalsVisibleTo` to `Starling.Html` and
@@ -129,8 +126,7 @@ startup.
 
 - Add an `HtmlTemplateElement` (or equivalent) whose `Content` is a
   `DocumentFragment`, following the DOM standard for `template.content`.
-- Wire `template.content` in both `src/Starling.Bindings/NodeBindings.cs` and
-  `src/Starling.Bindings.Jint/NodeBindings.cs`.
+- Wire `template.content` in `src/Starling.Bindings/NodeBindings.cs`.
 - Update the Starling parser's `<template>` handling to place template children
   into the content fragment.
 - Tests for the content-fragment semantics. This is core-DOM work that both
@@ -164,15 +160,15 @@ startup.
   (`starling` default, `anglesharp`). It sets `HtmlParsing.Backend` at startup.
   This is the only project that references the AngleSharp backend.
 - Flags `--anglesharp-html` / `--starling-html` in `AppHost.cs` and the env-var
-  default in `Gui/Program.cs`, matching the Jint pattern.
+  default in `Gui/Program.cs`, matching the JS-engine flag pattern.
 - Differential test project `tests/Starling.Html.AngleSharp.Tests`: parse the
   html5lib fixtures and our snapshot pages through both backends and assert the
   serialized Starling DOM matches. Any diff is either an adapter bug or a real
   Starling-parser spec gap. Both are worth finding.
 - Add an `AngleSharp+copy` column to the existing `HtmlParserBench` so we measure
   the real in-engine cost, not the raw AngleSharp number.
-- Short `STARLING_HTML_PARSER` note in `AGENTS.md`, matching the Jint write-up,
-  and a `tasks/` work package per the repo workflow.
+- Short `STARLING_HTML_PARSER` note in `AGENTS.md` and a `tasks/` work package
+  per the repo workflow.
 
 ## Performance note (important, do not skip)
 
@@ -186,6 +182,6 @@ The `AngleSharp+copy` benchmark column in Phase 4 exists to keep this honest.
 ## How this honors the locked "own engine" decision
 
 `browser-plan/00_INDEX.md` locks "own engine, no Chromium/Gecko/WebKit reuse."
-This stays true the same way Jint does: AngleSharp is opt-in, off by default, and
+This stays true: AngleSharp is opt-in, off by default, and
 deletable by removing one project and one selector arm. The Starling parser
 remains the default and the thing we keep building.

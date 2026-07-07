@@ -8,8 +8,7 @@
       net11 and the preview language version. So Starling.Bindings and every
       project that consumes it move to net11. Projects below Bindings (Dom, Js,
       Common, and so on) stay on net10 and are referenced downlevel, which the
-      runtime allows. The Jint backend does not reference Bindings, so it stays
-      on net10 too. Dom.Tests stays on net10, so the core DOM tests run
+      runtime allows. Dom.Tests stays on net10, so the core DOM tests run
       unchanged.
 
       The Aspire host (Starling.AppHost) stays on net10: its Aspire.AppHost.Sdk

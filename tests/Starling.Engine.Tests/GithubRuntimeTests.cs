@@ -11,7 +11,7 @@ namespace Starling.Engine.Tests;
 /// <summary>
 /// Offline runtime harness for the github.com snapshot (testdata/sites/github):
 /// parse the real homepage into the Starling DOM, install the window/DOM
-/// bindings (the Starling JS engine, not Jint), then execute every classic
+/// bindings (the Starling JS engine), then execute every classic
 /// script in document order and capture parse/compile failures separately from
 /// runtime throws + console.error. Runs the RUNTIME layer (execution + bindings)
 /// on real github code without the live browser.

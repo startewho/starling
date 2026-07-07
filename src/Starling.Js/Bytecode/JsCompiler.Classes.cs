@@ -39,20 +39,23 @@ public sealed partial class JsCompiler
             return;
         }
 
-        // §15.7 — script-top ClassDeclaration currently uses the global write
-        // path so static initializers and method bodies that read the class name
-        // resolve through LoadGlobal, preserving the existing class suite.
-        // bindNameToGlobal: bind the name before static elements run so a
-        // `static { … C … }` block or `static p = C.q` field sees the class.
-        //
-        // TDZ note: script-top global-lexical TDZ work is still deferred. The
-        // global write path below remains the single source of truth there.
+        // §15.7 / §16.1.7 — a script-top ClassDeclaration is a global LEXICAL
+        // binding (let-like) in the realm's declarative record, declared in TDZ
+        // by GlobalDeclInstantiation. bindNameToGlobal: the VM initializes the
+        // binding before static elements run so a `static { … C … }` block or
+        // `static p = C.q` field sees the class; the InitGlobalLex below
+        // re-initializes with the same value (idempotent).
         EmitClassValue(cd.Name, cd.BaseClass, cd.Body, bindNameToGlobal: true);
-        _b.Emit(Opcode.Dup); // assignment is an expression — leave value on stack briefly
-        // Declare the global binding first so the store is not rejected as an
-        // assignment to an undeclared global in strict mode (a top-level class
-        // declaration introduces a binding before its initializer runs).
         var classNameIdx = _b.AddConstant(cd.Name.Name);
+        if (IsGlobalLexicalScope)
+        {
+            _b.EmitU16(Opcode.InitGlobalLex, classNameIdx); // pops the class value
+            return;
+        }
+
+        // Fallback (non-global, unresolvable local — e.g. exotic nesting):
+        // preserve the legacy global write path.
+        _b.Emit(Opcode.Dup);
         _b.EmitU16(Opcode.DeclareGlobalVar, classNameIdx);
         _b.EmitU16(Opcode.StoreGlobal, classNameIdx);
         _b.Emit(Opcode.Pop);

@@ -2,14 +2,12 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <StartupObject>Starling.Js.Test262.Tests.Test262WorkerProgram</StartupObject>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="MSTest" />
     <PackageReference Include="AwesomeAssertions" />
-    <!-- Jint: drives the informational compat-delta baseline (J5b). The same
-         corpus + frontmatter parsing run against Jint alongside Starling.Js so
-         the two engines' pass rates are directly comparable. -->
-    <PackageReference Include="Jint" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Starling.Js\Starling.Js.csproj" />

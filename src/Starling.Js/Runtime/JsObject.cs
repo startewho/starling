@@ -241,6 +241,11 @@ public class JsObject
     /// <see cref="SetPrototypeOf"/> so subclasses can override.</summary>
     public JsObject? Prototype { get; private set; }
 
+    /// <summary>[[ErrorData]] marker (§20.5.1.1) — true for objects created by
+    /// an Error constructor (any realm). Object.prototype.toString reports
+    /// "Error" for these regardless of prototype identity.</summary>
+    public bool IsErrorExotic { get; internal set; }
+
     /// <summary>The [[Extensible]] internal slot. When false, new own properties
     /// are rejected. Virtual so exotic objects (notably <see cref="JsProxy"/>)
     /// can route through the <c>isExtensible</c> trap.</summary>
@@ -249,6 +254,10 @@ public class JsObject
     /// <summary>Backing field for <see cref="Extensible"/>; mutated only by
     /// <see cref="PreventExtensions"/> on ordinary objects.</summary>
     private bool _extensible = true;
+
+    /// <summary>§10.4.7 immutable-prototype exotic (%Object.prototype%):
+    /// [[SetPrototypeOf]] only succeeds when the value is unchanged.</summary>
+    internal bool IsImmutablePrototype { get; set; }
 
     /// <summary>Models the spec's <c>[[ParameterMap]]</c> internal slot: true for
     /// an <c>arguments</c> exotic object. Read by §20.1.3.6 step 5 so
@@ -303,7 +312,7 @@ public class JsObject
             return true; // §10.1.2 — same prototype is a no-op success
         }
 
-        if (!Extensible)
+        if (IsImmutablePrototype || !Extensible)
         {
             return false;
         }
@@ -496,28 +505,24 @@ public class JsObject
     /// JsTypedArray elements) participate in the walk.</summary>
     public virtual bool Has(string name)
     {
-        for (var o = this; o is not null; o = o.Prototype)
+        // Recursive virtual dispatch per §10.1.7.1 step 3.a: an exotic parent
+        // (Proxy `has` trap, typed-array element check) must see the lookup.
+        if (HasOwn(name))
         {
-            if (o.HasOwn(name))
-            {
-                return true;
-            }
+            return true;
         }
 
-        return false;
+        return Prototype?.Has(name) ?? false;
     }
 
     public virtual bool Has(JsSymbol symbol)
     {
-        for (var o = this; o is not null; o = o.Prototype)
+        if (HasOwn(symbol))
         {
-            if (o.HasOwn(symbol))
-            {
-                return true;
-            }
+            return true;
         }
 
-        return false;
+        return Prototype?.Has(symbol) ?? false;
     }
 
     public bool Has(JsPropertyKey key) => key.IsSymbol ? Has(key.AsSymbol) : Has(key.AsString);
@@ -683,7 +688,12 @@ public class JsObject
         }
 
         var cur = existing.Value;
-        var changingKind = desc.IsAccessor != cur.IsAccessor;
+        // §10.1.6.3 — kind is decided by FIELD PRESENCE, not the collapsed
+        // descriptor's default: a GENERIC descriptor ({} / {enumerable:…})
+        // has neither data nor accessor fields and never changes the kind.
+        var wantsData = present.HasValue || present.HasWritable;
+        var wantsAccessor = present.HasGet || present.HasSet;
+        var changingKind = (wantsData && cur.IsAccessor) || (wantsAccessor && !cur.IsAccessor);
         var enumerable = present.HasEnumerable ? desc.Enumerable : cur.Enumerable;
         var configurable = present.HasConfigurable ? desc.Configurable : cur.Configurable;
 
@@ -713,7 +723,7 @@ public class JsObject
                         return false;
                     }
 
-                    if (present.HasValue && !desc.Value.Equals(cur.Value))
+                    if (present.HasValue && !AbstractOperations.SameValue(desc.Value, cur.Value))
                     {
                         return false;
                     }
@@ -733,8 +743,11 @@ public class JsObject
             }
         }
 
+        // Merge by RESULTING kind: a kind flip rebuilds from the new fields; a
+        // generic descriptor keeps the current kind's payload untouched.
         PropertyDescriptor merged;
-        if (desc.IsAccessor)
+        var resultIsAccessor = wantsAccessor || (cur.IsAccessor && !wantsData);
+        if (resultIsAccessor)
         {
             merged = PropertyDescriptor.Accessor(
                 present.HasGet ? desc.Getter : (cur.IsAccessor ? cur.Getter : null),
@@ -789,12 +802,7 @@ public class JsObject
             return true;
         }
 
-        if (existing.IsAccessor != desc.IsAccessor)
-        {
-            return false;
-        }
-
-        if (existing.Configurable != desc.Configurable)
+        if (desc.Configurable)
         {
             return false;
         }
@@ -804,9 +812,27 @@ public class JsObject
             return false;
         }
 
-        if (!existing.IsAccessor && existing.Writable != desc.Writable)
+        if (existing.IsAccessor != desc.IsAccessor)
         {
             return false;
+        }
+
+        if (existing.IsAccessor)
+        {
+            return ReferenceEquals(existing.Getter, desc.Getter)
+                && ReferenceEquals(existing.Setter, desc.Setter);
+        }
+
+        // Data: writable may transition true→false; a non-writable slot pins
+        // both the flag and (per SameValue) the value.
+        if (!existing.Writable)
+        {
+            if (desc.Writable)
+            {
+                return false;
+            }
+
+            return AbstractOperations.SameValue(existing.Value, desc.Value);
         }
 
         return true;
@@ -910,7 +936,10 @@ public class JsObject
     {
         get
         {
-            foreach (var key in OrderedStringKeys())
+            // Route through the VIRTUAL Keys so host objects that only
+            // override Keys (storage, DOM collections) surface their exotic
+            // own keys to [[OwnPropertyKeys]] consumers (Object.keys, spread).
+            foreach (var key in Keys)
             {
                 yield return JsPropertyKey.String(key);
             }
@@ -986,6 +1015,10 @@ public sealed class JsNativeFunction : JsObject
     public Func<JsValue, JsValue[], JsValue> Body { get; }
     public bool IsConstructor { get; }
 
+    /// <summary>§7.3.25 GetFunctionRealm — populated by the realm-aware
+    /// constructor; null for realm-less host functions.</summary>
+    internal JsRealm? Realm { get; }
+
     /// <summary>Declared <c>length</c> (declared positional arity). Mirrored
     /// as an own non-enumerable property when set via the realm-aware
     /// constructor; intrinsics that build descriptors by hand may also stamp
@@ -1002,15 +1035,15 @@ public sealed class JsNativeFunction : JsObject
     }
 
     /// <summary>The shared fast-mode shape every native function adopts:
-    /// <c>Root → {name} → {name,length}</c>, both properties W=false/E=false/C=true
+    /// <c>Root → {length} → {length,name}</c>, both properties W=false/E=false/C=true
     /// (§17 builtin function defaults). Built once via <see cref="Shape.Transition"/>
     /// so its identity is exactly the shape an incremental two-property install
     /// would have produced — inline caches and dictionary migration see no
-    /// difference. <c>name</c> lands in slot 0, <c>length</c> in slot 1.</summary>
+    /// difference. Spec order (§10.2.3/§10.2.9): <c>length</c> lands in slot 0, <c>name</c> in slot 1.</summary>
     internal static readonly Shape NameLengthShape =
         Shape.Root
-            .Transition("name", Shape.Configurable)
-            .Transition("length", Shape.Configurable);
+            .Transition("length", Shape.Configurable)
+            .Transition("name", Shape.Configurable);
 
     /// <summary>Realm-aware constructor — wires
     /// <c>[[Prototype]] = realm.FunctionPrototype</c> and stamps
@@ -1021,6 +1054,7 @@ public sealed class JsNativeFunction : JsObject
         : base(realm?.FunctionPrototype)
     {
         ArgumentNullException.ThrowIfNull(realm);
+        Realm = realm;
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Body = body ?? throw new ArgumentNullException(nameof(body));
         IsConstructor = isConstructor;
@@ -1028,7 +1062,7 @@ public sealed class JsNativeFunction : JsObject
         // Adopt the shared name/length shape with a pre-filled 2-slot array
         // instead of two DefineOwnProperty transitions. Byte-identical result,
         // no per-property shape transition or table flatten at bootstrap.
-        AdoptShape(NameLengthShape, new[] { JsValue.String(name), JsValue.Number(length) });
+        AdoptShape(NameLengthShape, new[] { JsValue.Number(length), JsValue.String(name) });
     }
 
     /// <summary>Convenience overload for legacy (args-only) host functions.</summary>

@@ -75,7 +75,7 @@ public class NumberTests
     }
 
     [TestMethod]
-    public void Number_high_precision_formatting_matches_upstream_jint_cases()
+    public void Number_high_precision_formatting_matches_reference_cases()
     {
         Eval("(3).toExponential(1);").AsString.Should().Be("3.0e+0");
         Eval("(3).toExponential(50);").AsString.Should().Be("3.00000000000000000000000000000000000000000000000000e+0");

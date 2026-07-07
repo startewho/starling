@@ -336,8 +336,17 @@ public ref struct JsLexer
             if (c == '\\')
             {
                 Advance();
+                // §12.9.5 — a LineTerminator may not appear in a regex literal
+                // even escaped (RegularExpressionBackslashSequence requires a
+                // NonTerminator), so `/\<LF>/` is a SyntaxError too.
                 if (_i < _src.Length)
                 {
+                    if (IsLineTerminator(_src[_i]))
+                    {
+                        _errors.Report(JsLexError.UnterminatedRegExp, start, "unterminated regular expression");
+                        return MakeSourceToken(JsTokenKind.Invalid, start.Offset, _i - start.Offset, start, CurrentPos(), precededByLT);
+                    }
+
                     Advance();
                 }
 

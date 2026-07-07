@@ -34,7 +34,7 @@ public static class ObjectCtor
             if (newTarget.IsObject && AbstractOperations.IsConstructor(newTarget)
                 && !ReferenceEquals(newTarget.AsObject, ctor))
             {
-                var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, objectProto);
+                var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, objectProto, static r => r.ObjectPrototype);
                 return JsValue.Object(realm.NewObjectWithProto(instProto));
             }
             var value = args.Length > 0 ? args[0] : JsValue.Undefined;
@@ -52,12 +52,13 @@ public static class ObjectCtor
         // on the constructor (§20.1.2.1).
         ctor.DefineOwnProperty("prototype",
             PropertyDescriptor.Data(JsValue.Object(objectProto), writable: false, enumerable: false, configurable: false));
-        ctor.DefineOwnProperty("name",
-            PropertyDescriptor.Data(JsValue.String("Object"), writable: false, enumerable: false, configurable: true));
+        // §10.2.9/§10.2.10 order: length is installed before name.
         ctor.DefineOwnProperty("length",
             PropertyDescriptor.Data(JsValue.Number(1), writable: false, enumerable: false, configurable: true));
+        ctor.DefineOwnProperty("name",
+            PropertyDescriptor.Data(JsValue.String("Object"), writable: false, enumerable: false, configurable: true));
         // -------------------------------------------------------- Static methods
-        DefineMethod(realm, ctor, "assign", Assign, length: 2);
+        DefineMethod(realm, ctor, "assign", (thisV, args) => Assign(realm, thisV, args), length: 2);
         DefineMethod(realm, ctor, "create", (thisV, args) => Create(realm, args), length: 2);
         DefineMethod(realm, ctor, "defineProperty", (thisV, args) => DefineProperty(realm, args), length: 3);
         DefineMethod(realm, ctor, "defineProperties", (thisV, args) => DefineProperties(realm, args), length: 2);
@@ -70,15 +71,16 @@ public static class ObjectCtor
         DefineMethod(realm, ctor, "keys", (thisV, args) => Keys(realm, args), length: 1);
         DefineMethod(realm, ctor, "values", (thisV, args) => Values(realm, args), length: 1);
         DefineMethod(realm, ctor, "entries", (thisV, args) => Entries(realm, args), length: 1);
-        DefineMethod(realm, ctor, "freeze", (thisV, args) => Freeze(args), length: 1);
+        DefineMethod(realm, ctor, "freeze", (thisV, args) => SetIntegrityLevel(realm, args, frozen: true), length: 1);
         DefineMethod(realm, ctor, "isFrozen", (thisV, args) => IsFrozen(args), length: 1);
-        DefineMethod(realm, ctor, "seal", (thisV, args) => Seal(args), length: 1);
+        DefineMethod(realm, ctor, "seal", (thisV, args) => SetIntegrityLevel(realm, args, frozen: false), length: 1);
         DefineMethod(realm, ctor, "isSealed", (thisV, args) => IsSealed(args), length: 1);
-        DefineMethod(realm, ctor, "preventExtensions", (thisV, args) => PreventExtensions(args), length: 1);
+        DefineMethod(realm, ctor, "preventExtensions", (thisV, args) => PreventExtensions(realm, args), length: 1);
         DefineMethod(realm, ctor, "isExtensible", (thisV, args) => IsExtensible(args), length: 1);
         DefineMethod(realm, ctor, "is", (thisV, args) => Is(args), length: 2);
         DefineMethod(realm, ctor, "fromEntries", (thisV, args) => FromEntries(realm, args), length: 1);
-        DefineMethod(realm, ctor, "hasOwn", (thisV, args) => HasOwn(args), length: 2);
+        DefineMethod(realm, ctor, "groupBy", (thisV, args) => GroupBy(realm, args), length: 2);
+        DefineMethod(realm, ctor, "hasOwn", (thisV, args) => HasOwn(realm, args), length: 2);
 
         // -------------------------------------------------------- Prototype methods
         // Bulk-install the constructor back-reference + the six prototype methods
@@ -97,6 +99,54 @@ public static class ObjectCtor
             new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, args) => ProtoValueOf(realm, thisV)),
             new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, args) => ProtoToLocaleString(realm, thisV)),
         });
+
+        realm.ObjectProtoToString = objectProto.Get("toString");
+
+        // §B.2.2.2-5 __defineGetter__ / __defineSetter__ / __lookupGetter__ /
+        // __lookupSetter__ (Annex B legacy accessor helpers).
+        DefineMethod(realm, objectProto, "__defineGetter__",
+            (thisV, args) => DunderDefineAccessor(realm, thisV, args, isGetter: true), length: 2);
+        DefineMethod(realm, objectProto, "__defineSetter__",
+            (thisV, args) => DunderDefineAccessor(realm, thisV, args, isGetter: false), length: 2);
+        DefineMethod(realm, objectProto, "__lookupGetter__",
+            (thisV, args) => DunderLookupAccessor(realm, thisV, args, isGetter: true), length: 1);
+        DefineMethod(realm, objectProto, "__lookupSetter__",
+            (thisV, args) => DunderLookupAccessor(realm, thisV, args, isGetter: false), length: 1);
+
+        // §B.2.2.1 Object.prototype.__proto__ accessor.
+        var protoGetter = new JsNativeFunction(realm, "get __proto__", 0, (thisV, _) =>
+        {
+            var o = AbstractOperations.ToObject(realm, thisV);
+            var p = o.GetPrototypeOf();
+            return p is null ? JsValue.Null : JsValue.Object(p);
+        }, isConstructor: false);
+        var protoSetter = new JsNativeFunction(realm, "set __proto__", 1, (thisV, args) =>
+        {
+            if (thisV.IsNullish)
+            {
+                throw new JsThrow(realm.NewTypeError("Object.prototype.__proto__ setter called on null or undefined"));
+            }
+
+            var v = args.Length > 0 ? args[0] : JsValue.Undefined;
+            if (!v.IsObject && !v.IsNull)
+            {
+                return JsValue.Undefined;
+            }
+
+            if (!thisV.IsObject)
+            {
+                return JsValue.Undefined;
+            }
+
+            if (!thisV.AsObject.SetPrototypeOf(v.IsNull ? null : v.AsObject))
+            {
+                throw new JsThrow(realm.NewTypeError("Object.prototype.__proto__ setter: cyclic or non-extensible"));
+            }
+
+            return JsValue.Undefined;
+        }, isConstructor: false);
+        objectProto.DefineOwnProperty("__proto__",
+            PropertyDescriptor.Accessor(protoGetter, protoSetter, enumerable: false, configurable: true));
 
         realm.ObjectConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Object",
@@ -251,23 +301,14 @@ public static class ObjectCtor
     //                          Static implementations
     // ====================================================================
 
-    /// <summary>§20.1.2.1 Object.assign — copy own enumerable string-keyed
-    /// properties from each source to target.</summary>
-    private static JsValue Assign(JsValue thisV, JsValue[] args)
+    /// <summary>§20.1.2.1 Object.assign — copy own enumerable string- AND
+    /// symbol-keyed properties from each source (via [[OwnPropertyKeys]] so a
+    /// Proxy's ownKeys trap fires and order is per-source key order), with
+    /// throwing Set semantics on the target.</summary>
+    private static JsValue Assign(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        if (args.Length == 0)
-        {
-            throw new JsThrow(JsValue.String("Object.assign requires a target"));
-        }
-
-        var target = args[0];
-        if (!target.IsObject)
-        {
-            throw new JsThrow(JsValue.String("Object.assign target must be an object"));
-        }
-
-        var targetObj = target.AsObject;
-
+        var vm = realm.ActiveVm;
+        var to = AbstractOperations.ToObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         for (var i = 1; i < args.Length; i++)
         {
             var src = args[i];
@@ -276,24 +317,24 @@ public static class ObjectCtor
                 continue;
             }
 
-            if (!src.IsObject)
+            var from = AbstractOperations.ToObject(realm, src);
+            var keys = new List<JsPropertyKey>(from.OwnPropertyKeys);
+            foreach (var key in keys)
             {
-                continue;
-            }
+                var d = from.GetOwnPropertyDescriptor(key);
+                if (d is not { Enumerable: true })
+                {
+                    continue;
+                }
 
-            var srcObj = src.AsObject;
-            foreach (var key in srcObj.EnumerableKeys())
-            {
-                var v = srcObj.Get(key);
-                AbstractOperations.Set(vm: null, targetObj, key, v);
-            }
-            foreach (var key in srcObj.EnumerableSymbolKeys())
-            {
-                var v = srcObj.Get(key);
-                AbstractOperations.Set(vm: null, targetObj, JsPropertyKey.Symbol(key), v);
+                var v = AbstractOperations.Get(vm, from, key);
+                if (!AbstractOperations.Set(vm, to, key, v))
+                {
+                    throw new JsThrow(realm.NewTypeError($"Cannot assign to read only property '{key}'"));
+                }
             }
         }
-        return target;
+        return JsValue.Object(to);
     }
 
     /// <summary>§20.1.2.2 Object.create — create a fresh object with the
@@ -337,29 +378,36 @@ public static class ObjectCtor
         }
 
         var target = args[0].AsObject;
-        var props = args.Length > 1 ? args[1] : JsValue.Undefined;
-        if (props.IsUndefined)
-        {
-            throw new JsThrow(realm.NewTypeError("Object.defineProperties: descriptors must be an object"));
-        }
-
-        ApplyDescriptors(realm, target, props);
+        ApplyDescriptors(realm, target, args.Length > 1 ? args[1] : JsValue.Undefined);
         return args[0];
     }
 
     private static void ApplyDescriptors(JsRealm realm, JsObject target, JsValue props)
     {
-        if (!props.IsObject)
+        // §20.1.2.3.1 step 2 — ToObject(Properties): primitives are legal
+        // (they just contribute no own enumerable keys); nullish throws.
+        var p = AbstractOperations.ToObject(realm, props);
+        // Two phases: read EVERY descriptor first (through the vm so
+        // accessor-provided descriptors run, and so a bad descriptor throws
+        // before ANY define lands), then apply in order. Symbol keys count.
+        var keys = new List<JsPropertyKey>(p.OwnPropertyKeys);
+        var pending = new List<(JsPropertyKey Key, PropertyDescriptor Desc, JsObject Source)>();
+        foreach (var key in keys)
         {
-            throw new JsThrow(realm.NewTypeError("Property descriptors must be an object"));
+            var d = p.GetOwnPropertyDescriptor(key);
+            if (d is not { Enumerable: true })
+            {
+                continue;
+            }
+
+            var descVal = AbstractOperations.Get(realm.ActiveVm, p, key);
+            var desc = ToPropertyDescriptor(realm, descVal);
+            pending.Add((key, desc, descVal.AsObject));
         }
 
-        var p = props.AsObject;
-        foreach (var key in p.EnumerableKeys())
+        foreach (var (key, desc, source) in pending)
         {
-            var descVal = p.Get(key);
-            var desc = ToPropertyDescriptor(realm, descVal);
-            if (!Starling.Js.Runtime.JsMappedArguments.DefineFromUser(target, JsPropertyKey.String(key), desc, descVal.AsObject))
+            if (!Starling.Js.Runtime.JsMappedArguments.DefineFromUser(target, key, desc, source))
             {
                 throw new JsThrow(realm.NewTypeError($"Cannot define property '{key}'"));
             }
@@ -385,7 +433,7 @@ public static class ObjectCtor
         }
 
         var target = args[0].AsObject;
-        var key = AbstractOperations.ToPropertyKey(args[1]);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args[1]);
         var desc = ToPropertyDescriptor(realm, args[2]);
         if (!Starling.Js.Runtime.JsMappedArguments.DefineFromUser(target, key, desc, args[2].AsObject))
         {
@@ -399,7 +447,7 @@ public static class ObjectCtor
     private static JsValue GetOwnPropertyDescriptor(JsRealm realm, JsValue[] args)
     {
         var target = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
         var d = target.GetOwnPropertyDescriptor(key);
         if (d is null)
         {
@@ -446,24 +494,15 @@ public static class ObjectCtor
     {
         var target = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var symbols = new List<JsValue>();
-        // §10.4.6 — a Module Namespace Exotic Object carries @@toStringTag as an
-        // own symbol key surfaced through its [[OwnPropertyKeys]] (not the base
-        // symbol-property bag, which it keeps empty), so iterate that.
-        if (target is JsModuleNamespace)
+        // §7.3.23 GetOwnPropertyKeys — route through [[OwnPropertyKeys]] so a
+        // Proxy's ownKeys trap (and its invariant checks) fires even though
+        // only the symbol keys survive the filter.
+        foreach (var k in target.OwnPropertyKeys)
         {
-            foreach (var k in target.OwnPropertyKeys)
+            if (k.IsSymbol)
             {
-                if (k.IsSymbol)
-                {
-                    symbols.Add(JsValue.Symbol(k.AsSymbol));
-                }
+                symbols.Add(JsValue.Symbol(k.AsSymbol));
             }
-
-            return MakeArrayLike(realm, symbols);
-        }
-        foreach (var k in target.SymbolKeys)
-        {
-            symbols.Add(JsValue.Symbol(k));
         }
 
         return MakeArrayLike(realm, symbols);
@@ -520,49 +559,61 @@ public static class ObjectCtor
         return args[0];
     }
 
-    /// <summary>§20.1.2.18 Object.keys.</summary>
-    private static JsValue Keys(JsRealm realm, JsValue[] args)
+    /// <summary>§7.3.24 EnumerableOwnProperties — a SNAPSHOT of the own
+    /// string keys is taken first (a getter may add/remove keys mid-walk),
+    /// each key re-checked for presence + enumerability, values read through
+    /// the vm so getters fire.</summary>
+    private static JsValue EnumerableOwnProperties(JsRealm realm, JsValue[] args, bool wantKeys, bool wantValues)
     {
         var target = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var keys = new List<JsValue>();
-        foreach (var k in target.EnumerableKeys())
+        var vm = realm.ActiveVm;
+        var keys = new List<JsPropertyKey>(target.OwnPropertyKeys);
+        var results = new List<JsValue>(keys.Count);
+        foreach (var key in keys)
         {
-            keys.Add(JsValue.String(k));
-        }
+            if (key.IsSymbol)
+            {
+                continue;
+            }
 
-        return MakeArrayLike(realm, keys);
+            var d = target.GetOwnPropertyDescriptor(key);
+            if (d is not { Enumerable: true })
+            {
+                continue;
+            }
+
+            if (!wantValues)
+            {
+                results.Add(JsValue.String(key.AsString));
+                continue;
+            }
+
+            var v = AbstractOperations.Get(vm, target, key);
+            results.Add(wantKeys
+                ? MakeArrayLike(realm, new[] { JsValue.String(key.AsString), v })
+                : v);
+        }
+        return MakeArrayLike(realm, results);
     }
+
+    /// <summary>§20.1.2.18 Object.keys.</summary>
+    private static JsValue Keys(JsRealm realm, JsValue[] args)
+        => EnumerableOwnProperties(realm, args, wantKeys: true, wantValues: false);
 
     /// <summary>§20.1.2.23 Object.values.</summary>
     private static JsValue Values(JsRealm realm, JsValue[] args)
-    {
-        var target = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var values = new List<JsValue>();
-        foreach (var k in target.EnumerableKeys())
-        {
-            values.Add(AbstractOperations.Get(vm: null, target, k));
-        }
-
-        return MakeArrayLike(realm, values);
-    }
+        => EnumerableOwnProperties(realm, args, wantKeys: false, wantValues: true);
 
     /// <summary>§20.1.2.5 Object.entries.</summary>
     private static JsValue Entries(JsRealm realm, JsValue[] args)
-    {
-        var target = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
-        var entries = new List<JsValue>();
-        foreach (var k in target.EnumerableKeys())
-        {
-            var v = AbstractOperations.Get(vm: null, target, k);
-            entries.Add(MakeArrayLike(realm, new[] { JsValue.String(k), v }));
-        }
-        return MakeArrayLike(realm, entries);
-    }
+        => EnumerableOwnProperties(realm, args, wantKeys: true, wantValues: true);
 
-    /// <summary>§20.1.2.6 Object.freeze — set [[Writable]] and
-    /// [[Configurable]] to false on every own property, then prevent
-    /// extensions.</summary>
-    private static JsValue Freeze(JsValue[] args)
+    /// <summary>§7.3.16 SetIntegrityLevel (Object.freeze / Object.seal):
+    /// [[PreventExtensions]] FIRST (its rejection — e.g. a Proxy trap
+    /// returning false — is a TypeError), then partial DefinePropertyOrThrow
+    /// per key: sealed = {configurable:false}; frozen additionally clears
+    /// [[Writable]] on data properties.</summary>
+    private static JsValue SetIntegrityLevel(JsRealm realm, JsValue[] args, bool frozen)
     {
         var v = args.Length > 0 ? args[0] : JsValue.Undefined;
         if (!v.IsObject)
@@ -571,27 +622,42 @@ public static class ObjectCtor
         }
 
         var obj = v.AsObject;
+        if (!obj.PreventExtensions())
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot prevent extensions"));
+        }
+
         // Snapshot keys to avoid mutation-during-enumeration.
         var keys = new List<JsPropertyKey>(obj.OwnPropertyKeys);
+        var sealOnly = DescriptorFields.Build(value: false, writable: false, enumerable: false,
+            configurable: true, get: false, set: false);
+        var freezeData = DescriptorFields.Build(value: false, writable: true, enumerable: false,
+            configurable: true, get: false, set: false);
         foreach (var key in keys)
         {
-            var d = obj.GetOwnPropertyDescriptor(key);
-            if (d is null)
+            DescriptorFields fields;
+            if (!frozen)
             {
-                continue;
-            }
-
-            var desc = d.Value;
-            if (desc.IsAccessor)
-            {
-                obj.DefineOwnProperty(key, PropertyDescriptor.Accessor(desc.Getter, desc.Setter, desc.Enumerable, configurable: false));
+                fields = sealOnly;
             }
             else
             {
-                obj.DefineOwnProperty(key, PropertyDescriptor.Data(desc.Value, writable: false, enumerable: desc.Enumerable, configurable: false));
+                var d = obj.GetOwnPropertyDescriptor(key);
+                if (d is null)
+                {
+                    continue;
+                }
+
+                fields = d.Value.IsAccessor ? sealOnly : freezeData;
+            }
+
+            if (!obj.DefineOwnPropertyPartial(key,
+                    PropertyDescriptor.Data(JsValue.Undefined, writable: false, enumerable: false, configurable: false),
+                    fields))
+            {
+                throw new JsThrow(realm.NewTypeError($"Cannot redefine property '{key}'"));
             }
         }
-        obj.PreventExtensions();
         return v;
     }
 
@@ -632,40 +698,6 @@ public static class ObjectCtor
         return JsValue.True;
     }
 
-    /// <summary>§20.1.2.21 Object.seal — set [[Configurable]] to false; keep
-    /// [[Writable]] alone; prevent extensions.</summary>
-    private static JsValue Seal(JsValue[] args)
-    {
-        var v = args.Length > 0 ? args[0] : JsValue.Undefined;
-        if (!v.IsObject)
-        {
-            return v;
-        }
-
-        var obj = v.AsObject;
-        var keys = new List<JsPropertyKey>(obj.OwnPropertyKeys);
-        foreach (var key in keys)
-        {
-            var d = obj.GetOwnPropertyDescriptor(key);
-            if (d is null)
-            {
-                continue;
-            }
-
-            var desc = d.Value;
-            if (desc.IsAccessor)
-            {
-                obj.DefineOwnProperty(key, PropertyDescriptor.Accessor(desc.Getter, desc.Setter, desc.Enumerable, configurable: false));
-            }
-            else
-            {
-                obj.DefineOwnProperty(key, PropertyDescriptor.Data(desc.Value, writable: desc.Writable, enumerable: desc.Enumerable, configurable: false));
-            }
-        }
-        obj.PreventExtensions();
-        return v;
-    }
-
     /// <summary>§20.1.2.16 Object.isSealed.</summary>
     private static JsValue IsSealed(JsValue[] args)
     {
@@ -697,8 +729,9 @@ public static class ObjectCtor
         return JsValue.True;
     }
 
-    /// <summary>§20.1.2.19 Object.preventExtensions.</summary>
-    private static JsValue PreventExtensions(JsValue[] args)
+    /// <summary>§20.1.2.19 Object.preventExtensions — a false
+    /// [[PreventExtensions]] (Proxy trap) is a TypeError.</summary>
+    private static JsValue PreventExtensions(JsRealm realm, JsValue[] args)
     {
         var v = args.Length > 0 ? args[0] : JsValue.Undefined;
         if (!v.IsObject)
@@ -706,7 +739,11 @@ public static class ObjectCtor
             return v;
         }
 
-        v.AsObject.PreventExtensions();
+        if (!v.AsObject.PreventExtensions())
+        {
+            throw new JsThrow(realm.NewTypeError("Cannot prevent extensions"));
+        }
+
         return v;
     }
 
@@ -730,92 +767,200 @@ public static class ObjectCtor
         return JsValue.Boolean(AbstractOperations.SameValue(a, b));
     }
 
-    /// <summary>§20.1.2.7 Object.fromEntries — consumes any iterable of
-    /// <c>[key, value]</c> pairs via the iterator protocol (§7.4), so Maps,
-    /// generators, and entries() iterators all work. Plain array-likes
-    /// (length + indexed access) stay as a fallback for objects without
-    /// <c>@@iterator</c>.</summary>
+    /// <summary>§20.1.2.7 Object.fromEntries via §24.1.1.2
+    /// AddEntriesFromIterable: strict iterator protocol only (no array-like
+    /// fallback), with IteratorClose on every abrupt completion inside an
+    /// entry — non-object entry, key/value getter throws, ToPropertyKey
+    /// throws.</summary>
     private static JsValue FromEntries(JsRealm realm, JsValue[] args)
     {
         var srcV = args.Length > 0 ? args[0] : JsValue.Undefined;
-        if (!srcV.IsObject && !srcV.IsString)
+        if (srcV.IsNullish)
         {
             throw new JsThrow(realm.NewTypeError("Object.fromEntries requires an iterable"));
         }
 
+        var vm = realm.ActiveVm;
         var result = realm.NewOrdinaryObject();
-
-        if (ArrayCtor.HasIteratorMethod(realm, srcV))
+        var record = AbstractOperations.GetIterator(realm, vm, srcV);
+        while (true)
         {
-            var record = AbstractOperations.GetIterator(realm, realm.ActiveVm, srcV);
-            while (true)
+            var step = AbstractOperations.IteratorStep(realm, vm, ref record);
+            if (step is null)
             {
-                var step = AbstractOperations.IteratorStep(realm, realm.ActiveVm, ref record);
-                if (step is null)
+                return JsValue.Object(result);
+            }
+
+            var entryV = AbstractOperations.IteratorValue(vm, step.Value);
+            try
+            {
+                if (!entryV.IsObject)
                 {
-                    break;
+                    throw new JsThrow(realm.NewTypeError("Object.fromEntries: entry must be an object"));
                 }
 
-                var entryV = AbstractOperations.IteratorValue(realm.ActiveVm, step.Value);
-                AddEntry(realm, result, entryV);
+                var entry = entryV.AsObject;
+                var k = AbstractOperations.Get(vm, entry, "0");
+                var val = AbstractOperations.Get(vm, entry, "1");
+                var key = AbstractOperations.ToPropertyKey(vm, k);
+                result.DefineOwnProperty(key,
+                    PropertyDescriptor.Data(val, writable: true, enumerable: true, configurable: true));
             }
-            return JsValue.Object(result);
+            catch (JsThrow)
+            {
+                AbstractOperations.IteratorClose(vm, record, isThrowing: true);
+                throw;
+            }
         }
+    }
 
-        var src = srcV.AsObject;
-        var lengthV = src.Get("length");
-        if (!lengthV.IsNumber)
+    /// <summary>§20.1.2.13 (Array Grouping) Object.groupBy — iterate items,
+    /// key each element by ToPropertyKey(callback(value, index)), and return
+    /// a null-prototype object of dense arrays. Abrupt callback/coercion
+    /// completions close the iterator.</summary>
+    private static JsValue GroupBy(JsRealm realm, JsValue[] args)
+    {
+        var items = args.Length > 0 ? args[0] : JsValue.Undefined;
+        var callback = args.Length > 1 ? args[1] : JsValue.Undefined;
+        if (items.IsNullish)
         {
-            throw new JsThrow(realm.NewTypeError("Object.fromEntries: source is not iterable or array-like"));
+            throw new JsThrow(realm.NewTypeError("Object.groupBy requires an iterable"));
         }
 
-        var len = (int)lengthV.AsNumber;
-        for (var i = 0; i < len; i++)
+        if (!AbstractOperations.IsCallable(callback))
         {
-            AddEntry(realm, result,
-                src.Get(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            throw new JsThrow(realm.NewTypeError("Object.groupBy: callback must be a function"));
         }
 
+        var vm = realm.ActiveVm;
+        var order = new List<JsPropertyKey>();
+        var groups = new Dictionary<string, JsArray>(StringComparer.Ordinal);
+        var symbolGroups = new Dictionary<JsSymbol, JsArray>();
+        var record = AbstractOperations.GetIterator(realm, vm, items);
+        long k = 0;
+        while (true)
+        {
+            var step = AbstractOperations.IteratorStep(realm, vm, ref record);
+            if (step is null)
+            {
+                break;
+            }
+
+            var value = AbstractOperations.IteratorValue(vm, step.Value);
+            JsPropertyKey key;
+            try
+            {
+                var keyV = AbstractOperations.Call(vm, callback, JsValue.Undefined,
+                    new[] { value, JsValue.Number(k) });
+                key = AbstractOperations.ToPropertyKey(vm, keyV);
+            }
+            catch (JsThrow)
+            {
+                AbstractOperations.IteratorClose(vm, record, isThrowing: true);
+                throw;
+            }
+
+            JsArray? group;
+            if (key.IsSymbol)
+            {
+                if (!symbolGroups.TryGetValue(key.AsSymbol, out group))
+                {
+                    group = new JsArray(realm);
+                    symbolGroups[key.AsSymbol] = group;
+                    order.Add(key);
+                }
+            }
+            else if (!groups.TryGetValue(key.AsString, out group))
+            {
+                group = new JsArray(realm);
+                groups[key.AsString] = group;
+                order.Add(key);
+            }
+
+            group!.Push(value);
+            k++;
+        }
+
+        var result = realm.NewObjectWithProto(null);
+        foreach (var key in order)
+        {
+            var group = key.IsSymbol ? symbolGroups[key.AsSymbol] : groups[key.AsString];
+            result.DefineOwnProperty(key,
+                PropertyDescriptor.Data(JsValue.Object(group), writable: true, enumerable: true, configurable: true));
+        }
         return JsValue.Object(result);
     }
 
-    /// <summary>§20.1.2.7 steps 5.d–5.k (the adder closure): each entry must
-    /// be an object; its <c>0</c>/<c>1</c> properties become the key/value of
-    /// a new enumerable data property.</summary>
-    private static void AddEntry(JsRealm realm, JsObject result, JsValue entryV)
+    /// <summary>§20.1.2.13 Object.hasOwn(obj, key) — ToObject(O) first
+    /// (nullish throws), THEN ToPropertyKey(P).</summary>
+    private static JsValue HasOwn(JsRealm realm, JsValue[] args)
     {
-        if (!entryV.IsObject)
-        {
-            throw new JsThrow(realm.NewTypeError("Object.fromEntries: entry must be an object"));
-        }
-
-        var entry = entryV.AsObject;
-        var key = AbstractOperations.ToPropertyKey(entry.Get("0"));
-        var val = entry.Get("1");
-        result.DefineOwnProperty(key,
-            PropertyDescriptor.Data(val, writable: true, enumerable: true, configurable: true));
-    }
-
-    /// <summary>§20.1.2.13 Object.hasOwn(obj, key).</summary>
-    private static JsValue HasOwn(JsValue[] args)
-    {
-        if (args.Length == 0 || !args[0].IsObject)
-        {
-            return JsValue.False;
-        }
-
-        var key = AbstractOperations.ToPropertyKey(args.Length > 1 ? args[1] : JsValue.Undefined);
-        return JsValue.Boolean(args[0].AsObject.HasOwn(key));
+        var obj = RequireObject(realm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 1 ? args[1] : JsValue.Undefined);
+        return JsValue.Boolean(obj.HasOwn(key));
     }
 
     // ====================================================================
     //                       Prototype implementations
     // ====================================================================
 
+    /// <summary>§B.2.2.2/§B.2.2.3 — a PARTIAL accessor define: only the
+    /// requested get/set field plus enumerable+configurable are present, so
+    /// the opposite accessor half of an existing property survives.</summary>
+    private static JsValue DunderDefineAccessor(JsRealm realm, JsValue thisV, JsValue[] args, bool isGetter)
+    {
+        var obj = RequireObject(realm, thisV);
+        var fn = args.Length > 1 ? args[1] : JsValue.Undefined;
+        if (!AbstractOperations.IsCallable(fn))
+        {
+            throw new JsThrow(realm.NewTypeError(isGetter ? "Getter must be a function" : "Setter must be a function"));
+        }
+
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        var desc = PropertyDescriptor.Accessor(
+            isGetter ? fn.AsObject : null,
+            isGetter ? null : fn.AsObject,
+            enumerable: true, configurable: true);
+        var fields = DescriptorFields.Build(value: false, writable: false, enumerable: true,
+            configurable: true, get: isGetter, set: !isGetter);
+        if (!obj.DefineOwnPropertyPartial(key, desc, fields))
+        {
+            throw new JsThrow(realm.NewTypeError($"Cannot redefine property '{key}'"));
+        }
+
+        return JsValue.Undefined;
+    }
+
+    /// <summary>§B.2.2.4/§B.2.2.5 — walk the prototype chain via the virtual
+    /// [[GetOwnProperty]]/[[GetPrototypeOf]] (proxy traps fire) and return
+    /// the requested accessor half of the first own descriptor found.</summary>
+    private static JsValue DunderLookupAccessor(JsRealm realm, JsValue thisV, JsValue[] args, bool isGetter)
+    {
+        var obj = RequireObject(realm, thisV);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
+        for (JsObject? o = obj; o is not null; o = o.GetPrototypeOf())
+        {
+            var d = o.GetOwnPropertyDescriptor(key);
+            if (d is null)
+            {
+                continue;
+            }
+
+            if (!d.Value.IsAccessor)
+            {
+                return JsValue.Undefined;
+            }
+
+            var half = isGetter ? d.Value.Getter : d.Value.Setter;
+            return half is null ? JsValue.Undefined : JsValue.Object(half);
+        }
+        return JsValue.Undefined;
+    }
+
     /// <summary>§20.1.3.2 Object.prototype.hasOwnProperty.</summary>
     private static JsValue ProtoHasOwnProperty(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var key = AbstractOperations.ToPropertyKey(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var obj = RequireObject(realm, thisV);
         return JsValue.Boolean(obj.HasOwn(key));
     }
@@ -830,7 +975,7 @@ public static class ObjectCtor
         }
 
         var self = RequireObject(realm, thisV);
-        for (var p = args[0].AsObject.Prototype; p is not null; p = p.Prototype)
+        for (var p = args[0].AsObject.GetPrototypeOf(); p is not null; p = p.GetPrototypeOf())
         {
             if (ReferenceEquals(p, self))
             {
@@ -843,7 +988,7 @@ public static class ObjectCtor
     /// <summary>§20.1.3.4 Object.prototype.propertyIsEnumerable.</summary>
     private static JsValue ProtoPropertyIsEnumerable(JsRealm realm, JsValue thisV, JsValue[] args)
     {
-        var key = AbstractOperations.ToPropertyKey(args.Length > 0 ? args[0] : JsValue.Undefined);
+        var key = AbstractOperations.ToPropertyKey(realm.ActiveVm, args.Length > 0 ? args[0] : JsValue.Undefined);
         var obj = RequireObject(realm, thisV);
         var d = obj.GetOwnPropertyDescriptor(key);
         return JsValue.Boolean(d is { } dv && dv.Enumerable);
@@ -887,7 +1032,7 @@ public static class ObjectCtor
     /// exotic (step 5) via <see cref="JsObject.IsArgumentsExotic"/>.</summary>
     private static string DefaultToStringTag(JsRealm realm, JsObject o)
     {
-        if (o is JsArray)
+        if (JsArray.IsArray(JsValue.Object(o), realm))
         {
             return "Array";
         }
@@ -902,13 +1047,17 @@ public static class ObjectCtor
         {
             return "Function";
         }
-        // Error: any object with ErrorPrototype somewhere in its chain.
-        for (var p = o.Prototype; p is not null; p = p.Prototype)
+        // §20.1.3.6 step 8 — [[ErrorData]] (realm-independent, unlike a
+        // prototype-identity walk which misses cross-realm errors).
+        if (o.IsErrorExotic)
         {
-            if (ReferenceEquals(p, realm.ErrorPrototype))
-            {
-                return "Error";
-            }
+            return "Error";
+        }
+        // §20.1.3.6 step 7 — [[StringData]] ⇒ "String" (covers %String.prototype%
+        // itself, which sits on Object.prototype).
+        if (o is JsStringObject)
+        {
+            return "String";
         }
         // Boxed primitives (String / Number / Boolean) — detect via prototype.
         for (var p = o.Prototype; p is not null; p = p.Prototype)
@@ -946,18 +1095,19 @@ public static class ObjectCtor
     private static JsValue ProtoValueOf(JsRealm realm, JsValue thisV)
         => JsValue.Object(RequireObject(realm, thisV));
 
-    /// <summary>§20.1.3.5 Object.prototype.toLocaleString — defaults to
-    /// invoking <c>this.toString()</c>.</summary>
+    /// <summary>§20.1.3.5 Object.prototype.toLocaleString — Invoke(O, "toString"),
+    /// with the ORIGINAL this value as receiver (primitives stay primitive).</summary>
     private static JsValue ProtoToLocaleString(JsRealm realm, JsValue thisV)
     {
-        if (thisV.IsObject)
+        var obj = AbstractOperations.ToObject(realm, thisV);
+        // GetV — the boxed object only serves the lookup; an accessor's getter
+        // runs with the ORIGINAL (possibly primitive) receiver.
+        var ts = AbstractOperations.Get(realm.ActiveVm, obj, "toString", thisV);
+        if (!AbstractOperations.IsCallable(ts))
         {
-            var ts = thisV.AsObject.Get("toString");
-            if (ts.IsObject && ts.AsObject is JsNativeFunction nat)
-            {
-                return nat.Body(thisV, Array.Empty<JsValue>());
-            }
+            throw new JsThrow(realm.NewTypeError("toString is not a function"));
         }
-        return ProtoToString(realm, thisV);
+
+        return AbstractOperations.Call(realm.ActiveVm, ts, thisV, Array.Empty<JsValue>());
     }
 }

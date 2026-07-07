@@ -148,6 +148,14 @@ public sealed class ModuleLoader
             PromiseCtor.Reject(realm, result, ex.Value);
             return result;
         }
+        catch (Parse.JsParseException ex)
+        {
+            // A target module that fails to parse (including module-goal early
+            // errors, §16.2.1.6) rejects the import() promise with a
+            // SyntaxError — never a synchronous host throw.
+            PromiseCtor.Reject(realm, result, realm.NewSyntaxError(ex.Message));
+            return result;
+        }
 
         // Chain on the evaluation promise: fulfil with the namespace once the
         // subtree (incl. any top-level await) settles; reject with its error.
@@ -312,6 +320,12 @@ public sealed class ModuleLoader
         record.Status = ModuleStatus.Linked;
     }
 
+    /// <summary>§16.2.1.5.3 — distinguished result for a name reachable through
+    /// two star edges bound to different cells. Callers treat it as a link-time
+    /// SyntaxError at the site that REQUESTS the name (a bare `export *`
+    /// carrying an ambiguity is legal until someone asks for it).</summary>
+    private static readonly Cell AmbiguousExport = new(JsValue.Undefined);
+
     /// <summary>§16.2.1.5.2 Link — validate that each name this module exports
     /// (excluding pure local declarations, which trivially resolve) resolves to a
     /// binding. An unresolvable re-export is a link-time SyntaxError.</summary>
@@ -342,6 +356,12 @@ public sealed class ModuleLoader
                     throw new JsThrow(_runtime.Realm.NewSyntaxError(
                         $"The requested module '{e.ModuleRequest}' does not provide an export named '{e.ImportName}'"));
                 }
+
+                if (ReferenceEquals(cell, AmbiguousExport))
+                {
+                    throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                        $"The export '{e.ImportName}' from '{e.ModuleRequest}' is ambiguous (multiple star re-exports provide it)"));
+                }
             }
         }
     }
@@ -365,6 +385,12 @@ public sealed class ModuleLoader
         }
 
         var cell = ResolveExportCell(target, entry.ImportName, new HashSet<string>(StringComparer.Ordinal));
+        if (cell is not null && ReferenceEquals(cell, AmbiguousExport))
+        {
+            throw new JsThrow(_runtime.Realm.NewSyntaxError(
+                $"The export '{entry.ImportName}' from '{entry.ModuleRequest}' is ambiguous (multiple star re-exports provide it)"));
+        }
+
         return cell ?? throw new JsThrow(_runtime.Realm.NewSyntaxError(
             $"The requested module '{entry.ModuleRequest}' does not provide an export named '{entry.ImportName}'"));
     }
@@ -416,21 +442,38 @@ public sealed class ModuleLoader
         //    the name (named star re-exports — export * as ns — bind a namespace
         //    and are handled as a local export above once built). §16.2.1.5.3 —
         //    `export *` never re-exports the `default` name, so a request for
-        //    `default` must NOT be satisfied through a star edge.
+        //    `default` must NOT be satisfied through a star edge; and two star
+        //    edges resolving the SAME name to DIFFERENT bindings make the
+        //    export AMBIGUOUS (a link-time SyntaxError at the requesting site).
         if (exportName != "default")
         {
+            Cell? found = null;
             foreach (var e in module.ExportEntries)
             {
                 if (!e.IsLocal && e.IsStar && e.ExportName is null)
                 {
                     var dep = Resolve(e.ModuleRequest!, module.Url);
                     var c = ResolveExportCell(dep, exportName, seen);
-                    if (c is not null)
+                    if (c is null)
                     {
-                        return c;
+                        continue;
                     }
+
+                    if (ReferenceEquals(c, AmbiguousExport))
+                    {
+                        return AmbiguousExport;
+                    }
+
+                    if (found is not null && !ReferenceEquals(found, c))
+                    {
+                        return AmbiguousExport;
+                    }
+
+                    found = c;
                 }
             }
+
+            return found;
         }
 
         return null;
@@ -825,7 +868,7 @@ public sealed class ModuleLoader
         // from re-exported stars), each bound to its live cell. A name that fails
         // to resolve to a cell is dropped (it is not a usable binding).
         var exports = new Dictionary<string, Cell>(StringComparer.Ordinal);
-        var ns = new JsModuleNamespace(exports);
+        var ns = new JsModuleNamespace(exports, _runtime.Realm);
         module.Namespace = ns;
 
         foreach (var name in ExportedNames(module, new HashSet<string>(StringComparer.Ordinal)))

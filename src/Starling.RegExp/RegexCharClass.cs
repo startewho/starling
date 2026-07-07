@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-using System.Globalization;
-
 namespace Starling.RegExp;
 
 /// <summary>
@@ -21,6 +19,35 @@ public sealed class RegexCharClass
         Negated = negated;
         CaseInsensitive = caseInsensitive;
         SortAndCoalesce();
+    }
+
+    /// <summary>Copies this class's (already coalesced) ranges into
+    /// <paramref name="dest"/>; a negated class copies its complement. Used by
+    /// the v-flag set-expression parser, which does its algebra on raw range
+    /// lists.</summary>
+    public void CopyRangesInto(List<(int Lo, int Hi)> dest)
+    {
+        if (!Negated)
+        {
+            dest.AddRange(_ranges);
+            return;
+        }
+
+        var cursor = 0;
+        foreach (var (lo, hi) in _ranges)
+        {
+            if (lo > cursor)
+            {
+                dest.Add((cursor, lo - 1));
+            }
+
+            cursor = hi + 1;
+        }
+
+        if (cursor <= 0x10FFFF)
+        {
+            dest.Add((cursor, 0x10FFFF));
+        }
     }
 
     private void SortAndCoalesce()
@@ -71,9 +98,23 @@ public sealed class RegexCharClass
 
     private bool ContainsExact(int codePoint)
     {
-        foreach (var (lo, hi) in _ranges)
+        // _ranges is sorted and coalesced; binary search keeps large
+        // property tables (hundreds of ranges) cheap on the match path.
+        var lo = 0;
+        var hi = _ranges.Count - 1;
+        while (lo <= hi)
         {
-            if (codePoint >= lo && codePoint <= hi)
+            var mid = (lo + hi) >> 1;
+            var r = _ranges[mid];
+            if (codePoint < r.Lo)
+            {
+                hi = mid - 1;
+            }
+            else if (codePoint > r.Hi)
+            {
+                lo = mid + 1;
+            }
+            else
             {
                 return true;
             }
@@ -138,119 +179,54 @@ public sealed class RegexCharClass
         return false;
     }
 
-    // ---------------- Unicode property whitelist ----------------
+    // ---------------- Unicode property tables ----------------
 
-    /// <summary>The subset of Unicode property names B4-1 supports. Unknown
-    /// names should throw SyntaxError at parse time.</summary>
-    public static readonly System.Collections.Generic.HashSet<string> SupportedProperties = new()
+    /// <summary>Cache of decoded property range lists, keyed by the exact
+    /// escape spelling ("Script=Latin", "gc=Lu", "Alphabetic", ...). The
+    /// lists are shared and must not be mutated by callers.</summary>
+    private static readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(int, int)>> _propertyCache
+        = new(System.StringComparer.Ordinal);
+
+    /// <summary>Resolves a Unicode property spelling to its code point
+    /// ranges. Property names and values are case-sensitive. Returns false
+    /// for names the tables do not know, which the parser reports as a
+    /// SyntaxError.</summary>
+    public static bool TryGetPropertyRanges(string name, out System.Collections.Generic.List<(int, int)> ranges)
     {
-        "Letter", "L",
-        "Number", "N",
-        "Decimal_Number", "Nd",
-        "White_Space",
-        "Punctuation", "P",
-        "Symbol", "S",
-        "Uppercase_Letter", "Lu",
-        "Lowercase_Letter", "Ll",
-        "ID_Start", "IDS",
-        "ID_Continue", "IDC",
-    };
-
-    private static readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(int, int)>> _propertyRanges
-        = BuildPropertyRanges();
-
-    private static System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(int, int)>> BuildPropertyRanges()
-    {
-        var dict = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(int, int)>>(System.StringComparer.OrdinalIgnoreCase);
-        foreach (var name in SupportedProperties)
+        lock (_propertyCache)
         {
-            if (dict.ContainsKey(name))
+            if (_propertyCache.TryGetValue(name, out ranges!))
             {
-                continue;
+                return true;
             }
 
-            var ranges = new System.Collections.Generic.List<(int, int)>();
-            int? rangeStart = null;
-            for (var cp = 0; cp <= 0xFFFF; cp++)
+            if (!UnicodePropertyData.TryGetRanges(name, out var pairs, out var start, out var count))
             {
-                if (MatchesProperty(cp, name))
-                {
-                    rangeStart ??= cp;
-                }
-                else if (rangeStart.HasValue)
-                {
-                    ranges.Add((rangeStart.Value, cp - 1));
-                    rangeStart = null;
-                }
+                ranges = null!;
+                return false;
             }
-            if (rangeStart.HasValue)
+
+            var list = new System.Collections.Generic.List<(int, int)>(count);
+            for (var i = 0; i < count; i++)
             {
-                ranges.Add((rangeStart.Value, 0xFFFF));
+                list.Add((pairs[(start + i) * 2], pairs[(start + i) * 2 + 1]));
             }
-            // store a coalesced copy (ctor will copy again but cheap)
-            dict[name] = ranges;
-            // also store canonical short names if not present
+
+            _propertyCache[name] = list;
+            ranges = list;
+            return true;
         }
-        return dict;
     }
 
-    /// <summary>Returns a (cached) list of ranges for the given property name (without negation/case).
-    /// The caller must not mutate the returned list.
-    /// </summary>
+    /// <summary>Range lookup for names known to exist (sequence-property
+    /// sub-patterns). Unknown names return an empty list.</summary>
     public static System.Collections.Generic.List<(int, int)> GetPropertyRanges(string name)
     {
-        if (_propertyRanges.TryGetValue(name, out var ranges))
+        if (TryGetPropertyRanges(name, out var ranges))
         {
             return ranges;
         }
-        // fallback (should not happen after Supported check)
+
         return new System.Collections.Generic.List<(int, int)>();
     }
-
-    /// <summary>Test a single code unit against a supported property. We use
-    /// .NET's <see cref="CharUnicodeInfo"/> for the basic plane; supplementary
-    /// code points get conservative answers.</summary>
-    public static bool MatchesProperty(int cp, string property)
-    {
-        if (cp > 0xFFFF)
-        {
-            cp = '?'; // simplified — only the BMP
-        }
-
-        var c = (char)cp;
-        var cat = CharUnicodeInfo.GetUnicodeCategory(c);
-        return property switch
-        {
-            "Letter" or "L" => char.IsLetter(c),
-            "Number" or "N" => char.IsNumber(c),
-            "Decimal_Number" or "Nd" => cat == UnicodeCategory.DecimalDigitNumber,
-            "White_Space" => IsWhitespace(c),
-            "Punctuation" or "P" => char.IsPunctuation(c),
-            "Symbol" or "S" => char.IsSymbol(c),
-            "Uppercase_Letter" or "Lu" => cat == UnicodeCategory.UppercaseLetter,
-            "Lowercase_Letter" or "Ll" => cat == UnicodeCategory.LowercaseLetter,
-            "ID_Start" or "IDS" => IsIdStart(c, cat),
-            "ID_Continue" or "IDC" => IsIdContinue(c, cat),
-            _ => false,
-        };
-    }
-
-    // ID_Start: practical JS identifier-start set. Unicode also adds
-    // Other_ID_Start, but $/_ + IsLetter + Letter_Number (Nl) covers it.
-    private static bool IsIdStart(char c, UnicodeCategory cat) =>
-        char.IsLetter(c)
-        || cat == UnicodeCategory.LetterNumber
-        || c == '$'
-        || c == '_';
-
-    // ID_Continue: ID_Start plus combining marks, decimal digits,
-    // connector punctuation, and the zero-width joiners (U+200C/U+200D).
-    private static bool IsIdContinue(char c, UnicodeCategory cat) =>
-        IsIdStart(c, cat)
-        || cat == UnicodeCategory.NonSpacingMark
-        || cat == UnicodeCategory.SpacingCombiningMark
-        || cat == UnicodeCategory.DecimalDigitNumber
-        || cat == UnicodeCategory.ConnectorPunctuation
-        || c == '‌'  // ZERO WIDTH NON-JOINER
-        || c == '‍'; // ZERO WIDTH JOINER
 }

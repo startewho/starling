@@ -20,8 +20,7 @@ namespace Starling.Bindings;
 /// <c>performance.mark(...)</c> at module entry. With <c>mark</c> absent the
 /// call threw "not a function" and aborted the whole bundle, so the page's
 /// JavaScript never ran. We install no-op stubs that keep no entries, so the
-/// <c>getEntries*</c> family returns an empty array. This mirrors the Jint
-/// backend's <c>PerformanceBinding</c>.</para>
+/// <c>getEntries*</c> family returns an empty array.</para>
 /// <para><b>Out-of-scope (v1):</b> real PerformanceEntry/PerformanceObserver,
 /// Resource Timing, and Paint Timing. The stubs above satisfy the
 /// overwhelming majority of in-the-wild <c>performance</c> usage (timing

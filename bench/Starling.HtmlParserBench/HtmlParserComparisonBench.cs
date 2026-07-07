@@ -8,7 +8,7 @@ namespace Starling.HtmlParserBench;
 // Where does Starling.Html land against a mature, pure-managed reference
 // parser (AngleSharp)? Same input, same machine, reported side by side so the
 // numbers compare fairly — the HTML-parsing analogue of
-// bench/engine-comparison.md (Starling vs Jint).
+// bench/engine-comparison.md.
 //
 // Three columns:
 //   Starling        — the Starling parser to its own DOM (baseline).

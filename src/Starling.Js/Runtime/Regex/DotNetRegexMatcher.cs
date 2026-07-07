@@ -44,7 +44,7 @@ public sealed partial class DotNetRegexMatcher : IRegexMatcher
 
     /// <summary>Delegate a literal whole-string replace to System.Text's
     /// single-pass <see cref="NetRegex.Replace(string,string)"/> — the same
-    /// optimized path Jint uses, avoiding a per-match <c>Match</c> allocation.
+    /// optimized split path, avoiding a per-match <c>Match</c> allocation.
     /// Disabled for sticky regexes (Replace scans forward rather than anchoring
     /// at lastIndex). The replacement is literal (no <c>$</c>), so .NET performs
     /// no substitution and matches JS semantics exactly.</summary>
@@ -84,15 +84,18 @@ public sealed partial class DotNetRegexMatcher : IRegexMatcher
             return null;
         }
 
+        var rewritten = RewriteForDotNet(source, flags);
+        if (rewritten is null)
+        {
+            return null;
+        }
+
+        source = rewritten;
+
         var options = RegexOptions.ECMAScript | RegexOptions.CultureInvariant;
         if ((flags & RegexFlags.IgnoreCase) != 0)
         {
             options |= RegexOptions.IgnoreCase;
-        }
-
-        if ((flags & RegexFlags.Multiline) != 0)
-        {
-            options |= RegexOptions.Multiline;
         }
 
         if ((flags & RegexFlags.DotAll) != 0)
@@ -205,9 +208,189 @@ public sealed partial class DotNetRegexMatcher : IRegexMatcher
             {
                 return false;
             }
+
+            // A quantified group whose body can match empty via one path but
+            // not another: JS's RepeatMatcher backtracks inside the empty
+            // iteration, .NET aborts the loop. Detect the "nullable atom just
+            // before ')' + quantifier" shape and keep those on the Pike VM.
+            if ((c == '?' || c == '*' || c == '}') && i + 2 < source.Length && source[i + 1] == ')')
+            {
+                char after = source[i + 2];
+                if (after == '*' || after == '+' || after == '?' || after == '{')
+                {
+                    return false;
+                }
+            }
         }
 
         return true;
+    }
+
+    // JS \s (WhiteSpace + LineTerminator), as .NET class contents.
+    private const string JsWhitespaceSet =
+        "\\t-\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
+
+    // .NET's ECMAScript mode still diverges from JS on a few constructs:
+    //   * \s is ASCII-only there, JS includes the Unicode spaces
+    //   * the NEGATED escapes (\S/\W/\D) match with Unicode tables
+    //   * '.' excludes only \n, JS also excludes \r/\u2028/\u2029
+    //   * '$' (non-multiline) also matches before a trailing \n
+    // Rewrite those to exact JS-semantics equivalents; return null (fall back
+    // to the Pike VM) for the spots a textual rewrite cannot express safely.
+    private static string? RewriteForDotNet(string source, RegexFlags flags)
+    {
+        bool ignoreCase = (flags & RegexFlags.IgnoreCase) != 0;
+        bool multiline = (flags & RegexFlags.Multiline) != 0;
+        bool dotAll = (flags & RegexFlags.DotAll) != 0;
+
+        var sb = new System.Text.StringBuilder(source.Length + 16);
+        bool inClass = false;
+        int groupsOpened = 0;
+        for (int i = 0; i < source.Length; i++)
+        {
+            char c = source[i];
+            if (c == '\\' && i + 1 < source.Length)
+            {
+                char n = source[i + 1];
+                // Decimal escapes: fine for a backward reference, but .NET
+                // resolves a forward/ambiguous \1 as octal where JS sees a
+                // backreference, and in-class \1 is Annex B octal. Those two
+                // stay on the Pike VM.
+                if (n >= '1' && n <= '9')
+                {
+                    if (inClass)
+                    {
+                        return null;
+                    }
+
+                    var num = 0;
+                    var j = i + 1;
+                    while (j < source.Length && source[j] >= '0' && source[j] <= '9')
+                    {
+                        num = num * 10 + (source[j] - '0');
+                        j++;
+                    }
+
+                    if (num > groupsOpened)
+                    {
+                        return null;
+                    }
+                }
+
+                switch (n)
+                {
+                    case 's':
+                        if (inClass)
+                        {
+                            // A neighbouring '-' would splice the inserted set
+                            // into a range; leave those to the Pike VM.
+                            if ((i > 0 && source[i - 1] == '-') || (i + 2 < source.Length && source[i + 2] == '-'))
+                            {
+                                return null;
+                            }
+
+                            sb.Append(JsWhitespaceSet);
+                        }
+                        else
+                        {
+                            sb.Append('[').Append(JsWhitespaceSet).Append(']');
+                        }
+
+                        i++;
+                        continue;
+                    case 'S':
+                        if (inClass)
+                        {
+                            return null;
+                        }
+
+                        sb.Append("[^").Append(JsWhitespaceSet).Append(']');
+                        i++;
+                        continue;
+                    case 'W':
+                        // Under i, JS canonicalizes with ToUpperCase while .NET
+                        // folds to lowercase; the complements disagree (e.g.
+                        // U+0130), so only the exact rewrite is safe.
+                        if (inClass || ignoreCase)
+                        {
+                            return null;
+                        }
+
+                        sb.Append("[^0-9A-Za-z_]");
+                        i++;
+                        continue;
+                    case 'D':
+                        if (inClass)
+                        {
+                            return null;
+                        }
+
+                        sb.Append("[^0-9]");
+                        i++;
+                        continue;
+                    default:
+                        sb.Append(c).Append(n);
+                        i++;
+                        continue;
+                }
+            }
+
+            if (c == '(' && !inClass)
+            {
+                // Count capture groups seen so far: plain '(' and named
+                // '(?<name>' (not lookbehinds '(?<=' / '(?<!').
+                if (i + 1 >= source.Length || source[i + 1] != '?')
+                {
+                    groupsOpened++;
+                }
+                else if (i + 2 < source.Length && source[i + 2] == '<'
+                    && (i + 3 >= source.Length || (source[i + 3] != '=' && source[i + 3] != '!')))
+                {
+                    groupsOpened++;
+                }
+
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == '[' && !inClass)
+            {
+                inClass = true;
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == ']' && inClass)
+            {
+                inClass = false;
+                sb.Append(c);
+                continue;
+            }
+
+            if (!inClass && c == '.' && !dotAll)
+            {
+                sb.Append("[^\\n\\r\\u2028\\u2029]");
+                continue;
+            }
+
+            if (!inClass && c == '$')
+            {
+                // JS $ never matches before a trailing \n the way .NET's does;
+                // multiline breaks at all four LineTerminators, not just \n.
+                sb.Append(multiline ? "(?=\\z|[\\n\\r\\u2028\\u2029])" : "\\z");
+                continue;
+            }
+
+            if (!inClass && c == '^' && multiline)
+            {
+                sb.Append("(?<=\\A|[\\n\\r\\u2028\\u2029])");
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
     }
 
     // Parse the numeric value of a \xHH, \uHHHH, or \u{...} escape starting at

@@ -82,6 +82,19 @@ public static class FunctionCtor
             new IntrinsicHelpers.BulkMember("toString", 0, ProtoToString),
         });
 
+        // §20.2.3 — restricted properties. %Function.prototype% has `caller`
+        // and `arguments` accessors whose get AND set are %ThrowTypeError%, so
+        // reading or writing either on any function (which has no own copy)
+        // throws. Installed AFTER the bulk shape adopt — accessors can never
+        // enter a shape (see BulkInstallBuiltins hazards), and the adopt wipes
+        // anything defined earlier.
+        var throwTypeError = new JsNativeFunction(realm, "", 0, (_, _) =>
+            throw new JsThrow(realm.NewTypeError(
+                "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")));
+        var restricted = PropertyDescriptor.Accessor(throwTypeError, throwTypeError);
+        funcProto.DefineOwnProperty("caller", restricted);
+        funcProto.DefineOwnProperty("arguments", restricted);
+
         realm.FunctionConstructor = ctor;
         realm.GlobalObject.DefineOwnProperty("Function",
             PropertyDescriptor.Data(JsValue.Object(ctor), writable: true, enumerable: false, configurable: true));

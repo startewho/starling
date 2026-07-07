@@ -35,7 +35,7 @@ public sealed class RegexPikeVm
         bool sticky = (_flags & RegexFlags.Sticky) != 0;
         // Whether the pattern contains backref or lookaround — if so use the
         // slow recursive matcher (handles backreferences correctly).
-        bool needSlow = HasBackrefOrLookaround(_prog);
+        bool needSlow = HasBackrefOrLookaround(_prog) || _prog.LoopCount > 0;
 
         int maxStart = sticky ? start : input.Length;
         var pos = start;
@@ -97,6 +97,35 @@ public sealed class RegexPikeVm
             cp = char.ConvertToUtf32(input[pos], input[pos + 1]);
             charLen = 2;
         }
+        return cp;
+    }
+
+    /// <summary>Code point at pos (dir=1) or ending at pos (dir=-1), pairing
+    /// surrogates under u/v. Returns -1 at the input edge.</summary>
+    private int CodePointDirectional(ReadOnlySpan<char> input, int pos, int dir, out int charLen)
+    {
+        if (dir > 0)
+        {
+            return CodePointAt(input, pos, out charLen);
+        }
+
+        if (pos <= 0)
+        {
+            charLen = 0;
+            return -1;
+        }
+
+        int cp = input[pos - 1];
+        charLen = 1;
+        if (((_flags & (RegexFlags.Unicode | RegexFlags.UnicodeSets)) != 0)
+            && char.IsLowSurrogate(input[pos - 1])
+            && pos - 2 >= 0
+            && char.IsHighSurrogate(input[pos - 2]))
+        {
+            cp = char.ConvertToUtf32(input[pos - 2], input[pos - 1]);
+            charLen = 2;
+        }
+
         return cp;
     }
 
@@ -282,6 +311,11 @@ public sealed class RegexPikeVm
             return true;
         }
 
+        if ((_flags & (RegexFlags.Unicode | RegexFlags.UnicodeSets)) != 0)
+        {
+            return SimpleCaseFold(a) == SimpleCaseFold(b);
+        }
+
         if (a > 0xFFFF || b > 0xFFFF)
         {
             return false;
@@ -290,6 +324,60 @@ public sealed class RegexPikeVm
         var ca = (char)a; var cb = (char)b;
         return char.ToLowerInvariant(ca) == char.ToLowerInvariant(cb)
             || char.ToUpperInvariant(ca) == char.ToUpperInvariant(cb);
+    }
+
+    /// <summary>Unicode simple case folding (scf), used by Canonicalize under
+    /// u/v + i. Lowercasing covers almost all of it; the exceptions where scf
+    /// disagrees with the platform lowercase are patched explicitly.</summary>
+    internal static int SimpleCaseFold(int cp)
+    {
+        switch (cp)
+        {
+            case 0x00B5: return 0x03BC; // micro sign → mu
+            case 0x017F: return 0x0073; // long s → s
+            case 0x0130: return 0x0130; // İ folds to itself (Turkic-only mapping)
+            case 0x0345: return 0x03B9; // ypogegrammeni → iota
+            case 0x03C2: return 0x03C3; // final sigma → sigma
+            case 0x1E9E: return 0x00DF; // capital sharp s → ß
+            case 0x1FBE: return 0x03B9; // prosgegrammeni → iota
+            case 0x1FD3: return 0x0390;
+            case 0x1FE3: return 0x03B0;
+            case 0x1C80: return 0x0432;
+            case 0x1C81: return 0x0434;
+            case 0x1C82: return 0x043E;
+            case 0x1C83: return 0x0441;
+            case 0x1C84: return 0x0442;
+            case 0x1C85: return 0x0442;
+            case 0x1C86: return 0x044A;
+            case 0x1C87: return 0x0463;
+            case 0x1C88: return 0xA64B;
+        }
+
+        // Cherokee: the fold TARGET is the uppercase block, so uppercase
+        // letters fold to themselves and the lowercase block folds up.
+        if (cp is >= 0x13A0 and <= 0x13F5)
+        {
+            return cp;
+        }
+
+        if (cp is >= 0x13F8 and <= 0x13FD)
+        {
+            return cp - 8;
+        }
+
+        if (cp is >= 0xAB70 and <= 0xABBF)
+        {
+            return cp - 0xAB70 + 0x13A0;
+        }
+
+        if (cp <= 0xFFFF)
+        {
+            return char.ToLowerInvariant((char)cp);
+        }
+
+        // Astral case pairs (Deseret, Warang Citi, Adlam, ...) lower cleanly.
+        var s = char.ConvertFromUtf32(cp).ToLowerInvariant();
+        return s.Length is 2 && char.IsHighSurrogate(s[0]) ? char.ConvertToUtf32(s[0], s[1]) : s[0];
     }
 
     private struct Thread
@@ -340,6 +428,18 @@ public sealed class RegexPikeVm
                         {
                             var slotsCopy = cloneProvider != null ? cloneProvider(t.Slots) : (int[])t.Slots.Clone();
                             slotsCopy[ins.Arg1 * 2 + 1] = pos;
+                            t = new Thread(t.Pc + 1, slotsCopy);
+                            continue;
+                        }
+                    case RegexOp.ResetCaptures:
+                        {
+                            var slotsCopy = cloneProvider != null ? cloneProvider(t.Slots) : (int[])t.Slots.Clone();
+                            for (var g = ins.Arg1; g <= ins.Arg2; g++)
+                            {
+                                slotsCopy[g * 2] = -1;
+                                slotsCopy[g * 2 + 1] = -1;
+                            }
+
                             t = new Thread(t.Pc + 1, slotsCopy);
                             continue;
                         }
@@ -424,7 +524,7 @@ public sealed class RegexPikeVm
     /// those constructs.</summary>
     private RegexMatch? ExecSlow(string input, int start)
     {
-        int slotCount = (_prog.CaptureCount + 1) * 2;
+        int slotCount = (_prog.CaptureCount + 1) * 2 + _prog.LoopCount;
         var slots = new int[slotCount];
         for (var i = 0; i < slotCount; i++)
         {
@@ -452,6 +552,8 @@ public sealed class RegexPikeVm
         endPos = -1;
         outSlots = slots;
         var code = prog.Code;
+        // A reversed (lookbehind) program consumes right-to-left from pos.
+        var dir = prog.Reversed ? -1 : 1;
         Stack<(int Pos, int Pc, int[] Slots)>? backtrack = null;
 
         while (true)
@@ -508,40 +610,66 @@ public sealed class RegexPikeVm
                         goto Fail;
                     case RegexOp.Char:
                         {
-                            var cp = CodePointAt(input, pos, out var charLen);
-                            if (cp >= 0 && cp == ins.Arg1) { pos += charLen; pc++; continue; }
+                            var cp = CodePointDirectional(input, pos, dir, out var charLen);
+                            if (cp >= 0 && cp == ins.Arg1) { pos += charLen * dir; pc++; continue; }
                             goto Fail;
                         }
                     case RegexOp.CharIgnoreCase:
                         {
-                            var cp = CodePointAt(input, pos, out var charLen);
-                            if (cp >= 0 && CaseFoldEquals(cp, ins.Arg1)) { pos += charLen; pc++; continue; }
+                            var cp = CodePointDirectional(input, pos, dir, out var charLen);
+                            if (cp >= 0 && CaseFoldEquals(cp, ins.Arg1)) { pos += charLen * dir; pc++; continue; }
                             goto Fail;
                         }
                     case RegexOp.CharClass:
                         {
-                            var cp = CodePointAt(input, pos, out var charLen);
+                            var cp = CodePointDirectional(input, pos, dir, out var charLen);
                             if (cp >= 0 && prog.Klasses[ins.Arg1].Contains(cp))
                             {
-                                pos += charLen; pc++; continue;
+                                pos += charLen * dir; pc++; continue;
                             }
                             goto Fail;
                         }
                     case RegexOp.Any:
                         {
-                            var cp = CodePointAt(input, pos, out var charLen);
-                            if (cp >= 0) { pos += charLen; pc++; continue; }
+                            var cp = CodePointDirectional(input, pos, dir, out var charLen);
+                            if (cp >= 0) { pos += charLen * dir; pc++; continue; }
                             goto Fail;
                         }
                     case RegexOp.AnyExceptNewline:
                         {
-                            var cp = CodePointAt(input, pos, out var charLen);
+                            var cp = CodePointDirectional(input, pos, dir, out var charLen);
                             if (cp >= 0 && !RegexCharClass.IsLineTerminator(cp))
                             {
-                                pos += charLen; pc++; continue;
+                                pos += charLen * dir; pc++; continue;
                             }
                             goto Fail;
                         }
+                    case RegexOp.ResetCaptures:
+                        {
+                            for (var g = ins.Arg1; g <= ins.Arg2; g++)
+                            {
+                                slots[g * 2] = -1;
+                                slots[g * 2 + 1] = -1;
+                            }
+
+                            pc++;
+                            continue;
+                        }
+                    case RegexOp.MarkPos:
+                        slots[(prog.CaptureCount + 1) * 2 + ins.Arg1] = pos;
+                        pc++;
+                        continue;
+                    case RegexOp.ProgressJmp:
+                        // RepeatMatcher: an iteration that consumed nothing
+                        // fails this path (backtracking explores the body's
+                        // other alternatives / the loop exit).
+                        if (slots[(prog.CaptureCount + 1) * 2 + ins.Arg1] == pos)
+                        {
+                            goto Fail;
+                        }
+
+                        pc = ins.Arg2;
+                        continue;
                     case RegexOp.Backref:
                         {
                             var idx = ins.Arg1;
@@ -559,7 +687,10 @@ public sealed class RegexPikeVm
                                 continue;
                             }
                             var len = e - s;
-                            if (pos + len > input.Length)
+                            // Backwards mode compares the captured text ending
+                            // at pos instead of starting at it.
+                            var cmpStart = dir > 0 ? pos : pos - len;
+                            if (cmpStart < 0 || cmpStart + len > input.Length)
                             {
                                 goto Fail;
                             }
@@ -568,7 +699,7 @@ public sealed class RegexPikeVm
                             for (var k = 0; k < len; k++)
                             {
                                 var a = input[s + k];
-                                var b = input[pos + k];
+                                var b = input[cmpStart + k];
                                 if ((_flags & RegexFlags.IgnoreCase) != 0)
                                 {
                                     if (!CaseFoldEquals(a, b)) { brMatched = false; break; }
@@ -580,49 +711,48 @@ public sealed class RegexPikeVm
                                 goto Fail;
                             }
 
-                            pos += len;
+                            pos += len * dir;
                             pc++;
                             continue;
                         }
                     case RegexOp.Lookaround:
                         {
+                            // The sub shares the outer capture numbering and
+                            // starts from the outer capture state (backrefs to
+                            // outer groups resolve). A lookbehind sub-program is
+                            // compiled reversed, so it consumes right-to-left
+                            // from pos — no scan over candidate start points.
                             var sub = prog.Subs[ins.Arg1];
                             bool negative = (ins.Arg2 & 1) != 0;
-                            bool behind = (ins.Arg2 & 2) != 0;
-                            bool matched;
-                            if (behind)
+                            // Same capture numbering, but the sub owns its own
+                            // loop-mark tail — copy captures, size for the sub.
+                            var captureSlots = (prog.CaptureCount + 1) * 2;
+                            var subSlots = new int[captureSlots + sub.LoopCount];
+                            for (var k = 0; k < subSlots.Length; k++)
                             {
-                                // Try matches that end at pos. Scan starting positions
-                                // from 0 to pos. Allocate subSlots *once* outside the
-                                // loop to avoid O(pos) allocations on long inputs.
-                                var subSlotCount = (sub.CaptureCount + 1) * 2;
-                                var subSlots = new int[subSlotCount];
-                                matched = false;
-                                for (var i = 0; i <= pos; i++)
-                                {
-                                    for (var k = 0; k < subSlotCount; k++)
-                                    {
-                                        subSlots[k] = -1;
-                                    }
+                                subSlots[k] = k < captureSlots ? slots[k] : -1;
+                            }
 
-                                    if (TryMatch(sub, input, i, 0, subSlots, out var endP, out _) && endP == pos)
-                                    {
-                                        matched = true; break;
-                                    }
+                            bool matched = TryMatch(sub, input, pos, 0, subSlots, out _, out var subOut);
+                            if (matched == negative)
+                            {
+                                goto Fail;
+                            }
+
+                            if (matched)
+                            {
+                                // §22.2.2.4: captures made inside a successful
+                                // positive assertion persist. Group 0 belongs to
+                                // the outer match — skip its two slots; the
+                                // sub's loop-mark tail stays behind.
+                                for (var k = 2; k < captureSlots; k++)
+                                {
+                                    slots[k] = subOut[k];
                                 }
                             }
-                            else
-                            {
-                                var subSlots = new int[(sub.CaptureCount + 1) * 2];
-                                for (var k = 0; k < subSlots.Length; k++)
-                                {
-                                    subSlots[k] = -1;
-                                }
 
-                                matched = TryMatch(sub, input, pos, 0, subSlots, out _, out _);
-                            }
-                            if (matched != negative) { pc++; continue; }
-                            goto Fail;
+                            pc++;
+                            continue;
                         }
                     default:
                         goto Fail;

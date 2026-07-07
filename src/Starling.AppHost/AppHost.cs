@@ -3,13 +3,12 @@
 // Run with:
 //
 //     aspire run                         # defaults: --starling --imagesharp-gpu
-//     aspire run -- --jint               # Jint JS backend
 //     aspire run -- --starling --imagesharp # Starling + CPU paint backend
 //
 // Runtime-selection flags (everything after `aspire run --` lands in args) are
 // parsed here and forwarded to BOTH the gui and headless resources:
 //
-//     --starling | --jint                JS engine     (default: --starling)
+//     --starling                         JS engine     (default: --starling)
 //     --imagesharp | --imagesharp-gpu    paint backend (default: --imagesharp-gpu)
 //     --starling-html | --anglesharp-html  HTML parser  (default: --starling-html)
 //
@@ -117,11 +116,10 @@ static string? Env(string name)
     return string.IsNullOrWhiteSpace(value) ? null : value;
 }
 
-// --starling | --jint  ->  STARLING_JS_ENGINE value (null if no flag given).
+// --starling  ->  STARLING_JS_ENGINE value (null if no flag given).
 static string? SelectJsEngine(string[] args) => SelectFlag(
     args, "JS engine",
-    ("--starling", "starling"),
-    ("--jint", "jint"));
+    ("--starling", "starling"));
 
 // --imagesharp/--cpu | --imagesharp-gpu/--imagesharp-webgpu/--gpu  ->  STARLING_PAINT_BACKEND.
 static string? SelectPaintBackend(string[] args) => SelectFlag(
@@ -139,7 +137,7 @@ static string? SelectHtmlParser(string[] args) => SelectFlag(
     ("--anglesharp-html", "anglesharp"));
 
 // Scan args for any of the given flag->value mappings; return the selected value
-// (null if none present). Throws on conflicting selections (e.g. --jint --starling).
+// (null if none present). Throws on conflicting selections (e.g. --imagesharp --imagesharp-gpu).
 static string? SelectFlag(string[] args, string label, params (string Flag, string Value)[] mappings)
 {
     string? selected = null;
@@ -169,7 +167,7 @@ static string? SelectFlag(string[] args, string label, params (string Flag, stri
 // True for any flag SelectJsEngine / SelectPaintBackend recognize, so it can be
 // stripped before the args reach Aspire's command-line configuration provider.
 static bool IsStarlingSelectionFlag(string arg) => arg is
-    "--starling" or "--jint"
+    "--starling"
     or "--imagesharp" or "--cpu"
     or "--imagesharp-gpu" or "--imagesharp-webgpu" or "--gpu"
     or "--starling-html" or "--anglesharp-html";

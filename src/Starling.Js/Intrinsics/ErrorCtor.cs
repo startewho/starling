@@ -62,7 +62,7 @@ public static class ErrorCtor
             // derived class (`class E extends Error {}`), super() threads E as
             // new.target so the instance's [[Prototype]] is E.prototype.
             var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
-            var instance = new JsObject(instProto);
+            var instance = new JsObject(instProto) { IsErrorExotic = true };
             ApplyMessageAndCause(instance, args);
             return JsValue.Object(instance);
         }, isConstructor: true);
@@ -85,7 +85,7 @@ public static class ErrorCtor
         var ctor = new JsNativeFunction(name, (newTarget, args) =>
         {
             var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
-            var instance = new JsObject(instProto);
+            var instance = new JsObject(instProto) { IsErrorExotic = true };
             ApplyMessageAndCause(instance, args);
             return JsValue.Object(instance);
         }, isConstructor: true);
@@ -110,7 +110,7 @@ public static class ErrorCtor
 
             // §20.5.7.1: message + options come at args[1] / args[2], not [0] / [1].
             var instProto = IntrinsicHelpers.NewTargetPrototype(realm.ActiveVm, newTarget, proto);
-            var instance = new JsObject(instProto);
+            var instance = new JsObject(instProto) { IsErrorExotic = true };
             if (args.Length > 1 && !args[1].IsUndefined)
             {
                 instance.DefineOwnProperty("message",

@@ -193,6 +193,22 @@ public sealed partial class JsCompiler
     /// are scoped to the eval body, not injected into the caller/global env.</summary>
     private bool _directEvalLocalVars;
 
+    /// <summary>The script's top-level lexical names (§16.1.7) — bindings that
+    /// live in the realm's global declarative record. Set by
+    /// <see cref="EmitGlobalDeclInstantiation"/>; declaration-initializer stores
+    /// for these names emit <see cref="Opcode.InitGlobalLex"/> instead of
+    /// <see cref="Opcode.StoreGlobal"/> (a StoreGlobal would hit the binding's
+    /// own TDZ).</summary>
+    private HashSet<string>? _globalLexicalNames;
+
+    /// <summary>Annex B §B.3.3.1 — function-scope var slots synthesized for
+    /// block-level FunctionDeclarations in a SLOPPY function body, keyed by
+    /// name. Reserved by <see cref="HoistAnnexBBlockFunctions"/> (undefined
+    /// until the block's declaration evaluates); the block's hoist store then
+    /// writes through so the function is visible after the block, web-compat
+    /// style.</summary>
+    private Dictionary<string, int>? _annexBFnVarSlots;
+
     /// <summary>wp:M3-80 — the local slot of each positional formal parameter, in
     /// declaration order, recorded by <see cref="BindFunctionParameters"/> and
     /// consumed by <see cref="MaybeBindArguments"/> to build the §10.4.4.6 mapped
@@ -332,6 +348,52 @@ public sealed partial class JsCompiler
     /// in the innermost scope frame so later writes throw TypeError.</summary>
     private void MarkConst(string name) => _constScopes[^1].Add(name);
 
+    /// <summary>Annex B §B.3.3 promotion candidates for THIS eval/script unit:
+    /// block-level function names with no lexical declaration between their
+    /// block and the var scope. The per-declaration write-through consults
+    /// this — a shadowed function (`{ let f; { function f(){} } }`) keeps its
+    /// block binding but must NOT leak into the var environment.</summary>
+    private HashSet<string>? _annexBCandidates;
+
+    /// <summary>Function-expression self-name bindings (§15.2.5) — writes are
+    /// TypeError in strict code and silently ignored in sloppy code, distinct
+    /// from const's always-throw.</summary>
+    private readonly HashSet<string> _fnSelfNames = new(StringComparer.Ordinal);
+
+    private bool IsFnSelfName(string name)
+    {
+        // Only when the resolving scope entry IS the self-binding (an inner
+        // shadowing let/var/param wins normally).
+        for (var i = _scopes.Count - 1; i >= 0; i--)
+        {
+            if (_scopes[i].ContainsKey(name))
+            {
+                return i == 0 && _fnSelfNames.Contains(name);
+            }
+        }
+
+        // Not a local: a nested closure writing the enclosing function
+        // expression's self-name reaches it as an UPVALUE — same immutable
+        // binding, resolved through the parent chain.
+        return _parent is not null && !_fnSelfNames.Contains(name) && _parent.IsFnSelfNameResolved(name);
+    }
+
+    /// <summary>Parent-chain half of <see cref="IsFnSelfName"/>: does
+    /// <paramref name="name"/> resolve (in THIS compiler or its parents) to a
+    /// function-expression self-binding?</summary>
+    private bool IsFnSelfNameResolved(string name)
+    {
+        for (var i = _scopes.Count - 1; i >= 0; i--)
+        {
+            if (_scopes[i].ContainsKey(name))
+            {
+                return i == 0 && _fnSelfNames.Contains(name);
+            }
+        }
+
+        return _parent is not null && _parent.IsFnSelfNameResolved(name);
+    }
+
     /// <summary>§13.15.2 — is <paramref name="name"/> a <c>const</c> binding in
     /// some currently-open scope of THIS function? Mirrors
     /// <see cref="IsLexicalLocal"/>: walk innermost-out and stop at the first
@@ -468,12 +530,13 @@ public sealed partial class JsCompiler
     /// slots.</summary>
     private bool IsScriptTop => _parent is null;
 
-    /// <summary>TDZ — true only in the OUTERMOST script lexical scope, where a
-    /// top-level <c>let</c>/<c>const</c> binds on the global object (§16.1.7)
-    /// rather than a local slot. Global-lexical TDZ is deferred, so these
-    /// bindings are not TDZ-hoisted. A <c>let</c>/<c>const</c> inside any
-    /// nested scope (block, switch, loop body, …) — even at script top — is a
-    /// true block-scoped lexical binding and IS subject to TDZ.</summary>
+    /// <summary>True only in the OUTERMOST script lexical scope, where a
+    /// top-level <c>let</c>/<c>const</c>/<c>class</c> binds in the realm's
+    /// global lexical record (§16.1.7 — declared in TDZ by
+    /// GlobalDeclInstantiation, initialized via InitGlobalLex) rather than a
+    /// local slot. A <c>let</c>/<c>const</c> inside any nested scope (block,
+    /// switch, loop body, …) — even at script top — is an ordinary block-scoped
+    /// lexical binding.</summary>
     private bool IsGlobalLexicalScope => IsScriptTop && !_directEvalLocalLexicals && _scopes.Count == 1;
 
     public static Chunk Compile(Program program, string? name = "<script>")
@@ -481,7 +544,7 @@ public sealed partial class JsCompiler
         var c = new JsCompiler();
         c._b.IsStrict = program.Strict;
         c._b.SourcePath = name; // wp:M3-63 — referrer for dynamic import()
-        c.RunCaptureAnalysisForScript(program.Body);
+        c.RunCaptureAnalysisForScript(program);
         c.EmitProgram(program, keepLastExpression: false);
         return c._b.Build(name);
     }
@@ -493,10 +556,46 @@ public sealed partial class JsCompiler
     /// </summary>
     public static Chunk CompileForEval(Program program, string? name = "<eval>")
     {
-        var c = new JsCompiler();
+        // §19.2.1.3 EvalDeclarationInstantiation — eval code gets its OWN
+        // lexical environment (a `let` inside eval is not visible after it),
+        // and strict eval gets its own variable environment too. Only
+        // non-strict eval vars land on the global object.
+        var c = new JsCompiler
+        {
+            _directEvalLocalLexicals = true,
+            _directEvalLocalVars = program.Strict,
+        };
         c._b.IsStrict = program.Strict;
         c._b.SourcePath = name; // wp:M3-63 — referrer for dynamic import()
-        c.RunCaptureAnalysisForScript(program.Body);
+        // Real capture analysis (not the empty script set): the eval's
+        // frame-local lexicals must be capturable by closures. Non-strict eval
+        // vars stay global-object properties, so their names must NOT be
+        // preallocated as frame cells — a cell would shadow the global binding
+        // the initializer writes.
+        var captured = CaptureAnalysis.Compute(Array.Empty<Expression>(), program.Body);
+        if (!program.Strict)
+        {
+            foreach (var vn in Parse.JsParser.EvalVarDeclaredNames(program))
+            {
+                captured.Remove(vn);
+            }
+        }
+
+        c._capturedNames = captured;
+        c.EmitProgram(program, keepLastExpression: true);
+        return c._b.Build(name);
+    }
+
+    /// <summary>Compile with full SCRIPT semantics (§16.1.7 — global lexical
+    /// bindings land in the realm's persistent global declarative record) while
+    /// keeping the completion value, so the caller observes the script's result.
+    /// This is <c>$262.evalScript</c>'s contract — script evaluation, not eval.</summary>
+    public static Chunk CompileForScriptEval(Program program, string? name = "<script>")
+    {
+        var c = new JsCompiler();
+        c._b.IsStrict = program.Strict;
+        c._b.SourcePath = name;
+        c.RunCaptureAnalysisForScript(program);
         c.EmitProgram(program, keepLastExpression: true);
         return c._b.Build(name);
     }
@@ -548,14 +647,28 @@ public sealed partial class JsCompiler
 
     /// <summary>gap:script-top-var-not-global — script-top declarations
     /// (<c>var</c>, <c>let</c>, <c>const</c>, function-declarations, classes)
-    /// all bind on the global object now, so nested functions resolve any
-    /// free identifier through <see cref="Opcode.LoadGlobal"/> /
-    /// <see cref="Opcode.StoreGlobal"/>. There are no script-top "locals"
-    /// to capture, so the captured-name set is empty.</summary>
-    private void RunCaptureAnalysisForScript(IReadOnlyList<Statement> body)
+    /// all bind on the global object now, so nested functions resolve those
+    /// through <see cref="Opcode.LoadGlobal"/> / <see cref="Opcode.StoreGlobal"/>.
+    /// BLOCK-nested lexicals (and block functions) at script top DO live in
+    /// frame slots, so they need real capture analysis — without it a closure
+    /// snapshots the slot's value (a TDZ sentinel for a hoisted block function
+    /// over a later const) instead of sharing a cell. Names that bind globally
+    /// — vars, top-level function declarations, top-level lexicals — are
+    /// stripped so no cell shadows the global binding.</summary>
+    private void RunCaptureAnalysisForScript(Program program)
     {
-        _ = body;
-        _capturedNames = new HashSet<string>(StringComparer.Ordinal);
+        var captured = CaptureAnalysis.Compute(Array.Empty<Expression>(), program.Body);
+        foreach (var vn in Parse.JsParser.EvalVarDeclaredNames(program))
+        {
+            captured.Remove(vn);
+        }
+
+        foreach (var ln in Parse.JsParser.EvalLexicallyDeclaredNames(program))
+        {
+            captured.Remove(ln);
+        }
+
+        _capturedNames = captured;
     }
 
     /// <summary>Populate <see cref="_capturedNames"/> for a function body. Run
@@ -608,11 +721,58 @@ public sealed partial class JsCompiler
 
                 _b.EmitU16(Opcode.DeclareEvalVar, _b.AddConstant(vn));
             }
+
+            // Annex B §B.3.3.3 — sloppy block-level function names join
+            // declaredFunctionOrVarNames, so pre-declare them into the caller's
+            // eval-introduced var store too (idempotent; a read before the
+            // block evaluates yields undefined).
+            if (!_b.IsStrict)
+            {
+                var abNames = new List<string>();
+                var abPath = new List<HashSet<string>>
+                {
+                    new(Parse.JsParser.EvalLexicallyDeclaredNames(p), StringComparer.Ordinal),
+                };
+                foreach (var s in p.Body)
+                {
+                    CollectAnnexBFnNames(s, abNames, topLevel: true, abPath);
+                }
+
+                _annexBCandidates = new HashSet<string>(abNames, StringComparer.Ordinal);
+                foreach (var vn in abNames)
+                {
+                    if (_callerScopeNames is { } cs2 && cs2.Contains(vn))
+                    {
+                        continue;
+                    }
+
+                    _b.EmitU16(Opcode.DeclareEvalVar, _b.AddConstant(vn));
+                }
+            }
+        }
+        // §16.1.7 GlobalDeclarationInstantiation (and §19.2.1.3's global branch
+        // for eval-compiled chunks, whose lexical lists are empty because eval
+        // lexicals are frame-local). Runs all the collision early-error checks
+        // and creates the script's global bindings — lexicals uninitialized
+        // (TDZ) in the realm's global declarative record — before any code.
+        if (IsScriptTop && !_directEvalLocalVars && !_evalInjectVars)
+        {
+            EmitGlobalDeclInstantiation(p);
         }
         // Captured top-level vars are pre-allocated as cells before function
         // hoisting, so a hoisted function body resolves a captured name to the
         // parent's local cell instead of falling through to LoadGlobal/StoreGlobal.
         PreallocateCapturedVarBindings(p.Body);
+        // §16.1.7 GlobalDeclarationInstantiation step 18: every VarDeclaredName
+        // gets a global property (value undefined) before the body runs, so a
+        // read before the textual `var` sees undefined instead of throwing.
+        if (IsScriptTop && !_directEvalLocalVars && !_evalInjectVars)
+        {
+            foreach (var vn in Parse.JsParser.EvalVarDeclaredNames(p))
+            {
+                _b.EmitU16(Opcode.DeclareGlobalVar, _b.AddConstant(vn));
+            }
+        }
         if (_directEvalLocalLexicals)
         {
             HoistLexicalDeclarations(p.Body);
@@ -644,13 +804,375 @@ public sealed partial class JsCompiler
         _b.Emit(Opcode.Halt);
     }
 
+    /// <summary>Gather the §16.1.7 declaration name sets from the script body
+    /// and emit one <see cref="Opcode.GlobalDeclInstantiation"/>. Lexical names
+    /// (top-level <c>let</c>/<c>const</c>/<c>class</c>) are collected only for
+    /// true script chunks — eval chunks keep their lexicals frame-local, so
+    /// only the var/function sets ride along for the collision checks.</summary>
+    private void EmitGlobalDeclInstantiation(Program p)
+    {
+        var letNames = new List<string>();
+        var constNames = new List<string>();
+        if (!_directEvalLocalLexicals)
+        {
+            foreach (var s in p.Body)
+            {
+                switch (s)
+                {
+                    case VariableDeclaration vd when vd.Kind is "let" or "const":
+                        var into = vd.Kind == "const" ? constNames : letNames;
+                        foreach (var d in vd.Declarations)
+                        {
+                            CollectBoundNames(d.Id, into);
+                        }
+
+                        break;
+                    case ClassDeclaration cd:
+                        letNames.Add(cd.Name.Name);
+                        break;
+                }
+            }
+        }
+
+        var funcNames = new List<string>();
+        foreach (var s in p.Body)
+        {
+            var stmt = s;
+            while (stmt is LabeledStatement lab)
+            {
+                stmt = lab.Body;
+            }
+
+            if (stmt is FunctionDeclaration fd)
+            {
+                funcNames.Add(fd.Name.Name);
+            }
+        }
+
+        var varNames = new List<string>();
+        foreach (var vn in Parse.JsParser.EvalVarDeclaredNames(p))
+        {
+            if (!funcNames.Contains(vn))
+            {
+                varNames.Add(vn);
+            }
+        }
+
+        // Annex B §B.3.3.2/.3 — sloppy block-level function names are
+        // pre-declared as (lenient) global vars so a read before the block
+        // evaluates yields undefined.
+        var annexBNames = new List<string>();
+        if (!_b.IsStrict)
+        {
+            var blockFns = new List<string>();
+            var abLexPath = new List<HashSet<string>> { new(letNames, StringComparer.Ordinal) };
+            abLexPath[0].UnionWith(constNames);
+            foreach (var s in p.Body)
+            {
+                CollectAnnexBFnNames(s, blockFns, topLevel: true, abLexPath);
+            }
+
+            _annexBCandidates = new HashSet<string>(blockFns, StringComparer.Ordinal);
+            foreach (var n in blockFns)
+            {
+                if (!funcNames.Contains(n) && !varNames.Contains(n)
+                    && !letNames.Contains(n) && !constNames.Contains(n)
+                    && !annexBNames.Contains(n))
+                {
+                    annexBNames.Add(n);
+                }
+            }
+        }
+
+        if (letNames.Count == 0 && constNames.Count == 0 && varNames.Count == 0
+            && funcNames.Count == 0 && annexBNames.Count == 0)
+        {
+            return;
+        }
+
+        // Eval chunks (frame-local lexicals) create deletable global bindings
+        // (§19.2.1.3 CreateGlobalVarBinding(name, true)); scripts do not.
+        var decls = new GlobalDecls(
+            [.. letNames], [.. constNames], [.. varNames], [.. funcNames], [.. annexBNames],
+            Deletable: _directEvalLocalLexicals);
+        _b.EmitU16(Opcode.GlobalDeclInstantiation, _b.AddConstant(decls));
+
+        // Pattern-leaf initializer stores for these names must route through
+        // InitGlobalLex (a StoreGlobal would hit the binding's own TDZ).
+        if (letNames.Count > 0 || constNames.Count > 0)
+        {
+            _globalLexicalNames = new HashSet<string>(letNames, StringComparer.Ordinal);
+            _globalLexicalNames.UnionWith(constNames);
+        }
+    }
+
+    /// <summary>BoundNames of a binding target — flattens destructuring
+    /// patterns into their constituent identifier names.</summary>
+    private static void CollectBoundNames(Expression target, List<string> into)
+    {
+        switch (target)
+        {
+            case Identifier id:
+                into.Add(id.Name);
+                break;
+            case ArrayPattern arr:
+                foreach (var el in arr.Elements)
+                {
+                    switch (el)
+                    {
+                        case ArrayPatternBindingElement be:
+                            CollectBoundNames(be.Target, into);
+                            break;
+                        case ArrayPatternRestElement re:
+                            CollectBoundNames(re.Target, into);
+                            break;
+                    }
+                }
+
+                break;
+            case ObjectPattern obj:
+                foreach (var prop in obj.Properties)
+                {
+                    CollectBoundNames(prop.Target, into);
+                }
+
+                if (obj.Rest is not null)
+                {
+                    CollectBoundNames(obj.Rest.Argument, into);
+                }
+
+                break;
+            case AssignmentPattern ap:
+                CollectBoundNames(ap.Target, into);
+                break;
+            case RestElement rest:
+                CollectBoundNames(rest.Argument, into);
+                break;
+        }
+    }
+
+    /// <summary>Annex B §B.3.3.1 — in a SLOPPY function body, every block-level
+    /// plain FunctionDeclaration name (not generator/async, not "arguments",
+    /// not already a function-scope binding) gets a synthesized function-scope
+    /// var slot, undefined until the block runs. Call after
+    /// <see cref="HoistFunctionDeclarations"/> so top-level function names
+    /// already occupy the scope.</summary>
+    private void HoistAnnexBBlockFunctions(IReadOnlyList<Statement> body)
+    {
+        if (_b.IsStrict)
+        {
+            return;
+        }
+
+        var names = new List<string>();
+        var lexPath = new List<HashSet<string>>();
+        foreach (var s in body)
+        {
+            CollectAnnexBFnNames(s, names, topLevel: true, lexPath);
+        }
+
+        foreach (var name in names)
+        {
+            // A function-scope LEXICAL of the same name suppresses the copy
+            // entirely; `arguments` is never a candidate.
+            if (name == "arguments" || IsLexicalLocal(name))
+            {
+                continue;
+            }
+
+            // An existing var / parameter / top-level function binding is
+            // SHARED — the block's evaluation writes through to it (its value
+            // is not re-initialized at entry).
+            if (_scopes[0].TryGetValue(name, out var existing))
+            {
+                (_annexBFnVarSlots ??= new Dictionary<string, int>(StringComparer.Ordinal))[name] = existing;
+                continue;
+            }
+
+            var slot = _b.ReserveLocal();
+            _scopes[0][name] = slot;
+            if (IsNameCaptured(name))
+            {
+                _b.MarkCaptured(slot);
+                _b.EmitSlot(Opcode.InitCellLocal, slot);
+            }
+
+            (_annexBFnVarSlots ??= new Dictionary<string, int>(StringComparer.Ordinal))[name] = slot;
+        }
+    }
+
+    /// <summary>Annex B §B.3.3 candidate collection. A block-contained PLAIN
+    /// FunctionDeclaration is a candidate only when hoisting it as a var would
+    /// produce no early error — i.e. no same-named LEXICAL declaration in any
+    /// scope on the path from the var environment down to (and including) the
+    /// function's own block. Same-named vars / sibling function declarations do
+    /// NOT suppress (they share the var binding). <paramref name="lexPath"/>
+    /// carries the lexical-name sets of the containers walked so far.</summary>
+    private static void CollectAnnexBFnNames(Statement? s, List<string> into, bool topLevel, List<HashSet<string>> lexPath)
+    {
+        switch (s)
+        {
+            case null:
+                return;
+            case FunctionDeclaration fd:
+                if (!topLevel && !fd.Generator && !fd.Async
+                    && !lexPath.Any(set => set.Contains(fd.Name.Name)))
+                {
+                    into.Add(fd.Name.Name);
+                }
+
+                return; // never descend into the function's own body
+            case ClassDeclaration:
+                return;
+            case BlockStatement b:
+                WalkContainer(b.Body, into, lexPath);
+                return;
+            case IfStatement ifs:
+                CollectAnnexBFnNames(ifs.Consequent, into, topLevel: false, lexPath);
+                CollectAnnexBFnNames(ifs.Alternate, into, topLevel: false, lexPath);
+                return;
+            case WhileStatement w:
+                CollectAnnexBFnNames(w.Body, into, topLevel: false, lexPath);
+                return;
+            case DoWhileStatement dw:
+                CollectAnnexBFnNames(dw.Body, into, topLevel: false, lexPath);
+                return;
+            case ForStatement f:
+                {
+                    var head = LoopHeadLexicals(f.Init as VariableDeclaration);
+                    if (head is not null) { lexPath.Add(head); }
+                    CollectAnnexBFnNames(f.Body, into, topLevel: false, lexPath);
+                    if (head is not null) { lexPath.RemoveAt(lexPath.Count - 1); }
+                    return;
+                }
+            case ForInStatement fin:
+                {
+                    var head = LoopHeadLexicals(fin.Left as VariableDeclaration);
+                    if (head is not null) { lexPath.Add(head); }
+                    CollectAnnexBFnNames(fin.Body, into, topLevel: false, lexPath);
+                    if (head is not null) { lexPath.RemoveAt(lexPath.Count - 1); }
+                    return;
+                }
+            case ForOfStatement fof:
+                {
+                    var head = LoopHeadLexicals(fof.Left as VariableDeclaration);
+                    if (head is not null) { lexPath.Add(head); }
+                    CollectAnnexBFnNames(fof.Body, into, topLevel: false, lexPath);
+                    if (head is not null) { lexPath.RemoveAt(lexPath.Count - 1); }
+                    return;
+                }
+            case SwitchStatement sw:
+                {
+                    // The whole case list shares ONE block scope.
+                    var all = new List<Statement>();
+                    foreach (var c in sw.Cases)
+                    {
+                        all.AddRange(c.Consequent);
+                    }
+
+                    WalkContainer(all, into, lexPath);
+                    return;
+                }
+            case TryStatement t:
+                WalkContainer(t.Block.Body, into, lexPath);
+                if (t.Handler is not null)
+                {
+                    // §B.3.3.3 + §B.3.5 — a DESTRUCTURED catch parameter
+                    // named F blocks the promotion like an intervening
+                    // lexical; a simple identifier catch parameter permits it
+                    // (the same web-compat carve-out that lets `var f` shadow
+                    // a simple catch binding).
+                    var catchNames = new HashSet<string>(StringComparer.Ordinal);
+                    if (t.Handler.Param is not null and not Identifier)
+                    {
+                        var bound = new List<string>();
+                        CollectBoundNames(t.Handler.Param, bound);
+                        catchNames.UnionWith(bound);
+                    }
+
+                    lexPath.Add(catchNames);
+                    WalkContainer(t.Handler.Body.Body, into, lexPath);
+                    lexPath.RemoveAt(lexPath.Count - 1);
+                }
+
+                if (t.Finalizer is not null)
+                {
+                    WalkContainer(t.Finalizer.Body, into, lexPath);
+                }
+
+                return;
+            case LabeledStatement lab:
+                CollectAnnexBFnNames(lab.Body, into, topLevel, lexPath);
+                return;
+        }
+
+        static void WalkContainer(IReadOnlyList<Statement> body, List<string> into, List<HashSet<string>> lexPath)
+        {
+            var lex = ContainerLexicals(body);
+            lexPath.Add(lex);
+            foreach (var x in body)
+            {
+                CollectAnnexBFnNames(x, into, topLevel: false, lexPath);
+            }
+
+            lexPath.RemoveAt(lexPath.Count - 1);
+        }
+
+        // let/const/class names declared directly in this container (sibling
+        // FunctionDeclarations excluded — a same-named sibling fn does not
+        // suppress; the last evaluation wins).
+        static HashSet<string> ContainerLexicals(IReadOnlyList<Statement> body)
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var x in body)
+            {
+                switch (x)
+                {
+                    case VariableDeclaration vd when vd.Kind is "let" or "const":
+                        var names = new List<string>();
+                        foreach (var d in vd.Declarations)
+                        {
+                            CollectBoundNames(d.Id, names);
+                        }
+
+                        set.UnionWith(names);
+                        break;
+                    case ClassDeclaration cd:
+                        set.Add(cd.Name.Name);
+                        break;
+                }
+            }
+
+            return set;
+        }
+
+        static HashSet<string>? LoopHeadLexicals(VariableDeclaration? vd)
+        {
+            if (vd is null || vd.Kind == "var")
+            {
+                return null;
+            }
+
+            var names = new List<string>();
+            foreach (var d in vd.Declarations)
+            {
+                CollectBoundNames(d.Id, names);
+            }
+
+            return new HashSet<string>(names, StringComparer.Ordinal);
+        }
+    }
+
     private void HoistFunctionDeclarations(IReadOnlyList<Statement> body)
     {
         // At the script top there is no enclosing function, so hoisted
         // function-declarations install themselves as globals (mirroring
         // §10.2.11 host-defined global object behavior). Inside a function,
         // they bind a fresh local slot in the function's variable scope.
-        var isScriptTop = IsScriptTop && !_directEvalLocalVars;
+        // A BLOCK at script top (scope depth > 1) is NOT the script top: its
+        // functions bind block-locals (§14 lexical semantics), with the Annex B
+        // sloppy write-through emitted at the store below.
+        var isScriptTop = IsScriptTop && !_directEvalLocalVars && _scopes.Count == 1;
 
         // PASS 1 — register a slot / binding for EVERY function declaration in
         // this scope BEFORE compiling any body. Without this, a body that
@@ -737,6 +1259,37 @@ public sealed partial class JsCompiler
             }
             else
             {
+                // Annex B §B.3.3 — sloppy-mode web-compat write-through for a
+                // BLOCK-level function declaration: besides the block's own
+                // lexical binding, copy the function into the enclosing var
+                // scope when the declaration evaluates. Global scripts bind a
+                // (lenient) global var; an injected direct eval writes the
+                // caller's var environment; a function body writes the
+                // synthesized Annex B var slot.
+                if (!_b.IsStrict && _scopes.Count > 1)
+                {
+                    var fnName = fd.Name.Name;
+                    if (IsScriptTop && !_directEvalLocalVars
+                        && (_annexBCandidates is null || _annexBCandidates.Contains(fnName)))
+                    {
+                        _b.Emit(Opcode.Dup);
+                        if (_evalInjectVars)
+                        {
+                            _b.EmitU16(Opcode.DeclareEvalVar, _b.AddConstant(fnName));
+                            EmitEvalInjectedStore(fnName);
+                        }
+                        else
+                        {
+                            _b.EmitU16(Opcode.AnnexBGlobalFnBind, _b.AddConstant(fnName));
+                        }
+                    }
+                    else if (_annexBFnVarSlots is { } annexB && annexB.TryGetValue(fnName, out var varSlot))
+                    {
+                        _b.Emit(Opcode.Dup);
+                        EmitStoreLocalSlot(varSlot);
+                    }
+                }
+
                 EmitStoreLocalSlot(slot!.Value);
             }
         }
@@ -948,6 +1501,8 @@ public sealed partial class JsCompiler
         // of the function per §13.2.1 and §14.1.18. Register lexical names first
         // so hoisted function bodies capture same-scope class/let/const names.
         HoistFunctionDeclarations(fd.Body.Body);
+        // Annex B §B.3.3.1 — sloppy bodies var-hoist block-level function names.
+        HoistAnnexBBlockFunctions(fd.Body.Body);
         // wp:M3-20 — synthesize the `arguments` object if the body reads it.
         MaybeBindArguments(fd.Params, fd.Body.Body);
         // §10.2.1.1 — box `this` if a nested arrow reads it.
@@ -1535,8 +2090,9 @@ public sealed partial class JsCompiler
     /// with the TDZ sentinel via <see cref="Opcode.DeclareLocalTdz"/>.</summary>
     private void HoistLexicalName(string name)
     {
-        // Global-lexical TDZ is deferred — a top-level script let/const binds on
-        // the global object, so don't reserve a local slot for it here.
+        // A top-level script let/const binds in the realm's global lexical
+        // record (GlobalDeclInstantiation declares it in TDZ), so don't
+        // reserve a local slot for it here.
         if (IsGlobalLexicalScope)
         {
             return;
@@ -1789,7 +2345,10 @@ public sealed partial class JsCompiler
             {
                 var srcSlot = _b.ReserveLocal();
                 _b.EmitSlot(Opcode.StoreLocal, srcSlot);
-                DeclarePatternBindings(handler.Param);
+                // Catch bindings are catch-scoped, never script/eval vars —
+                // without the force, a destructured catch parameter at eval
+                // top level would leak into the caller's var environment.
+                DeclarePatternBindings(handler.Param, forceBlockLocal: true);
                 EmitPatternFromLocal(handler.Param, srcSlot, isDeclaration: true);
             }
             // The catch block is its own lexical scope: TDZ-hoist its top-level
@@ -2096,8 +2655,18 @@ public sealed partial class JsCompiler
             }
         }
 
+        // §16.1.7 — a script-top let/const binds in the realm's global lexical
+        // record: GlobalDeclInstantiation created it in TDZ, the declarator's
+        // initializer transitions it out via InitGlobalLex.
+        var globalLexical = (vd.Kind is "let" or "const") && IsGlobalLexicalScope;
+
         foreach (var d in vd.Declarations)
         {
+            if (globalLexical)
+            {
+                EmitGlobalLexicalDeclarator(d);
+                continue;
+            }
             if (lexical)
             {
                 EmitLexicalDeclarator(d);
@@ -2187,6 +2756,48 @@ public sealed partial class JsCompiler
     /// per-leaf stores route through <see cref="StoreBindingIdentifier"/>,
     /// which emits the unchecked store for an in-scope lexical binding when
     /// invoked during a declaration (<see cref="_inLexicalDeclInit"/>).</summary>
+    /// <summary>§16.1.7 — one script-top <c>let</c>/<c>const</c> declarator.
+    /// The binding already exists (TDZ) in the realm's global lexical record;
+    /// evaluate the initializer and initialize it via
+    /// <see cref="Opcode.InitGlobalLex"/>. A bare <c>let x;</c> initializes to
+    /// undefined.</summary>
+    private void EmitGlobalLexicalDeclarator(VariableDeclarator d)
+    {
+        if (d.Id is Identifier id)
+        {
+            if (d.Init is not null)
+            {
+                EmitNamedEvaluation(d.Init, id.Name);
+            }
+            else
+            {
+                _b.Emit(Opcode.LoadUndefined);
+            }
+
+            _b.EmitU16(Opcode.InitGlobalLex, _b.AddConstant(id.Name));
+            return;
+        }
+        // Destructuring: evaluate the init into a temp, then bind each leaf.
+        // StoreBindingIdentifier routes the leaf stores for these names through
+        // InitGlobalLex while _inLexicalDeclInit is set (a StoreGlobal would
+        // hit the leaf binding's own TDZ).
+        var srcSlot = _b.ReserveLocal();
+        if (d.Init is not null)
+        {
+            EmitExpression(d.Init);
+        }
+        else
+        {
+            _b.Emit(Opcode.LoadUndefined);
+        }
+
+        _b.EmitSlot(Opcode.StoreLocal, srcSlot);
+        var prev = _inLexicalDeclInit;
+        _inLexicalDeclInit = true;
+        EmitPatternFromLocal(d.Id, srcSlot, isDeclaration: true);
+        _inLexicalDeclInit = prev;
+    }
+
     private void EmitLexicalDeclarator(VariableDeclarator d)
     {
         if (d.Id is Identifier id)
@@ -2444,6 +3055,14 @@ public sealed partial class JsCompiler
             // script-top the binding is loop-local (not a global), per spec.
             var slot = _b.ReserveLocal();
             _scopes[^1][id.Name] = slot;
+            // The head binding IS lexical — without the marks, `i++` on a
+            // `for (const i…)` head skipped the const TypeError entirely.
+            MarkLexical(id.Name);
+            if (vd.Kind == "const")
+            {
+                MarkConst(id.Name);
+            }
+
             _b.MarkCaptured(slot);
             _b.EmitSlot(Opcode.InitCellLocal, slot);
             slots.Add(slot);
@@ -2509,7 +3128,26 @@ public sealed partial class JsCompiler
         // Step 1: evaluate the iterable + materialise an iterator-record handle.
         // wp:M3-04g — `for await` resolves an async iterator; the per-iteration
         // result objects are obtained by awaiting iterator.next().
-        EmitExpression(fo.Right);
+        // §14.7.5.5 ForIn/OfHeadEvaluation — a lexical ForDeclaration's bound
+        // names are visible (in TDZ) while the head expression evaluates, so
+        // `for (const x of [x])` throws a ReferenceError. The TDZ mini-scope
+        // exists only for the head; the real per-iteration bindings follow.
+        if (fo.Left is VariableDeclaration { Kind: "let" or "const" } tdzOf)
+        {
+            PushScope();
+            foreach (var d in tdzOf.Declarations)
+            {
+                HoistLexicalPattern(d.Id);
+            }
+
+            EmitExpression(fo.Right);
+            PopScope();
+        }
+        else
+        {
+            EmitExpression(fo.Right);
+        }
+
         _b.Emit(fo.Await ? Opcode.GetAsyncIterator : Opcode.GetIterator);
         var handleSlot = _b.ReserveLocal();
         _b.EmitSlot(Opcode.StoreLocal, handleSlot);
@@ -2761,7 +3399,24 @@ public sealed partial class JsCompiler
         // Keep the (coerced) source object too: §14.7.5.9 requires a key that
         // has been DELETED before it is reached to be skipped, so each step
         // re-checks that the property still exists.
-        EmitExpression(fi.Right);
+        // §14.7.5.5 — lexical ForDeclaration names are in TDZ while the head
+        // expression evaluates (see EmitForOf).
+        if (fi.Left is VariableDeclaration { Kind: "let" or "const" } tdzIn)
+        {
+            PushScope();
+            foreach (var d in tdzIn.Declarations)
+            {
+                HoistLexicalPattern(d.Id);
+            }
+
+            EmitExpression(fi.Right);
+            PopScope();
+        }
+        else
+        {
+            EmitExpression(fi.Right);
+        }
+
         _b.Emit(Opcode.Dup);
         _b.Emit(Opcode.EnumerateKeys);
         var keysSlot = _b.ReserveLocal();
@@ -3470,6 +4125,21 @@ public sealed partial class JsCompiler
 
     private void EmitIdStoreStatic(string name, bool needsTdzCheck)
     {
+        // §15.2.5 — the function-expression self-name is an immutable
+        // binding: strict writes throw TypeError, sloppy writes are silently
+        // dropped (the assigned value stays as the expression result on the
+        // stack; no store happens). Checked BEFORE branch selection so a
+        // nested closure's UPVALUE write to the name gets the same treatment.
+        if (IsFnSelfName(name))
+        {
+            if (_b.IsStrict)
+            {
+                _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(name));
+            }
+
+            return;
+        }
+
         if (TryResolveLocal(name, out var slot))
         {
             // §13.15.2 — a write to a const local (other than its own
@@ -3694,6 +4364,20 @@ public sealed partial class JsCompiler
                 EmitIdStore(id.Name, needsTdzCheck: false);
                 return;
             }
+            // §13.4.2.1 — ++/-- on a const binding is a runtime TypeError
+            // (after the old value is read and coerced, per evaluation order,
+            // but compile-time emission of the throw matches the observable
+            // behavior for a resolvable const local).
+            if (IsConstLocal(id.Name) && !_inLexicalDeclInit)
+            {
+                // Evaluate the read (for its TDZ check), coerce, then throw.
+                EmitIdLoad(id.Name);
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(0.0));
+                _b.Emit(Opcode.Add);
+                _b.EmitU16(Opcode.ThrowConstAssignment, _b.AddConstant(id.Name));
+                return;
+            }
+
             // Try local first, then upvalue, then global.
             if (TryResolveLocal(id.Name, out var slot))
             {
@@ -3777,6 +4461,44 @@ public sealed partial class JsCompiler
             _b.EmitU16(Opcode.StoreGlobal, nameIdx);
             return;
         }
+        if (up.Argument is SuperPropertyExpression sup)
+        {
+            // §13.4 — update of a super property (wp:M3-15). The read resolves
+            // through the home object's prototype (LoadSuperProperty /
+            // LoadSuperComputed); the write targets the receiver `this`
+            // (StoreSuper*), which re-pushes the stored value, so the postfix
+            // form recovers oldNum by reversing the ±1 step — the same
+            // no-temp-local trick as the member arms below.
+            var isInc = up.Op == JsTokenKind.PlusPlus;
+            if (!sup.Computed)
+            {
+                var supNameIdx = _b.AddConstant(((Identifier)sup.Property).Name);
+                _b.EmitU16(Opcode.LoadSuperProperty, supNameIdx);   // [oldVal]
+                _b.Emit(Opcode.UnaryPlus);                          // [oldNum]
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));  // [oldNum, 1]
+                _b.Emit(isInc ? Opcode.Add : Opcode.Sub);           // [newVal]
+                _b.EmitU16(Opcode.StoreSuperProperty, supNameIdx);  // [newVal]
+            }
+            else
+            {
+                EmitExpression(sup.Property);                       // [key]
+                _b.Emit(Opcode.Dup);                                // [key, key]
+                _b.Emit(Opcode.LoadSuperComputed);                  // [key, oldVal]
+                _b.Emit(Opcode.UnaryPlus);                          // [key, oldNum]
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));  // [key, oldNum, 1]
+                _b.Emit(isInc ? Opcode.Add : Opcode.Sub);           // [key, newVal]
+                _b.Emit(Opcode.StoreSuperComputed);                 // [newVal]
+            }
+
+            if (!up.Prefix)
+            {
+                // Postfix: result = oldNum = newVal ∓ 1 (reverse the ±1 step).
+                _b.EmitU16(Opcode.LoadConst, _b.AddConstant(1.0));  // [newVal, 1]
+                _b.Emit(isInc ? Opcode.Sub : Opcode.Add);           // [oldNum]
+            }
+
+            return;
+        }
         if (up.Argument is MemberExpression me)
         {
             // §13.4 Update Expressions — member-expression target.
@@ -3785,15 +4507,6 @@ public sealed partial class JsCompiler
             // StoreProperty / StoreComputed already re-push the stored value
             // (same contract as compound assignment in EmitAssignment), so we
             // can recover oldNum from newVal without any temporary locals.
-            //
-            // Reject `super.x++` / `super[k]++` — these would require
-            // PutValue on a super-reference, which needs separate super-update
-            // opcodes (deferred; add them if the McMaster app needs it).
-            if (me.Object is SuperPropertyExpression)
-            {
-                throw new NotSupportedException("update of super property not yet supported (wp:M3-15)");
-            }
-
             var isIncrement = up.Op == JsTokenKind.PlusPlus;
 
             // §13.4 — a private member target (obj.#x++ / ++obj.#x / …) reads and
@@ -4089,11 +4802,11 @@ public sealed partial class JsCompiler
         }
         if (a.Target is MemberExpression me)
         {
-            // Super-property assignment: super.x = v writes to `this`.
-            if (me.Object is SuperPropertyExpression)
-            {
-                throw new NotSupportedException("super.x = v is not supported in B1b-2a");
-            }
+            // A MemberExpression whose object is a super property
+            // (`super.a.b = v`) is an ordinary member store on the VALUE of
+            // `super.a` — the arms below handle it (EmitExpression emits the
+            // super read). Bare `super.x = v` is the SuperPropertyExpression
+            // target handled above.
             // Private name assignment: this.#x = v (and compound this.#x op= v).
             if (!me.Computed && me.Property is PrivateNameExpression pne)
             {
@@ -4270,15 +4983,48 @@ public sealed partial class JsCompiler
             return;
         }
 
+        if (a.Target is SuperPropertyExpression slog)
+        {
+            // super.x &&= / ||= / ??= v (wp:M3-15) — read through the super
+            // base, then a conditional StoreSuper* (which re-pushes the stored
+            // value), mirroring the member arms below.
+            if (!slog.Computed)
+            {
+                var supName = ((Identifier)slog.Property).Name;
+                var supIdx = _b.AddConstant(supName);
+                _b.EmitU16(Opcode.LoadSuperProperty, supIdx);   // [cur]
+                _b.Emit(Opcode.Dup);                            // [cur, cur]
+                var js = _b.EmitJump(jmp);                      // pops one cur
+                _b.Emit(Opcode.Pop);                            // []
+                EmitNamedEvaluation(a.Value, supName);          // [rhs]
+                _b.EmitU16(Opcode.StoreSuperProperty, supIdx);  // [rhs]
+                _b.PatchJump(js);                               // merge: [rhs] or [cur]
+                return;
+            }
+
+            // Computed: evaluate the key exactly once, keep it for the store.
+            EmitExpression(slog.Property);       // [key]
+            _b.Emit(Opcode.Dup);                 // [key, key]
+            _b.Emit(Opcode.LoadSuperComputed);   // [key, cur]
+            _b.Emit(Opcode.Dup);                 // [key, cur, cur]
+            var jsc = _b.EmitJump(jmp);          // pops one cur
+            _b.Emit(Opcode.Pop);                 // [key]
+            EmitExpression(a.Value);             // [key, rhs]
+            _b.Emit(Opcode.StoreSuperComputed);  // [rhs]
+            var jscEnd = _b.EmitJump(Opcode.Jump);
+            // Short-circuit path: [key, cur] — drop the dup'd key from
+            // underneath cur via a temp local.
+            _b.PatchJump(jsc);
+            var stmp = _b.ReserveLocal();
+            EmitStoreLocalSlot(stmp);            // [key]
+            _b.Emit(Opcode.Pop);                 // []
+            EmitLoadLocalSlot(stmp);             // [cur]
+            _b.PatchJump(jscEnd);                // merge: [rhs] or [cur]
+            return;
+        }
+
         if (a.Target is MemberExpression me)
         {
-            // super.x ??= … would require PutValue on a super-reference; the
-            // plain `=`/compound super paths above use dedicated opcodes and
-            // netclaw doesn't need the logical form, so defer it explicitly.
-            if (me.Object is SuperPropertyExpression)
-            {
-                throw new NotSupportedException("logical assignment to a super property is not supported");
-            }
             // Private-name logical assignment (this.#x &&= / ||= / ??= …).
             // Same shape as the plain non-computed member path below, but the
             // read/write route through PrivateGet/PrivateSet on a dup'd receiver.
@@ -4942,6 +5688,8 @@ public sealed partial class JsCompiler
         // references to it compile to (undefined) globals — breaking all
         // IIFE/webpack/bundler code.
         sub.HoistFunctionDeclarations(fe.Body.Body);
+        // Annex B §B.3.3.1 — sloppy bodies var-hoist block-level function names.
+        sub.HoistAnnexBBlockFunctions(fe.Body.Body);
         // wp:M3-20 — arrows have no own `arguments` (they inherit lexically),
         // so only ordinary function expressions synthesize one.
         if (!isArrow)
@@ -5303,6 +6051,7 @@ public sealed partial class JsCompiler
 
         var slot = _b.ReserveLocal();
         _scopes[^1][name] = slot;
+        _fnSelfNames.Add(name);
         if (IsNameCaptured(name))
         {
             // A nested closure references the self-name — back it with a Cell so
@@ -5353,6 +6102,54 @@ public sealed partial class JsCompiler
             argSlots[i] = _b.ReserveLocal();
         }
 
+        // §10.2.11 — when the formals themselves reference `arguments` (a
+        // default like `x = arguments[0]`), the arguments object binding is
+        // created BEFORE IteratorBindingInitialization runs the defaults, so
+        // bind it here — after the positional slots (the VM copies args into
+        // slots 0..argc-1, so the arguments slot must not displace them) and
+        // before any default evaluates. Skipped for arrows (markInitializer is
+        // false — no own binding) and when a formal explicitly binds the name.
+        // The later MaybeBindArguments call sees the scope entry and no-ops.
+        if (markInitializer && !ParamsBindArguments(parameters)
+            && CaptureAnalysis.ReferencesArguments(parameters, Array.Empty<Statement>()))
+        {
+            MaybeBindArguments(parameters, Array.Empty<Statement>());
+        }
+
+        // §10.2.11 parameter TDZ — when any default exists, every
+        // default/pattern parameter's bindings are declared UP FRONT in the
+        // uninitialized state, so a default that references itself or a later
+        // parameter (`(x = x)`, `(a = b, b)`) reads the sentinel and throws
+        // ReferenceError. The binding stores below run in declaration-init
+        // mode (like a let initializer) so they perform the one legal write.
+        // Plain identifier parameters bind straight to their (already
+        // initialized) argument slots and are unaffected.
+        var paramTdz = parameters.Any(HasParamDefault);
+        if (paramTdz)
+        {
+            foreach (var param in parameters)
+            {
+                var target = param is SpreadElement sp ? sp.Argument : param;
+                if (target is Identifier)
+                {
+                    continue;
+                }
+
+                DeclarePatternBindings(target, forceBlockLocal: true);
+                var names = new List<string>();
+                CollectBoundNames(target, names);
+                foreach (var n in names)
+                {
+                    MarkLexical(n);
+                    if (_scopes[^1].TryGetValue(n, out var declared))
+                    {
+                        _b.EmitSlot(IsSlotCaptured(declared)
+                            ? Opcode.InitCellLocalTdz : Opcode.DeclareLocalTdz, declared);
+                    }
+                }
+            }
+        }
+
         for (var i = 0; i < parameters.Count; i++)
         {
             var param = parameters[i];
@@ -5363,9 +6160,16 @@ public sealed partial class JsCompiler
                 // gather args[i..argc) via RestParam, then bind the array to the
                 // target (a plain identifier or a destructuring pattern). Rest
                 // is always the last parameter, so `i` is the gather start.
-                DeclarePatternBindings(spread.Argument);
+                if (!paramTdz || spread.Argument is Identifier)
+                {
+                    DeclarePatternBindings(spread.Argument);
+                }
+
                 _b.EmitU16(Opcode.RestParam, i);
+                var prevRest = _inLexicalDeclInit;
+                _inLexicalDeclInit = paramTdz || prevRest;
                 EmitPatternFromStack(spread.Argument, isDeclaration: true);
+                _inLexicalDeclInit = prevRest;
                 continue;
             }
 
@@ -5383,8 +6187,15 @@ public sealed partial class JsCompiler
                 continue;
             }
 
-            DeclarePatternBindings(param);
+            if (!paramTdz)
+            {
+                DeclarePatternBindings(param);
+            }
+
+            var prev = _inLexicalDeclInit;
+            _inLexicalDeclInit = paramTdz || prev;
             EmitPatternFromLocal(param, argSlots[i], isDeclaration: true);
+            _inLexicalDeclInit = prev;
         }
 
         if (bracket)
@@ -5546,7 +6357,9 @@ public sealed partial class JsCompiler
     /// the block-local slot while the closure reads the (never-initialized)
     /// cell, yielding <c>undefined</c>/<c>NaN</c>. <c>let</c>/<c>const</c> and
     /// catch/parameter bindings stay block-scoped (false).</param>
-    private void DeclarePatternBindings(Expression pattern, bool functionScoped = false)
+    /// <param name="forceBlockLocal">Catch parameters bind in the catch scope
+    /// even at script/eval top level — never as global or eval-injected vars.</param>
+    private void DeclarePatternBindings(Expression pattern, bool functionScoped = false, bool forceBlockLocal = false)
     {
         switch (pattern)
         {
@@ -5558,7 +6371,7 @@ public sealed partial class JsCompiler
                 // an initializer doesn't reset an existing value, and a
                 // hoisted function-decl that already installed the name
                 // keeps its function value.
-                if (IsScriptTop && !_directEvalLocalVars)
+                if (IsScriptTop && !_directEvalLocalVars && !forceBlockLocal)
                 {
                     // wp:M3-73 — a non-strict direct eval whose caller is a
                     // function injects its top-level vars into the caller's
@@ -5595,10 +6408,10 @@ public sealed partial class JsCompiler
                 }
                 return;
             case AssignmentExpression { Op: JsTokenKind.Eq } a:
-                DeclarePatternBindings(a.Target, functionScoped);
+                DeclarePatternBindings(a.Target, functionScoped, forceBlockLocal);
                 return;
             case AssignmentPattern a:
-                DeclarePatternBindings(a.Target, functionScoped);
+                DeclarePatternBindings(a.Target, functionScoped, forceBlockLocal);
                 return;
             case ArrayPattern arr:
                 foreach (var element in arr.Elements)
@@ -5606,10 +6419,10 @@ public sealed partial class JsCompiler
                     switch (element)
                     {
                         case ArrayPatternBindingElement binding:
-                            DeclarePatternBindings(binding.Target, functionScoped);
+                            DeclarePatternBindings(binding.Target, functionScoped, forceBlockLocal);
                             break;
                         case ArrayPatternRestElement rest:
-                            DeclarePatternBindings(rest.Target, functionScoped);
+                            DeclarePatternBindings(rest.Target, functionScoped, forceBlockLocal);
                             break;
                     }
                 }
@@ -5617,12 +6430,12 @@ public sealed partial class JsCompiler
             case ObjectPattern obj:
                 foreach (var prop in obj.Properties)
                 {
-                    DeclarePatternBindings(prop.Target, functionScoped);
+                    DeclarePatternBindings(prop.Target, functionScoped, forceBlockLocal);
                 }
 
                 if (obj.Rest is not null)
                 {
-                    DeclarePatternBindings(obj.Rest.Argument, functionScoped);
+                    DeclarePatternBindings(obj.Rest.Argument, functionScoped, forceBlockLocal);
                 }
 
                 return;
@@ -5634,7 +6447,7 @@ public sealed partial class JsCompiler
                         continue;
                     }
 
-                    DeclarePatternBindings(element is SpreadElement spread ? spread.Argument : element, functionScoped);
+                    DeclarePatternBindings(element is SpreadElement spread ? spread.Argument : element, functionScoped, forceBlockLocal);
                 }
                 return;
             case ObjectExpression obj:
@@ -5642,16 +6455,16 @@ public sealed partial class JsCompiler
                 {
                     if (prop.Value is SpreadElement spread)
                     {
-                        DeclarePatternBindings(spread.Argument, functionScoped);
+                        DeclarePatternBindings(spread.Argument, functionScoped, forceBlockLocal);
                     }
                     else
                     {
-                        DeclarePatternBindings(prop.Value, functionScoped);
+                        DeclarePatternBindings(prop.Value, functionScoped, forceBlockLocal);
                     }
                 }
                 return;
             case SpreadElement spread:
-                DeclarePatternBindings(spread.Argument, functionScoped);
+                DeclarePatternBindings(spread.Argument, functionScoped, forceBlockLocal);
                 return;
         }
     }
@@ -5790,6 +6603,17 @@ public sealed partial class JsCompiler
         }
         else
         {
+            // §16.1.7 — a declaration initializer's pattern-leaf store to a
+            // script-top lexical name initializes the global lexical binding
+            // (StoreGlobal would hit its own TDZ). Outside a declaration
+            // initializer, StoreGlobal's lexical-first path enforces
+            // TDZ/const semantics at runtime.
+            if (_inLexicalDeclInit && _globalLexicalNames is { } gl && gl.Contains(name))
+            {
+                _b.EmitU16(Opcode.InitGlobalLex, _b.AddConstant(name));
+                return;
+            }
+
             _b.EmitU16(Opcode.StoreGlobal, _b.AddConstant(name));
         }
     }

@@ -85,6 +85,13 @@ public sealed class JsFunction : JsObject
     /// <see cref="Bytecode.Opcode.RunFieldInits"/>.</summary>
     public IReadOnlyList<string>? InstancePrivateBrands { get; set; }
 
+    /// <summary>Per-CLASS-EVALUATION private-name identity (§6.2.12): maps a
+    /// compile-time mangled private name to the unique brand minted when the
+    /// class definition EVALUATED. Two evaluations of the same class
+    /// expression mint distinct brands, so cross-instance access throws.
+    /// Inherited lexically through MakeClosure; null outside class code.</summary>
+    public Dictionary<string, string>? PrivateNameMap { get; set; }
+
     /// <summary>B1b-2c — function kind. Normal functions run synchronously
     /// and return their body's value. Async functions return a Promise;
     /// generator functions return a Generator object; async generators
@@ -167,7 +174,16 @@ public sealed class JsFunction : JsObject
             // function's body with its own realm active (cross-realm execution).
             Realm = realm,
         };
-        fn.SetPrototypeOf(realm.FunctionPrototype);
+        // §27.5.1.1/§27.6.1.1/§27.7.1.1 — generator/async function objects
+        // inherit from their kind's function prototype (which carries the
+        // @@toStringTag consulted by Object.prototype.toString).
+        fn.SetPrototypeOf(template.Kind switch
+        {
+            JsFunctionKind.Generator => realm.GeneratorFunctionPrototype,
+            JsFunctionKind.Async => realm.AsyncFunctionPrototype,
+            JsFunctionKind.AsyncGenerator => realm.AsyncGeneratorFunctionPrototype,
+            _ => realm.FunctionPrototype,
+        });
 
         // Own-property creation order is observable (Object.getOwnPropertyNames
         // / Reflect.ownKeys) and the spec fixes it as length, then name, then
@@ -181,14 +197,47 @@ public sealed class JsFunction : JsObject
         fn.DefineOwnProperty("name",
             PropertyDescriptor.Data(JsValue.String(template.Name), writable: false, enumerable: false, configurable: true));
 
-        // §10.2.5 MakeConstructor — the function's own `prototype` slot holds the
-        // object that `new f()` uses as the new-target prototype. Spec descriptor
-        // is writable=true, enumerable=false, configurable=false.
-        var protoObj = new JsObject(realm.ObjectPrototype);
-        protoObj.DefineOwnProperty("constructor",
-            PropertyDescriptor.Data(JsValue.Object(fn), writable: true, enumerable: false, configurable: true));
-        fn.DefineOwnProperty("prototype",
-            PropertyDescriptor.Data(JsValue.Object(protoObj), writable: true, enumerable: false, configurable: false));
+        // §10.2.5 MakeConstructor / §27.5.1.1 / §27.6.1.1 — the `prototype`
+        // property depends on the function kind:
+        //   normal      — fresh object (proto %Object.prototype%) with a
+        //                 `constructor` back-link; `new f()` uses it.
+        //   generator   — fresh object whose proto is %GeneratorPrototype%,
+        //                 NO constructor back-link, and the descriptor is
+        //                 writable/non-configurable; generators made by calling
+        //                 the function inherit from it.
+        //   async gen   — same shape over %AsyncGeneratorPrototype%.
+        //   async       — NO prototype property at all.
+        // Generator/async functions are never constructors (the VM's construct
+        // path rejects them), so none of these get a constructor link.
+        switch (template.Kind)
+        {
+            case JsFunctionKind.Generator:
+            {
+                var genProto = new JsObject(realm.GeneratorPrototype);
+                fn.DefineOwnProperty("prototype",
+                    PropertyDescriptor.Data(JsValue.Object(genProto), writable: true, enumerable: false, configurable: false));
+                break;
+            }
+            case JsFunctionKind.AsyncGenerator:
+            {
+                var agenProto = new JsObject(realm.AsyncGeneratorPrototype);
+                fn.DefineOwnProperty("prototype",
+                    PropertyDescriptor.Data(JsValue.Object(agenProto), writable: true, enumerable: false, configurable: false));
+                break;
+            }
+            case JsFunctionKind.Async:
+                break; // no prototype property
+            default:
+            {
+                var protoObj = new JsObject(realm.ObjectPrototype);
+                protoObj.DefineOwnProperty("constructor",
+                    PropertyDescriptor.Data(JsValue.Object(fn), writable: true, enumerable: false, configurable: true));
+                fn.DefineOwnProperty("prototype",
+                    PropertyDescriptor.Data(JsValue.Object(protoObj), writable: true, enumerable: false, configurable: false));
+                break;
+            }
+        }
+
         return fn;
     }
 

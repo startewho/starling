@@ -1,5 +1,4 @@
 using BenchmarkDotNet.Attributes;
-using Jint;
 using Starling.Js.Bytecode;
 using Starling.Js.Parse;
 using Starling.Js.Runtime;
@@ -8,22 +7,20 @@ namespace Starling.JsEngineBench;
 
 /// <summary>
 /// Scaling sweep: ONE representative workload run at an increasing iteration
-/// count <c>N</c>, so the engines' <b>fixed</b> cost (parse + compile + realm
+/// count <c>N</c>, so the engine's <b>fixed</b> cost (parse + compile + realm
 /// bootstrap) and <b>marginal</b> per-iteration dispatch cost separate out as
 /// N grows. Where <see cref="StarlingFeatureBench"/> pins each feature at a
 /// single large N, this one answers "one-off vs medium vs lots-and-lots".
 ///
-/// <para>Read the table down an engine's column as N increases:</para>
+/// <para>Read the table down a column as N increases:</para>
 /// <list type="bullet">
-/// <item><b>N = 1</b> — dominated by FIXED cost (one-off latency). A bytecode VM
-///   pays a compile step a tree-walker skips, so Jint is expected to win here.</item>
-/// <item><b>N large</b> — dominated by MARGINAL cost (steady-state throughput).
-///   This is where bytecode + inline caches are expected to pull ahead — IF
-///   per-instruction dispatch is cheaper than re-walking the AST. A crossover
-///   exists only if Starling's marginal cost is below Jint's.</item>
+/// <item><b>N = 1</b> — dominated by FIXED cost (one-off latency): the parse +
+///   compile + bootstrap a bytecode VM pays before the first instruction.</item>
+/// <item><b>N large</b> — dominated by MARGINAL cost (steady-state throughput),
+///   where bytecode + inline caches earn their keep.</item>
 /// </list>
 ///
-/// <para>Decompose per engine from the curve:
+/// <para>Decompose from the curve:
 ///   fixed ≈ time at N=1;
 ///   marginal ≈ (t(N_hi) − t(N_lo)) / (N_hi − N_lo).</para>
 ///
@@ -35,9 +32,9 @@ namespace Starling.JsEngineBench;
 /// The body is a monomorphic property + prototype-method + call workload — the
 /// shape of code a bytecode VM with inline caches is supposed to be strongest
 /// on, and (unlike the regex cases) no shared System.Text call dilutes the
-/// engines' own dispatch. Both Warm and Cold build a fresh engine/realm per op,
+/// engine's own dispatch. Both Warm and Cold build a fresh runtime/realm per op,
 /// so realm bootstrap stays part of the fixed cost (intentional — it is part of
-/// one-off latency). Uses a short job (4 methods × 4 N); run with
+/// one-off latency). Uses a short job (2 methods × 4 N); run with
 /// <c>--filter '*StarlingScalingBench*'</c>.
 /// </summary>
 [ShortRunJob]
@@ -63,28 +60,19 @@ public class StarlingScalingBench
 
     private string _src = "";
     private Chunk? _chunk;
-    private Prepared<Acornima.Ast.Script> _jintPrepared;
 
     [GlobalSetup]
     public void Setup()
     {
         _src = Build(N);
         _chunk = JsCompiler.CompileForEval(new JsParser(_src).ParseProgram());
-        _jintPrepared = Engine.PrepareScript(_src, strict: true);
 
-        // Fail fast if a script throws on either engine.
-        Jint_Warm();
+        // Fail fast if the script throws.
         Starling_Warm();
     }
 
-    // Baseline: warm Jint (pre-parsed AST), the natural steady-state reference.
+    // Baseline: warm (pre-compiled chunk), the natural steady-state reference.
     [Benchmark(Baseline = true)]
-    public Engine Jint_Warm() => new Engine(o => o.Strict = true).Execute(_jintPrepared);
-
-    [Benchmark]
-    public Engine Jint_Cold() => new Engine(o => o.Strict = true).Execute(_src);
-
-    [Benchmark]
     public JsValue Starling_Warm() => new JsVm(new JsRuntime()).Run(_chunk!);
 
     [Benchmark]

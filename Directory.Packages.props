@@ -83,13 +83,6 @@
     <!-- Crypto: pure-managed TLS support (consumed from M2 onward) -->
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.5.0" />
 
-    <!-- Alternative JS engine (Starling.Bindings.Jint). Jint is a pure-managed
-         interpreter — its only dependency is Acornima (managed JS parser),
-         which depends only on in-box BCL packages. No native/runtime assets, so
-         the managed-first interop policy holds like BouncyCastle. Selected at
-         runtime via STARLING_JS_ENGINE=jint; removable by deleting the backend
-         project + this line. -->
-    <PackageVersion Include="Jint" Version="4.9.2" />
     <PackageVersion Include="Wasmtime" Version="44.0.0" />
 
     <!-- Legacy single-byte / CJK encodings (pure-managed; Rule-0 clean).

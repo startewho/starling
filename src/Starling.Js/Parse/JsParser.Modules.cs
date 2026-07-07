@@ -25,14 +25,29 @@ public ref partial struct JsParser
                 return ParseStatement();
             }
 
+            // §16.1 Script : ScriptBody — an ImportDeclaration only matches the
+            // Module goal; in a classic Script (and in eval code, which parses
+            // with the Script goal) it is a SyntaxError at parse time.
+            if (!_module)
+            {
+                throw new JsParseException("'import' declarations may only appear at top level of a module", _current.Start);
+            }
+
             return ParseImportDeclaration();
         }
 
-        return _current.Kind switch
+        if (_current.Kind == JsTokenKind.Export)
         {
-            JsTokenKind.Export => ParseExportDeclaration(),
-            _ => ParseStatement(),
-        };
+            // §16.1 — ExportDeclaration likewise only matches the Module goal.
+            if (!_module)
+            {
+                throw new JsParseException("'export' declarations may only appear at top level of a module", _current.Start);
+            }
+
+            return ParseExportDeclaration();
+        }
+
+        return ParseStatement();
     }
 
     /// <summary>wp:M3-03c — parse the expression-context forms of <c>import</c>:
@@ -55,6 +70,19 @@ public ref partial struct JsParser
                 throw new JsParseException(
                     $"the only valid meta-property for import is 'import.meta' (got 'import.{meta.Lexeme}')",
                     meta.Start);
+            }
+
+            // §13.3.12 — import.meta exists only in Module goal code, and
+            // neither token of a meta-property tolerates escape sequences
+            // (`im\u0070ort.meta` / `import.m\u0065ta` are SyntaxErrors).
+            if (!_module)
+            {
+                throw new JsParseException("import.meta is only valid in module code", start);
+            }
+
+            if (meta.ContainsEscape)
+            {
+                throw new JsParseException("'meta' of import.meta must not contain escape sequences", meta.Start);
             }
 
             return new ImportMetaExpression(start, meta.End);

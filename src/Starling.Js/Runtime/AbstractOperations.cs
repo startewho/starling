@@ -208,7 +208,9 @@ public static class AbstractOperations
 
         return value.AsObject switch
         {
-            JsFunction => true,
+            // §27.5/§27.6/§27.7 — generator and async functions have no
+            // [[Construct]]; `new` on them is a TypeError.
+            JsFunction fn => fn.Kind == JsFunctionKind.Normal,
             JsNativeFunction nat => nat.IsConstructor,
             JsBoundFunction bf => IsConstructor(JsValue.Object(bf.Target)),
             JsProxy proxy => !proxy.IsRevoked && proxy.TargetIsConstructor,
@@ -254,11 +256,12 @@ public static class AbstractOperations
         {
             return key.IsSymbol ? ns.Get(key.AsSymbol) : ns.Get(key.AsString);
         }
-        // ECMA-262 §25.2.5: integer-indexed exotic element access is handled
-        // by the typed-array object before ordinary descriptor lookup.
-        if (obj is JsTypedArray ta && key.IsString && IsCanonicalArrayIndex(key.AsString))
+        // §10.4.5.4 [[Get]]: a canonical numeric index resolves against the
+        // element storage only — invalid indices are undefined with NO
+        // prototype-chain walk.
+        if (obj is JsTypedArray ta && key.IsString && JsTypedArray.TryCanonicalNumericIndex(key.AsString, out var taIndex))
         {
-            return ta.Get(key.AsString);
+            return ta.IsValidIndex(taIndex) ? ta.GetElement((int)taIndex) : JsValue.Undefined;
         }
 
         for (var o = obj; o is not null; o = o.Prototype)
@@ -332,21 +335,31 @@ public static class AbstractOperations
         {
             return false;
         }
-        // ECMA-262 §25.2.5 integer-indexed exotic writes go to the backing
-        // ArrayBuffer instead of creating ordinary own properties.
-        if (obj is JsTypedArray ta && key.IsString && IsCanonicalArrayIndex(key.AsString))
-        {
-            if (int.TryParse(key.AsString, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var index)
-                && index >= 0 && index < ta.Length)
-            {
-                ta.SetElement(index, value, vm?.Realm);
-            }
-
-            return true;
-        }
         // Find existing descriptor anywhere on the chain.
         for (var o = obj; o is not null; o = o.Prototype)
         {
+            // §10.4.5.5 [[Set]]: when the lookup reaches a typed array (as the
+            // target itself or as a prototype) a canonical numeric index writes
+            // the element storage when the receiver is that view; an invalid
+            // index is a successful no-op with NO further chain walk. Only a
+            // valid index with a different receiver falls through to
+            // OrdinarySet's create-on-receiver.
+            if (o is JsTypedArray ta && key.IsString && JsTypedArray.TryCanonicalNumericIndex(key.AsString, out var taIndex))
+            {
+                if (receiver.IsObject && ReferenceEquals(receiver.AsObject, ta))
+                {
+                    ta.SetIntegerIndexed(taIndex, value, vm?.Realm ?? ta.Realm);
+                    return true;
+                }
+
+                if (!ta.IsValidIndex(taIndex))
+                {
+                    return true;
+                }
+
+                break;
+            }
+
             var desc = o.GetOwnPropertyDescriptor(key);
             if (desc is null)
             {
@@ -385,29 +398,34 @@ public static class AbstractOperations
         }
 
         var target = receiver.AsObject;
-        if (target.HasOwn(key))
+        // §10.1.9.2 steps 2-3 — the receiver's own descriptor comes from its
+        // [[GetOwnProperty]] (a Proxy's trap fires here, an Array's exotic
+        // length/index slots are seen).
+        var existing = target.GetOwnPropertyDescriptor(key);
+        if (existing is { } ex)
         {
-            var existing = target.GetOwnPropertyDescriptor(key);
-            // A receiver own accessor / non-writable data property blocks the
-            // create-data path per §10.1.9.2 (CreateDataProperty would fail).
-            if (existing is { IsAccessor: true })
+            if (ex.IsAccessor || !ex.Writable)
             {
                 return false;
             }
 
-            if (existing is { Writable: false })
+            if (target is JsProxy or JsArray)
             {
-                return false;
+                // Step 3.d — a value-only [[DefineOwnProperty]] so the exotic
+                // receiver applies its own semantics (defineProperty trap,
+                // ArraySetLength). Ordinary receivers keep the cheap Set path,
+                // which is behaviorally identical for a writable data slot.
+                return target.DefineOwnPropertyPartial(key, PropertyDescriptor.Data(value),
+                    DescriptorFields.Build(value: true, writable: false, enumerable: false,
+                        configurable: false, get: false, set: false));
             }
 
             target.Set(key, value);
             return true;
         }
-        if (!target.Extensible)
-        {
-            return false;
-        }
 
+        // Step 4 CreateDataProperty — [[DefineOwnProperty]] owns the
+        // extensibility rejection (and a Proxy's defineProperty trap fires).
         return target.DefineOwnProperty(key, PropertyDescriptor.Data(value));
     }
 
@@ -422,7 +440,7 @@ public static class AbstractOperations
 
         return callee.AsObject switch
         {
-            JsNativeFunction nat => CallNative(nat, thisValue, args),
+            JsNativeFunction nat => CallNative(vm, nat, thisValue, args),
             JsFunction fn => vm is not null
                 ? vm.CallFunction(fn, thisValue, args)
                 : CallForeignRealm(fn, thisValue, args),
@@ -433,8 +451,36 @@ public static class AbstractOperations
         };
     }
 
-    private static JsValue CallNative(JsNativeFunction nat, JsValue thisValue, JsValue[] args)
-        => nat.Body(thisValue, args);
+    /// <summary>Native-to-native recursion guard. Pure native call chains
+    /// (e.g. a builtin whose spec steps re-enter ToPrimitive, which calls
+    /// another builtin, …) never pass through the VM's barrier-depth guard, so
+    /// an unbounded loop would hit a NATIVE StackOverflowException — which .NET
+    /// cannot catch and which kills the whole process. Count native frames and
+    /// convert the runaway into a catchable RangeError first. The limit is
+    /// generous: legitimate native chains (proxy trap stacks, nested
+    /// ToPrimitive) stay in the tens.</summary>
+    private const int MaxNativeCallDepth = 2_000;
+    [ThreadStatic] private static int t_nativeCallDepth;
+
+    private static JsValue CallNative(JsVm? vm, JsNativeFunction nat, JsValue thisValue, JsValue[] args)
+    {
+        if (t_nativeCallDepth >= MaxNativeCallDepth)
+        {
+            throw vm is not null
+                ? new JsThrow(vm.Realm.NewRangeError("Maximum call stack size exceeded"))
+                : new JsThrow(JsValue.String("Maximum call stack size exceeded"));
+        }
+
+        t_nativeCallDepth++;
+        try
+        {
+            return nat.Body(thisValue, args);
+        }
+        finally
+        {
+            t_nativeCallDepth--;
+        }
+    }
 
     /// <summary>wp:M3-83 — host invokes a foreign-realm JS function with no
     /// ambient VM (e.g. Function.prototype.call on a foreign function, where
@@ -459,12 +505,18 @@ public static class AbstractOperations
             ? new JsThrow(vm.Realm.NewTypeError($"not a function: {detail}"))
             : new JsThrow(JsValue.String($"not a function: {detail}"));
 
+    /// <summary>Same realm-aware TypeError shaping for [[Construct]] misuse.</summary>
+    private static JsThrow NotAConstructor(JsVm? vm, string detail) =>
+        vm is not null
+            ? new JsThrow(vm.Realm.NewTypeError($"not a constructor: {detail}"))
+            : new JsThrow(JsValue.String($"not a constructor: {detail}"));
+
     /// <summary>§7.3.15 Construct — analogous for <c>new</c>.</summary>
     public static JsValue Construct(JsVm? vm, JsValue ctor, JsValue[] args, JsObject? newTarget = null)
     {
         if (!IsConstructor(ctor))
         {
-            throw new JsThrow(JsValue.String($"not a constructor: {JsValue.ToStringValue(ctor)}"));
+            throw NotAConstructor(vm, ctor.IsObject ? ctor.AsObject.ToString() ?? "object" : JsValue.ToStringValue(ctor));
         }
 
         newTarget ??= ctor.AsObject;
@@ -477,7 +529,7 @@ public static class AbstractOperations
             JsBoundFunction bf => Construct(vm, JsValue.Object(bf.Target),
                 ConcatBoundArgs(bf.BoundArgs, args), newTarget),
             JsProxy proxy => proxy.ProxyConstruct(args, newTarget),
-            _ => throw new JsThrow(JsValue.String($"not a constructor: {ctor.AsObject}")),
+            _ => throw NotAConstructor(vm, ctor.AsObject.ToString() ?? "object"),
         };
     }
 

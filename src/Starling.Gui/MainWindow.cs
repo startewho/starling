@@ -598,13 +598,9 @@ public sealed class MainWindow : Window, IBrowserController
         return info;
     }
 
-    // Canonical names matching the AppHost selection flags / README (--starling/
-    // --jint, --imagesharp/--imagesharp-gpu).
-    private static string GetJsEngineLabel() => JsEngineSelector.Selected switch
-    {
-        JsEngineKind.Jint => "jint",
-        _ => "starling",
-    };
+    // Canonical names matching the AppHost selection flags / README (--starling,
+    // --imagesharp/--imagesharp-gpu).
+    private static string GetJsEngineLabel() => "starling";
 
     private static string GetRenderBackendLabel() => PaintBackendSelector.Selected switch
     {

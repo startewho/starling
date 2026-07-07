@@ -152,6 +152,14 @@ public sealed class JsArrayIterator : JsObject
             return IteratorIntrinsics.MakeResult(realm, JsValue.Undefined, done: true);
         }
 
+        // §23.1.5.1 step 6.b.i — a typed array that went out of bounds
+        // (shrunk/detached resizable buffer) throws from next(), it does not
+        // complete quietly.
+        if (_iterated is JsTypedArray { IsOutOfBounds: true })
+        {
+            throw new JsThrow(realm.NewTypeError("TypedArray is out of bounds"));
+        }
+
         var len = GetLength(_iterated);
         if (_nextIndex >= len)
         {
@@ -181,6 +189,14 @@ public sealed class JsArrayIterator : JsObject
         if (obj is JsArray arr)
         {
             return arr.Length;
+        }
+
+        // Typed arrays report length via a PROTOTYPE ACCESSOR (§23.2.3) which
+        // the vm-less data-only Get below cannot invoke; read the exotic
+        // object's live length directly (also picks up length-tracking views).
+        if (obj is JsTypedArray ta)
+        {
+            return ta.Length;
         }
 
         var v = obj.Get("length");

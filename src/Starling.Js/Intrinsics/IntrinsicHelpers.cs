@@ -129,6 +129,16 @@ internal static class IntrinsicHelpers
     /// `class X extends Builtin {}` produce instances whose [[Prototype]] is
     /// <c>X.prototype</c> while still carrying the builtin's internal slots.</summary>
     public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto)
+        => NewTargetPrototype(vm, thisV, defaultProto, intrinsicSelector: null);
+
+    /// <summary>§10.1.13 GetPrototypeFromConstructor: when new.target's
+    /// `prototype` is not an object, the intrinsic default comes from
+    /// new.target's FUNCTION REALM (§7.3.25), selected by
+    /// <paramref name="intrinsicSelector"/>; <paramref name="defaultProto"/>
+    /// covers the callers that haven't opted in and function objects whose
+    /// realm is unknown.</summary>
+    public static JsObject NewTargetPrototype(JsVm? vm, JsValue thisV, JsObject defaultProto,
+        Func<JsRealm, JsObject>? intrinsicSelector)
     {
         if (thisV.IsObject && AbstractOperations.IsConstructor(thisV))
         {
@@ -137,7 +147,34 @@ internal static class IntrinsicHelpers
             {
                 return proto.AsObject;
             }
+
+            if (intrinsicSelector is not null && FunctionRealm(thisV.AsObject) is { } fnRealm)
+            {
+                return intrinsicSelector(fnRealm);
+            }
         }
         return defaultProto;
+    }
+
+    internal static JsRealm? FunctionRealm(JsObject fn)
+    {
+        while (true)
+        {
+            switch (fn)
+            {
+                case JsFunction f:
+                    return f.Realm;
+                case JsNativeFunction n:
+                    return n.Realm;
+                case JsBoundFunction bf:
+                    fn = bf.Target;
+                    continue;
+                case JsProxy { IsRevoked: false } proxy:
+                    fn = proxy.Target!;
+                    continue;
+                default:
+                    return null;
+            }
+        }
     }
 }

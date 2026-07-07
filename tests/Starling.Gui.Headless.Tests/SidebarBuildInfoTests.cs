@@ -21,7 +21,7 @@ public class SidebarBuildInfoTests
         var sidebar = new Sidebar(
             new ThemeManager(), System.Array.Empty<TabInfo>(), activeId: null,
             onTabActivated: null,
-            build: new BuildInfo("abc12345", "jint", "imagesharp-gpu", "anglesharp"));
+            build: new BuildInfo("abc12345", "starling", "imagesharp-gpu", "anglesharp"));
         var window = new Window { Content = sidebar, Width = 232, Height = 600 };
         window.Show();
         window.CaptureRenderedFrame(); // force measure/arrange so the tree materializes
@@ -32,7 +32,7 @@ public class SidebarBuildInfoTests
 
             texts.Should().Contain("commit").And.Contain("js").And.Contain("render").And.Contain("html");
             texts.Should().Contain("abc12345", "the commit value is shown");
-            texts.Should().Contain("jint", "the active JS engine is shown");
+            texts.Should().Contain("starling", "the active JS engine is shown");
             texts.Should().Contain("imagesharp-gpu", "the active render engine is shown");
             texts.Should().Contain("anglesharp", "the active HTML parser is shown");
         }

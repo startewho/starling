@@ -139,7 +139,7 @@ Parallel markers:
   same parent. On a parent row, it means at least some child rows can split.
 
 - [x] Generate a backend-neutral IDL surface manifest and use it to check the
-  Starling JS engine and Jint binding surfaces.
+  Starling JS engine binding surface.
 - [x] Make the manifest the source of truth for backend parity.
 - [x] Route every generated operation through `IdlMarshal`.
 - [x] Fail when a generated installer is not wired into the runtime.
@@ -235,11 +235,11 @@ Parallel markers:
   - [ ] `Enums.g.cs`. (`parallel-subtask`)
   - [ ] `Callbacks.g.cs`. (`parallel-subtask`)
   - [ ] `core-dom-surface.json`. (`parallel-subtask`)
-- [ ] Add Starling JS engine and Jint prototype parity tests. (`parallel-root`,
-  `parallel-subtask`)
-  - [ ] Compare constructors and prototype objects. (`parallel-subtask`)
-  - [ ] Compare `constructor` links. (`parallel-subtask`)
-  - [ ] Compare method and attribute descriptors. (`parallel-subtask`)
+- [ ] Add Starling JS engine prototype conformance tests against the manifest.
+  (`parallel-root`, `parallel-subtask`)
+  - [ ] Check constructors and prototype objects. (`parallel-subtask`)
+  - [ ] Check `constructor` links. (`parallel-subtask`)
+  - [ ] Check method and attribute descriptors. (`parallel-subtask`)
   - [ ] Compare constants on constructors and prototypes. (`parallel-subtask`)
   - [ ] Compare `instanceof` results. (`parallel-subtask`)
 - [ ] Require each `skip` entry to have a reason and a test for the matching
@@ -300,11 +300,6 @@ Parallel markers:
 - [ ] Add a skip category for each skipped member, such as custom prototype,
   missing DOM algorithm, missing type mapper support, or backend-specific.
   (`parallel-root`)
-- [ ] Decide whether Jint stays manually bound and manifest-tested, or whether
-  the generator also emits Jint bindings.
-  - [ ] Document the chosen strategy.
-  - [ ] If Jint stays manual, keep manifest parity as the gate.
-  - [ ] If Jint is generated, share the IDL model and test matrix.
 
 ### Mission-critical gates
 
@@ -313,8 +308,7 @@ Parallel markers:
   - [ ] Load the same IDL snapshot.
   - [ ] Build JS fixtures for each interface. (`parallel-subtask`)
   - [ ] Track expected failures. (`parallel-subtask`)
-  - [ ] Run checks for both Starling JS and Jint where possible.
-    (`parallel-subtask`)
+  - [ ] Run checks for Starling JS. (`parallel-subtask`)
 - [ ] Require every target IDL member to be classified as generated, covered by a
   Starling binding, blocked by type support, blocked by a missing DOM algorithm,
   or out of scope. (`parallel-root`, `parallel-subtask`)
@@ -325,11 +319,10 @@ Parallel markers:
   - [ ] `out-of-scope`.
 - [ ] Add hard per-interface coverage gates and ratchet them upward.
   (`parallel-root`)
-- [ ] Add differential oracle tests that run selected snippets in Starling JS,
-  Jint, and a real browser. (`parallel-root`, `parallel-subtask`)
+- [ ] Add differential oracle tests that run selected snippets in Starling JS
+  and a real browser. (`parallel-root`, `parallel-subtask`)
   - [ ] Choose representative snippets per interface. (`parallel-subtask`)
   - [ ] Run Starling JS. (`parallel-subtask`)
-  - [ ] Run Jint. (`parallel-subtask`)
   - [ ] Run a browser oracle. (`parallel-subtask`)
   - [ ] Store expected differences. (`parallel-subtask`)
 - [ ] Add a generated install registry and compare it to the manifest at runtime

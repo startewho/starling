@@ -80,7 +80,7 @@ public sealed class JsPromise : JsObject
 /// <summary>§27.2.1.2 PromiseCapability Record. Carries a promise and the
 /// resolving functions that settle it. Returned by <c>NewPromiseCapability</c>
 /// and consumed everywhere the spec spells "PromiseCapability".</summary>
-internal sealed record PromiseCapability(JsPromise Promise, JsValue Resolve, JsValue Reject);
+internal sealed record PromiseCapability(JsObject Promise, JsValue Resolve, JsValue Reject);
 
 /// <summary>§27.2.1.1 PromiseReaction Record. One entry on a pending promise's
 /// reaction list; copied to the microtask queue at settlement.</summary>

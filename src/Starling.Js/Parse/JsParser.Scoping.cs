@@ -233,14 +233,28 @@ public ref partial struct JsParser
     /// <paramref name="allowSloppyFunction"/>.</summary>
     private Statement ParseSubStatement(bool allowSloppyFunction = false)
     {
-        // A lexical declaration head is never a valid Statement here.
+        // A lexical declaration head is never a valid Statement here. In
+        // sloppy code the grammar's lookahead exclusion for an
+        // ExpressionStatement is ONLY `let [` — a bare `let` followed by an
+        // identifier/`{` parses as the IDENTIFIER `let` (with ASI supplying
+        // the statement break: `while (…) let\nx = 1`, and a same-line
+        // continuation failing naturally: `do let x = 1; …` is a SyntaxError
+        // at `x`). Strict mode keeps `let` fully reserved. The expression
+        // parse must be FORCED — falling into ParseStatement would re-detect
+        // the declaration head and accept it.
         if (_current.Kind is JsTokenKind.Const
             || (_current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
-                && IsLetDeclarationStart()))
+                && (_strict ? IsLetDeclarationStart() : _lex.Peek().Kind == JsTokenKind.LBracket)))
         {
             throw new JsParseException(
                 "lexical declaration cannot appear in a single-statement context",
                 _current.Start);
+        }
+
+        if (!_strict && _current.Kind == JsTokenKind.Identifier && _current.TextEquals("let")
+            && IsLetDeclarationStart())
+        {
+            return ParseExpressionStatement();
         }
 
         if (_current.Kind == JsTokenKind.Class)
@@ -283,6 +297,16 @@ public ref partial struct JsParser
         if (!isLabel)
         {
             _forbidLabelledFunction = false;
+        }
+
+        // Annex B.3.4 — a sloppy function declaration as an if-arm behaves
+        // "as if the declaration appeared in a block": normalize to a
+        // single-statement BlockStatement so hoisting, the B.3.3 candidate
+        // walk, and the var write-through all see the standard block shape.
+        if (_current.Kind == JsTokenKind.Function)
+        {
+            var fd = ParseStatement();
+            return new BlockStatement(new List<Statement> { fd }, fd.Start, fd.End);
         }
 
         return ParseStatement();

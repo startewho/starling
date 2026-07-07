@@ -21,7 +21,7 @@ public class JsErrorPositionTests
         // `o.missing()` — missing is undefined, CallMethod throws.
         var act = () => Eval("var o={}; o.missing();");
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("(at 1:");
+            .Which.Value.Should().Match<JsValue>(v => ThrownMessage(v).Contains("(at 1:"));
     }
 
     [TestMethod]
@@ -32,16 +32,18 @@ public class JsErrorPositionTests
         // carry position. (A *bare undeclared* call now throws ReferenceError
         // before the call — see the unresolved-global-read tests.)
         var act = () => Eval("var nope;\nnope();");
-        var msg = act.Should().Throw<JsThrow>().Which.Value.AsString;
+        var msg = ThrownMessage(act.Should().Throw<JsThrow>().Which.Value);
         msg.Should().Contain("(at 2:1)");
     }
 
     [TestMethod]
     public void New_on_undefined_carries_position()
     {
+        // `new` on a non-object throws a real TypeError object; the position
+        // rides in its message.
         var act = () => Eval("new undefined();");
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("(at 1:1)");
+            .Which.Value.Should().Match<JsValue>(v => ThrownMessage(v).Contains("(at 1:1)"));
     }
 
     [TestMethod]
@@ -59,7 +61,7 @@ public class JsErrorPositionTests
             """;
         var act = () => Eval(src);
         act.Should().Throw<JsThrow>()
-            .Which.Value.AsString.Should().Contain("(at 3:");
+            .Which.Value.Should().Match<JsValue>(v => ThrownMessage(v).Contains("(at 3:"));
     }
 
     [TestMethod]
@@ -69,7 +71,7 @@ public class JsErrorPositionTests
         // must be reported, not the first call's.
         const string src = "var o={f:function(){}}; o.f(); o.g();";
         var act = () => Eval(src);
-        var msg = act.Should().Throw<JsThrow>().Which.Value.AsString;
+        var msg = ThrownMessage(act.Should().Throw<JsThrow>().Which.Value);
         msg.Should().Contain("g");
         // `o.g()` member expression starts at column 32 (1-based).
         msg.Should().Contain("(at 1:32)");
@@ -130,6 +132,11 @@ public class JsErrorPositionTests
     }
 
     // ----- Helpers --------------------------------------------------------
+
+    /// <summary>Message text of a thrown value — the string itself for legacy
+    /// string throws, else the Error object's own <c>message</c>.</summary>
+    private static string ThrownMessage(JsValue v) =>
+        v.IsString ? v.AsString : JsValue.ToStringValue(v.AsObject.Get("message"));
 
     private static JsValue Eval(string src)
     {

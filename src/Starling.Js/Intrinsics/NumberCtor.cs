@@ -19,7 +19,9 @@ public static class NumberCtor
         JsNativeFunction? ctor = null;
         ctor = new JsNativeFunction(realm, "Number", length: 1, (newTarget, args) =>
         {
-            var n = args.Length == 0 ? 0 : ToNumber(args[0]);
+            // §21.1.1.1 step 1.a: Number(value) converts a BigInt numerically
+            // (the only ToNumber-adjacent path that does).
+            var n = args.Length == 0 ? 0 : ToNumberAllowBigInt(realm, args[0]);
             // §21.1.1.1: constructed → wrapper prototyped from new.target.
             if (IntrinsicHelpers.IsConstructInvocation(newTarget))
             {
@@ -65,7 +67,7 @@ public static class NumberCtor
             new IntrinsicHelpers.BulkMember("toPrecision", 1, (thisV, args) => ToPrecision(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm)),
             new IntrinsicHelpers.BulkMember("toExponential", 1, (thisV, args) => JsValue.String(ToExponential(ThisNumber(realm, thisV), args.Length > 0 ? args[0] : JsValue.Undefined, realm))),
             new IntrinsicHelpers.BulkMember("valueOf", 0, (thisV, _) => JsValue.Number(ThisNumber(realm, thisV))),
-            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, _) => JsValue.String(JsValue.ToStringValue(JsValue.Number(ThisNumber(realm, thisV))))),
+            new IntrinsicHelpers.BulkMember("toLocaleString", 0, (thisV, args) => JsValue.String(IntlObj.FormatNumberToLocaleString(realm, ThisNumber(realm, thisV), args))),
         });
 
         realm.NumberConstructor = ctor;
@@ -85,15 +87,37 @@ public static class NumberCtor
         return JsValue.Number(ParseFloatString(input));
     }
 
+    private static double ToNumberAllowBigInt(JsRealm realm, JsValue value)
+    {
+        if (value.IsObject)
+        {
+            value = AbstractOperations.ToPrimitive(realm.ActiveVm, value, "number");
+        }
+
+        if (value.Kind == JsValueKind.BigInt)
+        {
+            return (double)value.AsBigInt;
+        }
+
+        return value.IsString ? StringToNumber(value.AsString) : JsValue.ToNumber(value);
+    }
+
     internal static double ToNumber(JsValue value)
     {
         if (!value.IsObject)
         {
-            return value.IsString ? StringToNumber(value.AsString) : JsValue.ToNumber(value);
+            return Convert(value);
         }
 
         var prim = AbstractOperations.ToPrimitive(value, "number");
-        return prim.IsString ? StringToNumber(prim.AsString) : JsValue.ToNumber(prim);
+        return Convert(prim);
+
+        // §21.1.1.1 — Number(value) goes through ToNumeric: a BigInt argument
+        // converts to its Number value rather than throwing (unlike implicit
+        // arithmetic coercion, which is a TypeError).
+        static double Convert(JsValue v) => v.IsString
+            ? StringToNumber(v.AsString)
+            : v.IsBigInt ? (double)v.AsBigInt : JsValue.ToNumber(v);
     }
 
     private static bool IsInteger(JsValue value)
@@ -118,10 +142,9 @@ public static class NumberCtor
 
         if (thisV.IsObject)
         {
-            var slot = thisV.AsObject.GetOwnPropertyDescriptor("__primitiveValue");
-            if (slot is { } d && d.Value.IsNumber)
+            if (thisV.AsObject is JsPrimitiveBox box && box.Primitive.IsNumber)
             {
-                return d.Value.AsNumber;
+                return box.Primitive.AsNumber;
             }
         }
         throw new JsThrow(realm.NewTypeError("Number.prototype method called on incompatible receiver"));

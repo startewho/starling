@@ -72,8 +72,8 @@ running this suite:
    temporal dead zone setup, so `testharness.js` failed to compile (`missing
    declared lexical 'required_props'`). Fixed in `JsCompiler.EmitTryBody`.
    Regression test in `Starling.Js.Tests/CatchBlockLexicalTests`.
-2. **DOM** — `document.createElementNS` wasn't bound on the native backend
-   (Jint already had it). Added in `Starling.Bindings/NodeBindings`.
+2. **DOM** — `document.createElementNS` wasn't bound on the native backend.
+   Added in `Starling.Bindings/NodeBindings`.
 3. **Window identity** — `window.parent` / `top` / `frames` now return the
    window and `window.opener` is `null` for a top-level context, so
    testharness's `_forEach_windows` stops calling `postMessage` on a phantom
