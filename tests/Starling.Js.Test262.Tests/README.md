@@ -5,8 +5,10 @@ against the Starling JS engine.
 
 ## What it covers
 
-The whole corpus, one test per top-level bucket:
+The runner has one default scope plus one test per top-level bucket:
 
+- `Conformance_default_scope` — `language/expressions` and
+  `language/statements`, used as the fast path for zero-failure work.
 - `Conformance_language` — parsing, scoping, classes, async and await,
   generators, completion values.
 - `Conformance_built_ins` — the standard library (Object, Array, String,
@@ -15,15 +17,18 @@ The whole corpus, one test per top-level bucket:
 - `Conformance_annexB` — legacy web-compat semantics.
 - `Conformance_staging` — staged proposal tests.
 
-Each bucket has its own ratchet floor (a constant in `Test262Tests.cs`) and
-writes its own report to `testdata/test262/results/summary-<bucket>.txt` plus a
-full failure dump in `failures-<bucket>.txt`. A floor of 0 means report-only —
-set it to the measured baseline once the bucket has one, then ratchet upward.
-Never lower a floor.
+Each run writes a report to `testdata/test262/results/summary-<bucket>.txt` plus
+a full failure dump in `failures-<bucket>.txt`. Bucket tests keep ratchet floors
+in `Test262Tests.cs`. A floor of 0 means report-only. Set
+`STARLING_TEST262_ZERO=1` to fail on any failed or timed-out scenario.
 
 Tests tagged with features beyond the targeted spec level (ES2024) are skipped,
 not failed — see `OutOfScopeFeatures` in `Test262Runner.cs`. Skips are reported
 separately and are not in the denominator.
+
+The parent test process runs files through child worker processes by default.
+Set `STARLING_TEST262_WORKERS=0` for serial in-process debugging, or set a
+positive number to choose the worker count.
 
 ## How to run
 
@@ -42,7 +47,8 @@ STARLING_TEST262_DIRS=language/statements/for-of \
 ```
 
 `STARLING_TEST262_FILTER`, `STARLING_TEST262_MAX`, `STARLING_TEST262_TIMEOUT_MS`,
-and `STARLING_TEST262_FLOOR` work on every bucket.
+`STARLING_TEST262_FLOOR`, `STARLING_TEST262_WORKERS`, and
+`STARLING_TEST262_ZERO` work on every run.
 
 ## What the badge means
 

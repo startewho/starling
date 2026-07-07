@@ -2,6 +2,8 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <StartupObject>Starling.Js.Test262.Tests.Test262WorkerProgram</StartupObject>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="MSTest" />
